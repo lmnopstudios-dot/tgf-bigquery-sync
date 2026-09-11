@@ -81,8 +81,11 @@ async function getLatestOrders() {
   const data = await response.json();
 
   if (!response.ok || data.errors) {
-    console.error(data);
-    throw new Error('Shopify GraphQL request failed');
+    console.error('Shopify GraphQL error:', JSON.stringify(data, null, 2));
+  
+    throw new Error(
+      JSON.stringify(data.errors || data, null, 2)
+    );
   }
 
   return data.data.orders.nodes;
