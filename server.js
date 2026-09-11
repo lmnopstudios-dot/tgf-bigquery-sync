@@ -1016,16 +1016,12 @@ async function ensureWooUKDataset() {
   const [exists] = await dataset.exists();
 
   if (!exists) {
-    console.log(
-      `Creating dataset ${GOOGLE_PROJECT_ID}.${WOO_UK_DATASET}`
+    throw new Error(
+      `BigQuery dataset ${GOOGLE_PROJECT_ID}.${WOO_UK_DATASET} does not exist`
     );
-
-    await bigquery.createDataset(WOO_UK_DATASET, {
-      location: 'EU'
-    });
   }
 
-  return bigquery.dataset(WOO_UK_DATASET);
+  return dataset;
 }
 
 
