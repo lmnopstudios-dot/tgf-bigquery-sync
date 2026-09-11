@@ -423,3 +423,139 @@ app.listen(PORT, () => {
     `TGF BigQuery Sync listening on port ${PORT}`
   );
 });
+
+async function syncWooUSRefunds() {
+  const wooUrl = process.env.WOO_US_URL.replace(/\/$/, '');
+  const consumerKey = process.env.WOO_US_CONSUMER_KEY;
+  const consumerSecret = process.env.WOO_US_CONSUMER_SECRET;
+
+  if (!wooUrl || !consumerKey || !consumerSecret) {
+    throw new Error('Missing WooCommerce US environment variables');
+  }
+
+  // Find only Woo orders that actually contain refund data.
+  // DISTINCT is critical because Coupler has multiple rows per order.
+  const [orders] = await bigquery.query({
+    query: `
+      SELECT DISTINCT CAST(id AS STRING) AS order_id
+      FROM \`${process.env.GOOGLE_PROJECT_ID}.woocommerce_us.orders\`
+      WHERE refunds IS NOT NULL
+        AND TRIM(refunds) NOT IN ('', '[]', '{}')
+      ORDER BY order_id
+    `
+  });
+
+  console.log(`Found ${orders.length} Woo US orders containing refunds`);
+
+  const auth = Buffer.from(
+    `${consumerKey}:${consumerSecret}`
+  ).toString('base64');
+
+  const refundRows = [];
+
+  for (const order of orders) {
+    const orderId = order.order_id;
+
+    const response = await fetch(
+      `${wooUrl}/wp-json/wc/v3/orders/${orderId}/refunds?per_page=100`,
+      {
+        headers: {
+          Authorization: `Basic ${auth}`,
+          Accept: 'application/json'
+        }
+      }
+    );
+
+    if (!response.ok) {
+      const body = await response.text();
+
+      console.error(
+        `Refund fetch failed for order ${orderId}:`,
+        response.status,
+        body
+      );
+
+      continue;
+    }
+
+    const refunds = await response.json();
+
+    for (const refund of refunds) {
+      refundRows.push({
+        refund_id: String(refund.id),
+        order_id: String(orderId),
+
+        refund_date: refund.date_created_gmt
+          ? new Date(refund.date_created_gmt + 'Z').toISOString()
+          : null,
+
+        refund_amount: refund.amount
+          ? Number(refund.amount)
+          : 0,
+
+        reason: refund.reason || null,
+
+        refunded_by: refund.refunded_by
+          ? String(refund.refunded_by)
+          : null,
+
+        api_refunded: refund.api_refund === true,
+
+        line_items_json: refund.line_items
+          ? JSON.stringify(refund.line_items)
+          : null,
+
+        synced_at: new Date().toISOString()
+      });
+    }
+  }
+
+  console.log(`Found ${refundRows.length} individual Woo US refunds`);
+
+  const dataset = bigquery.dataset('woocommerce_us');
+  const tableName = 'refunds_api';
+  const table = dataset.table(tableName);
+
+  const [exists] = await table.exists();
+
+  if (!exists) {
+    await dataset.createTable(tableName, {
+      schema: [
+        { name: 'refund_id', type: 'STRING', mode: 'REQUIRED' },
+        { name: 'order_id', type: 'STRING', mode: 'REQUIRED' },
+        { name: 'refund_date', type: 'TIMESTAMP' },
+        { name: 'refund_amount', type: 'NUMERIC' },
+        { name: 'reason', type: 'STRING' },
+        { name: 'refunded_by', type: 'STRING' },
+        { name: 'api_refunded', type: 'BOOL' },
+        { name: 'line_items_json', type: 'STRING' },
+        { name: 'synced_at', type: 'TIMESTAMP' }
+      ]
+    });
+  } else {
+    await bigquery.query({
+      query: `
+        TRUNCATE TABLE
+        \`${process.env.GOOGLE_PROJECT_ID}.woocommerce_us.refunds_api\`
+      `
+    });
+  }
+
+  if (refundRows.length > 0) {
+    const freshTable = dataset.table(tableName);
+
+    // Insert in manageable batches
+    const batchSize = 500;
+
+    for (let i = 0; i < refundRows.length; i += batchSize) {
+      await freshTable.insert(
+        refundRows.slice(i, i + batchSize)
+      );
+    }
+  }
+
+  return {
+    refund_orders_checked: orders.length,
+    refunds_imported: refundRows.length
+  };
+}
