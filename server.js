@@ -25,6 +25,7 @@ const {
 
 const DATASET = 'shopify_data';
 const TABLE = 'order_locations';
+const LINE_ITEMS_TABLE = 'order_line_items';
 
 /* ---------------------------------------------------------
    BASIC VALIDATION
@@ -163,6 +164,115 @@ async function getAllOrders() {
             id
             name
           }
+
+          lineItems(first: 250) {
+            nodes {
+              id
+              name
+              title
+              variantTitle
+              sku
+              quantity
+              currentQuantity
+              taxable
+              requiresShipping
+              isGiftCard
+              vendor
+
+              product {
+                id
+                title
+                productType
+                vendor
+              }
+
+              variant {
+                id
+                title
+              }
+
+              originalUnitPriceSet {
+                shopMoney {
+                  amount
+                  currencyCode
+                }
+                presentmentMoney {
+                  amount
+                  currencyCode
+                }
+              }
+
+              originalTotalSet {
+                shopMoney {
+                  amount
+                  currencyCode
+                }
+                presentmentMoney {
+                  amount
+                  currencyCode
+                }
+              }
+
+              discountedTotalSet(withCodeDiscounts: true) {
+                shopMoney {
+                  amount
+                  currencyCode
+                }
+                presentmentMoney {
+                  amount
+                  currencyCode
+                }
+              }
+
+              totalDiscountSet {
+                shopMoney {
+                  amount
+                  currencyCode
+                }
+                presentmentMoney {
+                  amount
+                  currencyCode
+                }
+              }
+
+              customAttributes {
+                key
+                value
+              }
+
+              taxLines {
+                title
+                rate
+                ratePercentage
+
+                priceSet {
+                  shopMoney {
+                    amount
+                    currencyCode
+                  }
+
+                  presentmentMoney {
+                    amount
+                    currencyCode
+                  }
+                }
+              }
+
+              discountAllocations {
+                allocatedAmountSet {
+                  shopMoney {
+                    amount
+                    currencyCode
+                  }
+
+                  presentmentMoney {
+                    amount
+                    currencyCode
+                  }
+                }
+              }
+            }
+          }
         }
       }
     }
@@ -271,6 +381,185 @@ async function ensureBigQueryTable() {
   );
 }
 
+async function ensureLineItemsTable() {
+  const dataset =
+    bigquery.dataset(DATASET);
+
+  const table =
+    dataset.table(LINE_ITEMS_TABLE);
+
+  const [exists] =
+    await table.exists();
+
+  if (exists) {
+    return table;
+  }
+
+  console.log(
+    `Creating ${GOOGLE_PROJECT_ID}.${DATASET}.${LINE_ITEMS_TABLE}`
+  );
+
+  await dataset.createTable(
+    LINE_ITEMS_TABLE,
+    {
+      schema: [
+        {
+          name: 'order_id',
+          type: 'STRING',
+          mode: 'REQUIRED'
+        },
+        {
+          name: 'order_name',
+          type: 'STRING'
+        },
+        {
+          name: 'order_created_at',
+          type: 'TIMESTAMP'
+        },
+
+        {
+          name: 'line_item_id',
+          type: 'STRING',
+          mode: 'REQUIRED'
+        },
+
+        {
+          name: 'product_id',
+          type: 'STRING'
+        },
+        {
+          name: 'variant_id',
+          type: 'STRING'
+        },
+
+        {
+          name: 'name',
+          type: 'STRING'
+        },
+        {
+          name: 'title',
+          type: 'STRING'
+        },
+        {
+          name: 'variant_title',
+          type: 'STRING'
+        },
+        {
+          name: 'sku',
+          type: 'STRING'
+        },
+
+        {
+          name: 'quantity',
+          type: 'INT64'
+        },
+        {
+          name: 'current_quantity',
+          type: 'INT64'
+        },
+
+        {
+          name: 'is_gift_card',
+          type: 'BOOL'
+        },
+        {
+          name: 'taxable',
+          type: 'BOOL'
+        },
+        {
+          name: 'requires_shipping',
+          type: 'BOOL'
+        },
+
+        {
+          name: 'vendor',
+          type: 'STRING'
+        },
+        {
+          name: 'product_type',
+          type: 'STRING'
+        },
+
+        {
+          name: 'shop_currency',
+          type: 'STRING'
+        },
+        {
+          name: 'presentment_currency',
+          type: 'STRING'
+        },
+
+        {
+          name: 'original_unit_price_shop',
+          type: 'NUMERIC'
+        },
+        {
+          name: 'original_unit_price_presentment',
+          type: 'NUMERIC'
+        },
+
+        {
+          name: 'original_total_shop',
+          type: 'NUMERIC'
+        },
+        {
+          name: 'original_total_presentment',
+          type: 'NUMERIC'
+        },
+
+        {
+          name: 'discounted_total_shop',
+          type: 'NUMERIC'
+        },
+        {
+          name: 'discounted_total_presentment',
+          type: 'NUMERIC'
+        },
+
+        {
+          name: 'total_discount_shop',
+          type: 'NUMERIC'
+        },
+        {
+          name: 'total_discount_presentment',
+          type: 'NUMERIC'
+        },
+
+        {
+          name: 'tax_shop',
+          type: 'NUMERIC'
+        },
+        {
+          name: 'tax_presentment',
+          type: 'NUMERIC'
+        },
+
+        {
+          name: 'custom_attributes_json',
+          type: 'STRING'
+        },
+        {
+          name: 'tax_lines_json',
+          type: 'STRING'
+        },
+        {
+          name: 'discount_allocations_json',
+          type: 'STRING'
+        },
+
+        {
+          name: 'synced_at',
+          type: 'TIMESTAMP'
+        }
+      ]
+    }
+  );
+
+  return dataset.table(
+    LINE_ITEMS_TABLE
+  );
+}
+
 function transformOrders(orders) {
   const syncedAt =
     new Date().toISOString();
@@ -303,6 +592,199 @@ function transformOrders(orders) {
     synced_at:
       syncedAt
   }));
+}
+
+function transformLineItems(orders) {
+  const syncedAt =
+    new Date().toISOString();
+
+  const rows = [];
+
+  for (const order of orders) {
+    const lineItems =
+      order.lineItems?.nodes || [];
+
+    for (const item of lineItems) {
+      const taxLines =
+        item.taxLines || [];
+
+      const taxShop =
+        taxLines.reduce(
+          (sum, tax) =>
+            sum +
+            Number(
+              tax.priceSet
+                ?.shopMoney
+                ?.amount || 0
+            ),
+          0
+        );
+
+      const taxPresentment =
+        taxLines.reduce(
+          (sum, tax) =>
+            sum +
+            Number(
+              tax.priceSet
+                ?.presentmentMoney
+                ?.amount || 0
+            ),
+          0
+        );
+
+      rows.push({
+        order_id:
+          order.id,
+
+        order_name:
+          order.name || null,
+
+        order_created_at:
+          order.createdAt || null,
+
+        line_item_id:
+          item.id,
+
+        product_id:
+          item.product?.id || null,
+
+        variant_id:
+          item.variant?.id || null,
+
+        name:
+          item.name || null,
+
+        title:
+          item.title || null,
+
+        variant_title:
+          item.variantTitle || null,
+
+        sku:
+          item.sku || null,
+
+        quantity:
+          item.quantity ?? 0,
+
+        current_quantity:
+          item.currentQuantity ?? 0,
+
+        is_gift_card:
+          item.isGiftCard === true,
+
+        taxable:
+          item.taxable === true,
+
+        requires_shipping:
+          item.requiresShipping === true,
+
+        vendor:
+          item.vendor ||
+          item.product?.vendor ||
+          null,
+
+        product_type:
+          item.product?.productType ||
+          null,
+
+        shop_currency:
+          item.originalTotalSet
+            ?.shopMoney
+            ?.currencyCode || null,
+
+        presentment_currency:
+          item.originalTotalSet
+            ?.presentmentMoney
+            ?.currencyCode || null,
+
+        original_unit_price_shop:
+          Number(
+            item.originalUnitPriceSet
+              ?.shopMoney
+              ?.amount || 0
+          ),
+
+        original_unit_price_presentment:
+          Number(
+            item.originalUnitPriceSet
+              ?.presentmentMoney
+              ?.amount || 0
+          ),
+
+        original_total_shop:
+          Number(
+            item.originalTotalSet
+              ?.shopMoney
+              ?.amount || 0
+          ),
+
+        original_total_presentment:
+          Number(
+            item.originalTotalSet
+              ?.presentmentMoney
+              ?.amount || 0
+          ),
+
+        discounted_total_shop:
+          Number(
+            item.discountedTotalSet
+              ?.shopMoney
+              ?.amount || 0
+          ),
+
+        discounted_total_presentment:
+          Number(
+            item.discountedTotalSet
+              ?.presentmentMoney
+              ?.amount || 0
+          ),
+
+        total_discount_shop:
+          Number(
+            item.totalDiscountSet
+              ?.shopMoney
+              ?.amount || 0
+          ),
+
+        total_discount_presentment:
+          Number(
+            item.totalDiscountSet
+              ?.presentmentMoney
+              ?.amount || 0
+          ),
+
+        tax_shop:
+          Number(
+            taxShop.toFixed(2)
+          ),
+
+        tax_presentment:
+          Number(
+            taxPresentment.toFixed(2)
+          ),
+
+        custom_attributes_json:
+          JSON.stringify(
+            item.customAttributes || []
+          ),
+
+        tax_lines_json:
+          JSON.stringify(
+            item.taxLines || []
+          ),
+
+        discount_allocations_json:
+          JSON.stringify(
+            item.discountAllocations || []
+          ),
+
+        synced_at:
+          syncedAt
+      });
+    }
+  }
+
+  return rows;
 }
 
 async function replaceBigQueryData(
@@ -352,9 +834,53 @@ async function replaceBigQueryData(
   }
 }
 
+async function replaceLineItemsData(
+  rows
+) {
+  const table =
+    await ensureLineItemsTable();
+
+  console.log(
+    'Clearing existing Shopify line item data...'
+  );
+
+  await bigquery.query({
+    query: `
+      TRUNCATE TABLE
+      \`${GOOGLE_PROJECT_ID}.${DATASET}.${LINE_ITEMS_TABLE}\`
+    `
+  });
+
+  console.log(
+    `Writing ${rows.length} Shopify line items to BigQuery...`
+  );
+
+  const batchSize = 500;
+
+  for (
+    let i = 0;
+    i < rows.length;
+    i += batchSize
+  ) {
+    const batch = rows.slice(
+      i,
+      i + batchSize
+    );
+
+    await table.insert(batch);
+
+    console.log(
+      `Inserted ${Math.min(
+        i + batch.length,
+        rows.length
+      )}/${rows.length} Shopify line items`
+    );
+  }
+}
+
 async function syncShopify() {
   console.log(
-    'Starting Shopify order metadata sync'
+    'Starting Shopify order metadata + line item sync'
   );
 
   const orders =
@@ -364,11 +890,22 @@ async function syncShopify() {
     `Shopify returned ${orders.length} orders`
   );
 
-  const rows =
+  const orderRows =
     transformOrders(orders);
 
+  const lineItemRows =
+    transformLineItems(orders);
+
+  console.log(
+    `Extracted ${lineItemRows.length} Shopify line items`
+  );
+
   await replaceBigQueryData(
-    rows
+    orderRows
+  );
+
+  await replaceLineItemsData(
+    lineItemRows
   );
 
   console.log(
@@ -379,8 +916,11 @@ async function syncShopify() {
     ordersFetched:
       orders.length,
 
-    rowsWritten:
-      rows.length
+    orderRowsWritten:
+      orderRows.length,
+
+    lineItemsWritten:
+      lineItemRows.length
   };
 }
 
@@ -977,13 +1517,8 @@ app.post(
 );
 
 /* =========================================================
-   START SERVER
+   WOO UK - FULL HISTORIC ORDER IMPORT
 ========================================================= */
-
-
-// ============================================================================
-// WOO UK - FULL HISTORIC ORDER IMPORT
-// ============================================================================
 
 const {
   WOO_UK_URL,
@@ -991,29 +1526,38 @@ const {
   WOO_UK_CONSUMER_SECRET
 } = process.env;
 
-const WOO_UK_DATASET = 'woocommerce_uk';
-const WOO_UK_ORDERS_TABLE = 'orders_api';
+const WOO_UK_DATASET =
+  'woocommerce_uk';
 
+const WOO_UK_ORDERS_TABLE =
+  'orders_api';
 
-function wooBasicAuth(consumerKey, consumerSecret) {
+function wooBasicAuth(
+  consumerKey,
+  consumerSecret
+) {
   return Buffer.from(
     `${consumerKey}:${consumerSecret}`
   ).toString('base64');
 }
 
-
 function wooDateToIso(value) {
   if (!value) return null;
 
   // Woo's *_gmt fields normally come without a timezone suffix.
-  return new Date(`${value}Z`).toISOString();
+  return new Date(
+    `${value}Z`
+  ).toISOString();
 }
 
-
 async function ensureWooUKDataset() {
-  const dataset = bigquery.dataset(WOO_UK_DATASET);
+  const dataset =
+    bigquery.dataset(
+      WOO_UK_DATASET
+    );
 
-  const [exists] = await dataset.exists();
+  const [exists] =
+    await dataset.exists();
 
   if (!exists) {
     throw new Error(
@@ -1024,12 +1568,17 @@ async function ensureWooUKDataset() {
   return dataset;
 }
 
-
 async function ensureWooUKOrdersTable() {
-  const dataset = await ensureWooUKDataset();
+  const dataset =
+    await ensureWooUKDataset();
 
-  const table = dataset.table(WOO_UK_ORDERS_TABLE);
-  const [exists] = await table.exists();
+  const table =
+    dataset.table(
+      WOO_UK_ORDERS_TABLE
+    );
+
+  const [exists] =
+    await table.exists();
 
   if (exists) {
     return table;
@@ -1039,67 +1588,169 @@ async function ensureWooUKOrdersTable() {
     `Creating ${GOOGLE_PROJECT_ID}.${WOO_UK_DATASET}.${WOO_UK_ORDERS_TABLE}`
   );
 
-  await dataset.createTable(WOO_UK_ORDERS_TABLE, {
-    schema: [
-      { name: 'order_id', type: 'STRING', mode: 'REQUIRED' },
-      { name: 'order_number', type: 'STRING' },
+  await dataset.createTable(
+    WOO_UK_ORDERS_TABLE,
+    {
+      schema: [
+        {
+          name: 'order_id',
+          type: 'STRING',
+          mode: 'REQUIRED'
+        },
+        {
+          name: 'order_number',
+          type: 'STRING'
+        },
 
-      { name: 'status', type: 'STRING' },
-      { name: 'currency', type: 'STRING' },
+        {
+          name: 'status',
+          type: 'STRING'
+        },
+        {
+          name: 'currency',
+          type: 'STRING'
+        },
 
-      { name: 'date_created', type: 'TIMESTAMP' },
-      { name: 'date_modified', type: 'TIMESTAMP' },
-      { name: 'date_paid', type: 'TIMESTAMP' },
-      { name: 'date_completed', type: 'TIMESTAMP' },
+        {
+          name: 'date_created',
+          type: 'TIMESTAMP'
+        },
+        {
+          name: 'date_modified',
+          type: 'TIMESTAMP'
+        },
+        {
+          name: 'date_paid',
+          type: 'TIMESTAMP'
+        },
+        {
+          name: 'date_completed',
+          type: 'TIMESTAMP'
+        },
 
-      { name: 'total', type: 'NUMERIC' },
-      { name: 'total_tax', type: 'NUMERIC' },
+        {
+          name: 'total',
+          type: 'NUMERIC'
+        },
+        {
+          name: 'total_tax',
+          type: 'NUMERIC'
+        },
 
-      { name: 'shipping_total', type: 'NUMERIC' },
-      { name: 'shipping_tax', type: 'NUMERIC' },
+        {
+          name: 'shipping_total',
+          type: 'NUMERIC'
+        },
+        {
+          name: 'shipping_tax',
+          type: 'NUMERIC'
+        },
 
-      { name: 'discount_total', type: 'NUMERIC' },
-      { name: 'discount_tax', type: 'NUMERIC' },
+        {
+          name: 'discount_total',
+          type: 'NUMERIC'
+        },
+        {
+          name: 'discount_tax',
+          type: 'NUMERIC'
+        },
 
-      { name: 'cart_tax', type: 'NUMERIC' },
+        {
+          name: 'cart_tax',
+          type: 'NUMERIC'
+        },
 
-      { name: 'prices_include_tax', type: 'BOOL' },
+        {
+          name: 'prices_include_tax',
+          type: 'BOOL'
+        },
 
-      { name: 'payment_method', type: 'STRING' },
-      { name: 'payment_method_title', type: 'STRING' },
-      { name: 'transaction_id', type: 'STRING' },
+        {
+          name: 'payment_method',
+          type: 'STRING'
+        },
+        {
+          name: 'payment_method_title',
+          type: 'STRING'
+        },
+        {
+          name: 'transaction_id',
+          type: 'STRING'
+        },
 
-      { name: 'created_via', type: 'STRING' },
+        {
+          name: 'created_via',
+          type: 'STRING'
+        },
 
-      { name: 'billing_country', type: 'STRING' },
-      { name: 'shipping_country', type: 'STRING' },
+        {
+          name: 'billing_country',
+          type: 'STRING'
+        },
+        {
+          name: 'shipping_country',
+          type: 'STRING'
+        },
 
-      { name: 'customer_id', type: 'STRING' },
+        {
+          name: 'customer_id',
+          type: 'STRING'
+        },
 
-      // Keep full structures so we can properly inspect:
-      // gift cards, vouchers, VAT, refunds, unusual historic metadata, etc.
-      { name: 'line_items_json', type: 'STRING' },
-      { name: 'tax_lines_json', type: 'STRING' },
-      { name: 'shipping_lines_json', type: 'STRING' },
-      { name: 'coupon_lines_json', type: 'STRING' },
-      { name: 'fee_lines_json', type: 'STRING' },
-      { name: 'refunds_json', type: 'STRING' },
-      { name: 'meta_data_json', type: 'STRING' },
+        // Keep full structures so we can properly inspect:
+        // gift cards, vouchers, VAT, refunds, unusual historic metadata, etc.
+        {
+          name: 'line_items_json',
+          type: 'STRING'
+        },
+        {
+          name: 'tax_lines_json',
+          type: 'STRING'
+        },
+        {
+          name: 'shipping_lines_json',
+          type: 'STRING'
+        },
+        {
+          name: 'coupon_lines_json',
+          type: 'STRING'
+        },
+        {
+          name: 'fee_lines_json',
+          type: 'STRING'
+        },
+        {
+          name: 'refunds_json',
+          type: 'STRING'
+        },
+        {
+          name: 'meta_data_json',
+          type: 'STRING'
+        },
 
-      // Preserve the complete Woo response as an escape hatch.
-      { name: 'raw_json', type: 'STRING' },
+        // Preserve the complete Woo response as an escape hatch.
+        {
+          name: 'raw_json',
+          type: 'STRING'
+        },
 
-      { name: 'synced_at', type: 'TIMESTAMP' }
-    ]
-  });
+        {
+          name: 'synced_at',
+          type: 'TIMESTAMP'
+        }
+      ]
+    }
+  );
 
-  return dataset.table(WOO_UK_ORDERS_TABLE);
+  return dataset.table(
+    WOO_UK_ORDERS_TABLE
+  );
 }
-
 
 function transformWooUKOrder(order) {
   return {
-    order_id: String(order.id),
+    order_id:
+      String(order.id),
 
     order_number:
       order.number !== undefined &&
@@ -1107,42 +1758,66 @@ function transformWooUKOrder(order) {
         ? String(order.number)
         : null,
 
-    status: order.status || null,
-    currency: order.currency || null,
+    status:
+      order.status || null,
 
-    date_created: wooDateToIso(
-      order.date_created_gmt
-    ),
+    currency:
+      order.currency || null,
 
-    date_modified: wooDateToIso(
-      order.date_modified_gmt
-    ),
+    date_created:
+      wooDateToIso(
+        order.date_created_gmt
+      ),
 
-    date_paid: wooDateToIso(
-      order.date_paid_gmt
-    ),
+    date_modified:
+      wooDateToIso(
+        order.date_modified_gmt
+      ),
 
-    date_completed: wooDateToIso(
-      order.date_completed_gmt
-    ),
+    date_paid:
+      wooDateToIso(
+        order.date_paid_gmt
+      ),
 
-    total: Number(order.total || 0),
-    total_tax: Number(order.total_tax || 0),
+    date_completed:
+      wooDateToIso(
+        order.date_completed_gmt
+      ),
+
+    total:
+      Number(
+        order.total || 0
+      ),
+
+    total_tax:
+      Number(
+        order.total_tax || 0
+      ),
 
     shipping_total:
-      Number(order.shipping_total || 0),
+      Number(
+        order.shipping_total || 0
+      ),
 
     shipping_tax:
-      Number(order.shipping_tax || 0),
+      Number(
+        order.shipping_tax || 0
+      ),
 
     discount_total:
-      Number(order.discount_total || 0),
+      Number(
+        order.discount_total || 0
+      ),
 
     discount_tax:
-      Number(order.discount_tax || 0),
+      Number(
+        order.discount_tax || 0
+      ),
 
     cart_tax:
-      Number(order.cart_tax || 0),
+      Number(
+        order.cart_tax || 0
+      ),
 
     prices_include_tax:
       order.prices_include_tax === true,
@@ -1172,25 +1847,39 @@ function transformWooUKOrder(order) {
         : null,
 
     line_items_json:
-      JSON.stringify(order.line_items || []),
+      JSON.stringify(
+        order.line_items || []
+      ),
 
     tax_lines_json:
-      JSON.stringify(order.tax_lines || []),
+      JSON.stringify(
+        order.tax_lines || []
+      ),
 
     shipping_lines_json:
-      JSON.stringify(order.shipping_lines || []),
+      JSON.stringify(
+        order.shipping_lines || []
+      ),
 
     coupon_lines_json:
-      JSON.stringify(order.coupon_lines || []),
+      JSON.stringify(
+        order.coupon_lines || []
+      ),
 
     fee_lines_json:
-      JSON.stringify(order.fee_lines || []),
+      JSON.stringify(
+        order.fee_lines || []
+      ),
 
     refunds_json:
-      JSON.stringify(order.refunds || []),
+      JSON.stringify(
+        order.refunds || []
+      ),
 
     meta_data_json:
-      JSON.stringify(order.meta_data || []),
+      JSON.stringify(
+        order.meta_data || []
+      ),
 
     raw_json:
       JSON.stringify(order),
@@ -1199,7 +1888,6 @@ function transformWooUKOrder(order) {
       new Date().toISOString()
   };
 }
-
 
 async function fetchWooUKOrders() {
   if (
@@ -1213,12 +1901,16 @@ async function fetchWooUKOrders() {
   }
 
   const wooUrl =
-    WOO_UK_URL.replace(/\/$/, '');
+    WOO_UK_URL.replace(
+      /\/$/,
+      ''
+    );
 
-  const auth = wooBasicAuth(
-    WOO_UK_CONSUMER_KEY,
-    WOO_UK_CONSUMER_SECRET
-  );
+  const auth =
+    wooBasicAuth(
+      WOO_UK_CONSUMER_KEY,
+      WOO_UK_CONSUMER_SECRET
+    );
 
   const allOrders = [];
 
@@ -1228,7 +1920,11 @@ async function fetchWooUKOrders() {
   while (true) {
     console.log(
       `Fetching Woo UK orders page ${page}` +
-      (totalPages ? `/${totalPages}` : '')
+      (
+        totalPages
+          ? `/${totalPages}`
+          : ''
+      )
     );
 
     const url =
@@ -1239,15 +1935,23 @@ async function fetchWooUKOrders() {
       `&orderby=id` +
       `&order=asc`;
 
-    const response = await fetch(url, {
-      headers: {
-        Authorization: `Basic ${auth}`,
-        Accept: 'application/json'
-      }
-    });
+    const response =
+      await fetch(
+        url,
+        {
+          headers: {
+            Authorization:
+              `Basic ${auth}`,
+
+            Accept:
+              'application/json'
+          }
+        }
+      );
 
     if (!response.ok) {
-      const body = await response.text();
+      const body =
+        await response.text();
 
       throw new Error(
         `Woo UK order fetch failed on page ${page}: ` +
@@ -1255,23 +1959,34 @@ async function fetchWooUKOrders() {
       );
     }
 
-    const orders = await response.json();
+    const orders =
+      await response.json();
 
-    if (totalPages === null) {
-      totalPages = Number(
-        response.headers.get('x-wp-totalpages') || 0
-      );
+    if (
+      totalPages === null
+    ) {
+      totalPages =
+        Number(
+          response.headers.get(
+            'x-wp-totalpages'
+          ) || 0
+        );
 
-      const totalOrders = Number(
-        response.headers.get('x-wp-total') || 0
-      );
+      const totalOrders =
+        Number(
+          response.headers.get(
+            'x-wp-total'
+          ) || 0
+        );
 
       console.log(
         `Woo UK reports ${totalOrders} total orders across ${totalPages} pages`
       );
     }
 
-    allOrders.push(...orders);
+    allOrders.push(
+      ...orders
+    );
 
     console.log(
       `Fetched ${allOrders.length} Woo UK orders so far`
@@ -1279,7 +1994,10 @@ async function fetchWooUKOrders() {
 
     if (
       orders.length === 0 ||
-      (totalPages && page >= totalPages)
+      (
+        totalPages &&
+        page >= totalPages
+      )
     ) {
       break;
     }
@@ -1289,7 +2007,6 @@ async function fetchWooUKOrders() {
 
   return allOrders;
 }
-
 
 async function syncWooUKOrders() {
   console.log(
@@ -1307,7 +2024,9 @@ async function syncWooUKOrders() {
   );
 
   const rows =
-    orders.map(transformWooUKOrder);
+    orders.map(
+      transformWooUKOrder
+    );
 
   console.log(
     'Clearing existing Woo UK API order table...'
@@ -1328,9 +2047,14 @@ async function syncWooUKOrders() {
     i += batchSize
   ) {
     const batch =
-      rows.slice(i, i + batchSize);
+      rows.slice(
+        i,
+        i + batchSize
+      );
 
-    await table.insert(batch);
+    await table.insert(
+      batch
+    );
 
     console.log(
       `Inserted ${Math.min(
@@ -1345,23 +2069,29 @@ async function syncWooUKOrders() {
   );
 
   return {
-    orders_fetched: orders.length,
-    rows_written: rows.length
+    orders_fetched:
+      orders.length,
+
+    rows_written:
+      rows.length
   };
 }
 
-
-// ============================================================================
-// WOO UK - REFUNDS
-// ============================================================================
+/* =========================================================
+   WOO UK - REFUNDS
+========================================================= */
 
 async function ensureWooUKRefundsTable() {
   const dataset =
     await ensureWooUKDataset();
 
-  const tableName = 'refunds_api';
+  const tableName =
+    'refunds_api';
+
   const table =
-    dataset.table(tableName);
+    dataset.table(
+      tableName
+    );
 
   const [exists] =
     await table.exists();
@@ -1371,57 +2101,61 @@ async function ensureWooUKRefundsTable() {
       `Creating ${GOOGLE_PROJECT_ID}.${WOO_UK_DATASET}.${tableName}`
     );
 
-    await dataset.createTable(tableName, {
-      schema: [
-        {
-          name: 'refund_id',
-          type: 'STRING',
-          mode: 'REQUIRED'
-        },
-        {
-          name: 'order_id',
-          type: 'STRING',
-          mode: 'REQUIRED'
-        },
-        {
-          name: 'refund_date',
-          type: 'TIMESTAMP'
-        },
-        {
-          name: 'refund_amount',
-          type: 'NUMERIC'
-        },
-        {
-          name: 'reason',
-          type: 'STRING'
-        },
-        {
-          name: 'refunded_by',
-          type: 'STRING'
-        },
-        {
-          name: 'api_refunded',
-          type: 'BOOL'
-        },
-        {
-          name: 'line_items_json',
-          type: 'STRING'
-        },
-        {
-          name: 'raw_json',
-          type: 'STRING'
-        },
-        {
-          name: 'synced_at',
-          type: 'TIMESTAMP'
-        }
-      ]
-    });
+    await dataset.createTable(
+      tableName,
+      {
+        schema: [
+          {
+            name: 'refund_id',
+            type: 'STRING',
+            mode: 'REQUIRED'
+          },
+          {
+            name: 'order_id',
+            type: 'STRING',
+            mode: 'REQUIRED'
+          },
+          {
+            name: 'refund_date',
+            type: 'TIMESTAMP'
+          },
+          {
+            name: 'refund_amount',
+            type: 'NUMERIC'
+          },
+          {
+            name: 'reason',
+            type: 'STRING'
+          },
+          {
+            name: 'refunded_by',
+            type: 'STRING'
+          },
+          {
+            name: 'api_refunded',
+            type: 'BOOL'
+          },
+          {
+            name: 'line_items_json',
+            type: 'STRING'
+          },
+          {
+            name: 'raw_json',
+            type: 'STRING'
+          },
+          {
+            name: 'synced_at',
+            type: 'TIMESTAMP'
+          }
+        ]
+      }
+    );
   }
 
-  return dataset.table(tableName);
+  return dataset.table(
+    tableName
+  );
 }
-
 
 async function syncWooUKRefunds() {
   if (
@@ -1435,19 +2169,24 @@ async function syncWooUKRefunds() {
   }
 
   const wooUrl =
-    WOO_UK_URL.replace(/\/$/, '');
+    WOO_UK_URL.replace(
+      /\/$/,
+      ''
+    );
 
-  const auth = wooBasicAuth(
-    WOO_UK_CONSUMER_KEY,
-    WOO_UK_CONSUMER_SECRET
-  );
+  const auth =
+    wooBasicAuth(
+      WOO_UK_CONSUMER_KEY,
+      WOO_UK_CONSUMER_SECRET
+    );
 
-  // Because OUR orders table is one row per order,
-  // no DISTINCT/deduping nonsense is necessary.
+  // Our UK API orders table is one row per order,
+  // so no DISTINCT/deduping is necessary here.
   const [orders] =
     await bigquery.query({
       query: `
-        SELECT order_id
+        SELECT
+          order_id
         FROM
           \`${GOOGLE_PROJECT_ID}.${WOO_UK_DATASET}.${WOO_UK_ORDERS_TABLE}\`
         WHERE
@@ -1458,7 +2197,9 @@ async function syncWooUKRefunds() {
             '{}'
           )
         ORDER BY
-          SAFE_CAST(order_id AS INT64)
+          SAFE_CAST(
+            order_id AS INT64
+          )
       `
     });
 
@@ -1471,9 +2212,13 @@ async function syncWooUKRefunds() {
 
   let checked = 0;
 
-  for (const order of orders) {
+  for (
+    const order of orders
+  ) {
     const orderId =
-      String(order.order_id);
+      String(
+        order.order_id
+      );
 
     checked++;
 
@@ -1481,15 +2226,19 @@ async function syncWooUKRefunds() {
       `Fetching Woo UK refunds ${checked}/${orders.length} - order ${orderId}`
     );
 
-    const response = await fetch(
-      `${wooUrl}/wp-json/wc/v3/orders/${orderId}/refunds?per_page=100`,
-      {
-        headers: {
-          Authorization: `Basic ${auth}`,
-          Accept: 'application/json'
+    const response =
+      await fetch(
+        `${wooUrl}/wp-json/wc/v3/orders/${orderId}/refunds?per_page=100`,
+        {
+          headers: {
+            Authorization:
+              `Basic ${auth}`,
+
+            Accept:
+              'application/json'
+          }
         }
-      }
-    );
+      );
 
     if (!response.ok) {
       const body =
@@ -1501,17 +2250,24 @@ async function syncWooUKRefunds() {
         body
       );
 
-      failedOrders.push(orderId);
+      failedOrders.push(
+        orderId
+      );
+
       continue;
     }
 
     const refunds =
       await response.json();
 
-    for (const refund of refunds) {
+    for (
+      const refund of refunds
+    ) {
       refundRows.push({
         refund_id:
-          String(refund.id),
+          String(
+            refund.id
+          ),
 
         order_id:
           orderId,
@@ -1522,19 +2278,26 @@ async function syncWooUKRefunds() {
           ),
 
         refund_amount:
-          Number(refund.amount || 0),
+          Number(
+            refund.amount || 0
+          ),
 
         reason:
           refund.reason || null,
 
         refunded_by:
-          refund.refunded_by !== undefined &&
-          refund.refunded_by !== null
-            ? String(refund.refunded_by)
+          refund.refunded_by !==
+            undefined &&
+          refund.refunded_by !==
+            null
+            ? String(
+                refund.refunded_by
+              )
             : null,
 
         api_refunded:
-          refund.api_refund === true,
+          refund.api_refund ===
+          true,
 
         line_items_json:
           JSON.stringify(
@@ -1542,7 +2305,9 @@ async function syncWooUKRefunds() {
           ),
 
         raw_json:
-          JSON.stringify(refund),
+          JSON.stringify(
+            refund
+          ),
 
         synced_at:
           new Date().toISOString()
@@ -1572,9 +2337,14 @@ async function syncWooUKRefunds() {
     i += batchSize
   ) {
     const batch =
-      refundRows.slice(i, i + batchSize);
+      refundRows.slice(
+        i,
+        i + batchSize
+      );
 
-    await table.insert(batch);
+    await table.insert(
+      batch
+    );
 
     console.log(
       `Inserted ${Math.min(
@@ -1599,10 +2369,9 @@ async function syncWooUKRefunds() {
   };
 }
 
-
-// ============================================================================
-// WOO UK ROUTES
-// ============================================================================
+/* =========================================================
+   WOO UK ROUTES
+========================================================= */
 
 app.post(
   '/sync-woo-uk-orders',
@@ -1615,7 +2384,8 @@ app.post(
       res.json({
         success: true,
         store: 'UK',
-        dataset: WOO_UK_DATASET,
+        dataset:
+          WOO_UK_DATASET,
         ...result
       });
     } catch (error) {
@@ -1624,14 +2394,16 @@ app.post(
         error
       );
 
-      res.status(500).json({
-        success: false,
-        error: error.message
-      });
+      res
+        .status(500)
+        .json({
+          success: false,
+          error:
+            error.message
+        });
     }
   }
 );
-
 
 app.post(
   '/sync-woo-uk-refunds',
@@ -1644,7 +2416,8 @@ app.post(
       res.json({
         success: true,
         store: 'UK',
-        dataset: WOO_UK_DATASET,
+        dataset:
+          WOO_UK_DATASET,
         ...result
       });
     } catch (error) {
@@ -1653,13 +2426,20 @@ app.post(
         error
       );
 
-      res.status(500).json({
-        success: false,
-        error: error.message
-      });
+      res
+        .status(500)
+        .json({
+          success: false,
+          error:
+            error.message
+        });
     }
   }
 );
+
+/* =========================================================
+   START SERVER
+========================================================= */
 
 app.listen(
   PORT,
