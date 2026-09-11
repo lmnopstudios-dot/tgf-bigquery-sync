@@ -980,6 +980,691 @@ app.post(
    START SERVER
 ========================================================= */
 
+
+// ============================================================================
+// WOO UK - FULL HISTORIC ORDER IMPORT
+// ============================================================================
+
+const {
+  WOO_UK_URL,
+  WOO_UK_CONSUMER_KEY,
+  WOO_UK_CONSUMER_SECRET
+} = process.env;
+
+const WOO_UK_DATASET = 'woocommerce_uk';
+const WOO_UK_ORDERS_TABLE = 'orders_api';
+
+
+function wooBasicAuth(consumerKey, consumerSecret) {
+  return Buffer.from(
+    `${consumerKey}:${consumerSecret}`
+  ).toString('base64');
+}
+
+
+function wooDateToIso(value) {
+  if (!value) return null;
+
+  // Woo's *_gmt fields normally come without a timezone suffix.
+  return new Date(`${value}Z`).toISOString();
+}
+
+
+async function ensureWooUKDataset() {
+  const dataset = bigquery.dataset(WOO_UK_DATASET);
+
+  const [exists] = await dataset.exists();
+
+  if (!exists) {
+    console.log(
+      `Creating dataset ${GOOGLE_PROJECT_ID}.${WOO_UK_DATASET}`
+    );
+
+    await bigquery.createDataset(WOO_UK_DATASET, {
+      location: 'EU'
+    });
+  }
+
+  return bigquery.dataset(WOO_UK_DATASET);
+}
+
+
+async function ensureWooUKOrdersTable() {
+  const dataset = await ensureWooUKDataset();
+
+  const table = dataset.table(WOO_UK_ORDERS_TABLE);
+  const [exists] = await table.exists();
+
+  if (exists) {
+    return table;
+  }
+
+  console.log(
+    `Creating ${GOOGLE_PROJECT_ID}.${WOO_UK_DATASET}.${WOO_UK_ORDERS_TABLE}`
+  );
+
+  await dataset.createTable(WOO_UK_ORDERS_TABLE, {
+    schema: [
+      { name: 'order_id', type: 'STRING', mode: 'REQUIRED' },
+      { name: 'order_number', type: 'STRING' },
+
+      { name: 'status', type: 'STRING' },
+      { name: 'currency', type: 'STRING' },
+
+      { name: 'date_created', type: 'TIMESTAMP' },
+      { name: 'date_modified', type: 'TIMESTAMP' },
+      { name: 'date_paid', type: 'TIMESTAMP' },
+      { name: 'date_completed', type: 'TIMESTAMP' },
+
+      { name: 'total', type: 'NUMERIC' },
+      { name: 'total_tax', type: 'NUMERIC' },
+
+      { name: 'shipping_total', type: 'NUMERIC' },
+      { name: 'shipping_tax', type: 'NUMERIC' },
+
+      { name: 'discount_total', type: 'NUMERIC' },
+      { name: 'discount_tax', type: 'NUMERIC' },
+
+      { name: 'cart_tax', type: 'NUMERIC' },
+
+      { name: 'prices_include_tax', type: 'BOOL' },
+
+      { name: 'payment_method', type: 'STRING' },
+      { name: 'payment_method_title', type: 'STRING' },
+      { name: 'transaction_id', type: 'STRING' },
+
+      { name: 'created_via', type: 'STRING' },
+
+      { name: 'billing_country', type: 'STRING' },
+      { name: 'shipping_country', type: 'STRING' },
+
+      { name: 'customer_id', type: 'STRING' },
+
+      // Keep full structures so we can properly inspect:
+      // gift cards, vouchers, VAT, refunds, unusual historic metadata, etc.
+      { name: 'line_items_json', type: 'STRING' },
+      { name: 'tax_lines_json', type: 'STRING' },
+      { name: 'shipping_lines_json', type: 'STRING' },
+      { name: 'coupon_lines_json', type: 'STRING' },
+      { name: 'fee_lines_json', type: 'STRING' },
+      { name: 'refunds_json', type: 'STRING' },
+      { name: 'meta_data_json', type: 'STRING' },
+
+      // Preserve the complete Woo response as an escape hatch.
+      { name: 'raw_json', type: 'STRING' },
+
+      { name: 'synced_at', type: 'TIMESTAMP' }
+    ]
+  });
+
+  return dataset.table(WOO_UK_ORDERS_TABLE);
+}
+
+
+function transformWooUKOrder(order) {
+  return {
+    order_id: String(order.id),
+
+    order_number:
+      order.number !== undefined &&
+      order.number !== null
+        ? String(order.number)
+        : null,
+
+    status: order.status || null,
+    currency: order.currency || null,
+
+    date_created: wooDateToIso(
+      order.date_created_gmt
+    ),
+
+    date_modified: wooDateToIso(
+      order.date_modified_gmt
+    ),
+
+    date_paid: wooDateToIso(
+      order.date_paid_gmt
+    ),
+
+    date_completed: wooDateToIso(
+      order.date_completed_gmt
+    ),
+
+    total: Number(order.total || 0),
+    total_tax: Number(order.total_tax || 0),
+
+    shipping_total:
+      Number(order.shipping_total || 0),
+
+    shipping_tax:
+      Number(order.shipping_tax || 0),
+
+    discount_total:
+      Number(order.discount_total || 0),
+
+    discount_tax:
+      Number(order.discount_tax || 0),
+
+    cart_tax:
+      Number(order.cart_tax || 0),
+
+    prices_include_tax:
+      order.prices_include_tax === true,
+
+    payment_method:
+      order.payment_method || null,
+
+    payment_method_title:
+      order.payment_method_title || null,
+
+    transaction_id:
+      order.transaction_id || null,
+
+    created_via:
+      order.created_via || null,
+
+    billing_country:
+      order.billing?.country || null,
+
+    shipping_country:
+      order.shipping?.country || null,
+
+    customer_id:
+      order.customer_id !== undefined &&
+      order.customer_id !== null
+        ? String(order.customer_id)
+        : null,
+
+    line_items_json:
+      JSON.stringify(order.line_items || []),
+
+    tax_lines_json:
+      JSON.stringify(order.tax_lines || []),
+
+    shipping_lines_json:
+      JSON.stringify(order.shipping_lines || []),
+
+    coupon_lines_json:
+      JSON.stringify(order.coupon_lines || []),
+
+    fee_lines_json:
+      JSON.stringify(order.fee_lines || []),
+
+    refunds_json:
+      JSON.stringify(order.refunds || []),
+
+    meta_data_json:
+      JSON.stringify(order.meta_data || []),
+
+    raw_json:
+      JSON.stringify(order),
+
+    synced_at:
+      new Date().toISOString()
+  };
+}
+
+
+async function fetchWooUKOrders() {
+  if (
+    !WOO_UK_URL ||
+    !WOO_UK_CONSUMER_KEY ||
+    !WOO_UK_CONSUMER_SECRET
+  ) {
+    throw new Error(
+      'Missing WooCommerce UK environment variables'
+    );
+  }
+
+  const wooUrl =
+    WOO_UK_URL.replace(/\/$/, '');
+
+  const auth = wooBasicAuth(
+    WOO_UK_CONSUMER_KEY,
+    WOO_UK_CONSUMER_SECRET
+  );
+
+  const allOrders = [];
+
+  let page = 1;
+  let totalPages = null;
+
+  while (true) {
+    console.log(
+      `Fetching Woo UK orders page ${page}` +
+      (totalPages ? `/${totalPages}` : '')
+    );
+
+    const url =
+      `${wooUrl}/wp-json/wc/v3/orders` +
+      `?per_page=100` +
+      `&page=${page}` +
+      `&status=any` +
+      `&orderby=id` +
+      `&order=asc`;
+
+    const response = await fetch(url, {
+      headers: {
+        Authorization: `Basic ${auth}`,
+        Accept: 'application/json'
+      }
+    });
+
+    if (!response.ok) {
+      const body = await response.text();
+
+      throw new Error(
+        `Woo UK order fetch failed on page ${page}: ` +
+        `${response.status} ${body}`
+      );
+    }
+
+    const orders = await response.json();
+
+    if (totalPages === null) {
+      totalPages = Number(
+        response.headers.get('x-wp-totalpages') || 0
+      );
+
+      const totalOrders = Number(
+        response.headers.get('x-wp-total') || 0
+      );
+
+      console.log(
+        `Woo UK reports ${totalOrders} total orders across ${totalPages} pages`
+      );
+    }
+
+    allOrders.push(...orders);
+
+    console.log(
+      `Fetched ${allOrders.length} Woo UK orders so far`
+    );
+
+    if (
+      orders.length === 0 ||
+      (totalPages && page >= totalPages)
+    ) {
+      break;
+    }
+
+    page++;
+  }
+
+  return allOrders;
+}
+
+
+async function syncWooUKOrders() {
+  console.log(
+    'Starting full WooCommerce UK historic order import'
+  );
+
+  const table =
+    await ensureWooUKOrdersTable();
+
+  const orders =
+    await fetchWooUKOrders();
+
+  console.log(
+    `Woo UK returned ${orders.length} orders`
+  );
+
+  const rows =
+    orders.map(transformWooUKOrder);
+
+  console.log(
+    'Clearing existing Woo UK API order table...'
+  );
+
+  await bigquery.query({
+    query: `
+      TRUNCATE TABLE
+      \`${GOOGLE_PROJECT_ID}.${WOO_UK_DATASET}.${WOO_UK_ORDERS_TABLE}\`
+    `
+  });
+
+  const batchSize = 500;
+
+  for (
+    let i = 0;
+    i < rows.length;
+    i += batchSize
+  ) {
+    const batch =
+      rows.slice(i, i + batchSize);
+
+    await table.insert(batch);
+
+    console.log(
+      `Inserted ${Math.min(
+        i + batch.length,
+        rows.length
+      )}/${rows.length} Woo UK orders`
+    );
+  }
+
+  console.log(
+    'Woo UK historic order import complete'
+  );
+
+  return {
+    orders_fetched: orders.length,
+    rows_written: rows.length
+  };
+}
+
+
+// ============================================================================
+// WOO UK - REFUNDS
+// ============================================================================
+
+async function ensureWooUKRefundsTable() {
+  const dataset =
+    await ensureWooUKDataset();
+
+  const tableName = 'refunds_api';
+  const table =
+    dataset.table(tableName);
+
+  const [exists] =
+    await table.exists();
+
+  if (!exists) {
+    console.log(
+      `Creating ${GOOGLE_PROJECT_ID}.${WOO_UK_DATASET}.${tableName}`
+    );
+
+    await dataset.createTable(tableName, {
+      schema: [
+        {
+          name: 'refund_id',
+          type: 'STRING',
+          mode: 'REQUIRED'
+        },
+        {
+          name: 'order_id',
+          type: 'STRING',
+          mode: 'REQUIRED'
+        },
+        {
+          name: 'refund_date',
+          type: 'TIMESTAMP'
+        },
+        {
+          name: 'refund_amount',
+          type: 'NUMERIC'
+        },
+        {
+          name: 'reason',
+          type: 'STRING'
+        },
+        {
+          name: 'refunded_by',
+          type: 'STRING'
+        },
+        {
+          name: 'api_refunded',
+          type: 'BOOL'
+        },
+        {
+          name: 'line_items_json',
+          type: 'STRING'
+        },
+        {
+          name: 'raw_json',
+          type: 'STRING'
+        },
+        {
+          name: 'synced_at',
+          type: 'TIMESTAMP'
+        }
+      ]
+    });
+  }
+
+  return dataset.table(tableName);
+}
+
+
+async function syncWooUKRefunds() {
+  if (
+    !WOO_UK_URL ||
+    !WOO_UK_CONSUMER_KEY ||
+    !WOO_UK_CONSUMER_SECRET
+  ) {
+    throw new Error(
+      'Missing WooCommerce UK environment variables'
+    );
+  }
+
+  const wooUrl =
+    WOO_UK_URL.replace(/\/$/, '');
+
+  const auth = wooBasicAuth(
+    WOO_UK_CONSUMER_KEY,
+    WOO_UK_CONSUMER_SECRET
+  );
+
+  // Because OUR orders table is one row per order,
+  // no DISTINCT/deduping nonsense is necessary.
+  const [orders] =
+    await bigquery.query({
+      query: `
+        SELECT order_id
+        FROM
+          \`${GOOGLE_PROJECT_ID}.${WOO_UK_DATASET}.${WOO_UK_ORDERS_TABLE}\`
+        WHERE
+          refunds_json IS NOT NULL
+          AND TRIM(refunds_json) NOT IN (
+            '',
+            '[]',
+            '{}'
+          )
+        ORDER BY
+          SAFE_CAST(order_id AS INT64)
+      `
+    });
+
+  console.log(
+    `Found ${orders.length} Woo UK orders containing refund references`
+  );
+
+  const refundRows = [];
+  const failedOrders = [];
+
+  let checked = 0;
+
+  for (const order of orders) {
+    const orderId =
+      String(order.order_id);
+
+    checked++;
+
+    console.log(
+      `Fetching Woo UK refunds ${checked}/${orders.length} - order ${orderId}`
+    );
+
+    const response = await fetch(
+      `${wooUrl}/wp-json/wc/v3/orders/${orderId}/refunds?per_page=100`,
+      {
+        headers: {
+          Authorization: `Basic ${auth}`,
+          Accept: 'application/json'
+        }
+      }
+    );
+
+    if (!response.ok) {
+      const body =
+        await response.text();
+
+      console.error(
+        `Woo UK refund fetch failed for order ${orderId}:`,
+        response.status,
+        body
+      );
+
+      failedOrders.push(orderId);
+      continue;
+    }
+
+    const refunds =
+      await response.json();
+
+    for (const refund of refunds) {
+      refundRows.push({
+        refund_id:
+          String(refund.id),
+
+        order_id:
+          orderId,
+
+        refund_date:
+          wooDateToIso(
+            refund.date_created_gmt
+          ),
+
+        refund_amount:
+          Number(refund.amount || 0),
+
+        reason:
+          refund.reason || null,
+
+        refunded_by:
+          refund.refunded_by !== undefined &&
+          refund.refunded_by !== null
+            ? String(refund.refunded_by)
+            : null,
+
+        api_refunded:
+          refund.api_refund === true,
+
+        line_items_json:
+          JSON.stringify(
+            refund.line_items || []
+          ),
+
+        raw_json:
+          JSON.stringify(refund),
+
+        synced_at:
+          new Date().toISOString()
+      });
+    }
+  }
+
+  console.log(
+    `Found ${refundRows.length} individual Woo UK refunds`
+  );
+
+  const table =
+    await ensureWooUKRefundsTable();
+
+  await bigquery.query({
+    query: `
+      TRUNCATE TABLE
+      \`${GOOGLE_PROJECT_ID}.${WOO_UK_DATASET}.refunds_api\`
+    `
+  });
+
+  const batchSize = 500;
+
+  for (
+    let i = 0;
+    i < refundRows.length;
+    i += batchSize
+  ) {
+    const batch =
+      refundRows.slice(i, i + batchSize);
+
+    await table.insert(batch);
+
+    console.log(
+      `Inserted ${Math.min(
+        i + batch.length,
+        refundRows.length
+      )}/${refundRows.length} Woo UK refunds`
+    );
+  }
+
+  return {
+    refund_orders_checked:
+      orders.length,
+
+    refunds_imported:
+      refundRows.length,
+
+    failed_orders:
+      failedOrders.length,
+
+    failed_order_ids:
+      failedOrders
+  };
+}
+
+
+// ============================================================================
+// WOO UK ROUTES
+// ============================================================================
+
+app.post(
+  '/sync-woo-uk-orders',
+  requireSyncSecret,
+  async (req, res) => {
+    try {
+      const result =
+        await syncWooUKOrders();
+
+      res.json({
+        success: true,
+        store: 'UK',
+        dataset: WOO_UK_DATASET,
+        ...result
+      });
+    } catch (error) {
+      console.error(
+        'Woo UK order sync error:',
+        error
+      );
+
+      res.status(500).json({
+        success: false,
+        error: error.message
+      });
+    }
+  }
+);
+
+
+app.post(
+  '/sync-woo-uk-refunds',
+  requireSyncSecret,
+  async (req, res) => {
+    try {
+      const result =
+        await syncWooUKRefunds();
+
+      res.json({
+        success: true,
+        store: 'UK',
+        dataset: WOO_UK_DATASET,
+        ...result
+      });
+    } catch (error) {
+      console.error(
+        'Woo UK refund sync error:',
+        error
+      );
+
+      res.status(500).json({
+        success: false,
+        error: error.message
+      });
+    }
+  }
+);
+
 app.listen(
   PORT,
   () => {
