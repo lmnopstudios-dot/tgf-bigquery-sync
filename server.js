@@ -1889,7 +1889,7 @@ function transformWooUKOrder(order) {
   };
 }
 
-async function fetchWooUKOrders() {
+async function syncWooUKOrders() {
   if (
     !WOO_UK_URL ||
     !WOO_UK_CONSUMER_KEY ||
@@ -1900,11 +1900,15 @@ async function fetchWooUKOrders() {
     );
   }
 
+  console.log(
+    'Starting paged WooCommerce UK historic order import'
+  );
+
+  const table =
+    await ensureWooUKOrdersTable();
+
   const wooUrl =
-    WOO_UK_URL.replace(
-      /\/$/,
-      ''
-    );
+    WOO_UK_URL.replace(/\/$/, '');
 
   const auth =
     wooBasicAuth(
@@ -1912,19 +1916,31 @@ async function fetchWooUKOrders() {
       WOO_UK_CONSUMER_SECRET
     );
 
-  const allOrders = [];
+  /*
+   * Clear the destination ONCE before we start.
+   * After this, every Woo page is written immediately
+   * instead of keeping the entire history in memory.
+   */
+  console.log(
+    'Clearing existing Woo UK API order table...'
+  );
+
+  await bigquery.query({
+    query: `
+      TRUNCATE TABLE
+      \`${GOOGLE_PROJECT_ID}.${WOO_UK_DATASET}.${WOO_UK_ORDERS_TABLE}\`
+    `
+  });
 
   let page = 1;
   let totalPages = null;
+  let totalOrdersReported = null;
+  let rowsWritten = 0;
 
   while (true) {
     console.log(
       `Fetching Woo UK orders page ${page}` +
-      (
-        totalPages
-          ? `/${totalPages}`
-          : ''
-      )
+      (totalPages ? `/${totalPages}` : '')
     );
 
     const url =
@@ -1942,7 +1958,6 @@ async function fetchWooUKOrders() {
           headers: {
             Authorization:
               `Basic ${auth}`,
-
             Accept:
               'application/json'
           }
@@ -1962,9 +1977,13 @@ async function fetchWooUKOrders() {
     const orders =
       await response.json();
 
-    if (
-      totalPages === null
-    ) {
+    if (!Array.isArray(orders)) {
+      throw new Error(
+        `Unexpected Woo UK response on page ${page}`
+      );
+    }
+
+    if (totalPages === null) {
       totalPages =
         Number(
           response.headers.get(
@@ -1972,7 +1991,7 @@ async function fetchWooUKOrders() {
           ) || 0
         );
 
-      const totalOrders =
+      totalOrdersReported =
         Number(
           response.headers.get(
             'x-wp-total'
@@ -1980,24 +1999,42 @@ async function fetchWooUKOrders() {
         );
 
       console.log(
-        `Woo UK reports ${totalOrders} total orders across ${totalPages} pages`
+        `Woo UK reports ${totalOrdersReported} total orders across ${totalPages} pages`
       );
     }
 
-    allOrders.push(
-      ...orders
-    );
+    if (orders.length === 0) {
+      console.log(
+        `Woo UK page ${page} returned no orders`
+      );
+
+      break;
+    }
+
+    /*
+     * Transform ONLY this page.
+     *
+     * Once the loop moves on, these objects can be
+     * garbage-collected. We never retain all 38k orders.
+     */
+    const rows =
+      orders.map(
+        transformWooUKOrder
+      );
+
+    await table.insert(rows);
+
+    rowsWritten += rows.length;
 
     console.log(
-      `Fetched ${allOrders.length} Woo UK orders so far`
+      `Woo UK page ${page}/${totalPages}: ` +
+      `inserted ${rows.length} orders - ` +
+      `${rowsWritten}/${totalOrdersReported} total written`
     );
 
     if (
-      orders.length === 0 ||
-      (
-        totalPages &&
-        page >= totalPages
-      )
+      totalPages &&
+      page >= totalPages
     ) {
       break;
     }
@@ -2005,75 +2042,19 @@ async function fetchWooUKOrders() {
     page++;
   }
 
-  return allOrders;
-}
-
-async function syncWooUKOrders() {
   console.log(
-    'Starting full WooCommerce UK historic order import'
-  );
-
-  const table =
-    await ensureWooUKOrdersTable();
-
-  const orders =
-    await fetchWooUKOrders();
-
-  console.log(
-    `Woo UK returned ${orders.length} orders`
-  );
-
-  const rows =
-    orders.map(
-      transformWooUKOrder
-    );
-
-  console.log(
-    'Clearing existing Woo UK API order table...'
-  );
-
-  await bigquery.query({
-    query: `
-      TRUNCATE TABLE
-      \`${GOOGLE_PROJECT_ID}.${WOO_UK_DATASET}.${WOO_UK_ORDERS_TABLE}\`
-    `
-  });
-
-  const batchSize = 500;
-
-  for (
-    let i = 0;
-    i < rows.length;
-    i += batchSize
-  ) {
-    const batch =
-      rows.slice(
-        i,
-        i + batchSize
-      );
-
-    await table.insert(
-      batch
-    );
-
-    console.log(
-      `Inserted ${Math.min(
-        i + batch.length,
-        rows.length
-      )}/${rows.length} Woo UK orders`
-    );
-  }
-
-  console.log(
-    'Woo UK historic order import complete'
+    `Woo UK historic order import complete - ${rowsWritten} rows written`
   );
 
   return {
-    orders_fetched:
-      orders.length,
+    orders_reported:
+      totalOrdersReported,
+
+    pages_processed:
+      page,
 
     rows_written:
-      rows.length
+      rowsWritten
   };
 }
 
