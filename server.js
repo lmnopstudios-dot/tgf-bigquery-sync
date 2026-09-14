@@ -167,225 +167,6 @@ async function getAllOrders() {
             name
           }
 
-          currencyCode
-presentmentCurrencyCode
-processedAt
-cancelledAt
-paymentGatewayNames
-
-totalPriceSet {
-  shopMoney {
-    amount
-    currencyCode
-  }
-  presentmentMoney {
-    amount
-    currencyCode
-  }
-}
-
-subtotalPriceSet {
-  shopMoney {
-    amount
-    currencyCode
-  }
-  presentmentMoney {
-    amount
-    currencyCode
-  }
-}
-
-totalTaxSet {
-  shopMoney {
-    amount
-    currencyCode
-  }
-  presentmentMoney {
-    amount
-    currencyCode
-  }
-}
-
-totalDiscountsSet {
-  shopMoney {
-    amount
-    currencyCode
-  }
-  presentmentMoney {
-    amount
-    currencyCode
-  }
-}
-
-totalShippingPriceSet {
-  shopMoney {
-    amount
-    currencyCode
-  }
-  presentmentMoney {
-    amount
-    currencyCode
-  }
-}
-
-totalRefundedSet {
-  shopMoney {
-    amount
-    currencyCode
-  }
-  presentmentMoney {
-    amount
-    currencyCode
-  }
-}
-
-totalReceivedSet {
-  shopMoney {
-    amount
-    currencyCode
-  }
-  presentmentMoney {
-    amount
-    currencyCode
-  }
-}
-
-refunds {
-  id
-  createdAt
-  processedAt
-  updatedAt
-  note
-
-  totalRefundedSet {
-    shopMoney {
-      amount
-      currencyCode
-    }
-    presentmentMoney {
-      amount
-      currencyCode
-    }
-  }
-
-  refundLineItems(first: 250) {
-    nodes {
-      id
-      quantity
-      restocked
-      restockType
-
-      lineItem {
-        id
-        name
-        title
-        sku
-      }
-
-      subtotalSet {
-        shopMoney {
-          amount
-          currencyCode
-        }
-        presentmentMoney {
-          amount
-          currencyCode
-        }
-      }
-
-      totalTaxSet {
-        shopMoney {
-          amount
-          currencyCode
-        }
-        presentmentMoney {
-          amount
-          currencyCode
-        }
-      }
-    }
-  }
-
-  refundShippingLines(first: 50) {
-    nodes {
-      id
-
-      subtotalAmountSet {
-        shopMoney {
-          amount
-          currencyCode
-        }
-        presentmentMoney {
-          amount
-          currencyCode
-        }
-      }
-
-      taxAmountSet {
-        shopMoney {
-          amount
-          currencyCode
-        }
-        presentmentMoney {
-          amount
-          currencyCode
-        }
-      }
-    }
-  }
-
-  orderAdjustments(first: 50) {
-    nodes {
-      id
-      reason
-
-      amountSet {
-        shopMoney {
-          amount
-          currencyCode
-        }
-        presentmentMoney {
-          amount
-          currencyCode
-        }
-      }
-
-      taxAmountSet {
-        shopMoney {
-          amount
-          currencyCode
-        }
-        presentmentMoney {
-          amount
-          currencyCode
-        }
-      }
-    }
-  }
-
-  transactions(first: 100) {
-    nodes {
-      id
-      kind
-      status
-      gateway
-      createdAt
-      processedAt
-
-      amountSet {
-        shopMoney {
-          amount
-          currencyCode
-        }
-        presentmentMoney {
-          amount
-          currencyCode
-        }
-      }
-    }
-  }
-}
-
           lineItems(first: 250) {
             nodes {
               id
@@ -532,6 +313,295 @@ refunds {
 
     console.log(
       `Fetched ${orders.length} orders so far`
+    );
+  }
+
+  return orders;
+}
+
+async function getAllOrderFinancialsAndRefunds() {
+  const token =
+    await getShopifyAccessToken();
+
+  const query = `
+    query GetOrderFinancials($cursor: String) {
+      orders(
+        first: 50
+        after: $cursor
+        sortKey: CREATED_AT
+      ) {
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+
+        nodes {
+          id
+          name
+          createdAt
+          updatedAt
+          processedAt
+          cancelledAt
+          currencyCode
+          presentmentCurrencyCode
+          paymentGatewayNames
+
+          app {
+            id
+            name
+          }
+
+          totalPriceSet {
+            shopMoney {
+              amount
+              currencyCode
+            }
+            presentmentMoney {
+              amount
+              currencyCode
+            }
+          }
+
+          subtotalPriceSet {
+            shopMoney {
+              amount
+              currencyCode
+            }
+            presentmentMoney {
+              amount
+              currencyCode
+            }
+          }
+
+          totalTaxSet {
+            shopMoney {
+              amount
+              currencyCode
+            }
+            presentmentMoney {
+              amount
+              currencyCode
+            }
+          }
+
+          totalDiscountsSet {
+            shopMoney {
+              amount
+              currencyCode
+            }
+            presentmentMoney {
+              amount
+              currencyCode
+            }
+          }
+
+          totalShippingPriceSet {
+            shopMoney {
+              amount
+              currencyCode
+            }
+            presentmentMoney {
+              amount
+              currencyCode
+            }
+          }
+
+          totalRefundedSet {
+            shopMoney {
+              amount
+              currencyCode
+            }
+            presentmentMoney {
+              amount
+              currencyCode
+            }
+          }
+
+          totalReceivedSet {
+            shopMoney {
+              amount
+              currencyCode
+            }
+            presentmentMoney {
+              amount
+              currencyCode
+            }
+          }
+
+          refunds {
+            id
+            createdAt
+            processedAt
+            updatedAt
+            note
+
+            totalRefundedSet {
+              shopMoney {
+                amount
+                currencyCode
+              }
+              presentmentMoney {
+                amount
+                currencyCode
+              }
+            }
+
+            refundLineItems(first: 100) {
+              nodes {
+                id
+                quantity
+                restocked
+                restockType
+
+                lineItem {
+                  id
+                  name
+                  title
+                  sku
+                }
+
+                subtotalSet {
+                  shopMoney {
+                    amount
+                    currencyCode
+                  }
+                  presentmentMoney {
+                    amount
+                    currencyCode
+                  }
+                }
+
+                totalTaxSet {
+                  shopMoney {
+                    amount
+                    currencyCode
+                  }
+                  presentmentMoney {
+                    amount
+                    currencyCode
+                  }
+                }
+              }
+            }
+
+            refundShippingLines(first: 25) {
+              nodes {
+                id
+
+                subtotalAmountSet {
+                  shopMoney {
+                    amount
+                    currencyCode
+                  }
+                  presentmentMoney {
+                    amount
+                    currencyCode
+                  }
+                }
+
+                taxAmountSet {
+                  shopMoney {
+                    amount
+                    currencyCode
+                  }
+                  presentmentMoney {
+                    amount
+                    currencyCode
+                  }
+                }
+              }
+            }
+
+            orderAdjustments(first: 25) {
+              nodes {
+                id
+                reason
+
+                amountSet {
+                  shopMoney {
+                    amount
+                    currencyCode
+                  }
+                  presentmentMoney {
+                    amount
+                    currencyCode
+                  }
+                }
+
+                taxAmountSet {
+                  shopMoney {
+                    amount
+                    currencyCode
+                  }
+                  presentmentMoney {
+                    amount
+                    currencyCode
+                  }
+                }
+              }
+            }
+
+            transactions(first: 50) {
+              nodes {
+                id
+                kind
+                status
+                gateway
+                createdAt
+                processedAt
+
+                amountSet {
+                  shopMoney {
+                    amount
+                    currencyCode
+                  }
+                  presentmentMoney {
+                    amount
+                    currencyCode
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  `;
+
+  let cursor = null;
+  let hasNextPage = true;
+  let orders = [];
+  let page = 0;
+
+  while (hasNextPage) {
+    page++;
+
+    console.log(
+      `Fetching Shopify financial/refund page ${page}...`
+    );
+
+    const data =
+      await shopifyGraphQL(
+        token,
+        query,
+        { cursor }
+      );
+
+    const connection =
+      data.orders;
+
+    orders.push(
+      ...connection.nodes
+    );
+
+    hasNextPage =
+      connection.pageInfo.hasNextPage;
+
+    cursor =
+      connection.pageInfo.endCursor;
+
+    console.log(
+      `Fetched ${orders.length} Shopify financial/refund orders so far`
     );
   }
 
@@ -1614,14 +1684,21 @@ async function replaceRefundsData(rows) {
 
 async function syncShopify() {
   console.log(
-    'Starting Shopify order metadata + line item + financial + refund sync'
+    'Starting Shopify sync'
   );
 
   const orders =
     await getAllOrders();
 
   console.log(
-    `Shopify returned ${orders.length} orders`
+    `Shopify returned ${orders.length} orders for metadata/line items`
+  );
+
+  const financialOrders =
+    await getAllOrderFinancialsAndRefunds();
+
+  console.log(
+    `Shopify returned ${financialOrders.length} orders for financials/refunds`
   );
 
   const orderRows =
@@ -1631,10 +1708,10 @@ async function syncShopify() {
     transformLineItems(orders);
 
   const financialRows =
-    transformFinancials(orders);
+    transformFinancials(financialOrders);
 
   const refundRows =
-    transformRefunds(orders);
+    transformRefunds(financialOrders);
 
   console.log(
     `Extracted ${lineItemRows.length} Shopify line items`
@@ -1671,6 +1748,9 @@ async function syncShopify() {
   return {
     ordersFetched:
       orders.length,
+
+    financialOrdersFetched:
+      financialOrders.length,
 
     orderRowsWritten:
       orderRows.length,
