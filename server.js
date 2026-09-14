@@ -3774,6 +3774,204 @@ app.post(
   }
 );
 
+
+
+app.post(
+  '/agent',
+  requireSyncSecret,
+  express.json(),
+  async (req, res) => {
+    try {
+      const message = req.body?.message;
+
+      if (!message) {
+        return res.status(400).json({
+          success: false,
+          error: 'message is required'
+        });
+      }
+
+      const tools = [
+        {
+          type: 'function',
+          name: 'get_sales_summary',
+          description:
+            'Get TGF sales totals for a date range, optionally filtered by location, channel or source.',
+          parameters: {
+            type: 'object',
+            properties: {
+              start_date: {
+                type: 'string',
+                description: 'Start date in YYYY-MM-DD format'
+              },
+              end_date: {
+                type: 'string',
+                description: 'End date in YYYY-MM-DD format'
+              },
+              currency: {
+                type: 'string',
+                enum: ['GBP', 'USD', 'JPY']
+              },
+              location: {
+                type: ['string', 'null']
+              },
+              channel: {
+                type: ['string', 'null']
+              },
+              source: {
+                type: ['string', 'null']
+              }
+            },
+            required: ['start_date', 'end_date']
+          }
+        },
+        {
+          type: 'function',
+          name: 'get_sales_by_location',
+          description:
+            'Get TGF sales totals grouped by retail location for a date range.',
+          parameters: {
+            type: 'object',
+            properties: {
+              start_date: {
+                type: 'string'
+              },
+              end_date: {
+                type: 'string'
+              },
+              currency: {
+                type: 'string',
+                enum: ['GBP', 'USD', 'JPY']
+              }
+            },
+            required: ['start_date', 'end_date']
+          }
+        },
+        {
+          type: 'function',
+          name: 'compare_sales_periods',
+          description:
+            'Compare TGF sales performance between two date periods.',
+          parameters: {
+            type: 'object',
+            properties: {
+              period_1_start: {
+                type: 'string'
+              },
+              period_1_end: {
+                type: 'string'
+              },
+              period_2_start: {
+                type: 'string'
+              },
+              period_2_end: {
+                type: 'string'
+              },
+              currency: {
+                type: 'string',
+                enum: ['GBP', 'USD', 'JPY']
+              },
+              location: {
+                type: ['string', 'null']
+              },
+              channel: {
+                type: ['string', 'null']
+              },
+              source: {
+                type: ['string', 'null']
+              }
+            },
+            required: [
+              'period_1_start',
+              'period_1_end',
+              'period_2_start',
+              'period_2_end'
+            ]
+          }
+        }
+      ];
+
+      let response = await openai.responses.create({
+        model: 'gpt-5.6',
+        instructions: `
+You are The Great Frog ecommerce data analyst.
+
+You answer questions using the supplied tools.
+
+Important rules:
+- Never add GBP, USD and JPY together.
+- Default to GBP if the user does not specify a currency and the context is UK retail.
+- For phrases like "how much did we take", "how much did we make", "revenue", or "how did we do", use net_gross as the headline figure.
+- Sales gross is positive sales before refunds.
+- Refunds gross is negative.
+- Net gross is sales after refunds.
+- Be concise and commercially useful.
+- State the date range and currency used.
+- If comparing periods, show the absolute difference and percentage change where available.
+        `,
+        input: message,
+        tools
+      });
+
+      while (
+        response.output?.some(
+          item => item.type === 'function_call'
+        )
+      ) {
+        const outputs = [];
+
+        for (const item of response.output) {
+          if (item.type !== 'function_call') {
+            continue;
+          }
+
+          const args = JSON.parse(item.arguments || '{}');
+
+          let result;
+
+          if (item.name === 'get_sales_summary') {
+            result = await getSalesSummary(args);
+          } else if (item.name === 'get_sales_by_location') {
+            result = await getSalesByLocation(args);
+          } else if (item.name === 'compare_sales_periods') {
+            result = await compareSalesPeriods(args);
+          } else {
+            result = {
+              error: `Unknown tool: ${item.name}`
+            };
+          }
+
+          outputs.push({
+            type: 'function_call_output',
+            call_id: item.call_id,
+            output: JSON.stringify(result)
+          });
+        }
+
+        response = await openai.responses.create({
+          model: 'gpt-5.6',
+          previous_response_id: response.id,
+          input: outputs,
+          tools
+        });
+      }
+
+      res.json({
+        success: true,
+        answer: response.output_text
+      });
+    } catch (error) {
+      console.error('Agent error:', error);
+
+      res.status(500).json({
+        success: false,
+        error: error.message
+      });
+    }
+  }
+);
+
+
 /* =========================================================
    START SERVER
 ========================================================= */
