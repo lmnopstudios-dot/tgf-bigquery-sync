@@ -2540,6 +2540,270 @@ async function compareSalesPeriods({
       b !== 0 ? ((a - b) / Math.abs(b)) * 100 : null
   };
 }
+async function getSalesByChannel({
+  start_date,
+  end_date,
+  currency = 'GBP',
+  location = null,
+  source = null
+}) {
+  const filters = [
+    'date >= @start_date',
+    'date <= @end_date',
+    'currency = @currency'
+  ];
+
+  const params = {
+    start_date,
+    end_date,
+    currency
+  };
+
+  if (location) {
+    filters.push('LOWER(location) = LOWER(@location)');
+    params.location = location;
+  }
+
+  if (source) {
+    filters.push('LOWER(source) = LOWER(@source)');
+    params.source = source;
+  }
+
+  const query = `
+    SELECT
+      COALESCE(channel, 'Unknown') AS channel,
+      COUNT(*) AS transaction_count,
+
+      SUM(
+        CASE
+          WHEN transaction_type = 'sale'
+          THEN gross
+          ELSE 0
+        END
+      ) AS sales_gross,
+
+      SUM(
+        CASE
+          WHEN transaction_type = 'refund'
+          THEN gross
+          ELSE 0
+        END
+      ) AS refunds_gross,
+
+      SUM(gross) AS net_gross,
+
+      SUM(tax) AS net_tax,
+
+      SUM(net_ex_tax) AS net_ex_tax
+
+    FROM \`${GOOGLE_PROJECT_ID}.finance.accountant_transactions\`
+
+    WHERE ${filters.join('\nAND ')}
+
+    GROUP BY channel
+    ORDER BY net_gross DESC
+  `;
+
+  const [rows] = await bigquery.query({
+    query,
+    params
+  });
+
+  return rows;
+}
+
+
+async function getRefunds({
+  start_date,
+  end_date,
+  currency = 'GBP',
+  location = null,
+  channel = null,
+  source = null,
+  group_by = 'summary'
+}) {
+  const filters = [
+    'date >= @start_date',
+    'date <= @end_date',
+    'currency = @currency',
+    "transaction_type = 'refund'"
+  ];
+
+  const params = {
+    start_date,
+    end_date,
+    currency
+  };
+
+  if (location) {
+    filters.push('LOWER(location) = LOWER(@location)');
+    params.location = location;
+  }
+
+  if (channel) {
+    filters.push('LOWER(channel) = LOWER(@channel)');
+    params.channel = channel;
+  }
+
+  if (source) {
+    filters.push('LOWER(source) = LOWER(@source)');
+    params.source = source;
+  }
+
+  let groupExpression = null;
+  let groupAlias = null;
+
+  if (group_by === 'month') {
+    groupExpression = "FORMAT_DATE('%Y-%m', date)";
+    groupAlias = 'month';
+  }
+
+  if (group_by === 'location') {
+    groupExpression = "COALESCE(location, 'Unknown')";
+    groupAlias = 'location';
+  }
+
+  if (group_by === 'channel') {
+    groupExpression = "COALESCE(channel, 'Unknown')";
+    groupAlias = 'channel';
+  }
+
+  if (group_by === 'source') {
+    groupExpression = "COALESCE(source, 'Unknown')";
+    groupAlias = 'source';
+  }
+
+  const query = groupExpression
+    ? `
+      SELECT
+        ${groupExpression} AS ${groupAlias},
+        COUNT(*) AS refund_count,
+        SUM(gross) AS refunds_gross,
+        ABS(SUM(gross)) AS refunded_amount,
+        SUM(tax) AS refunded_tax,
+        SUM(net_ex_tax) AS refunded_net_ex_tax
+
+      FROM \`${GOOGLE_PROJECT_ID}.finance.accountant_transactions\`
+
+      WHERE ${filters.join('\nAND ')}
+
+      GROUP BY ${groupAlias}
+      ORDER BY refunded_amount DESC
+    `
+    : `
+      SELECT
+        COUNT(*) AS refund_count,
+        SUM(gross) AS refunds_gross,
+        ABS(SUM(gross)) AS refunded_amount,
+        SUM(tax) AS refunded_tax,
+        SUM(net_ex_tax) AS refunded_net_ex_tax
+
+      FROM \`${GOOGLE_PROJECT_ID}.finance.accountant_transactions\`
+
+      WHERE ${filters.join('\nAND ')}
+    `;
+
+  const [rows] = await bigquery.query({
+    query,
+    params
+  });
+
+  return groupExpression ? rows : (rows[0] || {});
+}
+
+
+async function getGiftCardIssuance({
+  start_date,
+  end_date,
+  currency = 'GBP',
+  location = null,
+  channel = null,
+  source = null,
+  group_by = 'summary'
+}) {
+  const filters = [
+    'date >= @start_date',
+    'date <= @end_date',
+    'currency = @currency'
+  ];
+
+  const params = {
+    start_date,
+    end_date,
+    currency
+  };
+
+  if (location) {
+    filters.push('LOWER(location) = LOWER(@location)');
+    params.location = location;
+  }
+
+  if (channel) {
+    filters.push('LOWER(channel) = LOWER(@channel)');
+    params.channel = channel;
+  }
+
+  if (source) {
+    filters.push('LOWER(source) = LOWER(@source)');
+    params.source = source;
+  }
+
+  let groupExpression = null;
+  let groupAlias = null;
+
+  if (group_by === 'month') {
+    groupExpression = "FORMAT_DATE('%Y-%m', date)";
+    groupAlias = 'month';
+  }
+
+  if (group_by === 'location') {
+    groupExpression = "COALESCE(location, 'Unknown')";
+    groupAlias = 'location';
+  }
+
+  if (group_by === 'channel') {
+    groupExpression = "COALESCE(channel, 'Unknown')";
+    groupAlias = 'channel';
+  }
+
+  if (group_by === 'source') {
+    groupExpression = "COALESCE(source, 'Unknown')";
+    groupAlias = 'source';
+  }
+
+  const query = groupExpression
+    ? `
+      SELECT
+        ${groupExpression} AS ${groupAlias},
+        COUNT(*) AS gift_card_transactions,
+        SUM(gift_card_issuance) AS gift_card_issuance,
+        SUM(transaction_gross) AS transaction_gross
+
+      FROM \`${GOOGLE_PROJECT_ID}.finance.accountant_gift_cards\`
+
+      WHERE ${filters.join('\nAND ')}
+
+      GROUP BY ${groupAlias}
+      ORDER BY gift_card_issuance DESC
+    `
+    : `
+      SELECT
+        COUNT(*) AS gift_card_transactions,
+        SUM(gift_card_issuance) AS gift_card_issuance,
+        SUM(transaction_gross) AS transaction_gross
+
+      FROM \`${GOOGLE_PROJECT_ID}.finance.accountant_gift_cards\`
+
+      WHERE ${filters.join('\nAND ')}
+    `;
+
+  const [rows] = await bigquery.query({
+    query,
+    params
+  });
+
+  return groupExpression ? rows : (rows[0] || {});
+}
 
 /* =========================================================
    ROUTES
@@ -4003,7 +4267,119 @@ app.post(
               'end_date'
             ]
           }
-        }
+        },
+        {
+  type: 'function',
+  name: 'get_sales_by_channel',
+  description:
+    'Get TGF sales grouped by sales channel for a date range, such as Online or Retail.',
+  parameters: {
+    type: 'object',
+    properties: {
+      start_date: {
+        type: 'string',
+        description: 'Start date in YYYY-MM-DD format'
+      },
+      end_date: {
+        type: 'string',
+        description: 'End date in YYYY-MM-DD format'
+      },
+      currency: {
+        type: 'string',
+        enum: ['GBP', 'USD', 'JPY']
+      },
+      location: {
+        type: ['string', 'null']
+      },
+      source: {
+        type: ['string', 'null']
+      }
+    },
+    required: ['start_date', 'end_date']
+  }
+},
+{
+  type: 'function',
+  name: 'get_refunds',
+  description:
+    'Analyse TGF refunds for a date range. Can return an overall summary or group refunds by month, location, channel or source.',
+  parameters: {
+    type: 'object',
+    properties: {
+      start_date: {
+        type: 'string'
+      },
+      end_date: {
+        type: 'string'
+      },
+      currency: {
+        type: 'string',
+        enum: ['GBP', 'USD', 'JPY']
+      },
+      location: {
+        type: ['string', 'null']
+      },
+      channel: {
+        type: ['string', 'null']
+      },
+      source: {
+        type: ['string', 'null']
+      },
+      group_by: {
+        type: 'string',
+        enum: [
+          'summary',
+          'month',
+          'location',
+          'channel',
+          'source'
+        ]
+      }
+    },
+    required: ['start_date', 'end_date']
+  }
+},
+{
+  type: 'function',
+  name: 'get_gift_card_issuance',
+  description:
+    'Get identified TGF gift card issuance. Can return an overall total or group by month, location, channel or source. Historical WooCommerce gift card identification is incomplete, so results primarily cover identified Shopify and Square issuance.',
+  parameters: {
+    type: 'object',
+    properties: {
+      start_date: {
+        type: 'string'
+      },
+      end_date: {
+        type: 'string'
+      },
+      currency: {
+        type: 'string',
+        enum: ['GBP', 'USD', 'JPY']
+      },
+      location: {
+        type: ['string', 'null']
+      },
+      channel: {
+        type: ['string', 'null']
+      },
+      source: {
+        type: ['string', 'null']
+      },
+      group_by: {
+        type: 'string',
+        enum: [
+          'summary',
+          'month',
+          'location',
+          'channel',
+          'source'
+        ]
+      }
+    },
+    required: ['start_date', 'end_date']
+  }
+}
       ];
 
       let response = await openai.responses.create({
@@ -4023,6 +4399,8 @@ Important rules:
 - Be concise and commercially useful.
 - State the date range and currency used.
 - If comparing periods, show the absolute difference and percentage change where available.
+- When discussing refunds, remember refund gross values are negative. Use refunded_amount when presenting a positive human-readable refund total.
+- Gift card issuance data is incomplete for historical WooCommerce. Mention this limitation when relevant.
         `,
         input: message,
         tools
@@ -4045,16 +4423,34 @@ Important rules:
           let result;
 
           if (item.name === 'get_sales_summary') {
-            result = await getSalesSummary(args);
-          } else if (item.name === 'get_sales_by_location') {
-            result = await getSalesByLocation(args);
-          } else if (item.name === 'compare_sales_periods') {
-            result = await compareSalesPeriods(args);
-          } else if (item.name === 'get_sales_by_month') {
 
-            result = await getSalesByMonth(args);
-          
-          } else {
+  result = await getSalesSummary(args);
+
+} else if (item.name === 'get_sales_by_location') {
+
+  result = await getSalesByLocation(args);
+
+} else if (item.name === 'compare_sales_periods') {
+
+  result = await compareSalesPeriods(args);
+
+} else if (item.name === 'get_sales_by_month') {
+
+  result = await getSalesByMonth(args);
+
+} else if (item.name === 'get_sales_by_channel') {
+
+  result = await getSalesByChannel(args);
+
+} else if (item.name === 'get_refunds') {
+
+  result = await getRefunds(args);
+
+} else if (item.name === 'get_gift_card_issuance') {
+
+  result = await getGiftCardIssuance(args);
+
+} else {
             result = {
               error: `Unknown tool: ${item.name}`
             };
