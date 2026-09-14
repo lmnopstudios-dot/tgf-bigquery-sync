@@ -827,11 +827,10 @@ async function getShopifyReturnsAnalysis({
       'return_line_item_reason',
       'return_line_item_reason_note'
     ],
-    product: ['product_id', 'product_title'],
+    product: ['product_title_at_time_of_sale'],
     variant: [
-      'product_variant_id',
-      'product_variant_title',
-      'product_variant_sku'
+      'product_variant_title_at_time_of_sale',
+      'product_variant_sku_at_time_of_sale'
     ],
     status: ['return_status']
   };
@@ -876,14 +875,6 @@ LIMIT ${limit}`;
       'returns analysis'
     );
   }
-
-  normalizeShopifyResourceIds(rows, [
-    'product_id',
-    'product_variant_id',
-    'order_id',
-    'refund_id',
-    'line_item_id'
-  ]);
 
   return {
     start_date,
@@ -5471,7 +5462,7 @@ app.post(
   type: 'function',
   name: 'get_shopify_returns_analysis',
   description:
-    'Analyse Shopify returned item quantities by reason, product, variant or return status. This reports units, not accounting refund value.',
+    'Analyse Shopify returned item quantities by reason, historical product or variant naming at the time of sale, or return status. This item-level report may identify products and variants by historical titles or SKUs rather than stable product IDs, and reports units rather than accounting refund value.',
   parameters: {
     type: 'object',
     properties: {
@@ -5556,10 +5547,10 @@ Important rules:
 - Use search_shopify_products for current live aggregate inventory, purchasability, product, variant and price state.
 - Do not confuse historical inventory snapshots with live stock. ending_inventory_units_at_location is location-specific historical data.
 - days_of_inventory_remaining_at_location is an estimate based on Shopify inventory and sales history, not a guarantee. Inventory value depends on costs recorded in Shopify.
-- Use get_shopify_returns_analysis for item-level return quantities, reasons and statuses. returned_quantity is units/items, not money refunded.
+- Use get_shopify_returns_analysis for item-level return quantities, reasons and statuses. returned_quantity is units/items, not money refunded. Products and variants may be identified by their historical titles or SKUs at the time of sale rather than stable product IDs.
 - Use BigQuery for accounting refund values, and Shopify sales KPIs or product performance for monetary return analysis.
 - Combine get_shopify_product_performance with get_shopify_inventory_performance for stock-risk questions.
-- Combine get_shopify_returns_analysis with get_shopify_product_performance for return and problem-product analysis.
+- For combined “top sellers with high returns” and other return/problem-product questions, match get_shopify_returns_analysis results to get_shopify_product_performance by historical product or variant naming where possible, and clearly state when the match is approximate.
 - Combine get_shopify_product_performance with search_shopify_products for questions such as “Which best-selling products are low on stock?”.
 - Use get_shopify_customer_kpis for Shopify Online Store new and returning customer behaviour.
 - new_customers means customers making their first purchase in the reporting period according to Shopify; returning_customers means customers who purchased after a previous purchase.
