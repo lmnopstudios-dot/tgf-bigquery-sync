@@ -73,6 +73,24 @@ const bigquery = new BigQuery({
    SHOPIFY
 ========================================================= */
 
+function sanitizeShopifyResponsePreview(
+  body,
+  secrets = []
+) {
+  let preview = body;
+
+  for (const secret of secrets) {
+    if (secret) {
+      preview = preview.split(secret).join('[REDACTED]');
+    }
+  }
+
+  return preview
+    .replace(/[\r\n\t]+/g, ' ')
+    .replace(/[\u0000-\u001f\u007f]/g, '')
+    .slice(0, 500);
+}
+
 async function getShopifyAccessToken() {
   const response = await fetch(
     `https://${SHOPIFY_SHOP}.myshopify.com/admin/oauth/access_token`,
@@ -90,7 +108,24 @@ async function getShopifyAccessToken() {
     }
   );
 
-  const data = await response.json();
+  const responseBody = await response.text();
+  let data;
+
+  try {
+    data = JSON.parse(responseBody);
+  } catch {
+    console.error(
+      `Shopify OAuth returned non-JSON response (HTTP ${response.status}):`,
+      sanitizeShopifyResponsePreview(
+        responseBody,
+        [SHOPIFY_CLIENT_SECRET]
+      )
+    );
+
+    throw new Error(
+      `Shopify OAuth returned non-JSON response: HTTP ${response.status}`
+    );
+  }
 
   if (!response.ok) {
     console.error(
@@ -126,7 +161,24 @@ async function shopifyGraphQL(
     }
   );
 
-  const data = await response.json();
+  const responseBody = await response.text();
+  let data;
+
+  try {
+    data = JSON.parse(responseBody);
+  } catch {
+    console.error(
+      `Shopify GraphQL returned non-JSON response (HTTP ${response.status}):`,
+      sanitizeShopifyResponsePreview(
+        responseBody,
+        [token]
+      )
+    );
+
+    throw new Error(
+      `Shopify GraphQL returned non-JSON response: HTTP ${response.status}`
+    );
+  }
 
   if (!response.ok || data.errors) {
     console.error(
