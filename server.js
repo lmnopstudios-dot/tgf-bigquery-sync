@@ -2289,13 +2289,6 @@ async function exportBigQueryViewToWorksheet(
   styleHeaderRow(worksheet.getRow(1));
   worksheet.getRow(1).commit();
 
-  worksheet.views = [
-    {
-      state: 'frozen',
-      ySplit: 1
-    }
-  ];
-
   worksheet.autoFilter = {
     from: { row: 1, column: 1 },
     to: { row: 1, column: headers.length }
