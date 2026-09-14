@@ -208,6 +208,16 @@ const SHOPIFY_CONVERSION_METRICS = [
   'checkout_conversion_rate'
 ];
 
+const SHOPIFY_SALES_METRICS = [
+  'orders',
+  'gross_sales',
+  'discounts',
+  'returns',
+  'net_sales',
+  'total_sales',
+  'average_order_value'
+];
+
 function validateShopifyReportDate(value, name) {
   if (
     typeof value !== 'string' ||
@@ -387,6 +397,111 @@ ORDER BY ${timeseries} ASC`;
     });
 
     return addCalculatedConversionRates(metrics);
+  });
+
+  return {
+    start_date,
+    end_date,
+    timeseries,
+    ...(timeseries === 'none'
+      ? { metrics: rows[0] ?? null }
+      : { periods: rows })
+  };
+}
+
+async function getShopifySalesKpis({
+  start_date,
+  end_date,
+  timeseries = 'none'
+}) {
+  validateShopifyReportDate(start_date, 'start_date');
+  validateShopifyReportDate(end_date, 'end_date');
+
+  if (start_date > end_date) {
+    throw new Error(
+      'start_date must be on or before end_date'
+    );
+  }
+
+  if (
+    !['none', 'day', 'week', 'month'].includes(
+      timeseries
+    )
+  ) {
+    throw new Error(
+      'timeseries must be one of: none, day, week, month'
+    );
+  }
+
+  const dateRange =
+    `SINCE ${start_date} UNTIL ${end_date}`;
+  const shopifyql = timeseries === 'none'
+    ? `FROM sales
+SHOW ${SHOPIFY_SALES_METRICS.join(', ')}
+WHERE sales_channel = 'Online Store'
+${dateRange}`
+    : `FROM sales
+SHOW ${SHOPIFY_SALES_METRICS.join(', ')}
+WHERE sales_channel = 'Online Store'
+TIMESERIES ${timeseries}
+${dateRange}
+ORDER BY ${timeseries} ASC`;
+  const token = await getShopifyAccessToken();
+  const data = await shopifyGraphQL(
+    token,
+    `
+      query ShopifySalesKpis($query: String!) {
+        shopifyqlQuery(query: $query) {
+          tableData {
+            columns {
+              name
+              dataType
+              displayName
+            }
+            rows
+          }
+          parseErrors
+        }
+      }
+    `,
+    { query: shopifyql }
+  );
+  const response = data.shopifyqlQuery;
+
+  if (response.parseErrors?.length) {
+    const details = response.parseErrors.join('; ');
+
+    throw new Error(
+      `ShopifyQL could not run the sales KPI report: ${details}`
+    );
+  }
+
+  if (!response.tableData) {
+    throw new Error(
+      'ShopifyQL returned an unexpected response without table data'
+    );
+  }
+
+  const { columns = [], rows: tableRows = [] } =
+    response.tableData;
+  const rows = tableRows.map(row => {
+    const values = Array.isArray(row)
+      ? row
+      : columns.map(column => row?.[column.name]);
+    const metrics = {};
+
+    columns.forEach((column, index) => {
+      const value = values[index];
+
+      if (value !== undefined) {
+        metrics[column.name] = parseShopifyqlValue(
+          value,
+          column.dataType
+        );
+      }
+    });
+
+    return metrics;
   });
 
   return {
@@ -4742,6 +4857,33 @@ app.post(
 },
 {
   type: 'function',
+  name: 'get_shopify_sales_kpis',
+  description:
+    'Get Shopify Online Store operational sales KPIs over an explicit date range, optionally as a daily, weekly or monthly timeseries.',
+  parameters: {
+    type: 'object',
+    properties: {
+      start_date: {
+        type: 'string',
+        description: 'Start date in YYYY-MM-DD format'
+      },
+      end_date: {
+        type: 'string',
+        description: 'End date in YYYY-MM-DD format'
+      },
+      timeseries: {
+        type: 'string',
+        enum: ['none', 'day', 'week', 'month'],
+        default: 'none',
+        description:
+          'Return one total or metrics grouped by this period.'
+      }
+    },
+    required: ['start_date', 'end_date']
+  }
+},
+{
+  type: 'function',
   name: 'search_shopify_products',
   description:
     'Search the current live Shopify product catalogue, including variants, prices and aggregate inventory across Shopify locations.',
@@ -4788,6 +4930,14 @@ Important rules:
 - Gift card issuance data is incomplete for historical WooCommerce. Mention this limitation when relevant.
 - BigQuery is the source of truth for historical financial reporting.
 - Shopify is the source of truth for online-store conversion KPIs wherever Shopify session data exists.
+- Shopify get_shopify_sales_kpis is the source for Online Store operational sales KPIs such as orders and AOV.
+- BigQuery remains the financial/accounting source of truth.
+- Shopify total_sales is the full amount customers spent including taxes, shipping, duties and fees.
+- Shopify net_sales is product sales after discounts and reversals, excluding taxes, shipping, duties and fees.
+- Shopify average_order_value is Shopify's own AOV metric and should be used when discussing Shopify ecommerce AOV.
+- Do not treat Shopify total_sales as equivalent to BigQuery net_gross; explain the metric used when relevant.
+- For questions like “why did online sales change?”, combine get_shopify_conversion_kpis and get_shopify_sales_kpis so the answer considers sessions, conversion rate, orders and AOV.
+- Use BigQuery refund data when the question requires accounting-grade refund totals; Shopify sales KPI returns can be used for operational Shopify analysis.
 - Shopify conversion_rate means sessions that completed checkout divided by sessions. Its value is a decimal, so 0.01 means 1%.
 - Do not use GA4 to fill historical gaps in Shopify conversion data unless the user explicitly asks you to.
 - When comparing conversion rates, report the percentage-point change as well as the relative percentage change where useful.
@@ -4852,6 +5002,10 @@ Important rules:
 } else if (item.name === 'get_shopify_conversion_kpis') {
 
   result = await getShopifyConversionKpis(args);
+
+} else if (item.name === 'get_shopify_sales_kpis') {
+
+  result = await getShopifySalesKpis(args);
 
 } else if (item.name === 'search_shopify_products') {
 
