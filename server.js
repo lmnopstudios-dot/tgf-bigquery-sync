@@ -346,7 +346,29 @@ async function getAllOrderFinancialsAndRefunds() {
           presentmentCurrencyCode
           paymentGatewayNames
 
-          app {
+transactions(first: 100) {
+  nodes {
+    id
+    kind
+    status
+    gateway
+    createdAt
+    processedAt
+
+    amountSet {
+      shopMoney {
+        amount
+        currencyCode
+      }
+      presentmentMoney {
+        amount
+        currencyCode
+      }
+    }
+  }
+}
+
+app {
             id
             name
           }
@@ -903,6 +925,8 @@ async function ensureFinancialsTable() {
 
       { name: 'payment_gateway_names_json', type: 'STRING' },
 
+      { name: 'transactions_json', type: 'STRING' },
+
       { name: 'synced_at', type: 'TIMESTAMP' }
     ]
   });
@@ -1061,6 +1085,9 @@ function transformFinancials(orders) {
 
     payment_gateway_names_json:
       JSON.stringify(order.paymentGatewayNames || []),
+
+    transactions_json:
+      JSON.stringify(order.transactions?.nodes || []),
 
     synced_at: syncedAt
   }));
