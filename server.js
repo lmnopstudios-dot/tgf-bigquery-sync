@@ -2335,6 +2335,85 @@ async function exportBigQueryViewToWorksheet(
   console.log(`${sheetName}: complete — ${rowCount} rows`);
 }
 
+async function getSalesByMonth({
+  start_date,
+  end_date,
+  currency = 'GBP',
+  location = null,
+  channel = null,
+  source = null
+}) {
+  const filters = [
+    'date >= @start_date',
+    'date <= @end_date',
+    'currency = @currency'
+  ];
+
+  const params = {
+    start_date,
+    end_date,
+    currency
+  };
+
+  if (location) {
+    filters.push('LOWER(location) = LOWER(@location)');
+    params.location = location;
+  }
+
+  if (channel) {
+    filters.push('LOWER(channel) = LOWER(@channel)');
+    params.channel = channel;
+  }
+
+  if (source) {
+    filters.push('LOWER(source) = LOWER(@source)');
+    params.source = source;
+  }
+
+  const query = `
+    SELECT
+      FORMAT_DATE('%Y-%m', date) AS month,
+
+      COUNT(*) AS transaction_count,
+
+      SUM(
+        CASE
+          WHEN transaction_type = 'sale'
+          THEN gross
+          ELSE 0
+        END
+      ) AS sales_gross,
+
+      SUM(
+        CASE
+          WHEN transaction_type = 'refund'
+          THEN gross
+          ELSE 0
+        END
+      ) AS refunds_gross,
+
+      SUM(gross) AS net_gross,
+
+      SUM(tax) AS net_tax,
+
+      SUM(net_ex_tax) AS net_ex_tax
+
+    FROM \`${GOOGLE_PROJECT_ID}.finance.accountant_transactions\`
+
+    WHERE ${filters.join('\nAND ')}
+
+    GROUP BY month
+    ORDER BY month
+  `;
+
+  const [rows] = await bigquery.query({
+    query,
+    params
+  });
+
+  return rows;
+}
+
 async function getSalesSummary({
   start_date,
   end_date,
@@ -3888,6 +3967,42 @@ app.post(
               'period_2_end'
             ]
           }
+        },
+        {
+          type: 'function',
+          name: 'get_sales_by_month',
+          description:
+            'Get TGF sales grouped by month for trend analysis over a date range.',
+          parameters: {
+            type: 'object',
+            properties: {
+              start_date: {
+                type: 'string',
+                description: 'Start date in YYYY-MM-DD format'
+              },
+              end_date: {
+                type: 'string',
+                description: 'End date in YYYY-MM-DD format'
+              },
+              currency: {
+                type: 'string',
+                enum: ['GBP', 'USD', 'JPY']
+              },
+              location: {
+                type: ['string', 'null']
+              },
+              channel: {
+                type: ['string', 'null']
+              },
+              source: {
+                type: ['string', 'null']
+              }
+            },
+            required: [
+              'start_date',
+              'end_date'
+            ]
+          }
         }
       ];
 
@@ -3935,6 +4050,10 @@ Important rules:
             result = await getSalesByLocation(args);
           } else if (item.name === 'compare_sales_periods') {
             result = await compareSalesPeriods(args);
+          } else if (item.name === 'get_sales_by_month') {
+
+            result = await getSalesByMonth(args);
+          
           } else {
             result = {
               error: `Unknown tool: ${item.name}`
