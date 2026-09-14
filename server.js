@@ -26,6 +26,8 @@ const {
 const DATASET = 'shopify_data';
 const TABLE = 'order_locations';
 const LINE_ITEMS_TABLE = 'order_line_items';
+const FINANCIALS_TABLE = 'order_financials';
+const REFUNDS_TABLE = 'order_refunds';
 
 /* ---------------------------------------------------------
    BASIC VALIDATION
@@ -164,6 +166,225 @@ async function getAllOrders() {
             id
             name
           }
+
+          currencyCode
+presentmentCurrencyCode
+processedAt
+cancelledAt
+paymentGatewayNames
+
+totalPriceSet {
+  shopMoney {
+    amount
+    currencyCode
+  }
+  presentmentMoney {
+    amount
+    currencyCode
+  }
+}
+
+subtotalPriceSet {
+  shopMoney {
+    amount
+    currencyCode
+  }
+  presentmentMoney {
+    amount
+    currencyCode
+  }
+}
+
+totalTaxSet {
+  shopMoney {
+    amount
+    currencyCode
+  }
+  presentmentMoney {
+    amount
+    currencyCode
+  }
+}
+
+totalDiscountsSet {
+  shopMoney {
+    amount
+    currencyCode
+  }
+  presentmentMoney {
+    amount
+    currencyCode
+  }
+}
+
+totalShippingPriceSet {
+  shopMoney {
+    amount
+    currencyCode
+  }
+  presentmentMoney {
+    amount
+    currencyCode
+  }
+}
+
+totalRefundedSet {
+  shopMoney {
+    amount
+    currencyCode
+  }
+  presentmentMoney {
+    amount
+    currencyCode
+  }
+}
+
+totalReceivedSet {
+  shopMoney {
+    amount
+    currencyCode
+  }
+  presentmentMoney {
+    amount
+    currencyCode
+  }
+}
+
+refunds {
+  id
+  createdAt
+  processedAt
+  updatedAt
+  note
+
+  totalRefundedSet {
+    shopMoney {
+      amount
+      currencyCode
+    }
+    presentmentMoney {
+      amount
+      currencyCode
+    }
+  }
+
+  refundLineItems(first: 250) {
+    nodes {
+      id
+      quantity
+      restocked
+      restockType
+
+      lineItem {
+        id
+        name
+        title
+        sku
+      }
+
+      subtotalSet {
+        shopMoney {
+          amount
+          currencyCode
+        }
+        presentmentMoney {
+          amount
+          currencyCode
+        }
+      }
+
+      totalTaxSet {
+        shopMoney {
+          amount
+          currencyCode
+        }
+        presentmentMoney {
+          amount
+          currencyCode
+        }
+      }
+    }
+  }
+
+  refundShippingLines(first: 50) {
+    nodes {
+      id
+
+      subtotalAmountSet {
+        shopMoney {
+          amount
+          currencyCode
+        }
+        presentmentMoney {
+          amount
+          currencyCode
+        }
+      }
+
+      taxAmountSet {
+        shopMoney {
+          amount
+          currencyCode
+        }
+        presentmentMoney {
+          amount
+          currencyCode
+        }
+      }
+    }
+  }
+
+  orderAdjustments(first: 50) {
+    nodes {
+      id
+      reason
+
+      amountSet {
+        shopMoney {
+          amount
+          currencyCode
+        }
+        presentmentMoney {
+          amount
+          currencyCode
+        }
+      }
+
+      taxAmountSet {
+        shopMoney {
+          amount
+          currencyCode
+        }
+        presentmentMoney {
+          amount
+          currencyCode
+        }
+      }
+    }
+  }
+
+  transactions(first: 100) {
+    nodes {
+      id
+      kind
+      status
+      gateway
+      createdAt
+      processedAt
+
+      amountSet {
+        shopMoney {
+          amount
+          currencyCode
+        }
+        presentmentMoney {
+          amount
+          currencyCode
+        }
+      }
+    }
+  }
+}
 
           lineItems(first: 250) {
             nodes {
@@ -560,6 +781,442 @@ async function ensureLineItemsTable() {
   );
 }
 
+async function ensureFinancialsTable() {
+  const dataset = bigquery.dataset(DATASET);
+  const table = dataset.table(FINANCIALS_TABLE);
+
+  const [exists] = await table.exists();
+
+  if (exists) {
+    return table;
+  }
+
+  console.log(
+    `Creating ${GOOGLE_PROJECT_ID}.${DATASET}.${FINANCIALS_TABLE}`
+  );
+
+  await dataset.createTable(FINANCIALS_TABLE, {
+    schema: [
+      { name: 'order_id', type: 'STRING', mode: 'REQUIRED' },
+      { name: 'order_name', type: 'STRING' },
+
+      { name: 'created_at', type: 'TIMESTAMP' },
+      { name: 'processed_at', type: 'TIMESTAMP' },
+      { name: 'updated_at', type: 'TIMESTAMP' },
+      { name: 'cancelled_at', type: 'TIMESTAMP' },
+
+      { name: 'order_source', type: 'STRING' },
+
+      { name: 'shop_currency', type: 'STRING' },
+      { name: 'presentment_currency', type: 'STRING' },
+
+      { name: 'original_total_shop', type: 'NUMERIC' },
+      { name: 'original_total_presentment', type: 'NUMERIC' },
+
+      { name: 'original_subtotal_shop', type: 'NUMERIC' },
+      { name: 'original_subtotal_presentment', type: 'NUMERIC' },
+
+      { name: 'original_tax_shop', type: 'NUMERIC' },
+      { name: 'original_tax_presentment', type: 'NUMERIC' },
+
+      { name: 'original_discounts_shop', type: 'NUMERIC' },
+      { name: 'original_discounts_presentment', type: 'NUMERIC' },
+
+      { name: 'original_shipping_shop', type: 'NUMERIC' },
+      { name: 'original_shipping_presentment', type: 'NUMERIC' },
+
+      { name: 'total_refunded_shop', type: 'NUMERIC' },
+      { name: 'total_refunded_presentment', type: 'NUMERIC' },
+
+      { name: 'total_received_shop', type: 'NUMERIC' },
+      { name: 'total_received_presentment', type: 'NUMERIC' },
+
+      { name: 'payment_gateway_names_json', type: 'STRING' },
+
+      { name: 'synced_at', type: 'TIMESTAMP' }
+    ]
+  });
+
+  return dataset.table(FINANCIALS_TABLE);
+}
+
+
+async function ensureRefundsTable() {
+  const dataset = bigquery.dataset(DATASET);
+  const table = dataset.table(REFUNDS_TABLE);
+
+  const [exists] = await table.exists();
+
+  if (exists) {
+    return table;
+  }
+
+  console.log(
+    `Creating ${GOOGLE_PROJECT_ID}.${DATASET}.${REFUNDS_TABLE}`
+  );
+
+  await dataset.createTable(REFUNDS_TABLE, {
+    schema: [
+      { name: 'refund_id', type: 'STRING', mode: 'REQUIRED' },
+      { name: 'order_id', type: 'STRING', mode: 'REQUIRED' },
+      { name: 'order_name', type: 'STRING' },
+
+      { name: 'refund_created_at', type: 'TIMESTAMP' },
+      { name: 'refund_processed_at', type: 'TIMESTAMP' },
+      { name: 'refund_updated_at', type: 'TIMESTAMP' },
+
+      { name: 'shop_currency', type: 'STRING' },
+      { name: 'presentment_currency', type: 'STRING' },
+
+      { name: 'refund_total_shop', type: 'NUMERIC' },
+      { name: 'refund_total_presentment', type: 'NUMERIC' },
+
+      { name: 'refund_line_subtotal_shop', type: 'NUMERIC' },
+      { name: 'refund_line_subtotal_presentment', type: 'NUMERIC' },
+
+      { name: 'refund_shipping_subtotal_shop', type: 'NUMERIC' },
+      { name: 'refund_shipping_subtotal_presentment', type: 'NUMERIC' },
+
+      { name: 'refund_line_tax_shop', type: 'NUMERIC' },
+      { name: 'refund_line_tax_presentment', type: 'NUMERIC' },
+
+      { name: 'refund_shipping_tax_shop', type: 'NUMERIC' },
+      { name: 'refund_shipping_tax_presentment', type: 'NUMERIC' },
+
+      { name: 'refund_adjustment_tax_shop', type: 'NUMERIC' },
+      { name: 'refund_adjustment_tax_presentment', type: 'NUMERIC' },
+
+      { name: 'refund_tax_shop', type: 'NUMERIC' },
+      { name: 'refund_tax_presentment', type: 'NUMERIC' },
+
+      { name: 'successful_transaction_shop', type: 'NUMERIC' },
+      { name: 'successful_transaction_presentment', type: 'NUMERIC' },
+      { name: 'has_successful_refund_transaction', type: 'BOOL' },
+
+      { name: 'note', type: 'STRING' },
+
+      { name: 'refund_line_items_json', type: 'STRING' },
+      { name: 'refund_shipping_lines_json', type: 'STRING' },
+      { name: 'order_adjustments_json', type: 'STRING' },
+      { name: 'transactions_json', type: 'STRING' },
+
+      { name: 'synced_at', type: 'TIMESTAMP' }
+    ]
+  });
+
+  return dataset.table(REFUNDS_TABLE);
+}
+
+
+function moneyAmount(moneyBag, side = 'shopMoney') {
+  const value = moneyBag?.[side]?.amount;
+
+  if (
+    value === undefined ||
+    value === null ||
+    value === ''
+  ) {
+    return 0;
+  }
+
+  return Number(value);
+}
+
+
+function transformFinancials(orders) {
+  const syncedAt = new Date().toISOString();
+
+  return orders.map(order => ({
+    order_id: order.id,
+    order_name: order.name || null,
+
+    created_at: order.createdAt || null,
+    processed_at: order.processedAt || null,
+    updated_at: order.updatedAt || null,
+    cancelled_at: order.cancelledAt || null,
+
+    order_source: order.app?.name || null,
+
+    shop_currency:
+      order.totalPriceSet?.shopMoney?.currencyCode ||
+      order.currencyCode ||
+      null,
+
+    presentment_currency:
+      order.totalPriceSet?.presentmentMoney?.currencyCode ||
+      order.presentmentCurrencyCode ||
+      null,
+
+    original_total_shop:
+      moneyAmount(order.totalPriceSet, 'shopMoney'),
+
+    original_total_presentment:
+      moneyAmount(order.totalPriceSet, 'presentmentMoney'),
+
+    original_subtotal_shop:
+      moneyAmount(order.subtotalPriceSet, 'shopMoney'),
+
+    original_subtotal_presentment:
+      moneyAmount(order.subtotalPriceSet, 'presentmentMoney'),
+
+    original_tax_shop:
+      moneyAmount(order.totalTaxSet, 'shopMoney'),
+
+    original_tax_presentment:
+      moneyAmount(order.totalTaxSet, 'presentmentMoney'),
+
+    original_discounts_shop:
+      moneyAmount(order.totalDiscountsSet, 'shopMoney'),
+
+    original_discounts_presentment:
+      moneyAmount(order.totalDiscountsSet, 'presentmentMoney'),
+
+    original_shipping_shop:
+      moneyAmount(order.totalShippingPriceSet, 'shopMoney'),
+
+    original_shipping_presentment:
+      moneyAmount(order.totalShippingPriceSet, 'presentmentMoney'),
+
+    total_refunded_shop:
+      moneyAmount(order.totalRefundedSet, 'shopMoney'),
+
+    total_refunded_presentment:
+      moneyAmount(order.totalRefundedSet, 'presentmentMoney'),
+
+    total_received_shop:
+      moneyAmount(order.totalReceivedSet, 'shopMoney'),
+
+    total_received_presentment:
+      moneyAmount(order.totalReceivedSet, 'presentmentMoney'),
+
+    payment_gateway_names_json:
+      JSON.stringify(order.paymentGatewayNames || []),
+
+    synced_at: syncedAt
+  }));
+}
+
+
+function transformRefunds(orders) {
+  const syncedAt = new Date().toISOString();
+  const rows = [];
+
+  for (const order of orders) {
+    const refunds = order.refunds || [];
+
+    for (const refund of refunds) {
+      const lineItems =
+        refund.refundLineItems?.nodes || [];
+
+      const shippingLines =
+        refund.refundShippingLines?.nodes || [];
+
+      const adjustments =
+        refund.orderAdjustments?.nodes || [];
+
+      const transactions =
+        refund.transactions?.nodes || [];
+
+      const lineSubtotalShop =
+        lineItems.reduce(
+          (sum, item) =>
+            sum + moneyAmount(item.subtotalSet, 'shopMoney'),
+          0
+        );
+
+      const lineSubtotalPresentment =
+        lineItems.reduce(
+          (sum, item) =>
+            sum + moneyAmount(item.subtotalSet, 'presentmentMoney'),
+          0
+        );
+
+      const shippingSubtotalShop =
+        shippingLines.reduce(
+          (sum, item) =>
+            sum + moneyAmount(item.subtotalAmountSet, 'shopMoney'),
+          0
+        );
+
+      const shippingSubtotalPresentment =
+        shippingLines.reduce(
+          (sum, item) =>
+            sum + moneyAmount(item.subtotalAmountSet, 'presentmentMoney'),
+          0
+        );
+
+      const lineTaxShop =
+        lineItems.reduce(
+          (sum, item) =>
+            sum + moneyAmount(item.totalTaxSet, 'shopMoney'),
+          0
+        );
+
+      const lineTaxPresentment =
+        lineItems.reduce(
+          (sum, item) =>
+            sum + moneyAmount(item.totalTaxSet, 'presentmentMoney'),
+          0
+        );
+
+      const shippingTaxShop =
+        shippingLines.reduce(
+          (sum, item) =>
+            sum + moneyAmount(item.taxAmountSet, 'shopMoney'),
+          0
+        );
+
+      const shippingTaxPresentment =
+        shippingLines.reduce(
+          (sum, item) =>
+            sum + moneyAmount(item.taxAmountSet, 'presentmentMoney'),
+          0
+        );
+
+      const adjustmentTaxShop =
+        adjustments.reduce(
+          (sum, item) =>
+            sum + moneyAmount(item.taxAmountSet, 'shopMoney'),
+          0
+        );
+
+      const adjustmentTaxPresentment =
+        adjustments.reduce(
+          (sum, item) =>
+            sum + moneyAmount(item.taxAmountSet, 'presentmentMoney'),
+          0
+        );
+
+      const successfulRefundTransactions =
+        transactions.filter(
+          transaction =>
+            transaction.kind === 'REFUND' &&
+            transaction.status === 'SUCCESS'
+        );
+
+      const successfulTransactionShop =
+        successfulRefundTransactions.reduce(
+          (sum, transaction) =>
+            sum + moneyAmount(transaction.amountSet, 'shopMoney'),
+          0
+        );
+
+      const successfulTransactionPresentment =
+        successfulRefundTransactions.reduce(
+          (sum, transaction) =>
+            sum + moneyAmount(transaction.amountSet, 'presentmentMoney'),
+          0
+        );
+
+      rows.push({
+        refund_id: refund.id,
+        order_id: order.id,
+        order_name: order.name || null,
+
+        refund_created_at:
+          refund.createdAt || null,
+
+        refund_processed_at:
+          refund.processedAt || null,
+
+        refund_updated_at:
+          refund.updatedAt || null,
+
+        shop_currency:
+          refund.totalRefundedSet?.shopMoney?.currencyCode ||
+          order.currencyCode ||
+          null,
+
+        presentment_currency:
+          refund.totalRefundedSet?.presentmentMoney?.currencyCode ||
+          order.presentmentCurrencyCode ||
+          null,
+
+        refund_total_shop:
+          moneyAmount(refund.totalRefundedSet, 'shopMoney'),
+
+        refund_total_presentment:
+          moneyAmount(refund.totalRefundedSet, 'presentmentMoney'),
+
+        refund_line_subtotal_shop:
+          Number(lineSubtotalShop.toFixed(2)),
+
+        refund_line_subtotal_presentment:
+          Number(lineSubtotalPresentment.toFixed(2)),
+
+        refund_shipping_subtotal_shop:
+          Number(shippingSubtotalShop.toFixed(2)),
+
+        refund_shipping_subtotal_presentment:
+          Number(shippingSubtotalPresentment.toFixed(2)),
+
+        refund_line_tax_shop:
+          Number(lineTaxShop.toFixed(2)),
+
+        refund_line_tax_presentment:
+          Number(lineTaxPresentment.toFixed(2)),
+
+        refund_shipping_tax_shop:
+          Number(shippingTaxShop.toFixed(2)),
+
+        refund_shipping_tax_presentment:
+          Number(shippingTaxPresentment.toFixed(2)),
+
+        refund_adjustment_tax_shop:
+          Number(adjustmentTaxShop.toFixed(2)),
+
+        refund_adjustment_tax_presentment:
+          Number(adjustmentTaxPresentment.toFixed(2)),
+
+        refund_tax_shop:
+          Number(
+            (
+              lineTaxShop +
+              shippingTaxShop +
+              adjustmentTaxShop
+            ).toFixed(2)
+          ),
+
+        refund_tax_presentment:
+          Number(
+            (
+              lineTaxPresentment +
+              shippingTaxPresentment +
+              adjustmentTaxPresentment
+            ).toFixed(2)
+          ),
+
+        successful_transaction_shop:
+          Number(successfulTransactionShop.toFixed(2)),
+
+        successful_transaction_presentment:
+          Number(successfulTransactionPresentment.toFixed(2)),
+
+        has_successful_refund_transaction:
+          successfulRefundTransactions.length > 0,
+
+        note: refund.note || null,
+
+        refund_line_items_json:
+          JSON.stringify(lineItems),
+
+        refund_shipping_lines_json:
+          JSON.stringify(shippingLines),
+
+        order_adjustments_json:
+          JSON.stringify(adjustments),
+
+        transactions_json:
+          JSON.stringify(transactions),
+
+        synced_at: syncedAt
+      });
+    }
+  }
+
+  return rows;
+}
+
 function transformOrders(orders) {
   const syncedAt =
     new Date().toISOString();
@@ -878,9 +1535,86 @@ async function replaceLineItemsData(
   }
 }
 
+async function replaceFinancialsData(rows) {
+  const table = await ensureFinancialsTable();
+
+  console.log(
+    'Clearing existing Shopify financial data...'
+  );
+
+  await bigquery.query({
+    query: `
+      TRUNCATE TABLE
+      \`${GOOGLE_PROJECT_ID}.${DATASET}.${FINANCIALS_TABLE}\`
+    `
+  });
+
+  console.log(
+    `Writing ${rows.length} Shopify financial rows to BigQuery...`
+  );
+
+  const batchSize = 500;
+
+  for (
+    let i = 0;
+    i < rows.length;
+    i += batchSize
+  ) {
+    const batch = rows.slice(i, i + batchSize);
+
+    await table.insert(batch);
+
+    console.log(
+      `Inserted ${Math.min(
+        i + batch.length,
+        rows.length
+      )}/${rows.length} Shopify financial rows`
+    );
+  }
+}
+
+
+async function replaceRefundsData(rows) {
+  const table = await ensureRefundsTable();
+
+  console.log(
+    'Clearing existing Shopify refund data...'
+  );
+
+  await bigquery.query({
+    query: `
+      TRUNCATE TABLE
+      \`${GOOGLE_PROJECT_ID}.${DATASET}.${REFUNDS_TABLE}\`
+    `
+  });
+
+  console.log(
+    `Writing ${rows.length} Shopify refunds to BigQuery...`
+  );
+
+  const batchSize = 500;
+
+  for (
+    let i = 0;
+    i < rows.length;
+    i += batchSize
+  ) {
+    const batch = rows.slice(i, i + batchSize);
+
+    await table.insert(batch);
+
+    console.log(
+      `Inserted ${Math.min(
+        i + batch.length,
+        rows.length
+      )}/${rows.length} Shopify refunds`
+    );
+  }
+}
+
 async function syncShopify() {
   console.log(
-    'Starting Shopify order metadata + line item sync'
+    'Starting Shopify order metadata + line item + financial + refund sync'
   );
 
   const orders =
@@ -896,8 +1630,22 @@ async function syncShopify() {
   const lineItemRows =
     transformLineItems(orders);
 
+  const financialRows =
+    transformFinancials(orders);
+
+  const refundRows =
+    transformRefunds(orders);
+
   console.log(
     `Extracted ${lineItemRows.length} Shopify line items`
+  );
+
+  console.log(
+    `Extracted ${financialRows.length} Shopify financial rows`
+  );
+
+  console.log(
+    `Extracted ${refundRows.length} Shopify refunds`
   );
 
   await replaceBigQueryData(
@@ -906,6 +1654,14 @@ async function syncShopify() {
 
   await replaceLineItemsData(
     lineItemRows
+  );
+
+  await replaceFinancialsData(
+    financialRows
+  );
+
+  await replaceRefundsData(
+    refundRows
   );
 
   console.log(
@@ -920,7 +1676,13 @@ async function syncShopify() {
       orderRows.length,
 
     lineItemsWritten:
-      lineItemRows.length
+      lineItemRows.length,
+
+    financialRowsWritten:
+      financialRows.length,
+
+    refundsWritten:
+      refundRows.length
   };
 }
 
