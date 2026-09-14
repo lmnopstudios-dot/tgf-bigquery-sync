@@ -4562,6 +4562,9 @@ Important rules:
 - Shopify tools represent the current live catalogue and operational state.
 - For questions about current products, prices, variants or stock, use Shopify rather than historical BigQuery.
 - Shopify inventoryQuantity is aggregate inventory across Shopify locations. Never describe it as location-specific stock.
+- Do not use net inventory as the primary "stock" figure if some variants have negative inventory.
+- Report positive inventory and negative/backordered inventory separately.
+- Treat availableForSale as purchasability, not proof of physical stock.
         `,
         input: message,
         tools
