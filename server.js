@@ -227,6 +227,26 @@ const SHOPIFY_PRODUCT_PERFORMANCE_METRICS = [
   'orders'
 ];
 
+const SHOPIFY_INVENTORY_METRICS = [
+  'ending_inventory_units_at_location',
+  'inventory_units_net_change_at_location',
+  'days_in_stock_at_location',
+  'days_out_of_stock_at_location',
+  'days_of_inventory_remaining_at_location',
+  'ending_inventory_value_at_location',
+  'ending_inventory_retail_value_at_location'
+];
+
+const SHOPIFY_INVENTORY_DIMENSIONS = [
+  'inventory_location_id',
+  'inventory_location_name',
+  'product_id',
+  'product_title',
+  'product_variant_id',
+  'product_variant_title',
+  'product_variant_sku'
+];
+
 const SHOPIFY_CUSTOMER_METRICS = [
   'customers',
   'new_customers',
@@ -264,6 +284,28 @@ function validateShopifyReportDate(value, name) {
       `${name} must be a valid calendar date`
     );
   }
+}
+
+function shopifyqlStringLiteral(value, name) {
+  if (typeof value !== 'string' || !value.trim()) {
+    throw new Error(`${name} must be a non-empty string`);
+  }
+
+  return `'${value.trim()
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "\\'")}'`;
+}
+
+function normalizeShopifyResourceIds(rows, fields) {
+  for (const row of rows) {
+    for (const field of fields) {
+      if (row[field] !== null && row[field] !== undefined) {
+        row[field] = String(row[field]);
+      }
+    }
+  }
+
+  return rows;
 }
 
 function parseShopifyqlValue(value, dataType) {
@@ -687,6 +729,171 @@ LIMIT ${limit}`;
     sort_by,
     limit,
     products: rows
+  };
+}
+
+async function getShopifyInventoryPerformance({
+  start_date,
+  end_date,
+  limit = 25,
+  location = null,
+  sort_by = 'ending_inventory_units_at_location',
+  sort_direction = 'desc'
+}) {
+  validateShopifyReportDate(start_date, 'start_date');
+  validateShopifyReportDate(end_date, 'end_date');
+
+  if (start_date > end_date) {
+    throw new Error('start_date must be on or before end_date');
+  }
+
+  if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+    throw new Error('limit must be an integer between 1 and 100');
+  }
+
+  const sortableMetrics = [
+    'ending_inventory_units_at_location',
+    'days_of_inventory_remaining_at_location',
+    'days_out_of_stock_at_location',
+    'ending_inventory_value_at_location'
+  ];
+
+  if (!sortableMetrics.includes(sort_by)) {
+    throw new Error(`sort_by must be one of: ${sortableMetrics.join(', ')}`);
+  }
+
+  if (!['asc', 'desc'].includes(sort_direction)) {
+    throw new Error('sort_direction must be one of: asc, desc');
+  }
+
+  const locationFilter = location === null || location === undefined
+    ? ''
+    : `WHERE inventory_location_name = ${shopifyqlStringLiteral(location, 'location')}\n`;
+  const shopifyql = `FROM inventory_by_location
+SHOW ${SHOPIFY_INVENTORY_METRICS.join(', ')}
+${locationFilter}GROUP BY ${SHOPIFY_INVENTORY_DIMENSIONS.join(', ')}
+SINCE ${start_date} UNTIL ${end_date}
+ORDER BY ${sort_by} ${sort_direction.toUpperCase()}
+LIMIT ${limit}`;
+  const token = await getShopifyAccessToken();
+  const rows = await runShopifyqlReport(
+    token,
+    shopifyql,
+    'inventory performance'
+  );
+
+  normalizeShopifyResourceIds(rows, [
+    'inventory_location_id',
+    'product_id',
+    'product_variant_id'
+  ]);
+
+  return {
+    start_date,
+    end_date,
+    location,
+    sort_by,
+    sort_direction,
+    limit,
+    inventory_history: rows,
+    semantics: {
+      data_type: 'historical_location_inventory',
+      days_of_inventory_remaining: 'Estimate based on Shopify inventory and sales history, not a guarantee.',
+      inventory_value: 'Depends on costs recorded in Shopify.'
+    }
+  };
+}
+
+async function getShopifyReturnsAnalysis({
+  start_date,
+  end_date,
+  limit = 25,
+  group_by = 'reason',
+  status = null
+}) {
+  validateShopifyReportDate(start_date, 'start_date');
+  validateShopifyReportDate(end_date, 'end_date');
+
+  if (start_date > end_date) {
+    throw new Error('start_date must be on or before end_date');
+  }
+
+  if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+    throw new Error('limit must be an integer between 1 and 100');
+  }
+
+  const dimensionsByGroup = {
+    reason: [
+      'return_line_item_reason',
+      'return_line_item_reason_note'
+    ],
+    product: ['product_id', 'product_title'],
+    variant: [
+      'product_variant_id',
+      'product_variant_title',
+      'product_variant_sku'
+    ],
+    status: ['return_status']
+  };
+  let dimensions = dimensionsByGroup[group_by];
+
+  if (!dimensions) {
+    throw new Error('group_by must be one of: reason, product, variant, status');
+  }
+
+  const statusFilter = status === null || status === undefined
+    ? ''
+    : `WHERE return_status = ${shopifyqlStringLiteral(status, 'status')}\n`;
+  const buildQuery = () => `FROM returns
+SHOW returned_quantity
+${statusFilter}GROUP BY ${dimensions.join(', ')}
+SINCE ${start_date} UNTIL ${end_date}
+ORDER BY returned_quantity DESC
+LIMIT ${limit}`;
+  const token = await getShopifyAccessToken();
+  let rows;
+
+  try {
+    rows = await runShopifyqlReport(
+      token,
+      buildQuery(),
+      'returns analysis'
+    );
+  } catch (error) {
+    if (
+      group_by !== 'reason' ||
+      !String(error.message).includes(
+        'return_line_item_reason_note'
+      )
+    ) {
+      throw error;
+    }
+
+    dimensions = ['return_line_item_reason'];
+    rows = await runShopifyqlReport(
+      token,
+      buildQuery(),
+      'returns analysis'
+    );
+  }
+
+  normalizeShopifyResourceIds(rows, [
+    'product_id',
+    'product_variant_id',
+    'order_id',
+    'refund_id',
+    'line_item_id'
+  ]);
+
+  return {
+    start_date,
+    end_date,
+    group_by,
+    status,
+    limit,
+    returned_items: rows,
+    unit: 'returned_quantity',
+    semantics: 'Item quantities only; use BigQuery for accounting refund values.'
   };
 }
 
@@ -5217,6 +5424,86 @@ app.post(
 },
 {
   type: 'function',
+  name: 'get_shopify_inventory_performance',
+  description:
+    'Analyse historical Shopify inventory snapshots by location, product and variant. This is not current live inventory; days of inventory remaining is an estimate and inventory value depends on recorded costs.',
+  parameters: {
+    type: 'object',
+    properties: {
+      start_date: {
+        type: 'string',
+        description: 'Start date in YYYY-MM-DD format'
+      },
+      end_date: {
+        type: 'string',
+        description: 'End date in YYYY-MM-DD format'
+      },
+      limit: {
+        type: 'integer',
+        minimum: 1,
+        maximum: 100,
+        default: 25
+      },
+      location: {
+        type: ['string', 'null'],
+        description: 'Exact Shopify inventory location name.'
+      },
+      sort_by: {
+        type: 'string',
+        enum: [
+          'ending_inventory_units_at_location',
+          'days_of_inventory_remaining_at_location',
+          'days_out_of_stock_at_location',
+          'ending_inventory_value_at_location'
+        ],
+        default: 'ending_inventory_units_at_location'
+      },
+      sort_direction: {
+        type: 'string',
+        enum: ['asc', 'desc'],
+        default: 'desc'
+      }
+    },
+    required: ['start_date', 'end_date']
+  }
+},
+{
+  type: 'function',
+  name: 'get_shopify_returns_analysis',
+  description:
+    'Analyse Shopify returned item quantities by reason, product, variant or return status. This reports units, not accounting refund value.',
+  parameters: {
+    type: 'object',
+    properties: {
+      start_date: {
+        type: 'string',
+        description: 'Start date in YYYY-MM-DD format'
+      },
+      end_date: {
+        type: 'string',
+        description: 'End date in YYYY-MM-DD format'
+      },
+      limit: {
+        type: 'integer',
+        minimum: 1,
+        maximum: 100,
+        default: 25
+      },
+      group_by: {
+        type: 'string',
+        enum: ['reason', 'product', 'variant', 'status'],
+        default: 'reason'
+      },
+      status: {
+        type: ['string', 'null'],
+        description: 'Exact Shopify return status to filter by.'
+      }
+    },
+    required: ['start_date', 'end_date']
+  }
+},
+{
+  type: 'function',
   name: 'search_shopify_products',
   description:
     'Search the current live Shopify product catalogue, including variants, prices and aggregate inventory across Shopify locations.',
@@ -5265,7 +5552,14 @@ Important rules:
 - Shopify is the source of truth for online-store conversion KPIs wherever Shopify session data exists.
 - Shopify get_shopify_sales_kpis is the source for Online Store operational sales KPIs such as orders and AOV.
 - Use get_shopify_product_performance for historical Shopify Online Store product performance.
-- Use search_shopify_products for current live product, variant, price and inventory state.
+- Use get_shopify_inventory_performance for historical, location-specific Shopify inventory analysis.
+- Use search_shopify_products for current live aggregate inventory, purchasability, product, variant and price state.
+- Do not confuse historical inventory snapshots with live stock. ending_inventory_units_at_location is location-specific historical data.
+- days_of_inventory_remaining_at_location is an estimate based on Shopify inventory and sales history, not a guarantee. Inventory value depends on costs recorded in Shopify.
+- Use get_shopify_returns_analysis for item-level return quantities, reasons and statuses. returned_quantity is units/items, not money refunded.
+- Use BigQuery for accounting refund values, and Shopify sales KPIs or product performance for monetary return analysis.
+- Combine get_shopify_product_performance with get_shopify_inventory_performance for stock-risk questions.
+- Combine get_shopify_returns_analysis with get_shopify_product_performance for return and problem-product analysis.
 - Combine get_shopify_product_performance with search_shopify_products for questions such as “Which best-selling products are low on stock?”.
 - Use get_shopify_customer_kpis for Shopify Online Store new and returning customer behaviour.
 - new_customers means customers making their first purchase in the reporting period according to Shopify; returning_customers means customers who purchased after a previous purchase.
@@ -5356,6 +5650,14 @@ Important rules:
 } else if (item.name === 'get_shopify_customer_kpis') {
 
   result = await getShopifyCustomerKpis(args);
+
+} else if (item.name === 'get_shopify_inventory_performance') {
+
+  result = await getShopifyInventoryPerformance(args);
+
+} else if (item.name === 'get_shopify_returns_analysis') {
+
+  result = await getShopifyReturnsAnalysis(args);
 
 } else if (item.name === 'search_shopify_products') {
 
