@@ -4,6 +4,7 @@ import ExcelJS from 'exceljs';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import OpenAI from 'openai';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -32,6 +33,12 @@ const TABLE = 'order_locations';
 const LINE_ITEMS_TABLE = 'order_line_items';
 const FINANCIALS_TABLE = 'order_financials';
 const REFUNDS_TABLE = 'order_refunds';
+
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+
+const openai = new OpenAI({
+  apiKey: OPENAI_API_KEY
+});
 
 /* ---------------------------------------------------------
    BASIC VALIDATION
@@ -2326,6 +2333,133 @@ async function exportBigQueryViewToWorksheet(
   worksheet.commit();
 
   console.log(`${sheetName}: complete — ${rowCount} rows`);
+}
+
+async function getSalesSummary({
+  start_date,
+  end_date,
+  currency = 'GBP',
+  location = null,
+  channel = null,
+  source = null
+}) {
+  const filters = [
+    'date >= @start_date',
+    'date <= @end_date',
+    'currency = @currency'
+  ];
+
+  const params = {
+    start_date,
+    end_date,
+    currency
+  };
+
+  if (location) {
+    filters.push('LOWER(location) = LOWER(@location)');
+    params.location = location;
+  }
+
+  if (channel) {
+    filters.push('LOWER(channel) = LOWER(@channel)');
+    params.channel = channel;
+  }
+
+  if (source) {
+    filters.push('LOWER(source) = LOWER(@source)');
+    params.source = source;
+  }
+
+  const query = `
+    SELECT
+      COUNT(*) AS transaction_count,
+      SUM(CASE WHEN transaction_type = 'sale' THEN gross ELSE 0 END) AS sales_gross,
+      SUM(CASE WHEN transaction_type = 'refund' THEN gross ELSE 0 END) AS refunds_gross,
+      SUM(gross) AS net_gross,
+      SUM(tax) AS net_tax,
+      SUM(net_ex_tax) AS net_ex_tax
+    FROM \`${GOOGLE_PROJECT_ID}.finance.accountant_transactions\`
+    WHERE ${filters.join('\nAND ')}
+  `;
+
+  const [rows] = await bigquery.query({
+    query,
+    params
+  });
+
+  return rows[0] || {};
+}
+
+async function getSalesByLocation({
+  start_date,
+  end_date,
+  currency = 'GBP'
+}) {
+  const query = `
+    SELECT
+      COALESCE(location, 'Unknown') AS location,
+      COUNT(*) AS transaction_count,
+      SUM(CASE WHEN transaction_type = 'sale' THEN gross ELSE 0 END) AS sales_gross,
+      SUM(CASE WHEN transaction_type = 'refund' THEN gross ELSE 0 END) AS refunds_gross,
+      SUM(gross) AS net_gross
+    FROM \`${GOOGLE_PROJECT_ID}.finance.accountant_transactions\`
+    WHERE date >= @start_date
+      AND date <= @end_date
+      AND currency = @currency
+    GROUP BY location
+    ORDER BY net_gross DESC
+  `;
+
+  const [rows] = await bigquery.query({
+    query,
+    params: {
+      start_date,
+      end_date,
+      currency
+    }
+  });
+
+  return rows;
+}
+
+async function compareSalesPeriods({
+  period_1_start,
+  period_1_end,
+  period_2_start,
+  period_2_end,
+  currency = 'GBP',
+  location = null,
+  channel = null,
+  source = null
+}) {
+  const period1 = await getSalesSummary({
+    start_date: period_1_start,
+    end_date: period_1_end,
+    currency,
+    location,
+    channel,
+    source
+  });
+
+  const period2 = await getSalesSummary({
+    start_date: period_2_start,
+    end_date: period_2_end,
+    currency,
+    location,
+    channel,
+    source
+  });
+
+  const a = Number(period1.net_gross || 0);
+  const b = Number(period2.net_gross || 0);
+
+  return {
+    period_1: period1,
+    period_2: period2,
+    difference: a - b,
+    percentage_change:
+      b !== 0 ? ((a - b) / Math.abs(b)) * 100 : null
+  };
 }
 
 /* =========================================================
