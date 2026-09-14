@@ -346,24 +346,22 @@ async function getAllOrderFinancialsAndRefunds() {
           presentmentCurrencyCode
           paymentGatewayNames
 
-transactions(first: 100) {
-  nodes {
-    id
-    kind
-    status
-    gateway
-    createdAt
-    processedAt
+transactions {
+  id
+  kind
+  status
+  gateway
+  createdAt
+  processedAt
 
-    amountSet {
-      shopMoney {
-        amount
-        currencyCode
-      }
-      presentmentMoney {
-        amount
-        currencyCode
-      }
+  amountSet {
+    shopMoney {
+      amount
+      currencyCode
+    }
+    presentmentMoney {
+      amount
+      currencyCode
     }
   }
 }
@@ -1087,7 +1085,7 @@ function transformFinancials(orders) {
       JSON.stringify(order.paymentGatewayNames || []),
 
     transactions_json:
-      JSON.stringify(order.transactions?.nodes || []),
+      JSON.stringify(order.transactions || []),
 
     synced_at: syncedAt
   }));
