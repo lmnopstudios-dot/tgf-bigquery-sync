@@ -35,10 +35,24 @@ const FINANCIALS_TABLE = 'order_financials';
 const REFUNDS_TABLE = 'order_refunds';
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+const SHOPIFYQL_MAX_THROTTLE_WAIT_MS = 30000;
+const SHOPIFYQL_THROTTLE_BUFFER_MS = 350;
 
 const openai = new OpenAI({
   apiKey: OPENAI_API_KEY
 });
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+class ShopifyGraphQLError extends Error {
+  constructor(errors) {
+    super(JSON.stringify(errors, null, 2));
+    this.name = 'ShopifyGraphQLError';
+    this.errors = errors;
+  }
+}
 
 /* ---------------------------------------------------------
    BASIC VALIDATION
@@ -186,13 +200,11 @@ async function shopifyGraphQL(
       JSON.stringify(data, null, 2)
     );
 
-    throw new Error(
-      JSON.stringify(
-        data.errors || data,
-        null,
-        2
-      )
-    );
+    if (data.errors) {
+      throw new ShopifyGraphQLError(data.errors);
+    }
+
+    throw new Error(JSON.stringify(data, null, 2));
   }
 
   return data.data;
@@ -368,9 +380,7 @@ async function runShopifyqlReport(
   shopifyql,
   reportName
 ) {
-  const data = await shopifyGraphQL(
-    token,
-    `
+  const query = `
       query ShopifyReport($query: String!) {
         shopifyqlQuery(query: $query) {
           tableData {
@@ -384,9 +394,63 @@ async function runShopifyqlReport(
           parseErrors
         }
       }
-    `,
-    { query: shopifyql }
-  );
+    `;
+  let data;
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      data = await shopifyGraphQL(
+        token,
+        query,
+        { query: shopifyql }
+      );
+      break;
+    } catch (error) {
+      const throttledError = error.errors?.find(
+        item => item?.extensions?.code === 'THROTTLED'
+      );
+
+      if (!throttledError) {
+        throw error;
+      }
+
+      const throttleError = new Error(
+        attempt === 1
+          ? 'ShopifyQL rate limit exceeded after one retry'
+          : 'ShopifyQL rate limit exceeded'
+      );
+      throttleError.code = 'THROTTLED';
+      throttleError.retryable = true;
+
+      if (attempt === 1) {
+        throw throttleError;
+      }
+
+      const resetAt =
+        throttledError.extensions?.cost?.windowResetAt;
+      const resetTime = Date.parse(resetAt);
+
+      if (!resetAt || Number.isNaN(resetTime)) {
+        throttleError.message +=
+          ': no valid throttle reset time was provided';
+        throw throttleError;
+      }
+
+      const waitMs = Math.max(
+        0,
+        resetTime - Date.now()
+      ) + SHOPIFYQL_THROTTLE_BUFFER_MS;
+
+      if (waitMs > SHOPIFYQL_MAX_THROTTLE_WAIT_MS) {
+        throttleError.message +=
+          ': throttle reset wait exceeds the maximum allowed';
+        throw throttleError;
+      }
+
+      await sleep(waitMs);
+    }
+  }
+
   const response = data.shopifyqlQuery;
 
   if (response.parseErrors?.length) {
@@ -477,62 +541,12 @@ TIMESERIES ${timeseries}
 ${dateRange}
 ORDER BY ${timeseries} ASC`;
   const token = await getShopifyAccessToken();
-  const data = await shopifyGraphQL(
+  const rows = await runShopifyqlReport(
     token,
-    `
-      query ShopifyConversionKpis($query: String!) {
-        shopifyqlQuery(query: $query) {
-          tableData {
-            columns {
-              name
-              dataType
-              displayName
-            }
-            rows
-          }
-          parseErrors
-        }
-      }
-    `,
-    { query: shopifyql }
+    shopifyql,
+    'conversion KPI'
   );
-  const response = data.shopifyqlQuery;
-
-  if (response.parseErrors?.length) {
-    const details = response.parseErrors.join('; ');
-
-    throw new Error(
-      `ShopifyQL could not run the conversion KPI report: ${details}`
-    );
-  }
-
-  if (!response.tableData) {
-    throw new Error(
-      'ShopifyQL returned an unexpected response without table data'
-    );
-  }
-
-  const { columns = [], rows: tableRows = [] } =
-    response.tableData;
-  const rows = tableRows.map(row => {
-    const values = Array.isArray(row)
-      ? row
-      : columns.map(column => row?.[column.name]);
-    const metrics = {};
-
-    columns.forEach((column, index) => {
-      const value = values[index];
-
-      if (value !== undefined) {
-        metrics[column.name] = parseShopifyqlValue(
-          value,
-          column.dataType
-        );
-      }
-    });
-
-    return addCalculatedConversionRates(metrics);
-  });
+  rows.forEach(addCalculatedConversionRates);
 
   return {
     start_date,
@@ -582,62 +596,11 @@ TIMESERIES ${timeseries}
 ${dateRange}
 ORDER BY ${timeseries} ASC`;
   const token = await getShopifyAccessToken();
-  const data = await shopifyGraphQL(
+  const rows = await runShopifyqlReport(
     token,
-    `
-      query ShopifySalesKpis($query: String!) {
-        shopifyqlQuery(query: $query) {
-          tableData {
-            columns {
-              name
-              dataType
-              displayName
-            }
-            rows
-          }
-          parseErrors
-        }
-      }
-    `,
-    { query: shopifyql }
+    shopifyql,
+    'sales KPI'
   );
-  const response = data.shopifyqlQuery;
-
-  if (response.parseErrors?.length) {
-    const details = response.parseErrors.join('; ');
-
-    throw new Error(
-      `ShopifyQL could not run the sales KPI report: ${details}`
-    );
-  }
-
-  if (!response.tableData) {
-    throw new Error(
-      'ShopifyQL returned an unexpected response without table data'
-    );
-  }
-
-  const { columns = [], rows: tableRows = [] } =
-    response.tableData;
-  const rows = tableRows.map(row => {
-    const values = Array.isArray(row)
-      ? row
-      : columns.map(column => row?.[column.name]);
-    const metrics = {};
-
-    columns.forEach((column, index) => {
-      const value = values[index];
-
-      if (value !== undefined) {
-        metrics[column.name] = parseShopifyqlValue(
-          value,
-          column.dataType
-        );
-      }
-    });
-
-    return metrics;
-  });
 
   return {
     start_date,
@@ -5576,6 +5539,8 @@ Important rules:
 - Report positive inventory and negative/backordered inventory separately.
 - Treat availableForSale as purchasability, not proof of physical stock.
 - When positive and negative inventory both exist, headline the positive inventory figure first. Net inventory may be shown only as a secondary balance.
+- If one tool fails but other relevant tools succeed, continue using the successful results and clearly state which part of the analysis could not be completed.
+- Do not fabricate data for a failed tool. If a Shopify tool is throttled, describe that source as temporarily unavailable rather than as missing data.
 
         `,
         input: message,
@@ -5594,11 +5559,12 @@ Important rules:
             continue;
           }
 
-          const args = JSON.parse(item.arguments || '{}');
-
           let result;
 
-          if (item.name === 'get_sales_summary') {
+          try {
+            const args = JSON.parse(item.arguments || '{}');
+
+            if (item.name === 'get_sales_summary') {
 
   result = await getSalesSummary(args);
 
@@ -5657,6 +5623,26 @@ Important rules:
 } else {
             result = {
               error: `Unknown tool: ${item.name}`
+            };
+            }
+          } catch (error) {
+            const throttled = error?.code === 'THROTTLED';
+
+            console.error(
+              `Agent tool ${item.name} failed:`,
+              error
+            );
+
+            result = {
+              success: false,
+              tool: item.name,
+              error: throttled
+                ? 'ShopifyQL rate limit exceeded'
+                : 'The tool could not complete the request',
+              code: throttled
+                ? 'THROTTLED'
+                : 'TOOL_EXECUTION_FAILED',
+              retryable: throttled && error.retryable === true
             };
           }
 
