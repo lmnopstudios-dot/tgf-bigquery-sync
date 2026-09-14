@@ -1,6 +1,9 @@
 import express from 'express';
 import { BigQuery } from '@google-cloud/bigquery';
 import ExcelJS from 'exceljs';
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -2147,46 +2150,218 @@ async function syncWooRefunds({
 }
 
 /* =========================================================
-   ROUTES
+   ACCOUNTANT EXPORT HELPERS
 ========================================================= */
 
-app.get(
-  '/',
-  (req, res) => {
-    res.json({
-      status: 'ok',
-      service:
-        'TGF BigQuery Sync'
+function getAccountantColumnWidth(header) {
+  const name = header.toLowerCase();
+
+  if (name.includes('transaction_id') || name === 'order_id') {
+    return 30;
+  }
+
+  if (name.includes('timestamp')) {
+    return 22;
+  }
+
+  if ([
+    'location',
+    'sales_location',
+    'payment_method',
+    'country',
+    'order_status',
+    'tax_method',
+    'source_transaction_kind'
+  ].includes(name)) {
+    return 24;
+  }
+
+  if (name === 'date' || name === 'month') {
+    return 14;
+  }
+
+  return 17;
+}
+
+function styleHeaderRow(row) {
+  row.height = 24;
+  row.font = {
+    bold: true,
+    color: { argb: 'FFFFFFFF' }
+  };
+  row.fill = {
+    type: 'pattern',
+    pattern: 'solid',
+    fgColor: { argb: 'FF202124' }
+  };
+  row.alignment = { vertical: 'middle' };
+}
+
+function cleanBigQueryValue(value) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+
+  if (
+    typeof value === 'object' &&
+    value !== null &&
+    'value' in value
+  ) {
+    return value.value;
+  }
+
+  if (
+    typeof value === 'object' &&
+    value !== null &&
+    value.constructor?.name !== 'Date' &&
+    typeof value.toString === 'function'
+  ) {
+    const stringValue = value.toString();
+
+    if (stringValue !== '[object Object]') {
+      const numberValue = Number(stringValue);
+
+      if (!Number.isNaN(numberValue)) {
+        return numberValue;
+      }
+
+      return stringValue;
+    }
+  }
+
+  return value;
+}
+
+function formatDataRow(row, headers) {
+  headers.forEach((header, index) => {
+    const name = header.toLowerCase();
+    const cell = row.getCell(index + 1);
+
+    if ([
+      'gross',
+      'tax',
+      'net',
+      'discount',
+      'shipping',
+      'refund',
+      'gift_card'
+    ].some(word => name.includes(word))) {
+      cell.numFmt = '#,##0.00;[Red](#,##0.00);-';
+    }
+  });
+}
+
+async function exportBigQueryViewToWorksheet(
+  workbook,
+  sheetName,
+  tableName
+) {
+  const worksheet = workbook.addWorksheet(sheetName);
+
+  const query = `
+    SELECT *
+    FROM \`${tableName}\`
+  `;
+
+  const [job] = await bigquery.createQueryJob({ query });
+
+  console.log(`${sheetName}: BigQuery job ${job.id}`);
+
+  let [rows, nextQuery] = await job.getQueryResults({
+    maxResults: 2000,
+    autoPaginate: false
+  });
+
+  if (!rows.length) {
+    worksheet.addRow(['No data']).commit();
+    worksheet.commit();
+    return;
+  }
+
+  const headers = Object.keys(rows[0]);
+
+  worksheet.columns = headers.map(header => ({
+    header,
+    key: header,
+    width: getAccountantColumnWidth(header)
+  }));
+
+  styleHeaderRow(worksheet.getRow(1));
+  worksheet.getRow(1).commit();
+
+  worksheet.views = [
+    {
+      state: 'frozen',
+      ySplit: 1
+    }
+  ];
+
+  worksheet.autoFilter = {
+    from: { row: 1, column: 1 },
+    to: { row: 1, column: headers.length }
+  };
+
+  let rowCount = 0;
+
+  while (true) {
+    for (const sourceRow of rows) {
+      const cleanRow = {};
+
+      for (const header of headers) {
+        cleanRow[header] = cleanBigQueryValue(sourceRow[header]);
+      }
+
+      const excelRow = worksheet.addRow(cleanRow);
+      formatDataRow(excelRow, headers);
+      excelRow.commit();
+      rowCount++;
+    }
+
+    console.log(`${sheetName}: ${rowCount} rows written`);
+
+    if (!nextQuery || !nextQuery.pageToken) {
+      break;
+    }
+
+    [rows, nextQuery] = await job.getQueryResults({
+      maxResults: 2000,
+      pageToken: nextQuery.pageToken,
+      autoPaginate: false
     });
   }
-);
 
-/* ---------------------------------------------------------
-   ACCOUNTANT EXCEL EXPORT
---------------------------------------------------------- */
+  worksheet.commit();
+
+  console.log(`${sheetName}: complete — ${rowCount} rows`);
+}
+
+/* =========================================================
+   ROUTES
+========================================================= */
 
 app.get(
   '/export-accountant',
   requireSyncSecret,
   async (req, res) => {
+    let tempFile = null;
+
     try {
-      const workbook =
-        new ExcelJS.Workbook();
+      const filename =
+        `TGF_Accountant_Finance_Export_${new Date()
+          .toISOString()
+          .slice(0, 10)}.xlsx`;
 
-      workbook.creator =
-        'The Great Frog';
+      tempFile = path.join(os.tmpdir(), filename);
 
-      workbook.created =
-        new Date();
+      console.log('Starting accountant export:', tempFile);
 
-      /* ---------------------------------------------------
-         NOTES
-      --------------------------------------------------- */
+      const workbook = new ExcelJS.stream.xlsx.WorkbookWriter({
+        filename: tempFile,
+        useStyles: true,
+        useSharedStrings: false
+      });
 
-      const notesSheet =
-        workbook.addWorksheet(
-          'Notes & Methodology'
-        );
+      const notesSheet = workbook.addWorksheet('Notes & Methodology');
 
       notesSheet.columns = [
         {
@@ -2201,6 +2376,9 @@ app.get(
         }
       ];
 
+      styleHeaderRow(notesSheet.getRow(1));
+      notesSheet.getRow(1).commit();
+
       const notes = [
         [
           'Purpose',
@@ -2208,39 +2386,39 @@ app.get(
         ],
         [
           'Source of truth',
-          'BigQuery finance.sales_master and the accountant-facing views derived from it.'
+          'BigQuery finance.sales_master and accountant-facing views.'
         ],
         [
           'Currencies',
-          'GBP, USD and JPY are preserved in their original transaction currencies. No FX conversion to GBP is included.'
+          'GBP, USD and JPY are preserved in their original transaction currency. No FX conversion to GBP is included.'
         ],
         [
           'Sales / refunds',
-          'Sales and refunds are separate transaction rows. Refund values are represented as negative amounts.'
+          'Sales and refunds are separate transaction rows. Refund amounts are negative.'
         ],
         [
           'Shopify',
-          'Successful SALE and CAPTURE transactions are treated as money received. Successful REFUND transactions are treated as money returned. AUTHORIZATION, FAILURE/ERROR and PENDING transactions are excluded.'
+          'Successful SALE and CAPTURE transactions represent money received. Successful REFUND transactions represent money returned. AUTHORIZATION, FAILURE/ERROR and PENDING transactions are excluded.'
         ],
         [
           'Migrated Shopify orders',
-          'Matrixify-migrated WooCommerce orders are excluded from Shopify finance data to avoid double counting.'
+          'Matrixify-migrated WooCommerce orders are excluded from Shopify finance data to prevent double counting.'
         ],
         [
           'Square VAT',
-          'For standard-rated UK jewellery, VAT is derived from VAT-inclusive taxable sales where Square source tax was not reliable. Identified gift-card issuance is excluded from taxable/ex-VAT Square sales.'
+          'VAT is derived from VAT-inclusive taxable sales where Square source tax was unreliable. Identified gift-card issuance is excluded from taxable/ex-VAT Square sales.'
         ],
         [
           'Square gift cards',
-          'Identified Square gift-card issuance is shown separately and explains the expected difference between Square gross and tax plus ex-tax sales.'
+          'Identified Square gift-card issuance is reported separately and explains the expected difference between Square gross and tax plus ex-tax sales.'
         ],
         [
           'Shopify gift cards',
-          'Shopify gift-card product sales are shown separately for information. Shopify tax/net values are not reduced again by the gift-card amount.'
+          'Shopify gift-card product sales are shown separately. Shopify tax/net figures are not reduced again by this gift-card amount.'
         ],
         [
           'WooCommerce gift cards',
-          'Historical WooCommerce voucher/gift-card issuance is not separately identified in the current accountant views. The Gift Cards sheet is therefore not complete historical issuance across all systems.'
+          'Historical WooCommerce voucher/gift-card issuance is not separately identified in the current accountant views, so Gift Cards is not complete historical issuance across all systems.'
         ],
         [
           'WooCommerce UK',
@@ -2248,7 +2426,7 @@ app.get(
         ],
         [
           'WooCommerce US / JP',
-          'USD and JPY remain in source currency. Recorded source tax is retained where available.'
+          'USD and JPY remain in source currency. Recorded tax is retained where available.'
         ],
         [
           'Migration pattern',
@@ -2256,7 +2434,7 @@ app.get(
         ],
         [
           'Tax treatment',
-          'This workbook is a reporting dataset rather than a legal VAT determination. Gift-card/voucher treatment and unusual historical items should be confirmed by the accountant.'
+          'This workbook is a reporting dataset rather than a legal VAT determination. Gift-card/voucher treatment and unusual historical transactions should be confirmed by the accountant.'
         ],
         [
           'Generated',
@@ -2264,409 +2442,85 @@ app.get(
         ]
       ];
 
-      for (
-        const [item, note]
-        of notes
-      ) {
-        notesSheet.addRow({
-          item,
-          note
-        });
+      for (const [item, note] of notes) {
+        const row = notesSheet.addRow({ item, note });
+        row.getCell(1).font = { bold: true };
+        row.commit();
       }
 
-      notesSheet.getRow(1).font = {
-        bold: true,
-        color: {
-          argb: 'FFFFFFFF'
-        }
-      };
-
-      notesSheet.getRow(1).fill = {
-        type: 'pattern',
-        pattern: 'solid',
-        fgColor: {
-          argb: 'FF202124'
-        }
-      };
-
-      notesSheet.views = [
-        {
-          state: 'frozen',
-          ySplit: 1
-        }
-      ];
-
-      /* ---------------------------------------------------
-         DATA SHEETS
-      --------------------------------------------------- */
+      notesSheet.commit();
 
       const sheets = [
         {
-          name:
-            'All Transactions',
-
-          view:
-            'accountant_transactions',
-
-          orderBy:
-            'date, transaction_timestamp, source, order_number'
+          name: 'All Transactions',
+          view: 'accountant_transactions'
         },
         {
-          name:
-            'Monthly Summary',
-
-          view:
-            'accountant_monthly_summary',
-
-          orderBy:
-            'month, source, sales_channel, sales_location, source_currency'
+          name: 'Monthly Summary',
+          view: 'accountant_monthly_summary'
         },
         {
-          name:
-            'Annual Summary',
-
-          view:
-            'accountant_annual_summary',
-
-          orderBy:
-            'year, source, currency'
+          name: 'Annual Summary',
+          view: 'accountant_annual_summary'
         },
         {
-          name:
-            'Source & Location',
-
-          view:
-            'accountant_location_summary',
-
-          orderBy:
-            'source, channel, location, currency'
+          name: 'Source & Location',
+          view: 'accountant_location_summary'
         },
         {
-          name:
-            'Gift Cards',
-
-          view:
-            'accountant_gift_cards',
-
-          orderBy:
-            'date, source, order_number'
+          name: 'Gift Cards',
+          view: 'accountant_gift_cards'
         }
       ];
 
-      for (
-        const sheetConfig
-        of sheets
-      ) {
-        console.log(
-          `Exporting ${sheetConfig.name}`
-        );
+      for (const config of sheets) {
+        console.log(`Exporting ${config.name}`);
 
-        const query = `
-          SELECT *
-          FROM \`${GOOGLE_PROJECT_ID}.finance.${sheetConfig.view}\`
-          ORDER BY ${sheetConfig.orderBy}
-        `;
-
-        const [rows] =
-          await bigquery.query({
-            query
-          });
-
-        const worksheet =
-          workbook.addWorksheet(
-            sheetConfig.name
-          );
-
-        if (
-          rows.length === 0
-        ) {
-          worksheet.addRow([
-            'No data'
-          ]);
-
-          continue;
-        }
-
-        const headers =
-          Object.keys(
-            rows[0]
-          );
-
-        worksheet.columns =
-          headers.map(
-            header => ({
-              header,
-              key:
-                header,
-
-              width:
-                getAccountantColumnWidth(
-                  header
-                )
-            })
-          );
-
-        for (
-          const row
-          of rows
-        ) {
-          const cleanRow = {};
-
-          for (
-            const header
-            of headers
-          ) {
-            let value =
-              row[header];
-
-            /*
-             * BigQuery DATE values sometimes arrive
-             * as wrapper objects.
-             */
-
-            if (
-              value &&
-              typeof value ===
-                'object' &&
-              'value' in value
-            ) {
-              value =
-                value.value;
-            }
-
-            cleanRow[header] =
-              value;
-          }
-
-          worksheet.addRow(
-            cleanRow
-          );
-        }
-
-        worksheet.views = [
-          {
-            state: 'frozen',
-            ySplit: 1
-          }
-        ];
-
-        worksheet.autoFilter = {
-          from: {
-            row: 1,
-            column: 1
-          },
-          to: {
-            row: 1,
-            column:
-              headers.length
-          }
-        };
-
-        styleAccountantHeader(
-          worksheet
-        );
-
-        formatAccountantColumns(
-          worksheet,
-          headers
-        );
-
-        console.log(
-          `${sheetConfig.name}: ${rows.length} rows`
+        await exportBigQueryViewToWorksheet(
+          workbook,
+          config.name,
+          `${GOOGLE_PROJECT_ID}.finance.${config.view}`
         );
       }
 
-      /* ---------------------------------------------------
-         SEND FILE
-      --------------------------------------------------- */
+      console.log('Committing workbook...');
+      await workbook.commit();
+      console.log('Workbook complete');
 
-      const filename =
-        `TGF_Accountant_Finance_Export_${
-          new Date()
-            .toISOString()
-            .slice(0, 10)
-        }.xlsx`;
+      res.download(tempFile, filename, error => {
+        if (error) {
+          console.error('Download error:', error);
+        }
 
-      res.setHeader(
-        'Content-Type',
-        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-      );
-
-      res.setHeader(
-        'Content-Disposition',
-        `attachment; filename="${filename}"`
-      );
-
-      await workbook.xlsx.write(
-        res
-      );
-
-      res.end();
-
+        fs.unlink(tempFile, () => {});
+      });
     } catch (error) {
-      console.error(
-        'Accountant export error:',
-        error
-      );
+      console.error('Accountant export error:', error);
 
-      if (
-        !res.headersSent
-      ) {
-        res
-          .status(500)
-          .json({
-            success: false,
-            error:
-              error.message
-          });
+      if (tempFile && fs.existsSync(tempFile)) {
+        fs.unlinkSync(tempFile);
+      }
+
+      if (!res.headersSent) {
+        res.status(500).json({
+          success: false,
+          error: error.message
+        });
       }
     }
   }
 );
 
-
-/* ---------------------------------------------------------
-   ACCOUNTANT EXPORT HELPERS
---------------------------------------------------------- */
-
-function getAccountantColumnWidth(
-  header
-) {
-  const name =
-    header.toLowerCase();
-
-  if (
-    name.includes(
-      'transaction_id'
-    ) ||
-    name ===
-      'order_id'
-  ) {
-    return 30;
+app.get(
+  '/',
+  (req, res) => {
+    res.json({
+      status: 'ok',
+      service:
+        'TGF BigQuery Sync'
+    });
   }
-
-  if (
-    name.includes(
-      'timestamp'
-    )
-  ) {
-    return 22;
-  }
-
-  if (
-    [
-      'location',
-      'sales_location',
-      'payment_method',
-      'country',
-      'order_status',
-      'tax_method',
-      'source_transaction_kind'
-    ].includes(
-      name
-    )
-  ) {
-    return 24;
-  }
-
-  if (
-    name === 'date' ||
-    name === 'month'
-  ) {
-    return 14;
-  }
-
-  return 17;
-}
-
-
-function styleAccountantHeader(
-  worksheet
-) {
-  const headerRow =
-    worksheet.getRow(1);
-
-  headerRow.height =
-    24;
-
-  headerRow.font = {
-    bold: true,
-    color: {
-      argb: 'FFFFFFFF'
-    }
-  };
-
-  headerRow.fill = {
-    type: 'pattern',
-    pattern: 'solid',
-    fgColor: {
-      argb: 'FF202124'
-    }
-  };
-
-  headerRow.alignment = {
-    vertical:
-      'middle'
-  };
-}
-
-
-function formatAccountantColumns(
-  worksheet,
-  headers
-) {
-  headers.forEach(
-    (
-      header,
-      index
-    ) => {
-      const name =
-        header.toLowerCase();
-
-      const column =
-        worksheet.getColumn(
-          index + 1
-        );
-
-      if (
-        name === 'date' ||
-        name === 'month'
-      ) {
-        column.numFmt =
-          'dd/mm/yyyy';
-      }
-
-      if (
-        name.includes(
-          'timestamp'
-        )
-      ) {
-        column.numFmt =
-          'dd/mm/yyyy hh:mm';
-      }
-
-      if (
-        [
-          'gross',
-          'tax',
-          'net',
-          'discount',
-          'shipping',
-          'refund',
-          'gift_card'
-        ].some(
-          word =>
-            name.includes(
-              word
-            )
-        )
-      ) {
-        column.numFmt =
-          '#,##0.00;[Red](#,##0.00);-';
-      }
-    }
-  );
-}
+);
 
 /* ---------------------------------------------------------
    SHOPIFY TEST
