@@ -4565,6 +4565,8 @@ Important rules:
 - Do not use net inventory as the primary "stock" figure if some variants have negative inventory.
 - Report positive inventory and negative/backordered inventory separately.
 - Treat availableForSale as purchasability, not proof of physical stock.
+- When positive and negative inventory both exist, headline the positive inventory figure first. Net inventory may be shown only as a secondary balance.
+
         `,
         input: message,
         tools
