@@ -146,6 +146,86 @@ async function shopifyGraphQL(
   return data.data;
 }
 
+async function searchShopifyProducts({
+  query,
+  limit = 10
+}) {
+  if (
+    typeof query !== 'string' ||
+    !query.trim()
+  ) {
+    throw new Error(
+      'query must be a non-empty string'
+    );
+  }
+
+  if (
+    !Number.isInteger(limit) ||
+    limit < 1 ||
+    limit > 25
+  ) {
+    throw new Error(
+      'limit must be an integer between 1 and 25'
+    );
+  }
+
+  const token =
+    await getShopifyAccessToken();
+
+  const data =
+    await shopifyGraphQL(
+      token,
+      `
+        query SearchProducts(
+          $query: String!
+          $limit: Int!
+        ) {
+          products(
+            first: $limit
+            query: $query
+          ) {
+            nodes {
+              id
+              title
+              handle
+              status
+              vendor
+              productType
+              variants(first: 100) {
+                nodes {
+                  id
+                  title
+                  sku
+                  price
+                  inventoryQuantity
+                  availableForSale
+                }
+              }
+            }
+          }
+        }
+      `,
+      {
+        query: query.trim(),
+        limit
+      }
+    );
+
+  return data.products.nodes.map(
+    product => ({
+      id: product.id,
+      title: product.title,
+      handle: product.handle,
+      status: product.status,
+      vendor: product.vendor,
+      productType:
+        product.productType,
+      variants:
+        product.variants.nodes
+    })
+  );
+}
+
 async function getAllOrders() {
   const token =
     await getShopifyAccessToken();
@@ -4379,6 +4459,31 @@ app.post(
     },
     required: ['start_date', 'end_date']
   }
+},
+{
+  type: 'function',
+  name: 'search_shopify_products',
+  description:
+    'Search the current live Shopify product catalogue, including variants, prices and aggregate inventory across Shopify locations.',
+  parameters: {
+    type: 'object',
+    properties: {
+      query: {
+        type: 'string',
+        description:
+          'A Shopify product search query.'
+      },
+      limit: {
+        type: 'integer',
+        minimum: 1,
+        maximum: 25,
+        default: 10,
+        description:
+          'Maximum number of products to return.'
+      }
+    },
+    required: ['query']
+  }
 }
       ];
 
@@ -4401,6 +4506,10 @@ Important rules:
 - If comparing periods, show the absolute difference and percentage change where available.
 - When discussing refunds, remember refund gross values are negative. Use refunded_amount when presenting a positive human-readable refund total.
 - Gift card issuance data is incomplete for historical WooCommerce. Mention this limitation when relevant.
+- BigQuery is the source of truth for historical financial reporting.
+- Shopify tools represent the current live catalogue and operational state.
+- For questions about current products, prices, variants or stock, use Shopify rather than historical BigQuery.
+- Shopify inventoryQuantity is aggregate inventory across Shopify locations. Never describe it as location-specific stock.
         `,
         input: message,
         tools
@@ -4449,6 +4558,10 @@ Important rules:
 } else if (item.name === 'get_gift_card_issuance') {
 
   result = await getGiftCardIssuance(args);
+
+} else if (item.name === 'search_shopify_products') {
+
+  result = await searchShopifyProducts(args);
 
 } else {
             result = {
