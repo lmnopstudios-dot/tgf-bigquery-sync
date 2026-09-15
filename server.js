@@ -26,7 +26,9 @@ const {
 
   WOO_JP_URL,
   WOO_JP_CONSUMER_KEY,
-  WOO_JP_CONSUMER_SECRET
+  WOO_JP_CONSUMER_SECRET,
+
+  METORIK_UK_API_KEY
 } = process.env;
 
 const DATASET = 'shopify_data';
@@ -4764,6 +4766,162 @@ app.get(
         'TGF BigQuery Sync',
       revision: DEPLOYED_GIT_REVISION
     });
+  }
+);
+
+/* ---------------------------------------------------------
+   METORIK UK TEST
+--------------------------------------------------------- */
+
+const METORIK_ORDERS_URL =
+  'https://api.metorik.com/v1/orders?per_page=3';
+
+function sanitizeMetorikValue(value) {
+  if (Array.isArray(value)) {
+    return value.map(sanitizeMetorikValue);
+  }
+
+  if (
+    value === null ||
+    typeof value !== 'object'
+  ) {
+    if (typeof value === 'string') {
+      return [METORIK_UK_API_KEY, SYNC_SECRET]
+        .filter(Boolean)
+        .reduce(
+          (sanitized, secret) =>
+            sanitized.split(secret).join('[REDACTED]'),
+          value
+        );
+    }
+
+    return value;
+  }
+
+  const sanitized = {};
+
+  for (const [key, childValue] of Object.entries(value)) {
+    const normalizedKey = key
+      .toLowerCase()
+      .replace(/[^a-z0-9]/g, '');
+
+    if (
+      normalizedKey.includes('email') ||
+      normalizedKey.includes('phone') ||
+      normalizedKey.includes('address') ||
+      normalizedKey.includes('firstname') ||
+      normalizedKey.includes('lastname') ||
+      normalizedKey.includes('displayname') ||
+      normalizedKey.includes('username') ||
+      normalizedKey.includes('ipaddress') ||
+      normalizedKey.includes('authorization') ||
+      normalizedKey.includes('credential') ||
+      normalizedKey.includes('apikey') ||
+      normalizedKey.includes('secret') ||
+      normalizedKey.includes('token') ||
+      normalizedKey === 'company' ||
+      normalizedKey === 'postcode' ||
+      normalizedKey === 'zipcode' ||
+      normalizedKey === 'city' ||
+      normalizedKey === 'state'
+    ) {
+      sanitized[key] = '[REDACTED]';
+      continue;
+    }
+
+    sanitized[key] = sanitizeMetorikValue(childValue);
+  }
+
+  return sanitized;
+}
+
+app.get(
+  '/test-metorik-uk',
+  requireSyncSecret,
+  async (req, res) => {
+    if (!METORIK_UK_API_KEY) {
+      return res.status(500).json({
+        success: false,
+        resource: 'orders',
+        error: 'METORIK_UK_API_KEY is not configured'
+      });
+    }
+
+    try {
+      const response = await fetch(
+        METORIK_ORDERS_URL,
+        {
+          headers: {
+            Accept: 'application/json',
+            Authorization: `Bearer ${METORIK_UK_API_KEY}`
+          }
+        }
+      );
+      const responseText = await response.text();
+      let data;
+
+      try {
+        data = JSON.parse(responseText);
+      } catch {
+        return res.status(502).json({
+          success: false,
+          resource: 'orders',
+          apiStatus: response.status,
+          error: 'Metorik returned a non-JSON response'
+        });
+      }
+
+      if (!response.ok) {
+        const sanitizedError =
+          sanitizeMetorikValue(data);
+
+        return res.status(response.status).json({
+          success: false,
+          resource: 'orders',
+          apiStatus: response.status,
+          error:
+            sanitizedError.message ||
+            sanitizedError.error ||
+            'Metorik API request failed'
+        });
+      }
+
+      const records = Array.isArray(data)
+        ? data
+        : Array.isArray(data.data)
+          ? data.data
+          : Array.isArray(data.orders)
+            ? data.orders
+            : [];
+      const pagination =
+        data && !Array.isArray(data)
+          ? data.meta || data.pagination || data.links || null
+          : null;
+
+      return res.json({
+        success: true,
+        resource: 'orders',
+        apiStatus: response.status,
+        recordsReturned: records.length,
+        sample: sanitizeMetorikValue(records.slice(0, 3)),
+        pagination: sanitizeMetorikValue(pagination),
+        topLevelKeys:
+          data && !Array.isArray(data)
+            ? Object.keys(data)
+            : ['array']
+      });
+    } catch (error) {
+      console.error(
+        'Metorik UK connectivity test failed:',
+        error.name
+      );
+
+      return res.status(502).json({
+        success: false,
+        resource: 'orders',
+        error: 'Unable to reach the Metorik API'
+      });
+    }
   }
 );
 
