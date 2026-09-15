@@ -4780,6 +4780,9 @@ const METORIK_DISCOVERY_START_DATE = '2025-01-01';
 const METORIK_DISCOVERY_END_DATE = '2025-09-30';
 const METORIK_DISCOVERY_PER_PAGE = '10';
 const METORIK_PAGINATION_TEST_PER_PAGE = '3';
+const METORIK_REQUEST_RETRY_COUNT = 2;
+const METORIK_RETRY_BASE_DELAY_MS = 500;
+const METORIK_MAX_RETRY_DELAY_MS = 30000;
 const METORIK_DISCOVERY_RESOURCES = [
   'products',
   'orders',
@@ -4804,7 +4807,7 @@ function sanitizeMetorikValue(value) {
     typeof value !== 'object'
   ) {
     if (typeof value === 'string') {
-      return [
+      const secretsRedacted = [
         METORIK_UK_API_KEY,
         METORIK_US_API_KEY,
         SYNC_SECRET
@@ -4815,6 +4818,9 @@ function sanitizeMetorikValue(value) {
             sanitized.split(secret).join('[REDACTED]'),
           value
         );
+      return secretsRedacted
+        .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, '[REDACTED]')
+        .replace(/(?:\+?\d[\d ().-]{7,}\d)/g, '[REDACTED]');
     }
 
     return value;
@@ -4879,11 +4885,84 @@ function hasMetorikRecordCollection(data, resource) {
     Array.isArray(data?.[resource]);
 }
 
+function getMetorikErrorFields(data) {
+  if (!data || Array.isArray(data) || typeof data !== 'object') return null;
+
+  const fields = ['error', 'errors', 'message', 'messages'];
+  const summarize = value => {
+    if (typeof value === 'string') {
+      return sanitizeMetorikValue(value).slice(0, 500);
+    }
+    if (typeof value === 'number' || typeof value === 'boolean' || value === null) {
+      return value;
+    }
+    if (Array.isArray(value)) return value.slice(0, 10).map(summarize);
+    if (typeof value !== 'object') return String(value).slice(0, 500);
+
+    const safeNestedFields = ['code', 'type', 'title', 'status', 'error', 'message', 'detail'];
+    return Object.fromEntries(
+      safeNestedFields
+        .filter(field => value[field] !== undefined)
+        .map(field => [field, summarize(value[field])])
+    );
+  };
+  const errors = Object.fromEntries(
+    fields
+      .filter(field => data[field] !== undefined)
+      .map(field => [field, summarize(data[field])])
+  );
+  return Object.keys(errors).length > 0 ? errors : null;
+}
+
+function getMetorikPagination(data) {
+  if (!data || Array.isArray(data) || typeof data !== 'object') return null;
+
+  const pagination = data.pagination || data.meta || data.links;
+  if (!pagination || Array.isArray(pagination) || typeof pagination !== 'object') {
+    return null;
+  }
+
+  const fields = [
+    'current_page', 'per_page', 'has_more_pages', 'total', 'total_pages',
+    'last_page', 'from', 'to', 'next_page', 'previous_page'
+  ];
+  const relevantPagination = Object.fromEntries(
+    fields
+      .filter(field => pagination[field] !== undefined)
+      .map(field => [field, sanitizeMetorikValue(pagination[field])])
+  );
+  return Object.keys(relevantPagination).length > 0
+    ? relevantPagination
+    : null;
+}
+
+function metorikRetryDelay(response, retryNumber) {
+  const retryAfter = response.headers.get('retry-after');
+  if (retryAfter) {
+    const seconds = Number(retryAfter);
+    const retryAt = Date.parse(retryAfter);
+    const delay = Number.isFinite(seconds)
+      ? seconds * 1000
+      : retryAt - Date.now();
+    if (Number.isFinite(delay) && delay >= 0) {
+      return Math.min(delay, METORIK_MAX_RETRY_DELAY_MS);
+    }
+  }
+  return Math.min(
+    METORIK_RETRY_BASE_DELAY_MS * (2 ** (retryNumber - 1)),
+    METORIK_MAX_RETRY_DELAY_MS
+  );
+}
+
+function waitForMetorikRetry(delayMs) {
+  return new Promise(resolve => setTimeout(resolve, delayMs));
+}
+
 async function requestMetorikResource(
   resource,
   { apiKey, storeName },
   queryParameters = {},
-  { includeDiscoveryDateRange = true } = {}
+  { includeDiscoveryDateRange = true, retryCount = 0 } = {}
 ) {
   const resourceUrl = new URL(
     resource,
@@ -4908,68 +4987,82 @@ async function requestMetorikResource(
     resourceUrl.searchParams.set(key, value);
   }
 
-  try {
-    const response = await fetch(resourceUrl, {
-      headers: {
-        Accept: 'application/json',
-        Authorization: `Bearer ${apiKey}`
-      }
-    });
-    const responseText = await response.text();
-    let data;
-
+  for (let attempt = 1; attempt <= retryCount + 1; attempt++) {
     try {
-      data = JSON.parse(responseText);
-    } catch {
+      const response = await fetch(resourceUrl, {
+        headers: {
+          Accept: 'application/json',
+          Authorization: `Bearer ${apiKey}`
+        }
+      });
+      const responseText = await response.text();
+      let data;
+
+      try {
+        data = JSON.parse(responseText);
+      } catch {
+        if ((response.status === 429 || response.status >= 500) &&
+            attempt <= retryCount) {
+          await waitForMetorikRetry(metorikRetryDelay(response, attempt));
+          continue;
+        }
+        return {
+          success: false,
+          apiStatus: response.status,
+          responseWasJson: false,
+          failureCategory: response.ok ? 'non_json_response' : 'http_error',
+          attempts: attempt,
+          records: [],
+          pagination: null,
+          metorikErrors: null,
+          topLevelKeys: [],
+          error: 'Metorik returned a non-JSON response'
+        };
+      }
+
+      const records = getMetorikResponseRecords(data, resource);
+      const pagination = getMetorikPagination(data);
+      const metorikErrors = getMetorikErrorFields(data);
+      if ((response.status === 429 || response.status >= 500) && attempt <= retryCount) {
+        await waitForMetorikRetry(metorikRetryDelay(response, attempt));
+        continue;
+      }
+      return {
+        success: response.ok,
+        apiStatus: response.status,
+        responseWasJson: true,
+        failureCategory: response.ok ? null : 'http_error',
+        attempts: attempt,
+        records,
+        recordsShapeValid: hasMetorikRecordCollection(data, resource),
+        pagination,
+        metorikErrors,
+        topLevelKeys: data && !Array.isArray(data) ? Object.keys(data) : ['array'],
+        ...(response.ok ? {} : { error: 'Metorik returned an unsuccessful response' })
+      };
+    } catch (error) {
+      if (attempt <= retryCount) {
+        await waitForMetorikRetry(Math.min(
+          METORIK_RETRY_BASE_DELAY_MS * (2 ** (attempt - 1)),
+          METORIK_MAX_RETRY_DELAY_MS
+        ));
+        continue;
+      }
+      console.error(`Metorik ${storeName} ${resource} request failed:`, error.name);
+
       return {
         success: false,
-        apiStatus: response.status,
+        apiStatus: null,
+        responseWasJson: false,
+        failureCategory: 'network_error',
+        attempts: attempt,
         records: [],
         pagination: null,
+        metorikErrors: null,
         topLevelKeys: [],
-        error: 'Metorik returned a non-JSON response'
+        error: 'Unable to reach the Metorik API'
       };
     }
-
-    const records = getMetorikResponseRecords(
-      data,
-      resource
-    );
-    return {
-      success: response.ok,
-      apiStatus: response.status,
-      records,
-      recordsShapeValid: hasMetorikRecordCollection(data, resource),
-      pagination: sanitizeMetorikValue(
-        data && !Array.isArray(data)
-          ? data.pagination || data.meta || data.links || null
-          : null
-      ),
-      topLevelKeys:
-        data && !Array.isArray(data)
-          ? Object.keys(data)
-          : ['array'],
-      ...(response.ok
-        ? {}
-        : {
-            error: 'Metorik returned an unsuccessful response',
-            metorikResponse: sanitizeMetorikValue(data)
-          })
-    };
-  } catch (error) {
-    console.error(
-      `Metorik ${storeName} ${resource} discovery failed:`,
-      error.name
-    );
-
-    return {
-      success: false,
-      apiStatus: null,
-      records: [],
-      pagination: null,
-      topLevelKeys: [],
-      error: 'Unable to reach the Metorik API'
-    };
   }
 }
 
@@ -5196,10 +5289,23 @@ const METORIK_ORDER_LINE_ITEMS_SCHEMA = [
 ];
 
 class MetorikSyncValidationError extends Error {
-  constructor(message) {
+  constructor(message, diagnostics = null) {
     super(message);
     this.name = 'MetorikSyncValidationError';
+    this.diagnostics = diagnostics;
   }
+}
+
+function metorikPageDiagnostics(requestedPage, result, failureCategory) {
+  return {
+    requested_page: requestedPage,
+    failure_category: failureCategory ?? result.failureCategory,
+    http_status: result.apiStatus,
+    response_was_json: result.responseWasJson,
+    metorik_errors: result.metorikErrors,
+    pagination: result.pagination,
+    attempts: result.attempts
+  };
 }
 
 function firstMetorikValue(source, fields) {
@@ -5425,34 +5531,66 @@ async function fetchAllMetorikUKOrders() {
       'orders',
       { apiKey: METORIK_UK_API_KEY, storeName: 'UK' },
       { page: String(requestedPage), per_page: String(METORIK_ORDERS_PER_PAGE) },
-      { includeDiscoveryDateRange: false }
+      {
+        includeDiscoveryDateRange: false,
+        retryCount: METORIK_REQUEST_RETRY_COUNT
+      }
     );
     if (!result.success) {
       throw new MetorikSyncValidationError(
-        `Metorik orders request failed on page ${requestedPage}`
+        `Metorik orders request failed on page ${requestedPage}`,
+        metorikPageDiagnostics(requestedPage, result)
       );
     }
     if (!result.recordsShapeValid) {
       throw new MetorikSyncValidationError(
-        `Metorik orders response has no record collection on page ${requestedPage}`
+        `Metorik orders response has no record collection on page ${requestedPage}`,
+        metorikPageDiagnostics(requestedPage, result, 'malformed_response')
       );
     }
 
     const pagination = result.pagination;
-    const currentPage = metorikInteger(pagination?.current_page, 'pagination.current_page', { required: true });
-    const perPage = metorikInteger(pagination?.per_page, 'pagination.per_page', { required: true });
+    let currentPage;
+    let perPage;
+    try {
+      currentPage = metorikInteger(
+        pagination?.current_page,
+        'pagination.current_page',
+        { required: true }
+      );
+      perPage = metorikInteger(
+        pagination?.per_page,
+        'pagination.per_page',
+        { required: true }
+      );
+    } catch (error) {
+      if (!(error instanceof MetorikSyncValidationError)) throw error;
+      throw new MetorikSyncValidationError(
+        error.message,
+        metorikPageDiagnostics(requestedPage, result, 'pagination_validation_failure')
+      );
+    }
     if (currentPage !== requestedPage || perPage <= 0) {
-      throw new MetorikSyncValidationError(`Metorik pagination did not advance to page ${requestedPage}`);
+      throw new MetorikSyncValidationError(
+        `Metorik pagination did not advance to page ${requestedPage}`,
+        metorikPageDiagnostics(requestedPage, result, 'pagination_validation_failure')
+      );
     }
     if (typeof pagination?.has_more_pages !== 'boolean') {
-      throw new MetorikSyncValidationError('pagination.has_more_pages is missing or invalid');
+      throw new MetorikSyncValidationError(
+        'pagination.has_more_pages is missing or invalid',
+        metorikPageDiagnostics(requestedPage, result, 'pagination_validation_failure')
+      );
     }
 
     const signature = JSON.stringify(result.records.map(record =>
       firstMetorikValue(record, ['order_id', 'id'])
     ));
     if (pageSignatures.has(signature)) {
-      throw new MetorikSyncValidationError(`Metorik repeated page content at page ${requestedPage}`);
+      throw new MetorikSyncValidationError(
+        `Metorik repeated page content at page ${requestedPage}`,
+        metorikPageDiagnostics(requestedPage, result, 'pagination_validation_failure')
+      );
     }
     pageSignatures.add(signature);
     orders.push(...result.records);
@@ -5461,7 +5599,10 @@ async function fetchAllMetorikUKOrders() {
       return { orders, pagesFetched: requestedPage, paginationCompleted: true };
     }
     if (result.records.length === 0) {
-      throw new MetorikSyncValidationError(`Metorik returned an empty non-final page at page ${requestedPage}`);
+      throw new MetorikSyncValidationError(
+        `Metorik returned an empty non-final page at page ${requestedPage}`,
+        metorikPageDiagnostics(requestedPage, result, 'pagination_validation_failure')
+      );
     }
   }
 
@@ -5612,12 +5753,18 @@ app.post(
       return res.json(await syncMetorikUKOrders());
     } catch (error) {
       console.error('Metorik UK order sync failed:', error.name);
+      if (error instanceof MetorikSyncValidationError && error.diagnostics) {
+        console.error('Metorik UK order sync diagnostics:', error.diagnostics);
+      }
       return res.status(500).json({
         success: false,
         store: 'UK',
         error: error instanceof MetorikSyncValidationError
           ? error.message
-          : 'Metorik UK orders sync failed'
+          : 'Metorik UK orders sync failed',
+        ...(error instanceof MetorikSyncValidationError && error.diagnostics
+          ? { diagnostics: error.diagnostics }
+          : {})
       });
     }
   }
