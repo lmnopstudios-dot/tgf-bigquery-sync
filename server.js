@@ -28,7 +28,8 @@ const {
   WOO_JP_CONSUMER_KEY,
   WOO_JP_CONSUMER_SECRET,
 
-  METORIK_UK_API_KEY
+  METORIK_UK_API_KEY,
+  METORIK_US_API_KEY
 } = process.env;
 
 const DATASET = 'shopify_data';
@@ -4770,7 +4771,7 @@ app.get(
 );
 
 /* ---------------------------------------------------------
-   METORIK UK TEST
+   METORIK DISCOVERY TESTS
 --------------------------------------------------------- */
 
 const METORIK_API_BASE_URL =
@@ -4803,7 +4804,11 @@ function sanitizeMetorikValue(value) {
     typeof value !== 'object'
   ) {
     if (typeof value === 'string') {
-      return [METORIK_UK_API_KEY, SYNC_SECRET]
+      return [
+        METORIK_UK_API_KEY,
+        METORIK_US_API_KEY,
+        SYNC_SECRET
+      ]
         .filter(Boolean)
         .reduce(
           (sanitized, secret) =>
@@ -4870,6 +4875,7 @@ function getMetorikResponseRecords(data, resource) {
 
 async function requestMetorikResource(
   resource,
+  { apiKey, storeName },
   queryParameters = {}
 ) {
   const resourceUrl = new URL(
@@ -4897,7 +4903,7 @@ async function requestMetorikResource(
     const response = await fetch(resourceUrl, {
       headers: {
         Accept: 'application/json',
-        Authorization: `Bearer ${METORIK_UK_API_KEY}`
+        Authorization: `Bearer ${apiKey}`
       }
     });
     const responseText = await response.text();
@@ -4942,7 +4948,7 @@ async function requestMetorikResource(
     };
   } catch (error) {
     console.error(
-      `Metorik UK ${resource} discovery failed:`,
+      `Metorik ${storeName} ${resource} discovery failed:`,
       error.name
     );
 
@@ -4957,8 +4963,11 @@ async function requestMetorikResource(
   }
 }
 
-async function discoverMetorikResource(resource) {
-  const result = await requestMetorikResource(resource);
+async function discoverMetorikResource(resource, store) {
+  const result = await requestMetorikResource(
+    resource,
+    store
+  );
   const { records, ...diagnostics } = result;
 
   return {
@@ -4987,13 +4996,17 @@ function getMetorikRecordIdentity(record) {
   );
 }
 
-async function discoverMetorikOrderPagination() {
+async function discoverMetorikOrderPagination(store) {
   const pages = await Promise.all(
     [1, 2].map(async page => {
-      const result = await requestMetorikResource('orders', {
-        page: String(page),
-        per_page: METORIK_PAGINATION_TEST_PER_PAGE
-      });
+      const result = await requestMetorikResource(
+        'orders',
+        store,
+        {
+          page: String(page),
+          per_page: METORIK_PAGINATION_TEST_PER_PAGE
+        }
+      );
       const { records, ...diagnostics } = result;
 
       return {
@@ -5027,38 +5040,69 @@ async function discoverMetorikOrderPagination() {
   };
 }
 
-app.get(
-  '/test-metorik-uk',
-  requireSyncSecret,
-  async (req, res) => {
-    if (!METORIK_UK_API_KEY) {
-      return res.status(500).json({
-        success: false,
-        error: 'METORIK_UK_API_KEY is not configured'
-      });
+async function runMetorikDiscovery(store) {
+  const discoveryResults = await Promise.all([
+    ...METORIK_DISCOVERY_RESOURCES.map(async resource => [
+      resource,
+      await discoverMetorikResource(resource, store)
+    ]),
+    [
+      'refunds',
+      await discoverMetorikResource('refunds', store)
+    ],
+    [
+      'orderPaginationTest',
+      await discoverMetorikOrderPagination(store)
+    ]
+  ]);
+
+  return {
+    store: store.storeName,
+    dateFilterSemantics: METORIK_DATE_FILTER_SEMANTICS,
+    ...Object.fromEntries(discoveryResults)
+  };
+}
+
+function addMetorikDiscoveryRoute({
+  path,
+  storeName,
+  apiKey,
+  apiKeyEnvironmentVariable
+}) {
+  app.get(
+    path,
+    requireSyncSecret,
+    async (req, res) => {
+      if (!apiKey) {
+        return res.status(500).json({
+          success: false,
+          store: storeName,
+          error:
+            `${apiKeyEnvironmentVariable} is not configured`
+        });
+      }
+
+      return res.json(await runMetorikDiscovery({
+        storeName,
+        apiKey
+      }));
     }
+  );
+}
 
-    const discoveryResults = await Promise.all([
-      ...METORIK_DISCOVERY_RESOURCES.map(async resource => [
-        resource,
-        await discoverMetorikResource(resource)
-      ]),
-      [
-        'refunds',
-        await discoverMetorikResource('refunds')
-      ],
-      [
-        'orderPaginationTest',
-        await discoverMetorikOrderPagination()
-      ]
-    ]);
+addMetorikDiscoveryRoute({
+  path: '/test-metorik-uk',
+  storeName: 'UK',
+  apiKey: METORIK_UK_API_KEY,
+  apiKeyEnvironmentVariable: 'METORIK_UK_API_KEY'
+});
 
-    return res.json({
-      dateFilterSemantics: METORIK_DATE_FILTER_SEMANTICS,
-      ...Object.fromEntries(discoveryResults)
-    });
-  }
-);
+addMetorikDiscoveryRoute({
+  path: '/test-metorik-us',
+  storeName: 'US',
+  apiKey: METORIK_US_API_KEY,
+  apiKeyEnvironmentVariable: 'METORIK_US_API_KEY'
+});
 
 /* ---------------------------------------------------------
    SHOPIFY TEST
