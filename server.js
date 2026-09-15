@@ -1225,6 +1225,274 @@ async function searchShopifyProducts({
   );
 }
 
+const SHOPIFY_INVENTORY_BY_LOCATION_PRODUCTS_QUERY = `
+  query InventoryProductsByLocation(
+    $query: String!
+    $limit: Int!
+  ) {
+    products(first: $limit, query: $query) {
+      nodes {
+        id
+        title
+        handle
+        status
+        tags
+        variants(first: 250) {
+          pageInfo {
+            hasNextPage
+            endCursor
+          }
+          nodes {
+            id
+            title
+            sku
+            availableForSale
+            inventoryItem {
+              id
+              inventoryLevels(first: 250) {
+                pageInfo {
+                  hasNextPage
+                  endCursor
+                }
+                nodes {
+                  location {
+                    id
+                    name
+                    isActive
+                  }
+                  quantities(names: ["available"]) {
+                    name
+                    quantity
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+`;
+
+const SHOPIFY_INVENTORY_BY_LOCATION_VARIANTS_QUERY = `
+  query InventoryProductVariants(
+    $productId: ID!
+    $cursor: String!
+  ) {
+    product(id: $productId) {
+      variants(first: 250, after: $cursor) {
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+        nodes {
+          id
+          title
+          sku
+          availableForSale
+          inventoryItem {
+            id
+            inventoryLevels(first: 250) {
+              pageInfo {
+                hasNextPage
+                endCursor
+              }
+              nodes {
+                location {
+                  id
+                  name
+                  isActive
+                }
+                quantities(names: ["available"]) {
+                  name
+                  quantity
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+`;
+
+const SHOPIFY_INVENTORY_BY_LOCATION_LEVELS_QUERY = `
+  query InventoryItemLevels(
+    $inventoryItemId: ID!
+    $cursor: String!
+  ) {
+    inventoryItem(id: $inventoryItemId) {
+      inventoryLevels(first: 250, after: $cursor) {
+        pageInfo {
+          hasNextPage
+          endCursor
+        }
+        nodes {
+          location {
+            id
+            name
+            isActive
+          }
+          quantities(names: ["available"]) {
+            name
+            quantity
+          }
+        }
+      }
+    }
+  }
+`;
+
+async function getShopifyInventoryByLocation({
+  query,
+  location,
+  limit = 10
+}) {
+  if (typeof query !== 'string' || !query.trim()) {
+    throw new Error('query must be a non-empty string');
+  }
+
+  if (location !== null && (
+    typeof location !== 'string' || !location.trim()
+  )) {
+    throw new Error('location must be null or a non-empty string');
+  }
+
+  if (!Number.isInteger(limit) || limit < 1 || limit > 25) {
+    throw new Error('limit must be an integer between 1 and 25');
+  }
+
+  const token = await getShopifyAccessToken();
+  const normalizedLocation = location === null
+    ? null
+    : location.trim().toLocaleLowerCase();
+  const data = await shopifyGraphQL(
+    token,
+    SHOPIFY_INVENTORY_BY_LOCATION_PRODUCTS_QUERY,
+    { query: query.trim(), limit }
+  );
+  const activeLocationNames = new Set();
+
+  const collectInventoryLevels = async inventoryItem => {
+    if (!inventoryItem) {
+      return [];
+    }
+
+    const levels = [...inventoryItem.inventoryLevels.nodes];
+    let pageInfo = inventoryItem.inventoryLevels.pageInfo;
+    const seenCursors = new Set();
+
+    while (pageInfo.hasNextPage) {
+      const cursor = pageInfo.endCursor;
+
+      if (!cursor || seenCursors.has(cursor)) {
+        throw new Error('Shopify inventory-level pagination returned an invalid cursor');
+      }
+
+      seenCursors.add(cursor);
+      const page = await shopifyGraphQL(
+        token,
+        SHOPIFY_INVENTORY_BY_LOCATION_LEVELS_QUERY,
+        { inventoryItemId: inventoryItem.id, cursor }
+      );
+
+      if (!page.inventoryItem) {
+        throw new Error(`Shopify inventory item not found: ${inventoryItem.id}`);
+      }
+
+      levels.push(...page.inventoryItem.inventoryLevels.nodes);
+      pageInfo = page.inventoryItem.inventoryLevels.pageInfo;
+    }
+
+    return levels;
+  };
+
+  const products = [];
+
+  for (const product of data.products.nodes) {
+    const variants = [...product.variants.nodes];
+    let pageInfo = product.variants.pageInfo;
+    const seenCursors = new Set();
+
+    while (pageInfo.hasNextPage) {
+      const cursor = pageInfo.endCursor;
+
+      if (!cursor || seenCursors.has(cursor)) {
+        throw new Error('Shopify variant pagination returned an invalid cursor');
+      }
+
+      seenCursors.add(cursor);
+      const page = await shopifyGraphQL(
+        token,
+        SHOPIFY_INVENTORY_BY_LOCATION_VARIANTS_QUERY,
+        { productId: product.id, cursor }
+      );
+
+      if (!page.product) {
+        throw new Error(`Shopify product not found: ${product.id}`);
+      }
+
+      variants.push(...page.product.variants.nodes);
+      pageInfo = page.product.variants.pageInfo;
+    }
+
+    const normalizedVariants = [];
+
+    for (const variant of variants) {
+      const levels = await collectInventoryLevels(variant.inventoryItem);
+      const activeLevels = levels.filter(level => level.location.isActive);
+
+      for (const level of activeLevels) {
+        activeLocationNames.add(level.location.name.toLocaleLowerCase());
+      }
+
+      normalizedVariants.push({
+        id: variant.id,
+        title: variant.title,
+        sku: variant.sku,
+        availableForSale: variant.availableForSale,
+        inventory_item_id: variant.inventoryItem?.id ?? null,
+        locations: activeLevels
+          .filter(level => normalizedLocation === null ||
+            level.location.name.toLocaleLowerCase() === normalizedLocation)
+          .map(level => ({
+            location_id: level.location.id,
+            location_name: level.location.name,
+            available: level.quantities.find(
+              quantity => quantity.name === 'available'
+            )?.quantity ?? null
+          }))
+      });
+    }
+
+    products.push({
+      id: product.id,
+      title: product.title,
+      handle: product.handle,
+      status: product.status,
+      tags: product.tags,
+      is_made_to_order: product.tags.some(
+        tag => tag.toLowerCase() === 'made-to-order'
+      ),
+      variants: normalizedVariants
+    });
+  }
+
+  const locationFound = normalizedLocation === null
+    ? null
+    : activeLocationNames.has(normalizedLocation);
+
+  return {
+    query: query.trim(),
+    location_filter: location,
+    location_found: locationFound,
+    ...(locationFound === false
+      ? { message: `Location not found: ${location.trim()}` }
+      : {}),
+    products
+  };
+}
+
 async function getAllOrders() {
   const token =
     await getShopifyAccessToken();
@@ -5748,6 +6016,35 @@ app.post(
 },
 {
   type: 'function',
+  name: 'get_shopify_inventory_by_location',
+  description:
+    'Get current live available physical inventory for every variant of matched Shopify products, broken down by active inventory location. This is read-only and is not historical or aggregate inventory.',
+  strict: true,
+  parameters: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      query: {
+        type: 'string',
+        description: 'Shopify product search text, such as a product title.'
+      },
+      location: {
+        type: ['string', 'null'],
+        description: 'Exact location name, matched case-insensitively, or null for every active inventory location.'
+      },
+      limit: {
+        type: 'integer',
+        minimum: 1,
+        maximum: 25,
+        default: 10,
+        description: 'Maximum number of matched products; variants are fully paginated.'
+      }
+    },
+    required: ['query', 'location', 'limit']
+  }
+},
+{
+  type: 'function',
   name: 'search_shopify_products',
   description:
     'Search the current live Shopify product catalogue, including variants, prices, tags, Made-to-Order status and aggregate inventory across Shopify locations.',
@@ -5808,7 +6105,7 @@ Important rules:
 - Shopify is the source of truth for online-store conversion KPIs wherever Shopify session data exists.
 - Shopify get_shopify_sales_kpis is the source for Online Store operational sales KPIs such as orders and AOV.
 - Use get_shopify_product_performance for historical Shopify Online Store product performance.
-- Use get_shopify_inventory_efficiency for aggregate historical inventory velocity, sell-through, stock duration, overstock and inventory risk; use get_shopify_inventory_performance for historical location-specific inventory; and use search_shopify_products for current live product and variant state, aggregate inventory, availableForSale, tags and Made-to-Order status.
+- Use search_shopify_products for the current catalogue, variants, aggregate inventory, availableForSale, tags and Made-to-Order status; get_shopify_inventory_by_location for current live available physical inventory by Shopify location; get_shopify_inventory_performance for historical location-specific inventory behaviour; and get_shopify_inventory_efficiency for aggregate historical velocity, sell-through, stock duration and overstock.
 - Do not confuse historical inventory snapshots with live stock. ending_inventory_units_at_location is location-specific historical data.
 - Combine get_shopify_product_performance with get_shopify_inventory_efficiency to identify fast sellers at risk of running out or slow sellers tying up stock.
 - days_of_inventory_remaining_at_location is an estimate based on Shopify inventory and sales history, not a guarantee. Inventory value depends on costs recorded in Shopify.
@@ -5851,8 +6148,10 @@ Important rules:
 - availableForSale represents current Shopify purchasability, not proof of physical inventory. Do not call a product or variant sold out solely because inventory is zero when availableForSale is true. Clearly distinguish finished / ready-to-ship stock, Made-to-Order availability and genuine current unavailability.
 - TGF's Online inventory location represents online fulfilment stock: positive inventory there is finished physical ready-to-ship stock, while zero means no finished ready-to-ship stock at Online. For a made-to-order product, zero Online stock does not imply it cannot be purchased. Never call aggregate inventory across Shopify locations Online inventory.
 - At a named retail location, positive inventory is finished physical stock held there and zero inventory means none is held there. Made-to-Order availability never implies physical availability at a retail store.
+- A missing inventory level is not the same as an explicit available quantity of zero. Never report a requested location as having zero stock when get_shopify_inventory_by_location reports that the location was not found.
+- Before claiming a current location imbalance, use get_shopify_inventory_by_location where practical. Without current location-level evidence, describe imbalance only as a possibility. Stock transfers may be suggested as candidates, not directives, and must account for variant or size identity, Made-to-Order status and sales history or velocity when available.
 - days_out_of_stock and days_out_of_stock_at_location do not automatically mean days unavailable for sale or lost-sales days. For Made-to-Order products, interpret them generally as days without positive finished / ready-to-ship inventory in the relevant scope; the product may have remained purchasable, although a lack of ready-to-ship stock can still be commercially relevant. If Made-to-Order status is unknown, do not guess: use current live Shopify product tags where appropriate.
-- When aggregate history suggests stockouts, high stock with repeated stockouts, low inventory on a strong seller, negative inventory, or poor sell-through with high inventory, do not immediately conclude unavailability or lost sales. Use the three inventory tools together where useful to distinguish Made-to-Order behaviour, limited ready-to-ship stock, variant or location imbalance, genuine unavailability and genuine overstock. Substantial aggregate inventory can coexist with no finished stock in important variants, sizes or locations.
+- When aggregate history suggests stockouts, high stock with repeated stockouts, low inventory on a strong seller, negative inventory, or poor sell-through with high inventory, do not immediately conclude unavailability or lost sales. Use the inventory tools together where useful to distinguish Made-to-Order behaviour, limited ready-to-ship stock, variant or location imbalance, genuine unavailability and genuine overstock. Substantial aggregate inventory can coexist with no finished stock in important variants, sizes or locations.
 - If one tool fails but other relevant tools succeed, continue using the successful results and clearly state which part of the analysis could not be completed.
 - Do not fabricate data for a failed tool. If a Shopify tool is throttled, describe that source as temporarily unavailable rather than as missing data.
 
@@ -5929,6 +6228,10 @@ Important rules:
 } else if (item.name === 'get_shopify_inventory_efficiency') {
 
   result = await getShopifyInventoryEfficiency(args);
+
+} else if (item.name === 'get_shopify_inventory_by_location') {
+
+  result = await getShopifyInventoryByLocation(args);
 
 } else if (item.name === 'get_shopify_profitability') {
 
