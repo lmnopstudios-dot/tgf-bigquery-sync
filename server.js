@@ -4773,8 +4773,16 @@ app.get(
    METORIK UK TEST
 --------------------------------------------------------- */
 
-const METORIK_PRODUCTS_URL =
-  'https://app.metorik.com/api/v1/store/products';
+const METORIK_API_BASE_URL =
+  'https://app.metorik.com/api/v1/store/';
+const METORIK_DISCOVERY_START_DATE = '2025-01-01';
+const METORIK_DISCOVERY_END_DATE = '2025-09-30';
+const METORIK_DISCOVERY_PER_PAGE = '10';
+const METORIK_DISCOVERY_RESOURCES = [
+  'products',
+  'orders',
+  'customers'
+];
 
 function sanitizeMetorikValue(value) {
   if (Array.isArray(value)) {
@@ -4835,6 +4843,108 @@ function sanitizeMetorikValue(value) {
   return sanitized;
 }
 
+function getMetorikResponseRecords(data, resource) {
+  if (Array.isArray(data)) {
+    return data;
+  }
+
+  if (Array.isArray(data?.data)) {
+    return data.data;
+  }
+
+  if (Array.isArray(data?.[resource])) {
+    return data[resource];
+  }
+
+  return [];
+}
+
+async function discoverMetorikResource(resource) {
+  const resourceUrl = new URL(
+    resource,
+    METORIK_API_BASE_URL
+  );
+  resourceUrl.searchParams.set(
+    'start_date',
+    METORIK_DISCOVERY_START_DATE
+  );
+  resourceUrl.searchParams.set(
+    'end_date',
+    METORIK_DISCOVERY_END_DATE
+  );
+  resourceUrl.searchParams.set(
+    'per_page',
+    METORIK_DISCOVERY_PER_PAGE
+  );
+
+  try {
+    const response = await fetch(resourceUrl, {
+      headers: {
+        Accept: 'application/json',
+        Authorization: `Bearer ${METORIK_UK_API_KEY}`
+      }
+    });
+    const responseText = await response.text();
+    let data;
+
+    try {
+      data = JSON.parse(responseText);
+    } catch {
+      return {
+        success: false,
+        apiStatus: response.status,
+        recordsReturned: 0,
+        sample: [],
+        pagination: null,
+        topLevelKeys: [],
+        error: 'Metorik returned a non-JSON response'
+      };
+    }
+
+    const records = getMetorikResponseRecords(
+      data,
+      resource
+    );
+    const result = {
+      success: response.ok,
+      apiStatus: response.status,
+      recordsReturned: records.length,
+      sample: sanitizeMetorikValue(records.slice(0, 3)),
+      pagination: sanitizeMetorikValue(
+        data && !Array.isArray(data)
+          ? data.pagination || data.meta || data.links || null
+          : null
+      ),
+      topLevelKeys:
+        data && !Array.isArray(data)
+          ? Object.keys(data)
+          : ['array']
+    };
+
+    if (!response.ok) {
+      result.error = 'Metorik returned an unsuccessful response';
+      result.metorikResponse = sanitizeMetorikValue(data);
+    }
+
+    return result;
+  } catch (error) {
+    console.error(
+      `Metorik UK ${resource} discovery failed:`,
+      error.name
+    );
+
+    return {
+      success: false,
+      apiStatus: null,
+      recordsReturned: 0,
+      sample: [],
+      pagination: null,
+      topLevelKeys: [],
+      error: 'Unable to reach the Metorik API'
+    };
+  }
+}
+
 app.get(
   '/test-metorik-uk',
   requireSyncSecret,
@@ -4842,90 +4952,18 @@ app.get(
     if (!METORIK_UK_API_KEY) {
       return res.status(500).json({
         success: false,
-        resource: 'products',
         error: 'METORIK_UK_API_KEY is not configured'
       });
     }
 
-    try {
-      const productsUrl = new URL(METORIK_PRODUCTS_URL);
-      productsUrl.searchParams.set(
-        'start_date',
-        '2026-09-01'
-      );
-      productsUrl.searchParams.set(
-        'end_date',
-        '2026-09-15'
-      );
+    const discoveryResults = await Promise.all(
+      METORIK_DISCOVERY_RESOURCES.map(async resource => [
+        resource,
+        await discoverMetorikResource(resource)
+      ])
+    );
 
-      const response = await fetch(
-        productsUrl,
-        {
-          headers: {
-            Accept: 'application/json',
-            Authorization: `Bearer ${METORIK_UK_API_KEY}`
-          }
-        }
-      );
-      const responseText = await response.text();
-      let data;
-
-      try {
-        data = JSON.parse(responseText);
-      } catch {
-        return res.status(502).json({
-          success: false,
-          resource: 'products',
-          apiStatus: response.status,
-          error: 'Metorik returned a non-JSON response'
-        });
-      }
-
-      if (!response.ok) {
-        return res.status(response.status).json({
-          success: false,
-          resource: 'products',
-          apiStatus: response.status,
-          metorikResponse: sanitizeMetorikValue(data)
-        });
-      }
-
-      const records = Array.isArray(data)
-        ? data
-        : Array.isArray(data.data)
-          ? data.data
-          : Array.isArray(data.products)
-            ? data.products
-            : [];
-      const pagination =
-        data && !Array.isArray(data)
-          ? data.meta || data.pagination || data.links || null
-          : null;
-
-      return res.json({
-        success: true,
-        resource: 'products',
-        apiStatus: response.status,
-        recordsReturned: records.length,
-        sample: sanitizeMetorikValue(records.slice(0, 3)),
-        pagination: sanitizeMetorikValue(pagination),
-        topLevelKeys:
-          data && !Array.isArray(data)
-            ? Object.keys(data)
-            : ['array']
-      });
-    } catch (error) {
-      console.error(
-        'Metorik UK connectivity test failed:',
-        error.name
-      );
-
-      return res.status(502).json({
-        success: false,
-        resource: 'products',
-        error: 'Unable to reach the Metorik API'
-      });
-    }
+    return res.json(Object.fromEntries(discoveryResults));
   }
 );
 
