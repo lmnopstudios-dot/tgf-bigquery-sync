@@ -4872,18 +4872,11 @@ app.get(
       }
 
       if (!response.ok) {
-        const sanitizedError =
-          sanitizeMetorikValue(data);
-
         return res.status(response.status).json({
           success: false,
           resource: 'products',
           apiStatus: response.status,
-          error:
-            sanitizedError.message ||
-            sanitizedError.error ||
-            'Metorik API request failed',
-          metorikResponse: sanitizedError
+          metorikResponse: sanitizeMetorikValue(data)
         });
       }
 
