@@ -5213,6 +5213,10 @@ app.post(
         });
       }
 
+      const currentDate = new Date()
+        .toISOString()
+        .slice(0, 10);
+
       const tools = [
         {
           type: 'function',
@@ -5776,7 +5780,19 @@ You are The Great Frog ecommerce data analyst.
 
 You answer questions using the supplied tools.
 
+Current date: ${currentDate}
+
 Important rules:
+- Never ask the user for an explicit date when their requested date range can be unambiguously resolved from the current date.
+- Interpret "2026 so far", "2026 YTD", "year to date" when referring to 2026, and equivalent wording as 2026-01-01 through today's date.
+- More generally, "<year> so far" means January 1 of that year through the earlier of today's date or December 31 of that year.
+- "This year" and "year to date" mean January 1 of the current year through today.
+- "This month" means the first day of the current month through today; "this week" means the start of the current calendar week through today.
+- "Today" means today's date; "yesterday" means yesterday's date.
+- "Last month" means the complete previous calendar month; "last year" means the complete previous calendar year.
+- For a named complete past year such as 2025, use January 1 through December 31 of that year.
+- Only ask the user to clarify dates when the requested period is genuinely ambiguous. Do not ask for an as-of date merely because a historical Shopify tool requires explicit start_date and end_date; derive those arguments from the user's natural-language period.
+- When reporting results, state the actual resolved date range used. When today's date creates a partial month, quarter or year, clearly identify it as a partial or year-to-date period where relevant.
 - Never add GBP, USD and JPY together.
 - Default to GBP if the user does not specify a currency and the context is UK retail.
 - For phrases like "how much did we take", "how much did we make", "revenue", or "how did we do", use net_gross as the headline figure.
