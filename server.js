@@ -8,6 +8,7 @@ import OpenAI from 'openai';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const DEPLOYED_GIT_REVISION = process.env.RENDER_GIT_COMMIT || null;
 
 const {
   SHOPIFY_SHOP,
@@ -1210,6 +1211,21 @@ async function getShopifyCustomerProductBehavior({
   const parametersUsedBy = query => Object.fromEntries(
     Object.entries(params).filter(([name]) => query.includes(`@${name}`))
   );
+  const diagnosticParams = query => Object.fromEntries(
+    Object.entries(parametersUsedBy(query)).map(([name, value]) => [
+      name,
+      name === 'customer_query' ? '[supplied]' : value
+    ])
+  );
+
+  console.log('Shopify customer/product behavior BigQuery diagnostic', {
+    analysis,
+    sql,
+    params: diagnosticParams(sql),
+    guest_sql: guestSql,
+    guest_params: diagnosticParams(guestSql)
+  });
+
   const [queryResult, guestResult] = await Promise.all([
     bigquery.query({ query: sql, params: parametersUsedBy(sql) }),
     bigquery.query({ query: guestSql, params: parametersUsedBy(guestSql) })
@@ -4715,7 +4731,8 @@ app.get(
     res.json({
       status: 'ok',
       service:
-        'TGF BigQuery Sync'
+        'TGF BigQuery Sync',
+      revision: DEPLOYED_GIT_REVISION
     });
   }
 );
@@ -6742,6 +6759,9 @@ app.listen(
   () => {
     console.log(
       `TGF BigQuery Sync listening on port ${PORT}`
+    );
+    console.log(
+      `Deployed git revision: ${DEPLOYED_GIT_REVISION || 'unavailable'}`
     );
   }
 );
