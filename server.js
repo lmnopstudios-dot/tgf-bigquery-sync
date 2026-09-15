@@ -1226,9 +1226,39 @@ async function getShopifyCustomerProductBehavior({
     guest_params: diagnosticParams(guestSql)
   });
 
+  const runBigQuery = async (label, query) => {
+    const startedAt = Date.now();
+
+    console.log(
+      `[customer-behavior:${analysis}] ${label} BigQuery starting`
+    );
+
+    try {
+      const result = await bigquery.query({
+        query,
+        params: parametersUsedBy(query)
+      });
+
+      console.log(
+        `[customer-behavior:${analysis}] ${label} BigQuery completed ` +
+        `(${Date.now() - startedAt}ms, ${result[0].length} rows)`
+      );
+
+      return result;
+    } catch (error) {
+      console.error(
+        `[customer-behavior:${analysis}] ${label} BigQuery failed ` +
+        `(${Date.now() - startedAt}ms)`,
+        error instanceof Error ? error.message : String(error)
+      );
+
+      throw error;
+    }
+  };
+
   const [queryResult, guestResult] = await Promise.all([
-    bigquery.query({ query: sql, params: parametersUsedBy(sql) }),
-    bigquery.query({ query: guestSql, params: parametersUsedBy(guestSql) })
+    runBigQuery('primary', sql),
+    runBigQuery('guest', guestSql)
   ]);
 
   return {
