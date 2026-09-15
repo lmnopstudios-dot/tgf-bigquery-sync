@@ -4773,8 +4773,8 @@ app.get(
    METORIK UK TEST
 --------------------------------------------------------- */
 
-const METORIK_ORDERS_URL =
-  'https://api.metorik.com/v1/orders?per_page=3';
+const METORIK_PRODUCTS_URL =
+  'https://app.metorik.com/api/v1/store/products';
 
 function sanitizeMetorikValue(value) {
   if (Array.isArray(value)) {
@@ -4842,14 +4842,14 @@ app.get(
     if (!METORIK_UK_API_KEY) {
       return res.status(500).json({
         success: false,
-        resource: 'orders',
+        resource: 'products',
         error: 'METORIK_UK_API_KEY is not configured'
       });
     }
 
     try {
       const response = await fetch(
-        METORIK_ORDERS_URL,
+        METORIK_PRODUCTS_URL,
         {
           headers: {
             Accept: 'application/json',
@@ -4865,7 +4865,7 @@ app.get(
       } catch {
         return res.status(502).json({
           success: false,
-          resource: 'orders',
+          resource: 'products',
           apiStatus: response.status,
           error: 'Metorik returned a non-JSON response'
         });
@@ -4877,7 +4877,7 @@ app.get(
 
         return res.status(response.status).json({
           success: false,
-          resource: 'orders',
+          resource: 'products',
           apiStatus: response.status,
           error:
             sanitizedError.message ||
@@ -4890,8 +4890,8 @@ app.get(
         ? data
         : Array.isArray(data.data)
           ? data.data
-          : Array.isArray(data.orders)
-            ? data.orders
+          : Array.isArray(data.products)
+            ? data.products
             : [];
       const pagination =
         data && !Array.isArray(data)
@@ -4900,7 +4900,7 @@ app.get(
 
       return res.json({
         success: true,
-        resource: 'orders',
+        resource: 'products',
         apiStatus: response.status,
         recordsReturned: records.length,
         sample: sanitizeMetorikValue(records.slice(0, 3)),
@@ -4918,7 +4918,7 @@ app.get(
 
       return res.status(502).json({
         success: false,
-        resource: 'orders',
+        resource: 'products',
         error: 'Unable to reach the Metorik API'
       });
     }
