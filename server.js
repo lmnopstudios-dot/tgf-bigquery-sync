@@ -1102,19 +1102,33 @@ async function getShopifyCustomerProductBehavior({
         WHERE customer_id IS NOT NULL AND NOT is_guest AND (
           LOWER(customer_id) = @customer_query OR
           LOWER(COALESCE(customer_name, '')) LIKE CONCAT('%', @customer_query, '%'))
+      ), customer_product_history AS (
+        SELECT l.customer_id, ANY_VALUE(l.customer_name HAVING MAX l.order_date) AS customer_name,
+               l.product_id, ANY_VALUE(l.product_title HAVING MAX l.order_date) AS product_title,
+               SUM(l.quantity) AS quantity, COUNT(DISTINCT l.order_id) AS order_count,
+               SUM(l.purchased_line_value) AS operational_purchased_line_value,
+               MIN(l.order_date) AS first_purchase, MAX(l.order_date) AS latest_purchase
+        FROM lines l JOIN matched_customers USING (customer_id)
+        WHERE TRUE ${customerProductsActivityFilter}
+        GROUP BY l.customer_id, l.product_id
+      ), distinct_variant_details AS (
+        SELECT DISTINCT l.customer_id, l.product_id,
+               l.variant_id, l.variant_title, l.sku
+        FROM lines l JOIN matched_customers USING (customer_id)
+        WHERE TRUE ${customerProductsActivityFilter}
+          AND (l.variant_id IS NOT NULL OR l.variant_title IS NOT NULL OR l.sku IS NOT NULL)
+      ), variant_details AS (
+        SELECT customer_id, product_id,
+               ARRAY_AGG(STRUCT(variant_id, variant_title, sku)
+                 ORDER BY variant_id, variant_title, sku LIMIT 10) AS variant_sku_details
+        FROM distinct_variant_details
+        GROUP BY customer_id, product_id
       )
-      SELECT l.customer_id, ANY_VALUE(l.customer_name HAVING MAX l.order_date) AS customer_name,
-             l.product_id, ANY_VALUE(l.product_title HAVING MAX l.order_date) AS product_title,
-             SUM(l.quantity) AS quantity, COUNT(DISTINCT l.order_id) AS order_count,
-             SUM(l.purchased_line_value) AS operational_purchased_line_value,
-             MIN(l.order_date) AS first_purchase, MAX(l.order_date) AS latest_purchase,
-             ARRAY_AGG(DISTINCT IF(
-               l.variant_id IS NOT NULL OR l.variant_title IS NOT NULL OR l.sku IS NOT NULL,
-               STRUCT(l.variant_id, l.variant_title, l.sku), NULL
-             ) IGNORE NULLS LIMIT 10) AS variant_sku_details
-      FROM lines l JOIN matched_customers USING (customer_id)
-      WHERE TRUE ${customerProductsActivityFilter}
-      GROUP BY l.customer_id, l.product_id
+      SELECT h.*, IFNULL(v.variant_sku_details, []) AS variant_sku_details
+      FROM customer_product_history h
+      LEFT JOIN variant_details v
+        ON h.customer_id = v.customer_id
+       AND h.product_id IS NOT DISTINCT FROM v.product_id
       ORDER BY operational_purchased_line_value DESC, quantity DESC LIMIT @limit`;
     guestSql = 'SELECT 0 AS excluded_guest_orders';
   } else if (analysis === 'product_affinity') {
@@ -1172,13 +1186,23 @@ async function getShopifyCustomerProductBehavior({
                COUNT(DISTINCT order_id) AS available_history_orders,
                MIN(order_date) AS available_history_first_order,
                MAX(order_date) AS available_history_last_order,
-               DATE_DIFF(${end_date === null ? 'CURRENT_DATE()' : 'DATE(@end_date)'}, MAX(order_date), DAY) AS days_since_last_order,
-               ARRAY_AGG(STRUCT(product_id, product_title, order_date)
-                 ORDER BY order_date DESC LIMIT 10) AS recent_products
+               DATE_DIFF(${end_date === null ? 'CURRENT_DATE()' : 'DATE(@end_date)'}, MAX(order_date), DAY) AS days_since_last_order
         FROM lines WHERE customer_id IS NOT NULL AND NOT is_guest GROUP BY customer_id
-      ) SELECT * FROM customer_history WHERE TRUE ${acquisitionFilter}
+      ), qualifying_customers AS (
+        SELECT * FROM customer_history WHERE TRUE ${acquisitionFilter}
         ${spendFilter} ${ordersFilter} ${inactiveFilter}
-        ORDER BY available_history_purchased_line_value DESC LIMIT @limit`;
+        ORDER BY available_history_purchased_line_value DESC LIMIT @limit
+      ), recent_product_history AS (
+        SELECT l.customer_id,
+               ARRAY_AGG(STRUCT(l.product_id, l.product_title, l.order_date)
+                 ORDER BY l.order_date DESC LIMIT 10) AS recent_products
+        FROM lines l JOIN qualifying_customers q USING (customer_id)
+        GROUP BY l.customer_id
+      )
+      SELECT q.*, r.recent_products
+      FROM qualifying_customers q
+      JOIN recent_product_history r USING (customer_id)
+      ORDER BY available_history_purchased_line_value DESC`;
     dateSemantics = 'start_date and end_date bound the available-history acquisition (first-order) period; metrics use all synchronized Shopify-native history. Inactivity is measured at end_date, or today when end_date is null.';
     guestSql = `${base} SELECT COUNT(DISTINCT order_id) AS excluded_guest_orders FROM lines WHERE is_guest`;
   }
@@ -6551,6 +6575,7 @@ Important rules:
 - days_out_of_stock and days_out_of_stock_at_location do not automatically mean days unavailable for sale or lost-sales days. For Made-to-Order products, interpret them generally as days without positive finished / ready-to-ship inventory in the relevant scope; the product may have remained purchasable, although a lack of ready-to-ship stock can still be commercially relevant. If Made-to-Order status is unknown, do not guess: use current live Shopify product tags where appropriate.
 - When aggregate history suggests stockouts, high stock with repeated stockouts, low inventory on a strong seller, negative inventory, or poor sell-through with high inventory, do not immediately conclude unavailability or lost sales. Use the inventory tools together where useful to distinguish Made-to-Order behaviour, limited ready-to-ship stock, variant or location imbalance, genuine unavailability and genuine overstock. Substantial aggregate inventory can coexist with no finished stock in important variants, sizes or locations.
 - If one tool fails but other relevant tools succeed, continue using the successful results and clearly state which part of the analysis could not be completed.
+- When a tool reports an internal execution or query failure, say that the requested analysis could not currently be retrieved because of an internal data/query failure. Do not suggest that the user provide an ID, narrow a date range, change the query, or take another remedial action unless the tool result specifically establishes that the action would help.
 - Do not fabricate data for a failed tool. If a Shopify tool is throttled, describe that source as temporarily unavailable rather than as missing data.
 
         `,
