@@ -283,8 +283,6 @@ const SHOPIFY_PROFITABILITY_METRICS = [
   'average_store_shipping_costs',
   'average_store_duties_and_import_taxes',
   'average_customer_duties_and_import_taxes',
-  'average_payment_processing_fees',
-  'average_international_fees',
   'average_sales_taxes',
   'average_duty_and_import_tax_adjustment_costs',
   'average_shipping_label_adjustment_costs'
@@ -904,6 +902,7 @@ ${timeseries === 'none' ? dateRange : `TIMESERIES ${timeseries}\n${dateRange}\nO
       basis: 'Shopify operational profitability before returns are settled; not accounting profit.',
       currency: 'Report values remain in Shopify store currency; no currency conversion is performed.',
       excluded_costs: 'Excludes costs Shopify does not know about, including marketing and packaging.',
+      unavailable_fees: 'Payment-processing and international fee components are unavailable from this ShopifyQL report and are omitted; they are not inferred or replaced with zero.',
       cost_data: 'Missing product costs must not be interpreted as complete or zero cost data.',
       source_of_truth: 'BigQuery remains the historical and accounting financial source of truth; later DHL data may provide more authoritative shipping, duty and customs costs.'
     }
@@ -5929,7 +5928,7 @@ app.post(
   type: 'function',
   name: 'get_shopify_profitability',
   description:
-    'Analyse Shopify operational order profitability and cost components before returns are settled. This is an operational estimate, not accounting profit or BigQuery financial truth.',
+    'Analyse Shopify operational order profitability and supported cost components before returns are settled. Payment-processing and international fee components are unavailable and omitted. This is an operational estimate, not accounting profit or BigQuery financial truth.',
   strict: true,
   parameters: {
     type: 'object',
@@ -6120,6 +6119,7 @@ Important rules:
 - Shopify operational metrics are not a replacement for BigQuery accounting figures.
 - Use get_shopify_profitability for Shopify operational profitability and cost-component analysis.
 - Clearly describe Shopify profitability as before returns and not accounting profit. Do not imply it includes marketing, packaging or costs not represented in Shopify.
+- The Shopify profitability tool output does not include payment-processing or international fee components. Do not derive them from sales, infer them, or replace them with zero.
 - BigQuery remains the financial/accounting source of truth.
 - Never combine incompatible currencies. Never fabricate missing metrics.
 - Shopify total_sales is the full amount customers spent including taxes, shipping, duties and fees.
