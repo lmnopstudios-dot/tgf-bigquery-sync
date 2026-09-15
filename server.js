@@ -1225,10 +1225,20 @@ async function searchShopifyProducts({
   );
 }
 
+// Keep connection pages conservative: Shopify rejects any Admin GraphQL query
+// whose requested cost exceeds 1,000 points. In particular, the discovery
+// query nests variants under products, so its two bounded connections use the
+// smallest pages here and inventory levels are fetched separately.
+const SHOPIFY_INVENTORY_PRODUCT_PAGE_SIZE = 25;
+const SHOPIFY_INVENTORY_DISCOVERY_VARIANT_PAGE_SIZE = 20;
+const SHOPIFY_INVENTORY_VARIANT_PAGE_SIZE = 50;
+const SHOPIFY_INVENTORY_LEVEL_PAGE_SIZE = 50;
+
 const SHOPIFY_INVENTORY_BY_LOCATION_PRODUCTS_QUERY = `
   query InventoryProductsByLocation(
     $query: String!
     $limit: Int!
+    $variantPageSize: Int!
   ) {
     products(first: $limit, query: $query) {
       nodes {
@@ -1237,7 +1247,7 @@ const SHOPIFY_INVENTORY_BY_LOCATION_PRODUCTS_QUERY = `
         handle
         status
         tags
-        variants(first: 250) {
+        variants(first: $variantPageSize) {
           pageInfo {
             hasNextPage
             endCursor
@@ -1249,23 +1259,6 @@ const SHOPIFY_INVENTORY_BY_LOCATION_PRODUCTS_QUERY = `
             availableForSale
             inventoryItem {
               id
-              inventoryLevels(first: 250) {
-                pageInfo {
-                  hasNextPage
-                  endCursor
-                }
-                nodes {
-                  location {
-                    id
-                    name
-                    isActive
-                  }
-                  quantities(names: ["available"]) {
-                    name
-                    quantity
-                  }
-                }
-              }
             }
           }
         }
@@ -1278,9 +1271,10 @@ const SHOPIFY_INVENTORY_BY_LOCATION_VARIANTS_QUERY = `
   query InventoryProductVariants(
     $productId: ID!
     $cursor: String!
+    $pageSize: Int!
   ) {
     product(id: $productId) {
-      variants(first: 250, after: $cursor) {
+      variants(first: $pageSize, after: $cursor) {
         pageInfo {
           hasNextPage
           endCursor
@@ -1292,23 +1286,6 @@ const SHOPIFY_INVENTORY_BY_LOCATION_VARIANTS_QUERY = `
           availableForSale
           inventoryItem {
             id
-            inventoryLevels(first: 250) {
-              pageInfo {
-                hasNextPage
-                endCursor
-              }
-              nodes {
-                location {
-                  id
-                  name
-                  isActive
-                }
-                quantities(names: ["available"]) {
-                  name
-                  quantity
-                }
-              }
-            }
           }
         }
       }
@@ -1319,10 +1296,11 @@ const SHOPIFY_INVENTORY_BY_LOCATION_VARIANTS_QUERY = `
 const SHOPIFY_INVENTORY_BY_LOCATION_LEVELS_QUERY = `
   query InventoryItemLevels(
     $inventoryItemId: ID!
-    $cursor: String!
+    $cursor: String
+    $pageSize: Int!
   ) {
     inventoryItem(id: $inventoryItemId) {
-      inventoryLevels(first: 250, after: $cursor) {
+      inventoryLevels(first: $pageSize, after: $cursor) {
         pageInfo {
           hasNextPage
           endCursor
@@ -1369,7 +1347,11 @@ async function getShopifyInventoryByLocation({
   const data = await shopifyGraphQL(
     token,
     SHOPIFY_INVENTORY_BY_LOCATION_PRODUCTS_QUERY,
-    { query: query.trim(), limit }
+    {
+      query: query.trim(),
+      limit: Math.min(limit, SHOPIFY_INVENTORY_PRODUCT_PAGE_SIZE),
+      variantPageSize: SHOPIFY_INVENTORY_DISCOVERY_VARIANT_PAGE_SIZE
+    }
   );
   const activeLocationNames = new Set();
 
@@ -1378,22 +1360,19 @@ async function getShopifyInventoryByLocation({
       return [];
     }
 
-    const levels = [...inventoryItem.inventoryLevels.nodes];
-    let pageInfo = inventoryItem.inventoryLevels.pageInfo;
+    const levels = [];
+    let cursor = null;
     const seenCursors = new Set();
 
-    while (pageInfo.hasNextPage) {
-      const cursor = pageInfo.endCursor;
-
-      if (!cursor || seenCursors.has(cursor)) {
-        throw new Error('Shopify inventory-level pagination returned an invalid cursor');
-      }
-
-      seenCursors.add(cursor);
+    while (true) {
       const page = await shopifyGraphQL(
         token,
         SHOPIFY_INVENTORY_BY_LOCATION_LEVELS_QUERY,
-        { inventoryItemId: inventoryItem.id, cursor }
+        {
+          inventoryItemId: inventoryItem.id,
+          cursor,
+          pageSize: SHOPIFY_INVENTORY_LEVEL_PAGE_SIZE
+        }
       );
 
       if (!page.inventoryItem) {
@@ -1401,7 +1380,20 @@ async function getShopifyInventoryByLocation({
       }
 
       levels.push(...page.inventoryItem.inventoryLevels.nodes);
-      pageInfo = page.inventoryItem.inventoryLevels.pageInfo;
+      const pageInfo = page.inventoryItem.inventoryLevels.pageInfo;
+
+      if (!pageInfo.hasNextPage) {
+        break;
+      }
+
+      const nextCursor = pageInfo.endCursor;
+
+      if (!nextCursor || seenCursors.has(nextCursor)) {
+        throw new Error('Shopify inventory-level pagination returned an invalid cursor');
+      }
+
+      seenCursors.add(nextCursor);
+      cursor = nextCursor;
     }
 
     return levels;
@@ -1425,7 +1417,11 @@ async function getShopifyInventoryByLocation({
       const page = await shopifyGraphQL(
         token,
         SHOPIFY_INVENTORY_BY_LOCATION_VARIANTS_QUERY,
-        { productId: product.id, cursor }
+        {
+          productId: product.id,
+          cursor,
+          pageSize: SHOPIFY_INVENTORY_VARIANT_PAGE_SIZE
+        }
       );
 
       if (!page.product) {
