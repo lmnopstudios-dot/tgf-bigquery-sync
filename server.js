@@ -1185,6 +1185,7 @@ async function searchShopifyProducts({
               status
               vendor
               productType
+              tags
               variants(first: 100) {
                 nodes {
                   id
@@ -1214,6 +1215,10 @@ async function searchShopifyProducts({
       vendor: product.vendor,
       productType:
         product.productType,
+      tags: product.tags,
+      is_made_to_order: product.tags.some(
+        tag => tag.toLowerCase() === 'made-to-order'
+      ),
       variants:
         product.variants.nodes
     })
@@ -5741,7 +5746,7 @@ app.post(
   type: 'function',
   name: 'search_shopify_products',
   description:
-    'Search the current live Shopify product catalogue, including variants, prices and aggregate inventory across Shopify locations.',
+    'Search the current live Shopify product catalogue, including variants, prices, tags, Made-to-Order status and aggregate inventory across Shopify locations.',
   parameters: {
     type: 'object',
     properties: {
@@ -5787,11 +5792,7 @@ Important rules:
 - Shopify is the source of truth for online-store conversion KPIs wherever Shopify session data exists.
 - Shopify get_shopify_sales_kpis is the source for Online Store operational sales KPIs such as orders and AOV.
 - Use get_shopify_product_performance for historical Shopify Online Store product performance.
-- Use get_shopify_inventory_performance for historical, location-specific Shopify inventory analysis.
-- Use get_shopify_inventory_efficiency for store-wide historical inventory velocity, sell-through, stock duration, overstock and stockout risk.
-- Use get_shopify_inventory_performance when the question specifically requires historical inventory by Shopify location.
-- Use search_shopify_products for current live aggregate inventory, purchasability, product, variant and price state.
-- Use search_shopify_products for current live variant inventory and current purchasability.
+- Use get_shopify_inventory_efficiency for aggregate historical inventory velocity, sell-through, stock duration, overstock and inventory risk; use get_shopify_inventory_performance for historical location-specific inventory; and use search_shopify_products for current live product and variant state, aggregate inventory, availableForSale, tags and Made-to-Order status.
 - Do not confuse historical inventory snapshots with live stock. ending_inventory_units_at_location is location-specific historical data.
 - Combine get_shopify_product_performance with get_shopify_inventory_efficiency to identify fast sellers at risk of running out or slow sellers tying up stock.
 - days_of_inventory_remaining_at_location is an estimate based on Shopify inventory and sales history, not a guarantee. Inventory value depends on costs recorded in Shopify.
@@ -5828,8 +5829,14 @@ Important rules:
 - Shopify inventoryQuantity is aggregate inventory across Shopify locations. Never describe it as location-specific stock.
 - Do not use net inventory as the primary "stock" figure if some variants have negative inventory.
 - Report positive inventory and negative/backordered inventory separately.
-- Treat availableForSale as purchasability, not proof of physical stock.
 - When positive and negative inventory both exist, headline the positive inventory figure first. Net inventory may be shown only as a secondary balance.
+- The Shopify product tag made-to-order is the sole source of truth for TGF Made-to-Order status. Compare it case-insensitively, and never infer Made-to-Order status from inventory, title, product type, availableForSale or any other heuristic.
+- For a product tagged made-to-order, zero inventory means no positive finished physical stock in that inventory scope, not sold out: the item may still be manufactured to order. Positive inventory is finished physical / ready-to-ship stock. Negative inventory is never negative physical stock and may represent Made-to-Order or backorder demand exceeding finished stock. Never describe an untagged zero-inventory product as Made to Order.
+- availableForSale represents current Shopify purchasability, not proof of physical inventory. Do not call a product or variant sold out solely because inventory is zero when availableForSale is true. Clearly distinguish finished / ready-to-ship stock, Made-to-Order availability and genuine current unavailability.
+- TGF's Online inventory location represents online fulfilment stock: positive inventory there is finished physical ready-to-ship stock, while zero means no finished ready-to-ship stock at Online. For a made-to-order product, zero Online stock does not imply it cannot be purchased. Never call aggregate inventory across Shopify locations Online inventory.
+- At a named retail location, positive inventory is finished physical stock held there and zero inventory means none is held there. Made-to-Order availability never implies physical availability at a retail store.
+- days_out_of_stock and days_out_of_stock_at_location do not automatically mean days unavailable for sale or lost-sales days. For Made-to-Order products, interpret them generally as days without positive finished / ready-to-ship inventory in the relevant scope; the product may have remained purchasable, although a lack of ready-to-ship stock can still be commercially relevant. If Made-to-Order status is unknown, do not guess: use current live Shopify product tags where appropriate.
+- When aggregate history suggests stockouts, high stock with repeated stockouts, low inventory on a strong seller, negative inventory, or poor sell-through with high inventory, do not immediately conclude unavailability or lost sales. Use the three inventory tools together where useful to distinguish Made-to-Order behaviour, limited ready-to-ship stock, variant or location imbalance, genuine unavailability and genuine overstock. Substantial aggregate inventory can coexist with no finished stock in important variants, sizes or locations.
 - If one tool fails but other relevant tools succeed, continue using the successful results and clearly state which part of the analysis could not be completed.
 - Do not fabricate data for a failed tool. If a Shopify tool is throttled, describe that source as temporarily unavailable rather than as missing data.
 
