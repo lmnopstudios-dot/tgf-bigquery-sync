@@ -4882,7 +4882,8 @@ app.get(
           error:
             sanitizedError.message ||
             sanitizedError.error ||
-            'Metorik API request failed'
+            'Metorik API request failed',
+          metorikResponse: sanitizedError
         });
       }
 
