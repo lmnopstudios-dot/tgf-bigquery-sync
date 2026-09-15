@@ -4778,11 +4778,20 @@ const METORIK_API_BASE_URL =
 const METORIK_DISCOVERY_START_DATE = '2025-01-01';
 const METORIK_DISCOVERY_END_DATE = '2025-09-30';
 const METORIK_DISCOVERY_PER_PAGE = '10';
+const METORIK_PAGINATION_TEST_PER_PAGE = '3';
 const METORIK_DISCOVERY_RESOURCES = [
   'products',
   'orders',
   'customers'
 ];
+const METORIK_DATE_FILTER_SEMANTICS = {
+  startDateAndEndDate:
+    'Analytical date range used for calculated values; it does not filter the resources returned.',
+  resourceDateFilters: {
+    orders: ['filter[created_at_min]', 'filter[created_at_max]'],
+    customers: ['filter[created_at_min]', 'filter[created_at_max]']
+  }
+};
 
 function sanitizeMetorikValue(value) {
   if (Array.isArray(value)) {
@@ -4859,7 +4868,10 @@ function getMetorikResponseRecords(data, resource) {
   return [];
 }
 
-async function discoverMetorikResource(resource) {
+async function requestMetorikResource(
+  resource,
+  queryParameters = {}
+) {
   const resourceUrl = new URL(
     resource,
     METORIK_API_BASE_URL
@@ -4877,6 +4889,10 @@ async function discoverMetorikResource(resource) {
     METORIK_DISCOVERY_PER_PAGE
   );
 
+  for (const [key, value] of Object.entries(queryParameters)) {
+    resourceUrl.searchParams.set(key, value);
+  }
+
   try {
     const response = await fetch(resourceUrl, {
       headers: {
@@ -4893,8 +4909,7 @@ async function discoverMetorikResource(resource) {
       return {
         success: false,
         apiStatus: response.status,
-        recordsReturned: 0,
-        sample: [],
+        records: [],
         pagination: null,
         topLevelKeys: [],
         error: 'Metorik returned a non-JSON response'
@@ -4905,11 +4920,10 @@ async function discoverMetorikResource(resource) {
       data,
       resource
     );
-    const result = {
+    return {
       success: response.ok,
       apiStatus: response.status,
-      recordsReturned: records.length,
-      sample: sanitizeMetorikValue(records.slice(0, 3)),
+      records,
       pagination: sanitizeMetorikValue(
         data && !Array.isArray(data)
           ? data.pagination || data.meta || data.links || null
@@ -4918,15 +4932,14 @@ async function discoverMetorikResource(resource) {
       topLevelKeys:
         data && !Array.isArray(data)
           ? Object.keys(data)
-          : ['array']
+          : ['array'],
+      ...(response.ok
+        ? {}
+        : {
+            error: 'Metorik returned an unsuccessful response',
+            metorikResponse: sanitizeMetorikValue(data)
+          })
     };
-
-    if (!response.ok) {
-      result.error = 'Metorik returned an unsuccessful response';
-      result.metorikResponse = sanitizeMetorikValue(data);
-    }
-
-    return result;
   } catch (error) {
     console.error(
       `Metorik UK ${resource} discovery failed:`,
@@ -4936,13 +4949,82 @@ async function discoverMetorikResource(resource) {
     return {
       success: false,
       apiStatus: null,
-      recordsReturned: 0,
-      sample: [],
+      records: [],
       pagination: null,
       topLevelKeys: [],
       error: 'Unable to reach the Metorik API'
     };
   }
+}
+
+async function discoverMetorikResource(resource) {
+  const result = await requestMetorikResource(resource);
+  const { records, ...diagnostics } = result;
+
+  return {
+    ...diagnostics,
+    recordsReturned: records.length,
+    sample: sanitizeMetorikValue(records.slice(0, 3))
+  };
+}
+
+function getMetorikRecordIdentity(record) {
+  const identityFields = [
+    'id',
+    'order_id',
+    'customer_id',
+    'metorik_customer_id',
+    'created_at',
+    'date_created',
+    'date',
+    'updated_at'
+  ];
+
+  return Object.fromEntries(
+    identityFields
+      .filter(field => record?.[field] !== undefined)
+      .map(field => [field, record[field]])
+  );
+}
+
+async function discoverMetorikOrderPagination() {
+  const pages = await Promise.all(
+    [1, 2].map(async page => {
+      const result = await requestMetorikResource('orders', {
+        page: String(page),
+        per_page: METORIK_PAGINATION_TEST_PER_PAGE
+      });
+      const { records, ...diagnostics } = result;
+
+      return {
+        page,
+        ...diagnostics,
+        records: sanitizeMetorikValue(
+          records.map(getMetorikRecordIdentity)
+        )
+      };
+    })
+  );
+  const pageIds = pages.map(page =>
+    page.records.map(record => record.order_id ?? record.id)
+  );
+
+  return {
+    perPageRequested: Number(METORIK_PAGINATION_TEST_PER_PAGE),
+    pages,
+    differentRecords:
+      pageIds[0].length > 0 &&
+      pageIds[1].length > 0 &&
+      !pageIds[0].some(id => pageIds[1].includes(id)),
+    paginationBehavesAsExpected:
+      pages[0].pagination?.current_page === 1 &&
+      pages[1].pagination?.current_page === 2 &&
+      pages[0].pagination?.per_page ===
+        Number(METORIK_PAGINATION_TEST_PER_PAGE) &&
+      pages[1].pagination?.per_page ===
+        Number(METORIK_PAGINATION_TEST_PER_PAGE) &&
+      pages[0].pagination?.has_more_pages === true
+  };
 }
 
 app.get(
@@ -4956,14 +5038,25 @@ app.get(
       });
     }
 
-    const discoveryResults = await Promise.all(
-      METORIK_DISCOVERY_RESOURCES.map(async resource => [
+    const discoveryResults = await Promise.all([
+      ...METORIK_DISCOVERY_RESOURCES.map(async resource => [
         resource,
         await discoverMetorikResource(resource)
-      ])
-    );
+      ]),
+      [
+        'refunds',
+        await discoverMetorikResource('refunds')
+      ],
+      [
+        'orderPaginationTest',
+        await discoverMetorikOrderPagination()
+      ]
+    ]);
 
-    return res.json(Object.fromEntries(discoveryResults));
+    return res.json({
+      dateFilterSemantics: METORIK_DATE_FILTER_SEMANTICS,
+      ...Object.fromEntries(discoveryResults)
+    });
   }
 );
 
