@@ -34,6 +34,8 @@ const LINE_ITEMS_TABLE = 'order_line_items';
 const ORDER_CUSTOMERS_TABLE = 'order_customers';
 const FINANCIALS_TABLE = 'order_financials';
 const REFUNDS_TABLE = 'order_refunds';
+const MATRIXIFY_SOURCE_APP_ID = 'gid://shopify/App/1758145';
+const SHOPIFY_NATIVE_HISTORY_START = '2025-11-16';
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const SHOPIFYQL_MAX_THROTTLE_WAIT_MS = 30000;
@@ -963,6 +965,258 @@ LIMIT ${limit}`;
     sort_direction,
     limit,
     customers: rows
+  };
+}
+
+function optionalBehaviorDateFilter(startDate, endDate, field) {
+  const clauses = [];
+
+  if (startDate !== null) clauses.push(`${field} >= DATE(@start_date)`);
+  if (endDate !== null) clauses.push(`${field} <= DATE(@end_date)`);
+
+  return clauses.length ? `AND ${clauses.join(' AND ')}` : '';
+}
+
+async function getShopifyCustomerProductBehavior({
+  analysis,
+  start_date,
+  end_date,
+  product_query,
+  customer_query,
+  minimum_lifetime_spend,
+  minimum_orders,
+  inactive_days,
+  limit
+}) {
+  const analyses = [
+    'product_customers',
+    'customer_products',
+    'product_affinity',
+    'repeat_customer_products',
+    'lapsed_high_value_customers'
+  ];
+
+  if (!analyses.includes(analysis)) {
+    throw new Error(`analysis must be one of: ${analyses.join(', ')}`);
+  }
+  if (start_date !== null) validateShopifyReportDate(start_date, 'start_date');
+  if (end_date !== null) validateShopifyReportDate(end_date, 'end_date');
+  if (start_date !== null && end_date !== null && start_date > end_date) {
+    throw new Error('start_date must be on or before end_date');
+  }
+  if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+    throw new Error('limit must be an integer between 1 and 100');
+  }
+  if (['product_customers', 'product_affinity'].includes(analysis) &&
+      (typeof product_query !== 'string' || !product_query.trim())) {
+    throw new Error(`${analysis} requires product_query`);
+  }
+  if (analysis === 'customer_products' &&
+      (typeof customer_query !== 'string' || !customer_query.trim())) {
+    throw new Error('customer_products requires customer_query');
+  }
+  if (minimum_lifetime_spend !== null &&
+      (typeof minimum_lifetime_spend !== 'number' || minimum_lifetime_spend < 0)) {
+    throw new Error('minimum_lifetime_spend must be a non-negative number or null');
+  }
+  if (minimum_orders !== null && (!Number.isInteger(minimum_orders) || minimum_orders < 1)) {
+    throw new Error('minimum_orders must be a positive integer or null');
+  }
+  if (inactive_days !== null && (!Number.isInteger(inactive_days) || inactive_days < 0)) {
+    throw new Error('inactive_days must be a non-negative integer or null');
+  }
+
+  const params = {
+    matrixify_source_app_id: MATRIXIFY_SOURCE_APP_ID,
+    limit
+  };
+  if (start_date !== null) params.start_date = start_date;
+  if (end_date !== null) params.end_date = end_date;
+  if (product_query !== null) params.product_query = product_query.trim().toLowerCase();
+  if (customer_query !== null) params.customer_query = customer_query.trim().toLowerCase();
+  if (minimum_lifetime_spend !== null) params.minimum_lifetime_spend = minimum_lifetime_spend;
+  if (minimum_orders !== null) params.minimum_orders = minimum_orders;
+  if (inactive_days !== null) params.inactive_days = inactive_days;
+
+  const base = `
+    WITH native_orders AS (
+      SELECT order_id, DATE(order_created_at) AS order_date,
+             customer_id, customer_name, is_guest
+      FROM \`${GOOGLE_PROJECT_ID}.${DATASET}.${ORDER_CUSTOMERS_TABLE}\`
+      WHERE (source_app_id IS NULL OR source_app_id != @matrixify_source_app_id)
+    ),
+    lines AS (
+      SELECT o.*, li.product_id, li.variant_id, li.title AS product_title,
+             li.variant_title, li.sku, li.quantity,
+             li.discounted_total_shop AS purchased_line_value,
+             li.shop_currency
+      FROM native_orders o
+      JOIN \`${GOOGLE_PROJECT_ID}.${DATASET}.${LINE_ITEMS_TABLE}\` li USING (order_id)
+    )`;
+  const linesActivityFilter = optionalBehaviorDateFilter(
+    start_date,
+    end_date,
+    'lines.order_date'
+  );
+  const customerProductsActivityFilter = optionalBehaviorDateFilter(
+    start_date,
+    end_date,
+    'l.order_date'
+  );
+  const productMatch = `(
+    LOWER(COALESCE(product_id, '')) = @product_query OR
+    LOWER(COALESCE(product_title, '')) LIKE CONCAT('%', @product_query, '%')
+  )`;
+  let sql;
+  let dateSemantics = 'start_date and end_date bound the purchase/activity period; null bounds use all synchronized history.';
+  let guestSql = `${base} SELECT COUNT(DISTINCT order_id) AS excluded_guest_orders
+    FROM lines WHERE is_guest ${linesActivityFilter}`;
+
+  if (analysis === 'product_customers') {
+    sql = `${base},
+      matched AS (SELECT * FROM lines WHERE ${productMatch} ${linesActivityFilter}),
+      lifetime AS (
+        SELECT customer_id, COUNT(DISTINCT order_id) AS available_history_orders,
+               SUM(purchased_line_value) AS available_history_purchased_line_value,
+               MIN(order_date) AS available_history_first_order,
+               MAX(order_date) AS available_history_last_order
+        FROM lines WHERE customer_id IS NOT NULL GROUP BY customer_id
+      )
+      SELECT m.customer_id, ANY_VALUE(m.customer_name HAVING MAX m.order_date) AS customer_name,
+             m.product_id, ANY_VALUE(m.product_title HAVING MAX m.order_date) AS product_title,
+             SUM(m.quantity) AS matching_quantity, COUNT(DISTINCT m.order_id) AS matching_order_count,
+             ANY_VALUE(l.available_history_orders) AS available_history_orders,
+             ANY_VALUE(l.available_history_purchased_line_value) AS available_history_purchased_line_value,
+             ANY_VALUE(l.available_history_first_order) AS available_history_first_order,
+             ANY_VALUE(l.available_history_last_order) AS available_history_last_order,
+             DATE_DIFF(CURRENT_DATE(), ANY_VALUE(l.available_history_last_order), DAY) AS days_since_last_order
+      FROM matched m JOIN lifetime l USING (customer_id)
+      WHERE m.customer_id IS NOT NULL AND NOT m.is_guest
+      GROUP BY m.customer_id, m.product_id
+      ORDER BY matching_quantity DESC, matching_order_count DESC LIMIT @limit`;
+    guestSql = `${base} SELECT COUNT(DISTINCT order_id) AS excluded_guest_orders
+      FROM lines WHERE is_guest AND ${productMatch} ${linesActivityFilter}`;
+  } else if (analysis === 'customer_products') {
+    sql = `${base}, matched_customers AS (
+        SELECT DISTINCT customer_id FROM lines
+        WHERE customer_id IS NOT NULL AND NOT is_guest AND (
+          LOWER(customer_id) = @customer_query OR
+          LOWER(COALESCE(customer_name, '')) LIKE CONCAT('%', @customer_query, '%'))
+      )
+      SELECT l.customer_id, ANY_VALUE(l.customer_name HAVING MAX l.order_date) AS customer_name,
+             l.product_id, ANY_VALUE(l.product_title HAVING MAX l.order_date) AS product_title,
+             SUM(l.quantity) AS quantity, COUNT(DISTINCT l.order_id) AS order_count,
+             SUM(l.purchased_line_value) AS operational_purchased_line_value,
+             MIN(l.order_date) AS first_purchase, MAX(l.order_date) AS latest_purchase,
+             ARRAY_AGG(DISTINCT IF(
+               l.variant_id IS NOT NULL OR l.variant_title IS NOT NULL OR l.sku IS NOT NULL,
+               STRUCT(l.variant_id, l.variant_title, l.sku), NULL
+             ) IGNORE NULLS LIMIT 10) AS variant_sku_details
+      FROM lines l JOIN matched_customers USING (customer_id)
+      WHERE TRUE ${customerProductsActivityFilter}
+      GROUP BY l.customer_id, l.product_id
+      ORDER BY operational_purchased_line_value DESC, quantity DESC LIMIT @limit`;
+    guestSql = 'SELECT 0 AS excluded_guest_orders';
+  } else if (analysis === 'product_affinity') {
+    sql = `${base}, period_lines AS (SELECT * FROM lines WHERE TRUE ${linesActivityFilter}),
+      seed AS (SELECT * FROM period_lines WHERE customer_id IS NOT NULL AND NOT is_guest AND ${productMatch}),
+      seed_summary AS (
+        SELECT product_id AS seed_product_id,
+               ANY_VALUE(product_title HAVING MAX order_date) AS seed_product_title,
+               COUNT(DISTINCT customer_id) AS seed_product_customer_count
+        FROM seed GROUP BY product_id
+      ), related AS (
+        SELECT s.product_id AS seed_product_id, p.product_id AS related_product_id,
+               ANY_VALUE(p.product_title HAVING MAX p.order_date) AS related_product_title,
+               COUNT(DISTINCT p.customer_id) AS shared_customer_count,
+               COUNT(DISTINCT p.order_id) AS related_order_count,
+               SUM(p.quantity) AS related_quantity,
+               SUM(p.purchased_line_value) AS related_operational_purchased_line_value
+        FROM (SELECT DISTINCT product_id, customer_id FROM seed) s
+        JOIN period_lines p USING (customer_id)
+        WHERE p.product_id IS DISTINCT FROM s.product_id
+        GROUP BY s.product_id, p.product_id
+      )
+      SELECT ss.seed_product_id, ss.seed_product_title, r.related_product_id,
+             r.related_product_title, ss.seed_product_customer_count, r.shared_customer_count,
+             100 * SAFE_DIVIDE(r.shared_customer_count, ss.seed_product_customer_count) AS customer_overlap_percentage,
+             r.related_order_count, r.related_quantity, r.related_operational_purchased_line_value
+      FROM related r JOIN seed_summary ss USING (seed_product_id)
+      ORDER BY shared_customer_count DESC, related_quantity DESC LIMIT @limit`;
+    guestSql = `${base} SELECT COUNT(DISTINCT order_id) AS excluded_guest_orders
+      FROM lines WHERE is_guest AND ${productMatch} ${linesActivityFilter}`;
+  } else if (analysis === 'repeat_customer_products') {
+    sql = `${base}, period_lines AS (
+        SELECT * FROM lines WHERE customer_id IS NOT NULL AND NOT is_guest ${linesActivityFilter}
+      ), customer_orders AS (
+        SELECT customer_id, COUNT(DISTINCT order_id) AS orders FROM period_lines GROUP BY customer_id
+      )
+      SELECT l.product_id, ANY_VALUE(l.product_title HAVING MAX l.order_date) AS product_title,
+             COUNT(DISTINCT l.customer_id) AS identified_buyers,
+             COUNT(DISTINCT IF(c.orders > 1, l.customer_id, NULL)) AS repeat_buyers,
+             COUNT(DISTINCT IF(c.orders = 1, l.customer_id, NULL)) AS one_order_buyers,
+             SAFE_DIVIDE(COUNT(DISTINCT IF(c.orders > 1, l.customer_id, NULL)),
+                         COUNT(DISTINCT l.customer_id)) AS repeat_buyer_share,
+             SUM(l.quantity) AS quantity, COUNT(DISTINCT l.order_id) AS orders,
+             SUM(l.purchased_line_value) AS operational_purchased_line_value
+      FROM period_lines l JOIN customer_orders c USING (customer_id)
+      GROUP BY l.product_id ORDER BY repeat_buyers DESC, identified_buyers DESC LIMIT @limit`;
+  } else {
+    const spendFilter = minimum_lifetime_spend === null ? '' : 'AND available_history_purchased_line_value >= @minimum_lifetime_spend';
+    const ordersFilter = minimum_orders === null ? '' : 'AND available_history_orders >= @minimum_orders';
+    const inactiveFilter = inactive_days === null ? '' : 'AND days_since_last_order >= @inactive_days';
+    const acquisitionFilter = optionalBehaviorDateFilter(start_date, end_date, 'available_history_first_order');
+    sql = `${base}, customer_history AS (
+        SELECT customer_id, ANY_VALUE(customer_name HAVING MAX order_date) AS customer_name,
+               SUM(purchased_line_value) AS available_history_purchased_line_value,
+               COUNT(DISTINCT order_id) AS available_history_orders,
+               MIN(order_date) AS available_history_first_order,
+               MAX(order_date) AS available_history_last_order,
+               DATE_DIFF(${end_date === null ? 'CURRENT_DATE()' : 'DATE(@end_date)'}, MAX(order_date), DAY) AS days_since_last_order,
+               ARRAY_AGG(STRUCT(product_id, product_title, order_date)
+                 ORDER BY order_date DESC LIMIT 10) AS recent_products
+        FROM lines WHERE customer_id IS NOT NULL AND NOT is_guest GROUP BY customer_id
+      ) SELECT * FROM customer_history WHERE TRUE ${acquisitionFilter}
+        ${spendFilter} ${ordersFilter} ${inactiveFilter}
+        ORDER BY available_history_purchased_line_value DESC LIMIT @limit`;
+    dateSemantics = 'start_date and end_date bound the available-history acquisition (first-order) period; metrics use all synchronized Shopify-native history. Inactivity is measured at end_date, or today when end_date is null.';
+    guestSql = `${base} SELECT COUNT(DISTINCT order_id) AS excluded_guest_orders FROM lines WHERE is_guest`;
+  }
+
+  const parametersUsedBy = query => Object.fromEntries(
+    Object.entries(params).filter(([name]) => query.includes(`@${name}`))
+  );
+  const [queryResult, guestResult] = await Promise.all([
+    bigquery.query({ query: sql, params: parametersUsedBy(sql) }),
+    bigquery.query({ query: guestSql, params: parametersUsedBy(guestSql) })
+  ]);
+
+  return {
+    analysis,
+    start_date,
+    end_date,
+    results: queryResult[0],
+    excluded_guest_orders: Number(guestResult[0][0]?.excluded_guest_orders || 0),
+    semantics: {
+      scope: 'Shopify-native customer/product behavioural analysis from persisted BigQuery tables.',
+      matrixify_exclusion: `Orders whose source_app_id is ${MATRIXIFY_SOURCE_APP_ID} are excluded; these are 2,158 historical WooCommerce orders imported by Matrixify.`,
+      available_history: `Synchronized Shopify-native history begins ${SHOPIFY_NATIVE_HISTORY_START}; available-history metrics are not necessarily true customer lifetime metrics.`,
+      dates: dateSemantics,
+      result_grain: analysis === 'product_customers'
+        ? 'One row per stable customer_id and matched product_id. A broad product query can return the same customer on multiple rows; count distinct customer_id for a unique matched-customer count.'
+        : analysis === 'product_affinity'
+          ? 'Affinity is calculated independently for each matched seed_product_id. A broad product query creates multiple separate seed cohorts, never one combined seed-product cohort.'
+          : 'Result grain is defined by the stable IDs returned for the selected analysis.',
+      monetary_value: 'discounted_total_shop summed as operational purchased-line value in Shopify shop currency; it is not settled revenue and may not reflect subsequent refunds.',
+      identity: 'customer_id is identity; customer_name is display-only and matching names are never merged.',
+      guests: 'Guest orders have no synthesized identity and are excluded from individual-customer results; excluded_guest_orders reports the relevant excluded scope.',
+      interpretation: analysis === 'product_affinity'
+        ? 'Affinity is observed customer/product overlap, not causation.'
+        : analysis === 'repeat_customer_products'
+          ? 'Products are associated with repeat customers; this does not mean a product caused retention.'
+          : 'Behavioural aggregates do not establish causation.',
+      financial_truth: 'BigQuery finance.sales_master remains the accounting/financial source of truth.'
+    }
   };
 }
 
@@ -6084,6 +6338,41 @@ app.post(
 },
 {
   type: 'function',
+  name: 'get_shopify_customer_product_behavior',
+  description:
+    'Run bounded Shopify-native customer/product behavioural analysis in BigQuery. Matrixify-imported WooCommerce orders and guest identities are excluded where appropriate.',
+  strict: true,
+  parameters: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      analysis: {
+        type: 'string',
+        enum: [
+          'product_customers',
+          'customer_products',
+          'product_affinity',
+          'repeat_customer_products',
+          'lapsed_high_value_customers'
+        ]
+      },
+      start_date: { type: ['string', 'null'], description: 'Activity or acquisition start date in YYYY-MM-DD format, or null.' },
+      end_date: { type: ['string', 'null'], description: 'Activity or acquisition end date in YYYY-MM-DD format, or null.' },
+      product_query: { type: ['string', 'null'], description: 'Stable product ID or title search; required for product_customers and product_affinity.' },
+      customer_query: { type: ['string', 'null'], description: 'Stable customer ID or display-name search; required for customer_products.' },
+      minimum_lifetime_spend: { type: ['number', 'null'], minimum: 0, description: 'Minimum available-history operational purchased-line value.' },
+      minimum_orders: { type: ['integer', 'null'], minimum: 1, description: 'Minimum distinct available-history Shopify-native orders.' },
+      inactive_days: { type: ['integer', 'null'], minimum: 0, description: 'Minimum days since last available-history order.' },
+      limit: { type: 'integer', minimum: 1, maximum: 100 }
+    },
+    required: [
+      'analysis', 'start_date', 'end_date', 'product_query', 'customer_query',
+      'minimum_lifetime_spend', 'minimum_orders', 'inactive_days', 'limit'
+    ]
+  }
+},
+{
+  type: 'function',
   name: 'get_shopify_returns_analysis',
   description:
     'Analyse Shopify returned item quantities by reason, historical product or variant naming at the time of sale, or return status. This item-level report may identify products and variants by historical titles or SKUs rather than stable product IDs, and reports units rather than accounting refund value.',
@@ -6219,6 +6508,11 @@ Important rules:
 - Combine get_shopify_product_performance with search_shopify_products for questions such as “Which best-selling products are low on stock?”.
 - Use get_shopify_customer_kpis for Shopify Online Store new and returning customer behaviour.
 - Use get_shopify_customer_lifetime_metrics for lifetime customer value, lifetime order frequency, acquisition and recency.
+- Use get_shopify_customer_product_behavior for Shopify-native customer/product behavioural analysis. Matrixify WooCommerce imports are excluded by source_app_id by default; synchronized Shopify-native history begins 16 Nov 2025, so call its metrics available-history rather than true lifetime when earlier customer history may exist.
+- In get_shopify_customer_product_behavior, customer IDs are identities and names are display attributes only. Never merge people by name or synthesize guest identities. Operational purchased-line value uses discounted line value, may not reflect later refunds, and is not settled/accounting revenue; BigQuery finance remains financial truth.
+- Describe product affinity as observed customer/product overlap, never causation. Describe products as associated with repeat customers, never as causing retention. Do not automatically recommend discounts for lapsed customers.
+- A broad product query can match multiple product IDs. product_customers returns customer × matched-product rows, so the same customer may appear more than once; product_affinity reports a separate cohort for each seed_product_id and must never be described as one combined seed cohort.
+- Combine get_shopify_customer_product_behavior with get_shopify_customer_lifetime_metrics for Shopify customer lifetime/cohort reporting; get_shopify_product_performance for operational product sales/returns; BigQuery finance tools for accounting sales/refunds; and current Shopify catalogue/inventory tools for present catalogue and availability.
 - Use get_shopify_customer_kpis for period-based new-vs-returning behaviour.
 - Do not describe lifetime customer metrics as activity entirely within the requested date range.
 - new_customers means customers making their first purchase in the reporting period according to Shopify; returning_customers means customers who purchased after a previous purchase.
@@ -6344,6 +6638,10 @@ Important rules:
 } else if (item.name === 'get_shopify_customer_lifetime_metrics') {
 
   result = await getShopifyCustomerLifetimeMetrics(args);
+
+} else if (item.name === 'get_shopify_customer_product_behavior') {
+
+  result = await getShopifyCustomerProductBehavior(args);
 
 } else if (item.name === 'get_shopify_returns_analysis') {
 
