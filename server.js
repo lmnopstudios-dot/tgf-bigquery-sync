@@ -259,6 +259,46 @@ const SHOPIFY_INVENTORY_DIMENSIONS = [
   'product_variant_sku'
 ];
 
+const SHOPIFY_INVENTORY_EFFICIENCY_METRICS = [
+  'starting_inventory_units',
+  'ending_inventory_units',
+  'inventory_units_sold',
+  'inventory_units_sold_per_day',
+  'sell_through_rate',
+  'percent_of_inventory_sold',
+  'days_in_stock',
+  'days_out_of_stock',
+  'days_of_inventory_remaining',
+  'ending_inventory_value',
+  'ending_inventory_retail_value'
+];
+
+const SHOPIFY_PROFITABILITY_METRICS = [
+  'average_revenue_before_returns',
+  'average_store_costs_before_returns',
+  'average_profit_at_delivery_before_returns',
+  'average_cost_of_goods_sold',
+  'average_sale_after_discounts',
+  'average_customer_shipping_charges',
+  'average_store_shipping_costs',
+  'average_store_duties_and_import_taxes',
+  'average_customer_duties_and_import_taxes',
+  'average_payment_processing_fees',
+  'average_international_fees',
+  'average_sales_taxes',
+  'average_duty_and_import_tax_adjustment_costs',
+  'average_shipping_label_adjustment_costs'
+];
+
+const SHOPIFY_CUSTOMER_LIFETIME_METRICS = [
+  'new_customer_records',
+  'total_amount_spent',
+  'total_number_of_orders',
+  'total_amount_spent_per_order',
+  'days_since_last_order',
+  'percent_of_customers'
+];
+
 const SHOPIFY_CUSTOMER_METRICS = [
   'customers',
   'new_customers',
@@ -764,6 +804,165 @@ LIMIT ${limit}`;
       days_of_inventory_remaining: 'Estimate based on Shopify inventory and sales history, not a guarantee.',
       inventory_value: 'Depends on costs recorded in Shopify.'
     }
+  };
+}
+
+async function getShopifyInventoryEfficiency({
+  start_date,
+  end_date,
+  limit = 20,
+  sort_by = 'sell_through_rate',
+  sort_direction = 'desc'
+}) {
+  validateShopifyReportDate(start_date, 'start_date');
+  validateShopifyReportDate(end_date, 'end_date');
+
+  if (start_date > end_date) {
+    throw new Error('start_date must be on or before end_date');
+  }
+  if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+    throw new Error('limit must be an integer between 1 and 100');
+  }
+
+  const sortableMetrics = [
+    'sell_through_rate',
+    'inventory_units_sold',
+    'inventory_units_sold_per_day',
+    'ending_inventory_units',
+    'days_of_inventory_remaining',
+    'days_out_of_stock',
+    'ending_inventory_value',
+    'ending_inventory_retail_value'
+  ];
+
+  if (!sortableMetrics.includes(sort_by)) {
+    throw new Error(`sort_by must be one of: ${sortableMetrics.join(', ')}`);
+  }
+  if (!['asc', 'desc'].includes(sort_direction)) {
+    throw new Error('sort_direction must be one of: asc, desc');
+  }
+
+  const shopifyql = `FROM inventory
+SHOW ${SHOPIFY_INVENTORY_EFFICIENCY_METRICS.join(', ')}
+WHERE inventory_is_tracked = true
+GROUP BY product_id, product_title
+SINCE ${start_date} UNTIL ${end_date}
+ORDER BY ${sort_by} ${sort_direction.toUpperCase()}
+LIMIT ${limit}`;
+  const token = await getShopifyAccessToken();
+  const rows = await runShopifyqlReport(token, shopifyql, 'inventory efficiency');
+
+  normalizeShopifyResourceIds(rows, ['product_id']);
+
+  return {
+    start_date,
+    end_date,
+    scope: 'aggregate_across_shopify_locations',
+    data_type: 'aggregate_historical_shopify_inventory_analytics',
+    tracked_inventory_only: true,
+    sort_by,
+    sort_direction,
+    limit,
+    products: rows,
+    semantics: {
+      sell_through_rate: "Shopify's inventory sell-through metric.",
+      days_of_inventory_remaining: 'Estimate based on recent sales velocity, not a guarantee; it can be null when no units sold in the period.',
+      inventory_value: 'Depends on cost data recorded in Shopify.',
+      negative_inventory: 'Negative inventory is not physical stock.'
+    }
+  };
+}
+
+async function getShopifyProfitability({
+  start_date,
+  end_date,
+  timeseries = 'none'
+}) {
+  validateShopifyReportDate(start_date, 'start_date');
+  validateShopifyReportDate(end_date, 'end_date');
+
+  if (start_date > end_date) {
+    throw new Error('start_date must be on or before end_date');
+  }
+  if (!['none', 'day', 'week', 'month'].includes(timeseries)) {
+    throw new Error('timeseries must be one of: none, day, week, month');
+  }
+
+  const dateRange = `SINCE ${start_date} UNTIL ${end_date}`;
+  const shopifyql = `FROM profitability
+SHOW ${SHOPIFY_PROFITABILITY_METRICS.join(', ')}
+${timeseries === 'none' ? dateRange : `TIMESERIES ${timeseries}\n${dateRange}\nORDER BY ${timeseries} ASC`}`;
+  const token = await getShopifyAccessToken();
+  const rows = await runShopifyqlReport(token, shopifyql, 'profitability');
+
+  return {
+    start_date,
+    end_date,
+    timeseries,
+    ...(timeseries === 'none' ? { metrics: rows[0] ?? null } : { periods: rows }),
+    semantics: {
+      basis: 'Shopify operational profitability before returns are settled; not accounting profit.',
+      currency: 'Report values remain in Shopify store currency; no currency conversion is performed.',
+      excluded_costs: 'Excludes costs Shopify does not know about, including marketing and packaging.',
+      cost_data: 'Missing product costs must not be interpreted as complete or zero cost data.',
+      source_of_truth: 'BigQuery remains the historical and accounting financial source of truth; later DHL data may provide more authoritative shipping, duty and customs costs.'
+    }
+  };
+}
+
+async function getShopifyCustomerLifetimeMetrics({
+  start_date,
+  end_date,
+  limit = 20,
+  sort_by = 'total_amount_spent',
+  sort_direction = 'desc'
+}) {
+  validateShopifyReportDate(start_date, 'start_date');
+  validateShopifyReportDate(end_date, 'end_date');
+
+  if (start_date > end_date) {
+    throw new Error('start_date must be on or before end_date');
+  }
+  if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
+    throw new Error('limit must be an integer between 1 and 100');
+  }
+
+  const sortableMetrics = [
+    'total_amount_spent',
+    'total_number_of_orders',
+    'total_amount_spent_per_order',
+    'days_since_last_order',
+    'new_customer_records'
+  ];
+
+  if (!sortableMetrics.includes(sort_by)) {
+    throw new Error(`sort_by must be one of: ${sortableMetrics.join(', ')}`);
+  }
+  if (!['asc', 'desc'].includes(sort_direction)) {
+    throw new Error('sort_direction must be one of: asc, desc');
+  }
+
+  const shopifyql = `FROM customers
+SHOW ${SHOPIFY_CUSTOMER_LIFETIME_METRICS.join(', ')}
+GROUP BY customer_id, customer_name, customer_first_order_date, customer_last_order_date
+SINCE ${start_date} UNTIL ${end_date}
+ORDER BY ${sort_by} ${sort_direction.toUpperCase()}
+LIMIT ${limit}`;
+  const token = await getShopifyAccessToken();
+  const rows = await runShopifyqlReport(token, shopifyql, 'customer lifetime metrics');
+
+  normalizeShopifyResourceIds(rows, ['customer_id']);
+
+  return {
+    start_date,
+    end_date,
+    cohort_basis: 'customer acquisition / first purchase in the selected date range',
+    metrics_scope: 'lifetime metrics for the selected customers, not activity limited to the date range',
+    pii: 'No customer email, phone or address is requested.',
+    sort_by,
+    sort_direction,
+    limit,
+    customers: rows
   };
 }
 
@@ -5423,6 +5622,88 @@ app.post(
 },
 {
   type: 'function',
+  name: 'get_shopify_inventory_efficiency',
+  description:
+    'Analyse aggregate historical Shopify inventory across all locations by product, including velocity, sell-through, stock duration, value, overstock and stockout risk. This is not current live stock.',
+  strict: true,
+  parameters: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      start_date: { type: 'string', description: 'Start date in YYYY-MM-DD format' },
+      end_date: { type: 'string', description: 'End date in YYYY-MM-DD format' },
+      limit: { type: 'integer', minimum: 1, maximum: 100, default: 20 },
+      sort_by: {
+        type: 'string',
+        enum: [
+          'sell_through_rate',
+          'inventory_units_sold',
+          'inventory_units_sold_per_day',
+          'ending_inventory_units',
+          'days_of_inventory_remaining',
+          'days_out_of_stock',
+          'ending_inventory_value',
+          'ending_inventory_retail_value'
+        ],
+        default: 'sell_through_rate'
+      },
+      sort_direction: { type: 'string', enum: ['asc', 'desc'], default: 'desc' }
+    },
+    required: ['start_date', 'end_date', 'limit', 'sort_by', 'sort_direction']
+  }
+},
+{
+  type: 'function',
+  name: 'get_shopify_profitability',
+  description:
+    'Analyse Shopify operational order profitability and cost components before returns are settled. This is an operational estimate, not accounting profit or BigQuery financial truth.',
+  strict: true,
+  parameters: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      start_date: { type: 'string', description: 'Start date in YYYY-MM-DD format' },
+      end_date: { type: 'string', description: 'End date in YYYY-MM-DD format' },
+      timeseries: {
+        type: 'string',
+        enum: ['none', 'day', 'week', 'month'],
+        default: 'none'
+      }
+    },
+    required: ['start_date', 'end_date', 'timeseries']
+  }
+},
+{
+  type: 'function',
+  name: 'get_shopify_customer_lifetime_metrics',
+  description:
+    'Analyse non-sensitive customer lifetime value, order frequency, acquisition and recency for customers acquired in a date range. Lifetime values are not limited to that date range.',
+  strict: true,
+  parameters: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      start_date: { type: 'string', description: 'Customer acquisition start date in YYYY-MM-DD format' },
+      end_date: { type: 'string', description: 'Customer acquisition end date in YYYY-MM-DD format' },
+      limit: { type: 'integer', minimum: 1, maximum: 100, default: 20 },
+      sort_by: {
+        type: 'string',
+        enum: [
+          'total_amount_spent',
+          'total_number_of_orders',
+          'total_amount_spent_per_order',
+          'days_since_last_order',
+          'new_customer_records'
+        ],
+        default: 'total_amount_spent'
+      },
+      sort_direction: { type: 'string', enum: ['asc', 'desc'], default: 'desc' }
+    },
+    required: ['start_date', 'end_date', 'limit', 'sort_by', 'sort_direction']
+  }
+},
+{
+  type: 'function',
   name: 'get_shopify_returns_analysis',
   description:
     'Analyse Shopify returned item quantities by reason, historical product or variant naming at the time of sale, or return status. This item-level report may identify products and variants by historical titles or SKUs rather than stable product IDs, and reports units rather than accounting refund value.',
@@ -5507,8 +5788,12 @@ Important rules:
 - Shopify get_shopify_sales_kpis is the source for Online Store operational sales KPIs such as orders and AOV.
 - Use get_shopify_product_performance for historical Shopify Online Store product performance.
 - Use get_shopify_inventory_performance for historical, location-specific Shopify inventory analysis.
+- Use get_shopify_inventory_efficiency for store-wide historical inventory velocity, sell-through, stock duration, overstock and stockout risk.
+- Use get_shopify_inventory_performance when the question specifically requires historical inventory by Shopify location.
 - Use search_shopify_products for current live aggregate inventory, purchasability, product, variant and price state.
+- Use search_shopify_products for current live variant inventory and current purchasability.
 - Do not confuse historical inventory snapshots with live stock. ending_inventory_units_at_location is location-specific historical data.
+- Combine get_shopify_product_performance with get_shopify_inventory_efficiency to identify fast sellers at risk of running out or slow sellers tying up stock.
 - days_of_inventory_remaining_at_location is an estimate based on Shopify inventory and sales history, not a guarantee. Inventory value depends on costs recorded in Shopify.
 - Use get_shopify_returns_analysis for item-level return quantities, reasons and statuses. returned_quantity is units/items, not money refunded. Products and variants may be identified by their historical titles or SKUs at the time of sale rather than stable product IDs.
 - Use BigQuery for accounting refund values, and Shopify sales KPIs or product performance for monetary return analysis.
@@ -5516,11 +5801,17 @@ Important rules:
 - For combined “top sellers with high returns” and other return/problem-product questions, match get_shopify_returns_analysis results to get_shopify_product_performance by historical product or variant naming where possible, and clearly state when the match is approximate.
 - Combine get_shopify_product_performance with search_shopify_products for questions such as “Which best-selling products are low on stock?”.
 - Use get_shopify_customer_kpis for Shopify Online Store new and returning customer behaviour.
+- Use get_shopify_customer_lifetime_metrics for lifetime customer value, lifetime order frequency, acquisition and recency.
+- Use get_shopify_customer_kpis for period-based new-vs-returning behaviour.
+- Do not describe lifetime customer metrics as activity entirely within the requested date range.
 - new_customers means customers making their first purchase in the reporting period according to Shopify; returning_customers means customers who purchased after a previous purchase.
 - Call returning_customer_rate “returning customer rate”. Do not describe it as order repeat rate, repeat purchase rate or lifetime retention, and do not infer lifetime customer value from it.
 - return_rate_value is a value-based ratio of absolute returns to gross sales, not a customer return rate or a percentage of units returned.
 - Shopify operational metrics are not a replacement for BigQuery accounting figures.
+- Use get_shopify_profitability for Shopify operational profitability and cost-component analysis.
+- Clearly describe Shopify profitability as before returns and not accounting profit. Do not imply it includes marketing, packaging or costs not represented in Shopify.
 - BigQuery remains the financial/accounting source of truth.
+- Never combine incompatible currencies. Never fabricate missing metrics.
 - Shopify total_sales is the full amount customers spent including taxes, shipping, duties and fees.
 - Shopify net_sales is product sales after discounts and reversals, excluding taxes, shipping, duties and fees.
 - Shopify average_order_value is Shopify's own AOV metric and should be used when discussing Shopify ecommerce AOV.
@@ -5611,6 +5902,18 @@ Important rules:
 } else if (item.name === 'get_shopify_inventory_performance') {
 
   result = await getShopifyInventoryPerformance(args);
+
+} else if (item.name === 'get_shopify_inventory_efficiency') {
+
+  result = await getShopifyInventoryEfficiency(args);
+
+} else if (item.name === 'get_shopify_profitability') {
+
+  result = await getShopifyProfitability(args);
+
+} else if (item.name === 'get_shopify_customer_lifetime_metrics') {
+
+  result = await getShopifyCustomerLifetimeMetrics(args);
 
 } else if (item.name === 'get_shopify_returns_analysis') {
 
