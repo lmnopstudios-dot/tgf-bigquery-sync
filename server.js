@@ -4948,6 +4948,10 @@ function metorikRetryDelay(response, retryNumber) {
       return Math.min(delay, METORIK_MAX_RETRY_DELAY_MS);
     }
   }
+  if (response.status === 429) {
+    return [5000, 15000][retryNumber - 1] ??
+      METORIK_MAX_RETRY_DELAY_MS;
+  }
   return Math.min(
     METORIK_RETRY_BASE_DELAY_MS * (2 ** (retryNumber - 1)),
     METORIK_MAX_RETRY_DELAY_MS
@@ -5216,6 +5220,29 @@ const METORIK_ORDERS_TABLE = 'orders';
 const METORIK_ORDER_LINE_ITEMS_TABLE = 'order_line_items';
 const METORIK_ORDERS_PER_PAGE = 100;
 const METORIK_MAX_ORDER_PAGES = 100000;
+const METORIK_DEFAULT_PAGE_DELAY_MS = 1250;
+const METORIK_MAX_PAGE_DELAY_MS = 60000;
+
+function getMetorikPageDelayMs(value) {
+  if (value === undefined || value === '') {
+    return METORIK_DEFAULT_PAGE_DELAY_MS;
+  }
+  if (!/^\d+$/.test(value)) {
+    throw new Error('METORIK_PAGE_DELAY_MS must be a non-negative integer');
+  }
+
+  const delayMs = Number(value);
+  if (!Number.isSafeInteger(delayMs) || delayMs > METORIK_MAX_PAGE_DELAY_MS) {
+    throw new Error(
+      `METORIK_PAGE_DELAY_MS must be between 0 and ${METORIK_MAX_PAGE_DELAY_MS}`
+    );
+  }
+  return delayMs;
+}
+
+const METORIK_PAGE_DELAY_MS = getMetorikPageDelayMs(
+  process.env.METORIK_PAGE_DELAY_MS
+);
 
 const METORIK_ORDERS_SCHEMA = [
   { name: 'order_id', type: 'INT64', mode: 'REQUIRED' },
@@ -5596,7 +5623,12 @@ async function fetchAllMetorikUKOrders() {
     orders.push(...result.records);
 
     if (!pagination.has_more_pages) {
-      return { orders, pagesFetched: requestedPage, paginationCompleted: true };
+      return {
+        orders,
+        pagesFetched: requestedPage,
+        paginationCompleted: true,
+        pageDelayMs: METORIK_PAGE_DELAY_MS
+      };
     }
     if (result.records.length === 0) {
       throw new MetorikSyncValidationError(
@@ -5604,6 +5636,8 @@ async function fetchAllMetorikUKOrders() {
         metorikPageDiagnostics(requestedPage, result, 'pagination_validation_failure')
       );
     }
+
+    await sleep(METORIK_PAGE_DELAY_MS);
   }
 
   throw new MetorikSyncValidationError('Metorik pagination exceeded the safety page limit');
@@ -5728,6 +5762,7 @@ async function syncMetorikUKOrders() {
     currencies_observed: currencies,
     unexpected_currencies: unexpectedCurrencies,
     pages_fetched: fetched.pagesFetched,
+    page_delay_ms: fetched.pageDelayMs,
     duplicate_order_ids_detected: 0,
     duplicate_line_item_identity_pairs_detected: 0,
     destination_tables: [
