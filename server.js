@@ -31,6 +31,7 @@ const {
 const DATASET = 'shopify_data';
 const TABLE = 'order_locations';
 const LINE_ITEMS_TABLE = 'order_line_items';
+const ORDER_CUSTOMERS_TABLE = 'order_customers';
 const FINANCIALS_TABLE = 'order_financials';
 const REFUNDS_TABLE = 'order_refunds';
 
@@ -1509,6 +1510,13 @@ async function getAllOrders() {
           name
           createdAt
           updatedAt
+          cancelledAt
+          displayFinancialStatus
+
+          customer {
+            id
+            displayName
+          }
 
           app {
             id
@@ -2224,6 +2232,39 @@ async function ensureLineItemsTable() {
   );
 }
 
+async function ensureOrderCustomersTable() {
+  const dataset = bigquery.dataset(DATASET);
+  const table = dataset.table(ORDER_CUSTOMERS_TABLE);
+
+  const [exists] = await table.exists();
+
+  if (exists) {
+    return table;
+  }
+
+  console.log(
+    `Creating ${GOOGLE_PROJECT_ID}.${DATASET}.${ORDER_CUSTOMERS_TABLE}`
+  );
+
+  await dataset.createTable(ORDER_CUSTOMERS_TABLE, {
+    schema: [
+      { name: 'order_id', type: 'STRING', mode: 'REQUIRED' },
+      { name: 'order_name', type: 'STRING' },
+      { name: 'order_created_at', type: 'TIMESTAMP' },
+      { name: 'customer_id', type: 'STRING' },
+      { name: 'customer_name', type: 'STRING' },
+      { name: 'is_guest', type: 'BOOL', mode: 'REQUIRED' },
+      { name: 'cancelled_at', type: 'TIMESTAMP' },
+      { name: 'display_financial_status', type: 'STRING' },
+      { name: 'source_app_id', type: 'STRING' },
+      { name: 'source_app_name', type: 'STRING' },
+      { name: 'synced_at', type: 'TIMESTAMP' }
+    ]
+  });
+
+  return dataset.table(ORDER_CUSTOMERS_TABLE);
+}
+
 async function ensureFinancialsTable() {
   const dataset = bigquery.dataset(DATASET);
   const table = dataset.table(FINANCIALS_TABLE);
@@ -2892,6 +2933,25 @@ function transformLineItems(orders) {
   return rows;
 }
 
+function transformOrderCustomers(orders) {
+  const syncedAt = new Date().toISOString();
+
+  return orders.map(order => ({
+    order_id: order.id,
+    order_name: order.name || null,
+    order_created_at: order.createdAt || null,
+    customer_id: order.customer?.id || null,
+    customer_name: order.customer?.displayName || null,
+    is_guest: !order.customer?.id,
+    cancelled_at: order.cancelledAt || null,
+    display_financial_status:
+      order.displayFinancialStatus || null,
+    source_app_id: order.app?.id || null,
+    source_app_name: order.app?.name || null,
+    synced_at: syncedAt
+  }));
+}
+
 async function replaceBigQueryData(
   rows
 ) {
@@ -2979,6 +3039,40 @@ async function replaceLineItemsData(
         i + batch.length,
         rows.length
       )}/${rows.length} Shopify line items`
+    );
+  }
+}
+
+async function replaceOrderCustomersData(rows) {
+  const table = await ensureOrderCustomersTable();
+
+  console.log(
+    'Clearing existing Shopify order customer data...'
+  );
+
+  await bigquery.query({
+    query: `
+      TRUNCATE TABLE
+      \`${GOOGLE_PROJECT_ID}.${DATASET}.${ORDER_CUSTOMERS_TABLE}\`
+    `
+  });
+
+  console.log(
+    `Writing ${rows.length} Shopify order customer rows to BigQuery...`
+  );
+
+  const batchSize = 500;
+
+  for (let i = 0; i < rows.length; i += batchSize) {
+    const batch = rows.slice(i, i + batchSize);
+
+    await table.insert(batch);
+
+    console.log(
+      `Inserted ${Math.min(
+        i + batch.length,
+        rows.length
+      )}/${rows.length} Shopify order customer rows`
     );
   }
 }
@@ -3085,6 +3179,9 @@ async function syncShopify() {
   const lineItemRows =
     transformLineItems(orders);
 
+  const orderCustomerRows =
+    transformOrderCustomers(orders);
+
   const financialRows =
     transformFinancials(financialOrders);
 
@@ -3093,6 +3190,10 @@ async function syncShopify() {
 
   console.log(
     `Extracted ${lineItemRows.length} Shopify line items`
+  );
+
+  console.log(
+    `Extracted ${orderCustomerRows.length} Shopify order customer rows`
   );
 
   console.log(
@@ -3109,6 +3210,10 @@ async function syncShopify() {
 
   await replaceLineItemsData(
     lineItemRows
+  );
+
+  await replaceOrderCustomersData(
+    orderCustomerRows
   );
 
   await replaceFinancialsData(
@@ -3135,6 +3240,9 @@ async function syncShopify() {
 
     lineItemsWritten:
       lineItemRows.length,
+
+    orderCustomerRowsWritten:
+      orderCustomerRows.length,
 
     financialRowsWritten:
       financialRows.length,
