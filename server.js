@@ -4848,8 +4848,18 @@ app.get(
     }
 
     try {
+      const productsUrl = new URL(METORIK_PRODUCTS_URL);
+      productsUrl.searchParams.set(
+        'start_date',
+        '2026-09-01'
+      );
+      productsUrl.searchParams.set(
+        'end_date',
+        '2026-09-15'
+      );
+
       const response = await fetch(
-        METORIK_PRODUCTS_URL,
+        productsUrl,
         {
           headers: {
             Accept: 'application/json',
