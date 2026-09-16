@@ -63,6 +63,21 @@ test('normalizes web, guest, first/last, UTM and multiple moment pages without r
   assert.equal('customer_id' in rows.acquisition[0], false);
 });
 
+test('uses explicit UTC Shopify bounds and rejects results outside that window', async () => {
+  let search;
+  await assert.rejects(extractAcquisition({
+    graphql: async (_query, variables) => {
+      search = variables.query;
+      return { orders: { nodes: [order({
+        id: 'outside', createdAt: '2026-09-16T00:00:00.000Z', customerJourneySummary: null
+      })], pageInfo: { hasNextPage: false, endCursor: null } } };
+    },
+    startDate: '2026-09-15', endExclusive: '2026-09-16T00:00:00.000Z'
+  }), /outside the requested UTC window: outside/);
+  assert.equal(search,
+    "created_at:>='2026-09-15T00:00:00.000Z' created_at:<'2026-09-16T00:00:00.000Z'");
+});
+
 test('accepts a POS ready journey with zero moments', async () => {
   const pos = order({
     attribution: { handle: 'pos', displayName: 'Point of Sale' }, sourceName: 'pos',
@@ -165,6 +180,15 @@ test('promotion uses one coordinated transaction and preserves rows outside the 
   assert.match(promotion.query, /order_created_at >= TIMESTAMP\(@startDate\)/);
   assert.doesNotMatch(promotion.query, /WHERE TRUE/);
   assert.deepEqual(promotion.params, { startDate: '2026-09-15T00:00:00.000Z', endExclusive: '2026-09-16T00:00:00.000Z' });
+});
+
+test('promotion refuses to insert rows outside the window it replaces', async () => {
+  await assert.rejects(promoteAcquisitionWindow({
+    bigquery: fakeBigQuery(), projectId: 'project', startDate: '2026-09-15',
+    endExclusive: '2026-09-16T00:00:00.000Z',
+    acquisition: [{ order_id: 'outside', order_created_at: '2026-09-16T00:00:00.000Z',
+      app_id: null, is_matrixify_import: false }], moments: []
+  }), /Promotion rows fall outside/);
 });
 
 test('a failed coordinated transaction is surfaced and cannot partially promote', async () => {

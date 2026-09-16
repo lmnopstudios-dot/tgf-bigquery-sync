@@ -154,11 +154,14 @@ export async function extractAcquisition({
   graphql, startDate, endExclusive, now = () => new Date(),
   sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 }) {
+  const startInclusive = `${startDate}T00:00:00.000Z`;
   const orders = [];
   let cursor = null;
   do {
     const data = await requestWithRetry(graphql, ORDERS_QUERY, {
-      cursor, query: `created_at:>=${startDate} created_at:<${endExclusive.slice(0, 10)}`
+      // Shopify date-only search values are evaluated in the shop timezone. Use
+      // quoted instants so this query describes the same UTC window as BigQuery.
+      cursor, query: `created_at:>='${startInclusive}' created_at:<'${endExclusive}'`
     }, sleep);
     const connection = data.orders;
     if (!connection?.pageInfo || !Array.isArray(connection.nodes)) throw new Error('Invalid Shopify orders connection');
@@ -167,6 +170,17 @@ export async function extractAcquisition({
     if (!connection.pageInfo.endCursor || connection.pageInfo.endCursor === cursor) throw new Error('Invalid Shopify order pagination cursor');
     cursor = connection.pageInfo.endCursor;
   } while (true);
+
+  const outsideWindow = orders.find(order => {
+    const createdAt = new Date(order.createdAt).getTime();
+    return !Number.isFinite(createdAt) || createdAt < Date.parse(startInclusive) ||
+      createdAt >= Date.parse(endExclusive);
+  });
+  if (outsideWindow) {
+    throw new AcquisitionValidationError(
+      `Shopify returned an order outside the requested UTC window: ${outsideWindow.id}`
+    );
+  }
 
   const syncedAt = now().toISOString();
   const acquisition = [];
@@ -266,6 +280,14 @@ async function insertRows(table, rows) {
 
 export async function promoteAcquisitionWindow({ bigquery, projectId, datasetName = 'shopify_data', startDate, endExclusive, acquisition, moments }) {
   validateRows(acquisition, moments);
+  const startInclusive = Date.parse(`${startDate}T00:00:00.000Z`);
+  const end = Date.parse(endExclusive);
+  if ([...acquisition, ...moments].some(row => {
+    const createdAt = new Date(row.order_created_at).getTime();
+    return !Number.isFinite(createdAt) || createdAt < startInclusive || createdAt >= end;
+  })) {
+    throw new AcquisitionValidationError('Promotion rows fall outside the requested UTC window');
+  }
   const dataset = bigquery.dataset(datasetName);
   const [datasetExists] = await dataset.exists();
   if (!datasetExists) await bigquery.createDataset(datasetName);
