@@ -5216,6 +5216,7 @@ addMetorikDiscoveryRoute({
 --------------------------------------------------------- */
 
 const METORIK_UK_DATASET = 'metorik_uk';
+const METORIK_US_DATASET = 'metorik_us';
 const METORIK_ORDERS_TABLE = 'orders';
 const METORIK_ORDER_LINE_ITEMS_TABLE = 'order_line_items';
 const METORIK_CUSTOMERS_TABLE = 'customers';
@@ -5229,6 +5230,23 @@ const METORIK_MAX_CUSTOMER_PAGES = 100000;
 const METORIK_MAX_CATALOGUE_PAGES = 100000;
 const METORIK_DEFAULT_PAGE_DELAY_MS = 1250;
 const METORIK_MAX_PAGE_DELAY_MS = 60000;
+
+const METORIK_STORES = Object.freeze({
+  UK: Object.freeze({
+    storeName: 'UK',
+    apiKey: METORIK_UK_API_KEY,
+    apiKeyEnvironmentVariable: 'METORIK_UK_API_KEY',
+    dataset: METORIK_UK_DATASET,
+    expectedOrderCurrencies: Object.freeze(['GBP'])
+  }),
+  US: Object.freeze({
+    storeName: 'US',
+    apiKey: METORIK_US_API_KEY,
+    apiKeyEnvironmentVariable: 'METORIK_US_API_KEY',
+    dataset: METORIK_US_DATASET,
+    expectedOrderCurrencies: Object.freeze(['USD'])
+  })
+});
 
 function getMetorikPageDelayMs(value) {
   if (value === undefined || value === '') {
@@ -5746,7 +5764,7 @@ function transformMetorikCustomer(customer, syncedAt) {
   };
 }
 
-async function fetchAllMetorikUKCustomers() {
+async function fetchAllMetorikCustomers(store) {
   const customers = [];
   const pageSignatures = new Set();
 
@@ -5757,7 +5775,7 @@ async function fetchAllMetorikUKCustomers() {
   ) {
     const result = await requestMetorikResource(
       'customers',
-      { apiKey: METORIK_UK_API_KEY, storeName: 'UK' },
+      store,
       { page: String(requestedPage), per_page: String(METORIK_CUSTOMERS_PER_PAGE) },
       {
         includeDiscoveryDateRange: false,
@@ -5854,14 +5872,14 @@ async function fetchAllMetorikUKCustomers() {
   );
 }
 
-async function fetchAllMetorikUKOrders() {
+async function fetchAllMetorikOrders(store) {
   const orders = [];
   const pageSignatures = new Set();
 
   for (let requestedPage = 1; requestedPage <= METORIK_MAX_ORDER_PAGES; requestedPage++) {
     const result = await requestMetorikResource(
       'orders',
-      { apiKey: METORIK_UK_API_KEY, storeName: 'UK' },
+      store,
       { page: String(requestedPage), per_page: String(METORIK_ORDERS_PER_PAGE) },
       {
         includeDiscoveryDateRange: false,
@@ -5948,7 +5966,7 @@ async function fetchAllMetorikUKOrders() {
   throw new MetorikSyncValidationError('Metorik pagination exceeded the safety page limit');
 }
 
-async function fetchAllMetorikUKCatalogueResource(resource, identityField) {
+async function fetchAllMetorikCatalogueResource(store, resource, identityField) {
   const records = [];
   const pageSignatures = new Set();
 
@@ -5961,7 +5979,7 @@ async function fetchAllMetorikUKCatalogueResource(resource, identityField) {
     // analytics that this sync discards. They do not filter catalogue membership.
     const result = await requestMetorikResource(
       resource,
-      { apiKey: METORIK_UK_API_KEY, storeName: 'UK' },
+      store,
       {
         page: String(requestedPage),
         per_page: String(METORIK_CATALOGUE_PER_PAGE),
@@ -6085,11 +6103,11 @@ async function fetchAllMetorikUKCatalogueResource(resource, identityField) {
   );
 }
 
-async function ensureMetorikUKDatasetAndTables() {
-  const dataset = bigquery.dataset(METORIK_UK_DATASET);
+async function ensureMetorikDatasetAndTables(store) {
+  const dataset = bigquery.dataset(store.dataset);
   const [datasetExists] = await dataset.exists();
   if (!datasetExists) {
-    await bigquery.createDataset(METORIK_UK_DATASET);
+    await bigquery.createDataset(store.dataset);
   }
 
   for (const [tableName, schema] of [
@@ -6110,8 +6128,8 @@ async function insertMetorikRows(table, rows) {
   }
 }
 
-async function safelyReplaceMetorikUKTables(orderRows, lineItemRows) {
-  const dataset = await ensureMetorikUKDatasetAndTables();
+async function safelyReplaceMetorikTables(store, orderRows, lineItemRows) {
+  const dataset = await ensureMetorikDatasetAndTables(store);
   const suffix = `${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
   const stagingOrdersName = `_staging_orders_${suffix}`;
   const stagingLinesName = `_staging_order_line_items_${suffix}`;
@@ -6131,8 +6149,8 @@ async function safelyReplaceMetorikUKTables(orderRows, lineItemRows) {
 
     const [counts] = await bigquery.query({ query: `
       SELECT
-        (SELECT COUNT(*) FROM \`${GOOGLE_PROJECT_ID}.${METORIK_UK_DATASET}.${stagingOrdersName}\`) AS orders_count,
-        (SELECT COUNT(*) FROM \`${GOOGLE_PROJECT_ID}.${METORIK_UK_DATASET}.${stagingLinesName}\`) AS lines_count
+        (SELECT COUNT(*) FROM \`${GOOGLE_PROJECT_ID}.${store.dataset}.${stagingOrdersName}\`) AS orders_count,
+        (SELECT COUNT(*) FROM \`${GOOGLE_PROJECT_ID}.${store.dataset}.${stagingLinesName}\`) AS lines_count
     ` });
     if (Number(counts[0]?.orders_count) !== orderRows.length ||
         Number(counts[0]?.lines_count) !== lineItemRows.length) {
@@ -6141,14 +6159,20 @@ async function safelyReplaceMetorikUKTables(orderRows, lineItemRows) {
 
     await bigquery.query({ query: `
       BEGIN TRANSACTION;
-      DELETE FROM \`${GOOGLE_PROJECT_ID}.${METORIK_UK_DATASET}.${METORIK_ORDERS_TABLE}\` WHERE TRUE;
-      INSERT INTO \`${GOOGLE_PROJECT_ID}.${METORIK_UK_DATASET}.${METORIK_ORDERS_TABLE}\`
-        SELECT * FROM \`${GOOGLE_PROJECT_ID}.${METORIK_UK_DATASET}.${stagingOrdersName}\`;
-      DELETE FROM \`${GOOGLE_PROJECT_ID}.${METORIK_UK_DATASET}.${METORIK_ORDER_LINE_ITEMS_TABLE}\` WHERE TRUE;
-      INSERT INTO \`${GOOGLE_PROJECT_ID}.${METORIK_UK_DATASET}.${METORIK_ORDER_LINE_ITEMS_TABLE}\`
-        SELECT * FROM \`${GOOGLE_PROJECT_ID}.${METORIK_UK_DATASET}.${stagingLinesName}\`;
+      DELETE FROM \`${GOOGLE_PROJECT_ID}.${store.dataset}.${METORIK_ORDERS_TABLE}\` WHERE TRUE;
+      INSERT INTO \`${GOOGLE_PROJECT_ID}.${store.dataset}.${METORIK_ORDERS_TABLE}\`
+        SELECT * FROM \`${GOOGLE_PROJECT_ID}.${store.dataset}.${stagingOrdersName}\`;
+      DELETE FROM \`${GOOGLE_PROJECT_ID}.${store.dataset}.${METORIK_ORDER_LINE_ITEMS_TABLE}\` WHERE TRUE;
+      INSERT INTO \`${GOOGLE_PROJECT_ID}.${store.dataset}.${METORIK_ORDER_LINE_ITEMS_TABLE}\`
+        SELECT * FROM \`${GOOGLE_PROJECT_ID}.${store.dataset}.${stagingLinesName}\`;
       COMMIT TRANSACTION;
     ` });
+
+    return {
+      staging_orders_count: orderRows.length,
+      staging_line_items_count: lineItemRows.length,
+      coordinated_transactional_replacement: true
+    };
   } finally {
     await Promise.allSettled([
       stagingOrders.delete({ ignoreNotFound: true }),
@@ -6157,8 +6181,8 @@ async function safelyReplaceMetorikUKTables(orderRows, lineItemRows) {
   }
 }
 
-async function syncMetorikUKOrders() {
-  const fetched = await fetchAllMetorikUKOrders();
+async function syncMetorikOrders(store) {
+  const fetched = await fetchAllMetorikOrders(store);
   if (!fetched.paginationCompleted || fetched.orders.length === 0) {
     throw new MetorikSyncValidationError('Metorik did not return a complete, non-empty order history');
   }
@@ -6184,73 +6208,61 @@ async function syncMetorikUKOrders() {
     );
   }
   const orderIds = new Set(orderRows.map(row => row.order_id));
-  if (lineItemRows.some(row => !orderIds.has(row.order_id))) {
+  const orphanLineItems = lineItemRows.filter(
+    row => !orderIds.has(row.order_id)
+  ).length;
+  if (orphanLineItems > 0) {
     throw new MetorikSyncValidationError('A line item references an order outside the fetched order set');
   }
 
-  const currencies = [...new Set(orderRows.map(row => row.currency).filter(Boolean))].sort();
-  const unexpectedCurrencies = currencies.filter(currency => currency !== 'GBP');
+  const distribution = (rows, field) => Object.fromEntries(
+    [...rows.reduce((counts, row) => {
+      const value = row[field] ?? '(null)';
+      counts.set(value, (counts.get(value) ?? 0) + 1);
+      return counts;
+    }, new Map())].sort(([left], [right]) => String(left).localeCompare(String(right)))
+  );
+  const currencyDistribution = distribution(orderRows, 'currency');
+  const currencies = Object.keys(currencyDistribution).filter(
+    currency => currency !== '(null)'
+  );
+  const unexpectedCurrencies = currencies.filter(
+    currency => !store.expectedOrderCurrencies.includes(currency)
+  );
   const orderDates = orderRows.map(row => row.order_created_at).filter(Boolean).sort();
 
-  await safelyReplaceMetorikUKTables(orderRows, lineItemRows);
+  const replacement = await safelyReplaceMetorikTables(store, orderRows, lineItemRows);
 
   return {
     success: true,
-    store: 'UK',
+    store: store.storeName,
     orders_fetched: orderRows.length,
+    orders_imported: orderRows.length,
     line_items_fetched: lineItemRows.length,
+    line_items_imported: lineItemRows.length,
     first_order_date: orderDates[0] ?? null,
     last_order_date: orderDates.at(-1) ?? null,
     currencies_observed: currencies,
+    currency_distribution: currencyDistribution,
+    status_distribution: distribution(orderRows, 'status'),
     unexpected_currencies: unexpectedCurrencies,
     pages_fetched: fetched.pagesFetched,
     page_delay_ms: fetched.pageDelayMs,
     duplicate_order_ids_detected: 0,
     duplicate_line_item_identity_pairs_detected: 0,
+    orphan_line_items_detected: orphanLineItems,
+    ...replacement,
     destination_tables: [
-      `${GOOGLE_PROJECT_ID}.${METORIK_UK_DATASET}.${METORIK_ORDERS_TABLE}`,
-      `${GOOGLE_PROJECT_ID}.${METORIK_UK_DATASET}.${METORIK_ORDER_LINE_ITEMS_TABLE}`
+      `${GOOGLE_PROJECT_ID}.${store.dataset}.${METORIK_ORDERS_TABLE}`,
+      `${GOOGLE_PROJECT_ID}.${store.dataset}.${METORIK_ORDER_LINE_ITEMS_TABLE}`
     ]
   };
 }
 
-app.post(
-  '/sync-metorik-uk-orders',
-  requireSyncSecret,
-  async (req, res) => {
-    if (!METORIK_UK_API_KEY) {
-      return res.status(500).json({
-        success: false,
-        store: 'UK',
-        error: 'METORIK_UK_API_KEY is not configured'
-      });
-    }
-
-    try {
-      return res.json(await syncMetorikUKOrders());
-    } catch (error) {
-      console.error('Metorik UK order sync failed:', error.name);
-      if (error instanceof MetorikSyncValidationError && error.diagnostics) {
-        console.error('Metorik UK order sync diagnostics:', error.diagnostics);
-      }
-      return res.status(500).json({
-        success: false,
-        store: 'UK',
-        error: error instanceof MetorikSyncValidationError
-          ? error.message
-          : 'Metorik UK orders sync failed',
-        ...(error instanceof MetorikSyncValidationError && error.diagnostics
-          ? { diagnostics: error.diagnostics }
-          : {})
-      });
-    }
-  }
-);
-
-async function ensureMetorikUKCatalogueTables() {
-  const dataset = bigquery.dataset(METORIK_UK_DATASET);
+async function ensureMetorikCatalogueTables(store) {
+  const dataset = bigquery.dataset(store.dataset);
   const [datasetExists] = await dataset.exists();
-  if (!datasetExists) await bigquery.createDataset(METORIK_UK_DATASET);
+  if (!datasetExists) await bigquery.createDataset(store.dataset);
 
   for (const [tableName, schema] of [
     [METORIK_PRODUCTS_TABLE, METORIK_PRODUCTS_SCHEMA],
@@ -6282,7 +6294,7 @@ function metorikSchemaMatches(actualFields, expectedFields) {
   });
 }
 
-async function reconcileMetorikProductsSchema(dataset) {
+async function reconcileMetorikProductsSchema(store, dataset) {
   const table = dataset.table(METORIK_PRODUCTS_TABLE);
   const [metadata] = await table.getMetadata();
   const actualFields = metadata.schema?.fields ?? [];
@@ -6305,7 +6317,7 @@ async function reconcileMetorikProductsSchema(dataset) {
   // represented as that scalar's JSON value.
   await bigquery.query({ query: `
     CREATE OR REPLACE TABLE
-      \`${GOOGLE_PROJECT_ID}.${METORIK_UK_DATASET}.${METORIK_PRODUCTS_TABLE}\` (
+      \`${GOOGLE_PROJECT_ID}.${store.dataset}.${METORIK_PRODUCTS_TABLE}\` (
         product_id INT64 NOT NULL,
         title STRING,
         sku STRING,
@@ -6330,7 +6342,7 @@ async function reconcileMetorikProductsSchema(dataset) {
       END AS tags_json,
       image, current_price, regular_price, sale_price, stock_quantity,
       in_stock, product_created_at, product_updated_at, synced_at
-    FROM \`${GOOGLE_PROJECT_ID}.${METORIK_UK_DATASET}.${METORIK_PRODUCTS_TABLE}\`
+    FROM \`${GOOGLE_PROJECT_ID}.${store.dataset}.${METORIK_PRODUCTS_TABLE}\`
   ` });
 
   const [updatedMetadata] = await table.getMetadata();
@@ -6349,6 +6361,7 @@ function numberFromBigQuery(value) {
 }
 
 async function getMetorikCatalogueDiagnostics(
+  store,
   stagingProductsName,
   stagingVariationsName
 ) {
@@ -6356,29 +6369,33 @@ async function getMetorikCatalogueDiagnostics(
     SELECT
       COUNT(DISTINCT v.product_id) AS variation_parent_ids,
       COUNTIF(p.product_id IS NOT NULL) AS variation_parents_present,
-      COUNTIF(p.product_id IS NULL) AS variation_parents_absent
-    FROM \`${GOOGLE_PROJECT_ID}.${METORIK_UK_DATASET}.${stagingVariationsName}\` v
-    LEFT JOIN \`${GOOGLE_PROJECT_ID}.${METORIK_UK_DATASET}.${stagingProductsName}\` p
+      COUNTIF(p.product_id IS NULL) AS variation_parents_absent,
+      COUNT(DISTINCT IF(p.product_id IS NOT NULL, v.product_id, NULL))
+        AS distinct_variation_parents_present,
+      COUNT(DISTINCT IF(p.product_id IS NULL, v.product_id, NULL))
+        AS distinct_variation_parents_absent
+    FROM \`${GOOGLE_PROJECT_ID}.${store.dataset}.${stagingVariationsName}\` v
+    LEFT JOIN \`${GOOGLE_PROJECT_ID}.${store.dataset}.${stagingProductsName}\` p
       USING (product_id)
   ` });
   const [historicalRows] = await bigquery.query({ query: `
     WITH historical_products AS (
       SELECT DISTINCT product_id
-      FROM \`${GOOGLE_PROJECT_ID}.${METORIK_UK_DATASET}.${METORIK_ORDER_LINE_ITEMS_TABLE}\`
+      FROM \`${GOOGLE_PROJECT_ID}.${store.dataset}.${METORIK_ORDER_LINE_ITEMS_TABLE}\`
       WHERE product_id IS NOT NULL
     ), historical_variations AS (
       SELECT DISTINCT variation_id
-      FROM \`${GOOGLE_PROJECT_ID}.${METORIK_UK_DATASET}.${METORIK_ORDER_LINE_ITEMS_TABLE}\`
+      FROM \`${GOOGLE_PROJECT_ID}.${store.dataset}.${METORIK_ORDER_LINE_ITEMS_TABLE}\`
       WHERE variation_id IS NOT NULL AND variation_id != 0
     ), product_comparison AS (
       SELECT h.product_id, p.product_id IS NOT NULL AS is_present
       FROM historical_products h
-      LEFT JOIN \`${GOOGLE_PROJECT_ID}.${METORIK_UK_DATASET}.${stagingProductsName}\` p
+      LEFT JOIN \`${GOOGLE_PROJECT_ID}.${store.dataset}.${stagingProductsName}\` p
         USING (product_id)
     ), variation_comparison AS (
       SELECT h.variation_id, v.variation_id IS NOT NULL AS is_present
       FROM historical_variations h
-      LEFT JOIN \`${GOOGLE_PROJECT_ID}.${METORIK_UK_DATASET}.${stagingVariationsName}\` v
+      LEFT JOIN \`${GOOGLE_PROJECT_ID}.${store.dataset}.${stagingVariationsName}\` v
         USING (variation_id)
     )
     SELECT
@@ -6425,6 +6442,12 @@ async function getMetorikCatalogueDiagnostics(
     variation_parents_absent: numberFromBigQuery(
       relationship.variation_parents_absent
     ),
+    distinct_variation_parents_present: numberFromBigQuery(
+      relationship.distinct_variation_parents_present
+    ),
+    distinct_variation_parents_absent: numberFromBigQuery(
+      relationship.distinct_variation_parents_absent
+    ),
     historical_product_ids: historicalProductIds,
     historical_product_ids_present: historicalProductIdsPresent,
     historical_product_ids_absent: numberFromBigQuery(
@@ -6446,8 +6469,8 @@ async function getMetorikCatalogueDiagnostics(
   };
 }
 
-async function safelyReplaceMetorikUKCatalogue(productRows, variationRows) {
-  const dataset = await ensureMetorikUKCatalogueTables();
+async function safelyReplaceMetorikCatalogue(store, productRows, variationRows) {
+  const dataset = await ensureMetorikCatalogueTables(store);
   const suffix = `${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
   const stagingProductsName = `_staging_products_${suffix}`;
   const stagingVariationsName = `_staging_product_variations_${suffix}`;
@@ -6467,9 +6490,9 @@ async function safelyReplaceMetorikUKCatalogue(productRows, variationRows) {
 
     const [counts] = await bigquery.query({ query: `
       SELECT
-        (SELECT COUNT(*) FROM \`${GOOGLE_PROJECT_ID}.${METORIK_UK_DATASET}.${stagingProductsName}\`)
+        (SELECT COUNT(*) FROM \`${GOOGLE_PROJECT_ID}.${store.dataset}.${stagingProductsName}\`)
           AS products_count,
-        (SELECT COUNT(*) FROM \`${GOOGLE_PROJECT_ID}.${METORIK_UK_DATASET}.${stagingVariationsName}\`)
+        (SELECT COUNT(*) FROM \`${GOOGLE_PROJECT_ID}.${store.dataset}.${stagingVariationsName}\`)
           AS variations_count
     ` });
     if (
@@ -6482,6 +6505,7 @@ async function safelyReplaceMetorikUKCatalogue(productRows, variationRows) {
     }
 
     const diagnostics = await getMetorikCatalogueDiagnostics(
+      store,
       stagingProductsName,
       stagingVariationsName
     );
@@ -6489,20 +6513,20 @@ async function safelyReplaceMetorikUKCatalogue(productRows, variationRows) {
     // Reconcile only after the complete source has transformed and both
     // staging tables and diagnostics have succeeded. Unexpected schemas abort
     // without modifying production.
-    await reconcileMetorikProductsSchema(dataset);
+    await reconcileMetorikProductsSchema(store, dataset);
 
     // One transaction prevents current products and variations from ever
     // representing different successful ingestion runs.
     await bigquery.query({ query: `
       BEGIN TRANSACTION;
-      DELETE FROM \`${GOOGLE_PROJECT_ID}.${METORIK_UK_DATASET}.${METORIK_PRODUCTS_TABLE}\`
+      DELETE FROM \`${GOOGLE_PROJECT_ID}.${store.dataset}.${METORIK_PRODUCTS_TABLE}\`
         WHERE TRUE;
-      INSERT INTO \`${GOOGLE_PROJECT_ID}.${METORIK_UK_DATASET}.${METORIK_PRODUCTS_TABLE}\`
-        SELECT * FROM \`${GOOGLE_PROJECT_ID}.${METORIK_UK_DATASET}.${stagingProductsName}\`;
-      DELETE FROM \`${GOOGLE_PROJECT_ID}.${METORIK_UK_DATASET}.${METORIK_PRODUCT_VARIATIONS_TABLE}\`
+      INSERT INTO \`${GOOGLE_PROJECT_ID}.${store.dataset}.${METORIK_PRODUCTS_TABLE}\`
+        SELECT * FROM \`${GOOGLE_PROJECT_ID}.${store.dataset}.${stagingProductsName}\`;
+      DELETE FROM \`${GOOGLE_PROJECT_ID}.${store.dataset}.${METORIK_PRODUCT_VARIATIONS_TABLE}\`
         WHERE TRUE;
-      INSERT INTO \`${GOOGLE_PROJECT_ID}.${METORIK_UK_DATASET}.${METORIK_PRODUCT_VARIATIONS_TABLE}\`
-        SELECT * FROM \`${GOOGLE_PROJECT_ID}.${METORIK_UK_DATASET}.${stagingVariationsName}\`;
+      INSERT INTO \`${GOOGLE_PROJECT_ID}.${store.dataset}.${METORIK_PRODUCT_VARIATIONS_TABLE}\`
+        SELECT * FROM \`${GOOGLE_PROJECT_ID}.${store.dataset}.${stagingVariationsName}\`;
       COMMIT TRANSACTION;
     ` });
 
@@ -6520,12 +6544,14 @@ async function safelyReplaceMetorikUKCatalogue(productRows, variationRows) {
   }
 }
 
-async function syncMetorikUKProducts() {
-  const fetchedProducts = await fetchAllMetorikUKCatalogueResource(
+async function syncMetorikProducts(store) {
+  const fetchedProducts = await fetchAllMetorikCatalogueResource(
+    store,
     'products',
     'product_id'
   );
-  const fetchedVariations = await fetchAllMetorikUKCatalogueResource(
+  const fetchedVariations = await fetchAllMetorikCatalogueResource(
+    store,
     'variations',
     'variation_id'
   );
@@ -6577,23 +6603,28 @@ async function syncMetorikUKProducts() {
   }
 
   const productTypes = {};
+  const productStatuses = {};
   for (const row of productRows) {
     const type = row.type ?? '(null)';
     productTypes[type] = (productTypes[type] ?? 0) + 1;
+    const status = row.status ?? '(null)';
+    productStatuses[status] = (productStatuses[status] ?? 0) + 1;
   }
-  const validation = await safelyReplaceMetorikUKCatalogue(
+  const validation = await safelyReplaceMetorikCatalogue(
+    store,
     productRows,
     variationRows
   );
 
   return {
     success: true,
-    store: 'UK',
+    store: store.storeName,
     products_fetched: fetchedProducts.records.length,
     products_imported: productRows.length,
     variations_fetched: fetchedVariations.records.length,
     variations_imported: variationRows.length,
     product_types: productTypes,
+    product_statuses: productStatuses,
     products_pages_fetched: fetchedProducts.pagesFetched,
     variations_pages_fetched: fetchedVariations.pagesFetched,
     page_delay_ms: METORIK_PAGE_DELAY_MS,
@@ -6601,50 +6632,17 @@ async function syncMetorikUKProducts() {
     duplicate_variation_ids_detected: 0,
     ...validation,
     destination_tables: [
-      `${GOOGLE_PROJECT_ID}.${METORIK_UK_DATASET}.${METORIK_PRODUCTS_TABLE}`,
-      `${GOOGLE_PROJECT_ID}.${METORIK_UK_DATASET}.${METORIK_PRODUCT_VARIATIONS_TABLE}`
+      `${GOOGLE_PROJECT_ID}.${store.dataset}.${METORIK_PRODUCTS_TABLE}`,
+      `${GOOGLE_PROJECT_ID}.${store.dataset}.${METORIK_PRODUCT_VARIATIONS_TABLE}`
     ]
   };
 }
 
-app.post(
-  '/sync-metorik-uk-products',
-  requireSyncSecret,
-  async (req, res) => {
-    if (!METORIK_UK_API_KEY) {
-      return res.status(500).json({
-        success: false,
-        store: 'UK',
-        error: 'METORIK_UK_API_KEY is not configured'
-      });
-    }
-
-    try {
-      return res.json(await syncMetorikUKProducts());
-    } catch (error) {
-      console.error('Metorik UK product catalogue sync failed:', error.name);
-      if (error instanceof MetorikSyncValidationError && error.diagnostics) {
-        console.error('Metorik UK product sync diagnostics:', error.diagnostics);
-      }
-      return res.status(500).json({
-        success: false,
-        store: 'UK',
-        error: error instanceof MetorikSyncValidationError
-          ? error.message
-          : 'Metorik UK product catalogue sync failed',
-        ...(error instanceof MetorikSyncValidationError && error.diagnostics
-          ? { diagnostics: error.diagnostics }
-          : {})
-      });
-    }
-  }
-);
-
-async function ensureMetorikUKCustomersTable() {
-  const dataset = bigquery.dataset(METORIK_UK_DATASET);
+async function ensureMetorikCustomersTable(store) {
+  const dataset = bigquery.dataset(store.dataset);
   const [datasetExists] = await dataset.exists();
   if (!datasetExists) {
-    await bigquery.createDataset(METORIK_UK_DATASET);
+    await bigquery.createDataset(store.dataset);
   }
 
   const table = dataset.table(METORIK_CUSTOMERS_TABLE);
@@ -6657,8 +6655,8 @@ async function ensureMetorikUKCustomersTable() {
   return dataset;
 }
 
-async function safelyReplaceMetorikUKCustomers(customerRows) {
-  const dataset = await ensureMetorikUKCustomersTable();
+async function safelyReplaceMetorikCustomers(store, customerRows) {
+  const dataset = await ensureMetorikCustomersTable(store);
   const suffix = `${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
   const stagingName = `_staging_customers_${suffix}`;
   const [stagingTable] = await dataset.createTable(stagingName, {
@@ -6670,7 +6668,7 @@ async function safelyReplaceMetorikUKCustomers(customerRows) {
     await insertMetorikRows(stagingTable, customerRows);
     const [counts] = await bigquery.query({ query: `
       SELECT COUNT(*) AS customer_count
-      FROM \`${GOOGLE_PROJECT_ID}.${METORIK_UK_DATASET}.${stagingName}\`
+      FROM \`${GOOGLE_PROJECT_ID}.${store.dataset}.${stagingName}\`
     ` });
     if (Number(counts[0]?.customer_count) !== customerRows.length) {
       throw new MetorikSyncValidationError(
@@ -6680,11 +6678,16 @@ async function safelyReplaceMetorikUKCustomers(customerRows) {
 
     await bigquery.query({ query: `
       BEGIN TRANSACTION;
-      DELETE FROM \`${GOOGLE_PROJECT_ID}.${METORIK_UK_DATASET}.${METORIK_CUSTOMERS_TABLE}\` WHERE TRUE;
-      INSERT INTO \`${GOOGLE_PROJECT_ID}.${METORIK_UK_DATASET}.${METORIK_CUSTOMERS_TABLE}\`
-        SELECT * FROM \`${GOOGLE_PROJECT_ID}.${METORIK_UK_DATASET}.${stagingName}\`;
+      DELETE FROM \`${GOOGLE_PROJECT_ID}.${store.dataset}.${METORIK_CUSTOMERS_TABLE}\` WHERE TRUE;
+      INSERT INTO \`${GOOGLE_PROJECT_ID}.${store.dataset}.${METORIK_CUSTOMERS_TABLE}\`
+        SELECT * FROM \`${GOOGLE_PROJECT_ID}.${store.dataset}.${stagingName}\`;
       COMMIT TRANSACTION;
     ` });
+
+    return {
+      staging_customers_count: customerRows.length,
+      transactional_replacement: true
+    };
   } finally {
     await Promise.allSettled([
       stagingTable.delete({ ignoreNotFound: true })
@@ -6692,8 +6695,8 @@ async function safelyReplaceMetorikUKCustomers(customerRows) {
   }
 }
 
-async function syncMetorikUKCustomers() {
-  const fetched = await fetchAllMetorikUKCustomers();
+async function syncMetorikCustomers(store) {
+  const fetched = await fetchAllMetorikCustomers(store);
   if (!fetched.paginationCompleted || fetched.customers.length === 0) {
     throw new MetorikSyncValidationError(
       'Metorik did not return a complete, non-empty customer history'
@@ -6722,12 +6725,16 @@ async function syncMetorikUKCustomers() {
     customerRows.map(row => row.currency).filter(Boolean)
   )].sort();
 
-  await safelyReplaceMetorikUKCustomers(customerRows);
+  const replacement = await safelyReplaceMetorikCustomers(store, customerRows);
 
   return {
     success: true,
-    store: 'UK',
+    store: store.storeName,
     customers_fetched: customerRows.length,
+    customers_imported: customerRows.length,
+    metorik_customer_id_count: customerRows.filter(
+      row => row.metorik_customer_id !== null
+    ).length,
     registered_woo_linked_customers: customerRows.filter(
       row => row.customer_id !== null && row.customer_id > 0
     ).length,
@@ -6736,49 +6743,84 @@ async function syncMetorikUKCustomers() {
     ).length,
     customers_with_orders: customerRows.filter(row => row.order_count > 0).length,
     customers_with_zero_orders: customerRows.filter(row => row.order_count === 0).length,
+    first_order_date_populated_count: customerRows.filter(
+      row => row.first_order_date !== null
+    ).length,
+    last_order_date_populated_count: customerRows.filter(
+      row => row.last_order_date !== null
+    ).length,
     first_customer_created_date: createdDates[0] ?? null,
     last_customer_created_date: createdDates.at(-1) ?? null,
     currencies_observed: currencies,
     pages_fetched: fetched.pagesFetched,
     page_delay_ms: fetched.pageDelayMs,
     duplicate_canonical_identities_detected: 0,
+    ...replacement,
     destination_table:
-      `${GOOGLE_PROJECT_ID}.${METORIK_UK_DATASET}.${METORIK_CUSTOMERS_TABLE}`
+      `${GOOGLE_PROJECT_ID}.${store.dataset}.${METORIK_CUSTOMERS_TABLE}`
   };
 }
 
-app.post(
-  '/sync-metorik-uk-customers',
-  requireSyncSecret,
-  async (req, res) => {
-    if (!METORIK_UK_API_KEY) {
+function addMetorikSyncRoute({ path, store, resourceLabel, sync }) {
+  app.post(path, requireSyncSecret, async (req, res) => {
+    if (!store.apiKey) {
       return res.status(500).json({
         success: false,
-        store: 'UK',
-        error: 'METORIK_UK_API_KEY is not configured'
+        store: store.storeName,
+        error: `${store.apiKeyEnvironmentVariable} is not configured`
       });
     }
 
     try {
-      return res.json(await syncMetorikUKCustomers());
+      return res.json(await sync(store));
     } catch (error) {
-      console.error('Metorik UK customer sync failed:', error.name);
+      console.error(
+        `Metorik ${store.storeName} ${resourceLabel} sync failed:`,
+        error.name
+      );
       if (error instanceof MetorikSyncValidationError && error.diagnostics) {
-        console.error('Metorik UK customer sync diagnostics:', error.diagnostics);
+        console.error(
+          `Metorik ${store.storeName} ${resourceLabel} sync diagnostics:`,
+          error.diagnostics
+        );
       }
       return res.status(500).json({
         success: false,
-        store: 'UK',
+        store: store.storeName,
         error: error instanceof MetorikSyncValidationError
           ? error.message
-          : 'Metorik UK customers sync failed',
+          : `Metorik ${store.storeName} ${resourceLabel} sync failed`,
         ...(error instanceof MetorikSyncValidationError && error.diagnostics
           ? { diagnostics: error.diagnostics }
           : {})
       });
     }
-  }
-);
+  });
+}
+
+for (const [slug, store] of Object.entries({
+  uk: METORIK_STORES.UK,
+  us: METORIK_STORES.US
+})) {
+  addMetorikSyncRoute({
+    path: `/sync-metorik-${slug}-orders`,
+    store,
+    resourceLabel: 'orders',
+    sync: syncMetorikOrders
+  });
+  addMetorikSyncRoute({
+    path: `/sync-metorik-${slug}-customers`,
+    store,
+    resourceLabel: 'customers',
+    sync: syncMetorikCustomers
+  });
+  addMetorikSyncRoute({
+    path: `/sync-metorik-${slug}-products`,
+    store,
+    resourceLabel: 'product catalogue',
+    sync: syncMetorikProducts
+  });
+}
 
 /* ---------------------------------------------------------
    SHOPIFY TEST
