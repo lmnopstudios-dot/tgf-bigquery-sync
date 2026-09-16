@@ -7,12 +7,18 @@ test('requires an explicit valid date and validates identifiers', () => {
   assert.throws(() => parseArguments(['--date', '2026-02-30']), /valid calendar/);
   assert.throws(() => parseArguments(['--date', '2026-09-15', '--dataset', 'x`; DELETE']), /unsupported/);
   assert.equal(parseArguments(['--date', '2026-09-15']).date, '2026-09-15');
+  assert.throws(() => parseArguments(['--date', '2026-09-15', '--batch-start', '2026-09-14']), /supplied together/);
+  assert.throws(() => parseArguments(['--date', '2026-09-15', '--batch-start', '2026-09-16', '--batch-end', '2026-09-14']), /must not be after/);
+  assert.deepEqual(parseArguments(['--date', '2026-09-15', '--batch-start', '2026-09-14', '--batch-end', '2026-09-16', '--expected-acquisition-rows', '111', '--expected-moment-rows', '193']), {
+    date: '2026-09-15', batchStart: '2026-09-14', batchEnd: '2026-09-16', start: '2026-09-14T00:00:00.000Z', endExclusive: '2026-09-17T00:00:00.000Z', expectedAcquisitionRows: 111, expectedMomentRows: 193, project: 'gf-full-data', dataset: 'shopify_data'
+  });
 });
 
 test('every production statement is parameterized and SELECT-only', () => {
   for (const query of Object.values(buildQueries('project', 'dataset'))) {
     assert.match(query, /^\s*(SELECT|WITH)\b/i);
-    assert.match(query, /@date/);
+    assert.match(query, /@start/);
+    assert.match(query, /@endExclusive/);
     assert.doesNotMatch(query, /\b(INSERT|UPDATE|DELETE|MERGE|CREATE|DROP|ALTER|TRUNCATE|CALL)\b/i);
   }
 });
@@ -57,17 +63,31 @@ test('diagnostic emits one structured result and never submits a write', async (
   assert.equal(output.window.date, '2026-09-15');
   assert.equal(output.recommendation.decision, 'PROCEED');
   assert.equal(output.representative_journeys.length, 0);
-  assert.ok(submitted.every(item => item.params.date === '2026-09-15' && item.useLegacySql === false));
+  assert.ok(submitted.every(item => item.params.start === '2026-09-15T00:00:00.000Z' && item.params.endExclusive === '2026-09-16T00:00:00.000Z' && item.useLegacySql === false));
 });
 
-test('recommendation fails deterministically for any critical defect or empty window', () => {
+test('recommendation accepts valid single-day and multi-day batches', () => {
+  const clean = { duplicate_order_ids: 0, duplicate_order_moment_pairs: 0, orphan_journey_moments: 0,
+    moment_count_mismatches: 0, visit_flag_mismatches: 0, incomplete_pagination_orders: 0,
+    summary_visit_ids_missing_from_moments: 0, privacy_indicator_rows: 0 };
+  assert.equal(recommendation({ acquisition_row_count: 51, journey_moment_row_count: 91 }, clean,
+    { utc_date_groups: [{ utc_order_date: '2026-09-14' }], out_of_window_acquisition_rows: 0, out_of_window_journey_moment_rows: 0, batch_orphan_journey_moments: 0 }).decision, 'PROCEED');
+  assert.equal(recommendation({ acquisition_row_count: 111, journey_moment_row_count: 193 }, clean,
+    { utc_date_groups: [{ utc_order_date: '2026-09-14' }, { utc_order_date: '2026-09-15' }, { utc_order_date: '2026-09-16' }], out_of_window_acquisition_rows: 0, out_of_window_journey_moment_rows: 0, batch_orphan_journey_moments: 0 },
+    { acquisitionRows: 111, momentRows: 193 }).decision, 'PROCEED');
+});
+
+test('recommendation rejects a contaminated multi-day batch and count mismatches', () => {
   assert.equal(recommendation({ acquisition_row_count: 0 }, {}).decision, 'DO_NOT_PROCEED');
   const clean = { duplicate_order_ids: 0, duplicate_order_moment_pairs: 0, orphan_journey_moments: 2,
     moment_count_mismatches: 0, visit_flag_mismatches: 0, incomplete_pagination_orders: 0,
     summary_visit_ids_missing_from_moments: 0, privacy_indicator_rows: 0 };
   assert.deepEqual(recommendation({ acquisition_row_count: 1 }, clean).deterministic_failures, ['orphan_journey_moments']);
   clean.orphan_journey_moments = 0;
-  assert.deepEqual(recommendation({ acquisition_row_count: 1 }, clean,
-    { utc_date_groups: [{ utc_order_date: '2026-09-15' }, { utc_order_date: '2026-09-16' }] },
-    '2026-09-15').deterministic_failures, ['sync_batch_contains_orders_outside_utc_window']);
+  assert.deepEqual(recommendation({ acquisition_row_count: 111, journey_moment_row_count: 193 }, clean,
+    { utc_date_groups: [{ utc_order_date: '2026-09-14' }, { utc_order_date: '2026-09-17' }], out_of_window_acquisition_rows: 1, out_of_window_journey_moment_rows: 2 },
+    { acquisitionRows: 111, momentRows: 193 }).deterministic_failures, ['sync_batch_contains_orders_outside_utc_window']);
+  assert.deepEqual(recommendation({ acquisition_row_count: 110, journey_moment_row_count: 192 }, clean,
+    { out_of_window_acquisition_rows: 0, out_of_window_journey_moment_rows: 0 }, { acquisitionRows: 111, momentRows: 193 }).deterministic_failures,
+  ['unexpected_acquisition_row_count', 'unexpected_journey_moment_row_count']);
 });
