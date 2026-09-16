@@ -78,12 +78,18 @@ export function buildQueries(project, dataset) {
        (SELECT COUNT(*) FROM a WHERE journey_pagination_complete IS FALSE) incomplete_pagination_orders,
        (SELECT COUNT(*) FROM (SELECT order_id,first_visit_id id FROM a WHERE first_visit_id IS NOT NULL UNION ALL SELECT order_id,last_visit_id FROM a WHERE last_visit_id IS NOT NULL) ids LEFT JOIN m ON m.order_id=ids.order_id AND m.moment_id=ids.id WHERE m.moment_id IS NULL) summary_visit_ids_missing_from_moments,
        (SELECT COUNT(*) FROM (SELECT first_visit_landing_host host, first_visit_landing_path path, first_visit_referrer_host ref FROM a UNION ALL SELECT last_visit_landing_host,last_visit_landing_path,last_visit_referrer_host FROM a UNION ALL SELECT landing_host,landing_path,referrer_host FROM m) WHERE REGEXP_CONTAINS(COALESCE(host,'')||COALESCE(path,'')||COALESCE(ref,''), r'(?i)(https?://|[?#]|@|token=|auth=|session=|checkout=|email=)')) privacy_indicator_rows`,
-    examples: `WITH a AS (SELECT * FROM ${window(a)}), m AS (SELECT * FROM ${window(m)}), chosen AS (SELECT * FROM a ORDER BY journey_moment_count DESC, order_id LIMIT ${EXAMPLE_LIMIT})
+    examples: `WITH a AS (SELECT * FROM ${window(a)}), m AS (SELECT * FROM ${window(m)}), chosen AS (SELECT * FROM a ORDER BY journey_moment_count DESC, order_id LIMIT ${EXAMPLE_LIMIT}),
+      moments_by_order AS (
+       SELECT order_id,
+        ARRAY_AGG(STRUCT(moment_sequence AS sequence, moment_id, occurred_at, source, source_type, landing_host, landing_path, referrer_host, STRUCT(utm_source AS source,utm_medium AS medium,utm_campaign AS campaign,utm_content AS content,utm_term AS term) AS utms) ORDER BY moment_sequence, moment_id) moments
+       FROM m GROUP BY order_id
+      )
       SELECT order_id, STRUCT(attribution_handle AS handle, attribution_display_name AS display_name) attribution, source_name, journey_moment_count moment_count, days_to_conversion,
        STRUCT(first_visit_source AS source, first_visit_source_type AS source_type, first_visit_landing_host AS landing_host, first_visit_landing_path AS landing_path, first_visit_referrer_host AS referrer_host, STRUCT(first_visit_utm_source AS source,first_visit_utm_medium AS medium,first_visit_utm_campaign AS campaign,first_visit_utm_content AS content,first_visit_utm_term AS term) AS utms) first_visit,
        STRUCT(last_visit_source AS source, last_visit_source_type AS source_type, last_visit_landing_host AS landing_host, last_visit_landing_path AS landing_path, last_visit_referrer_host AS referrer_host, STRUCT(last_visit_utm_source AS source,last_visit_utm_medium AS medium,last_visit_utm_campaign AS campaign,last_visit_utm_content AS content,last_visit_utm_term AS term) AS utms) last_visit,
-       ARRAY(SELECT AS STRUCT moment_sequence sequence, moment_id, occurred_at, source, source_type, landing_host, landing_path, referrer_host, STRUCT(utm_source AS source,utm_medium AS medium,utm_campaign AS campaign,utm_content AS content,utm_term AS term) utms FROM m WHERE m.order_id=chosen.order_id ORDER BY moment_sequence, moment_id) moments
-      FROM chosen ORDER BY journey_moment_count DESC, order_id`
+       IFNULL(moments_by_order.moments, []) moments
+      FROM chosen LEFT JOIN moments_by_order USING(order_id)
+      ORDER BY journey_moment_count DESC, order_id`
   };
 }
 
