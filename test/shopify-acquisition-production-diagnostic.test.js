@@ -19,6 +19,8 @@ test('every production statement is parameterized and SELECT-only', () => {
 
 test('typed STRUCT fields use BigQuery AS aliases', () => {
   const queries = buildQueries('project', 'dataset');
+  assert.match(queries.reconciliation, /target_batches/);
+  assert.match(queries.reconciliation, /DATE\(order_created_at\) utc_order_date/);
   assert.match(queries.moments, /COUNT\(\*\) AS total\) all_moments_utm/);
   assert.equal((queries.coverage.match(/ AS total_visits/g) || []).length, 2);
   for (const alias of ['null_count', 'min', 'max', 'average', 'same_day', 'days_1_7', 'days_8_30', 'days_31_90', 'days_over_90']) {
@@ -46,7 +48,7 @@ test('cross-table checks use set-based joins instead of correlated table subquer
 
 test('diagnostic emits one structured result and never submits a write', async () => {
   const submitted = [];
-  const fixtures = [{ acquisition_row_count: 64 }, {}, {}, {}, { duplicate_order_ids: 0, duplicate_order_moment_pairs: 0, orphan_journey_moments: 0, moment_count_mismatches: 0, visit_flag_mismatches: 0, incomplete_pagination_orders: 0, summary_visit_ids_missing_from_moments: 0, privacy_indicator_rows: 0 }, []];
+  const fixtures = [{ acquisition_row_count: 64 }, {}, {}, {}, { duplicate_order_ids: 0, duplicate_order_moment_pairs: 0, orphan_journey_moments: 0, moment_count_mismatches: 0, visit_flag_mismatches: 0, incomplete_pagination_orders: 0, summary_visit_ids_missing_from_moments: 0, privacy_indicator_rows: 0 }, {}, []];
   const bigquery = { query: async options => { submitted.push(options); const value = fixtures.shift(); return [Array.isArray(value) ? value : [value]]; } };
   const output = await runDiagnostic({ bigquery, date: '2026-09-15', project: 'p', dataset: 'd' });
   assert.equal(output.window.date, '2026-09-15');
@@ -61,4 +63,8 @@ test('recommendation fails deterministically for any critical defect or empty wi
     moment_count_mismatches: 0, visit_flag_mismatches: 0, incomplete_pagination_orders: 0,
     summary_visit_ids_missing_from_moments: 0, privacy_indicator_rows: 0 };
   assert.deepEqual(recommendation({ acquisition_row_count: 1 }, clean).deterministic_failures, ['orphan_journey_moments']);
+  clean.orphan_journey_moments = 0;
+  assert.deepEqual(recommendation({ acquisition_row_count: 1 }, clean,
+    { utc_date_groups: [{ utc_order_date: '2026-09-15' }, { utc_order_date: '2026-09-16' }] },
+    '2026-09-15').deterministic_failures, ['sync_batch_contains_orders_outside_utc_window']);
 });

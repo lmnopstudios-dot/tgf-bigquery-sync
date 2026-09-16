@@ -78,6 +78,30 @@ export function buildQueries(project, dataset) {
        (SELECT COUNT(*) FROM a WHERE journey_pagination_complete IS FALSE) incomplete_pagination_orders,
        (SELECT COUNT(*) FROM (SELECT order_id,first_visit_id id FROM a WHERE first_visit_id IS NOT NULL UNION ALL SELECT order_id,last_visit_id FROM a WHERE last_visit_id IS NOT NULL) ids LEFT JOIN m ON m.order_id=ids.order_id AND m.moment_id=ids.id WHERE m.moment_id IS NULL) summary_visit_ids_missing_from_moments,
        (SELECT COUNT(*) FROM (SELECT first_visit_landing_host host, first_visit_landing_path path, first_visit_referrer_host ref FROM a UNION ALL SELECT last_visit_landing_host,last_visit_landing_path,last_visit_referrer_host FROM a UNION ALL SELECT landing_host,landing_path,referrer_host FROM m) WHERE REGEXP_CONTAINS(COALESCE(host,'')||COALESCE(path,'')||COALESCE(ref,''), r'(?i)(https?://|[?#]|@|token=|auth=|session=|checkout=|email=)')) privacy_indicator_rows`,
+    reconciliation: `WITH target_batches AS (
+        SELECT DISTINCT synced_at FROM ${window(a)}
+      ), batch_acquisition AS (
+        SELECT a.* FROM ${a} a JOIN target_batches USING (synced_at)
+      ), batch_moments AS (
+        SELECT m.* FROM ${m} m JOIN target_batches USING (synced_at)
+      ), dates AS (
+        SELECT DATE(order_created_at) utc_order_date, COUNT(*) acquisition_rows,
+          COUNT(DISTINCT order_id) unique_orders, SUM(journey_moment_count) reported_moments,
+          MIN(order_created_at) min_order_created_at, MAX(order_created_at) max_order_created_at,
+          ARRAY_AGG(STRUCT(order_id, order_created_at) ORDER BY order_created_at, order_id LIMIT 10) safe_order_examples
+        FROM batch_acquisition GROUP BY 1
+      ), actual_moments AS (
+        SELECT DATE(order_created_at) utc_order_date, COUNT(*) journey_moment_rows,
+          COUNT(DISTINCT moment_id) unique_moments
+        FROM batch_moments GROUP BY 1
+      )
+      SELECT ARRAY_AGG(STRUCT(d.utc_order_date, d.acquisition_rows, d.unique_orders,
+        d.reported_moments, COALESCE(m.journey_moment_rows, 0) journey_moment_rows,
+        COALESCE(m.unique_moments, 0) unique_moments, d.min_order_created_at,
+        d.max_order_created_at, d.safe_order_examples) ORDER BY d.utc_order_date) utc_date_groups,
+        MIN(d.min_order_created_at) affected_batch_min_order_created_at,
+        MAX(d.max_order_created_at) affected_batch_max_order_created_at
+      FROM dates d LEFT JOIN actual_moments m USING (utc_order_date)`,
     examples: `WITH a AS (SELECT * FROM ${window(a)}), m AS (SELECT * FROM ${window(m)}), chosen AS (SELECT * FROM a ORDER BY journey_moment_count DESC, order_id LIMIT ${EXAMPLE_LIMIT}),
       moments_by_order AS (
        SELECT order_id,
@@ -104,10 +128,13 @@ function plain(value) {
   return value;
 }
 
-export function recommendation(counts, quality) {
+export function recommendation(counts, quality, reconciliation, date) {
   const failures = [];
   if (!counts.acquisition_row_count) failures.push('empty_acquisition_window');
   for (const key of ['duplicate_order_ids','duplicate_order_moment_pairs','orphan_journey_moments','moment_count_mismatches','visit_flag_mismatches','incomplete_pagination_orders','summary_visit_ids_missing_from_moments','privacy_indicator_rows']) if (Number(quality[key]) !== 0) failures.push(key);
+  if (date && reconciliation?.utc_date_groups?.some(group => String(group.utc_order_date) !== date)) {
+    failures.push('sync_batch_contains_orders_outside_utc_window');
+  }
   return { safe_to_proceed_with_larger_backfill: failures.length === 0, decision: failures.length ? 'DO_NOT_PROCEED' : 'PROCEED', deterministic_failures: failures };
 }
 
@@ -119,13 +146,13 @@ export async function runDiagnostic({ bigquery, date, project, dataset }) {
     const [rows] = await bigquery.query({ query, params: { date }, useLegacySql: false });
     results[name] = plain(name === 'examples' ? rows : rows[0] || {});
   }
-  const { counts, distributions, moments, coverage, quality, examples } = results;
+  const { counts, distributions, moments, coverage, quality, examples, reconciliation } = results;
   return { diagnostic: 'shopify_acquisition_production_validation', window: { date, start_inclusive: `${date}T00:00:00.000Z`, end_exclusive: new Date(new Date(`${date}T00:00:00.000Z`).getTime()+86400000).toISOString(), project, dataset }, counts,
     journey_coverage: { moment_count_distribution: distributions.journey_moment_count, availability_ready_combinations: distributions.journey_availability, pagination_complete_counts: distributions.journey_pagination_complete, first_visit_id_present: counts.first_visit_id_present, last_visit_id_present: counts.last_visit_id_present, first_last_visit_ids_same: counts.first_last_visit_ids_same },
     order_attribution: { attribution: distributions.attribution, source_name: distributions.source_name, apps: distributions.apps, matrixify_import_count: counts.matrixify_import_count, customer_order_index_distribution: distributions.customer_order_index },
     journey_sources: { first_visit: distributions.first_visit_sources, last_visit: distributions.last_visit_sources, all_moments: moments.source_types },
     utm_coverage: { first_visits: coverage.first_visits, last_visits: coverage.last_visits, all_moments: moments.all_moments_utm }, landing_evidence: { top_landing_paths: moments.top_landing_paths, top_referrer_hosts: moments.top_referrer_hosts }, conversion_lag: coverage.conversion_lag,
-    data_quality: quality, representative_journeys: examples, privacy_checks: { prohibited_customer_identity_selected: false, raw_url_query_string_indicator_rows: quality.privacy_indicator_rows }, recommendation: recommendation(counts, quality) };
+    data_quality: quality, sync_batch_reconciliation: reconciliation, representative_journeys: examples, privacy_checks: { prohibited_customer_identity_selected: false, raw_url_query_string_indicator_rows: quality.privacy_indicator_rows }, recommendation: recommendation(counts, quality, reconciliation, date) };
 }
 
 async function main() {
