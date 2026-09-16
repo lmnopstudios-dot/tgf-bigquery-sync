@@ -21,6 +21,9 @@ test('typed STRUCT fields use BigQuery AS aliases', () => {
   const queries = buildQueries('project', 'dataset');
   assert.match(queries.reconciliation, /target_batches/);
   assert.match(queries.reconciliation, /DATE\(order_created_at\) utc_order_date/);
+  assert.match(queries.reconciliation, /COALESCE\(m\.journey_moment_rows, 0\) AS journey_moment_rows/);
+  assert.match(queries.reconciliation, /COALESCE\(m\.unique_moments, 0\) AS unique_moments/);
+  assert.doesNotMatch(queries.reconciliation, /COALESCE\([^)]*\)\s+(?!AS\b)[A-Za-z_][A-Za-z0-9_]*/);
   assert.match(queries.moments, /COUNT\(\*\) AS total\) all_moments_utm/);
   assert.equal((queries.coverage.match(/ AS total_visits/g) || []).length, 2);
   for (const alias of ['null_count', 'min', 'max', 'average', 'same_day', 'days_1_7', 'days_8_30', 'days_31_90', 'days_over_90']) {
