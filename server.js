@@ -5219,10 +5219,14 @@ const METORIK_UK_DATASET = 'metorik_uk';
 const METORIK_ORDERS_TABLE = 'orders';
 const METORIK_ORDER_LINE_ITEMS_TABLE = 'order_line_items';
 const METORIK_CUSTOMERS_TABLE = 'customers';
+const METORIK_PRODUCTS_TABLE = 'products';
+const METORIK_PRODUCT_VARIATIONS_TABLE = 'product_variations';
 const METORIK_ORDERS_PER_PAGE = 100;
 const METORIK_CUSTOMERS_PER_PAGE = 100;
+const METORIK_CATALOGUE_PER_PAGE = 100;
 const METORIK_MAX_ORDER_PAGES = 100000;
 const METORIK_MAX_CUSTOMER_PAGES = 100000;
+const METORIK_MAX_CATALOGUE_PAGES = 100000;
 const METORIK_DEFAULT_PAGE_DELAY_MS = 1250;
 const METORIK_MAX_PAGE_DELAY_MS = 60000;
 
@@ -5315,6 +5319,43 @@ const METORIK_ORDER_LINE_ITEMS_SCHEMA = [
   { name: 'cogs', type: 'NUMERIC' },
   { name: 'ring_size', type: 'STRING' },
   { name: 'metadata_json', type: 'STRING', mode: 'REQUIRED' },
+  { name: 'synced_at', type: 'TIMESTAMP', mode: 'REQUIRED' }
+];
+
+// Current catalogue state only. Metorik's date-window-dependent product
+// analytics are deliberately excluded because BigQuery remains financial truth.
+const METORIK_PRODUCTS_SCHEMA = [
+  { name: 'product_id', type: 'INT64', mode: 'REQUIRED' },
+  { name: 'title', type: 'STRING' },
+  { name: 'sku', type: 'STRING' },
+  { name: 'type', type: 'STRING' },
+  { name: 'status', type: 'STRING' },
+  { name: 'tags', type: 'STRING' },
+  { name: 'image', type: 'STRING' },
+  { name: 'current_price', type: 'NUMERIC' },
+  { name: 'regular_price', type: 'NUMERIC' },
+  { name: 'sale_price', type: 'NUMERIC' },
+  { name: 'stock_quantity', type: 'INT64' },
+  { name: 'in_stock', type: 'BOOL' },
+  { name: 'product_created_at', type: 'TIMESTAMP' },
+  { name: 'product_updated_at', type: 'TIMESTAMP' },
+  { name: 'synced_at', type: 'TIMESTAMP', mode: 'REQUIRED' }
+];
+
+const METORIK_PRODUCT_VARIATIONS_SCHEMA = [
+  { name: 'variation_id', type: 'INT64', mode: 'REQUIRED' },
+  { name: 'product_id', type: 'INT64', mode: 'REQUIRED' },
+  { name: 'sku', type: 'STRING' },
+  { name: 'name', type: 'STRING' },
+  { name: 'image', type: 'STRING' },
+  { name: 'attributes_json', type: 'STRING', mode: 'REQUIRED' },
+  { name: 'current_price', type: 'NUMERIC' },
+  { name: 'regular_price', type: 'NUMERIC' },
+  { name: 'sale_price', type: 'NUMERIC' },
+  { name: 'stock_quantity', type: 'INT64' },
+  { name: 'in_stock', type: 'BOOL' },
+  { name: 'variation_created_at', type: 'TIMESTAMP' },
+  { name: 'variation_updated_at', type: 'TIMESTAMP' },
   { name: 'synced_at', type: 'TIMESTAMP', mode: 'REQUIRED' }
 ];
 
@@ -5423,6 +5464,12 @@ function metorikTimestamp(value, field) {
     throw new MetorikSyncValidationError(`${field} is not a valid timestamp`);
   }
   return date.toISOString();
+}
+
+function metorikBoolean(value, field) {
+  if (value === undefined || value === null || value === '') return null;
+  if (typeof value === 'boolean') return value;
+  throw new MetorikSyncValidationError(`${field} is not a boolean`);
 }
 
 function metorikJson(value, field) {
@@ -5551,6 +5598,72 @@ function transformMetorikLineItems(order, orderRow, syncedAt) {
       synced_at: syncedAt
     };
   });
+}
+
+function transformMetorikProduct(product, syncedAt) {
+  return {
+    product_id: metorikInteger(product?.product_id, 'product_id', {
+      required: true
+    }),
+    title: metorikString(product?.title, 'product title'),
+    sku: metorikString(product?.sku, 'product sku'),
+    type: metorikString(product?.type, 'product type'),
+    status: metorikString(product?.status, 'product status'),
+    tags: metorikString(product?.tags, 'product tags'),
+    image: metorikString(product?.image, 'product image'),
+    current_price: metorikNumeric(product?.current_price, 'product current_price'),
+    regular_price: metorikNumeric(product?.regular_price, 'product regular_price'),
+    sale_price: metorikNumeric(product?.sale_price, 'product sale_price'),
+    stock_quantity: metorikInteger(product?.stock_quantity, 'product stock_quantity'),
+    in_stock: metorikBoolean(product?.in_stock, 'product in_stock'),
+    product_created_at: metorikTimestamp(
+      product?.product_created_at,
+      'product_created_at'
+    ),
+    product_updated_at: metorikTimestamp(
+      product?.product_updated_at,
+      'product_updated_at'
+    ),
+    synced_at: syncedAt
+  };
+}
+
+function transformMetorikProductVariation(variation, syncedAt) {
+  return {
+    variation_id: metorikInteger(variation?.variation_id, 'variation_id', {
+      required: true
+    }),
+    product_id: metorikInteger(variation?.product_id, 'variation product_id', {
+      required: true
+    }),
+    sku: metorikString(variation?.sku, 'variation sku'),
+    name: metorikString(variation?.name, 'variation name'),
+    image: metorikString(variation?.image, 'variation image'),
+    attributes_json: metorikJson(variation?.atts, 'variation atts'),
+    current_price: metorikNumeric(
+      variation?.current_price,
+      'variation current_price'
+    ),
+    regular_price: metorikNumeric(
+      variation?.regular_price,
+      'variation regular_price'
+    ),
+    sale_price: metorikNumeric(variation?.sale_price, 'variation sale_price'),
+    stock_quantity: metorikInteger(
+      variation?.stock_quantity,
+      'variation stock_quantity'
+    ),
+    in_stock: metorikBoolean(variation?.in_stock, 'variation in_stock'),
+    variation_created_at: metorikTimestamp(
+      variation?.variation_created_at,
+      'variation_created_at'
+    ),
+    variation_updated_at: metorikTimestamp(
+      variation?.variation_updated_at,
+      'variation_updated_at'
+    ),
+    synced_at: syncedAt
+  };
 }
 
 function duplicateMetorikIds(rows, field) {
@@ -5823,6 +5936,143 @@ async function fetchAllMetorikUKOrders() {
   throw new MetorikSyncValidationError('Metorik pagination exceeded the safety page limit');
 }
 
+async function fetchAllMetorikUKCatalogueResource(resource, identityField) {
+  const records = [];
+  const pageSignatures = new Set();
+
+  for (
+    let requestedPage = 1;
+    requestedPage <= METORIK_MAX_CATALOGUE_PAGES;
+    requestedPage++
+  ) {
+    // These dates are required by Metorik solely as the calculation window for
+    // analytics that this sync discards. They do not filter catalogue membership.
+    const result = await requestMetorikResource(
+      resource,
+      { apiKey: METORIK_UK_API_KEY, storeName: 'UK' },
+      {
+        page: String(requestedPage),
+        per_page: String(METORIK_CATALOGUE_PER_PAGE),
+        start_date: METORIK_DISCOVERY_START_DATE,
+        end_date: METORIK_DISCOVERY_END_DATE
+      },
+      {
+        includeDiscoveryDateRange: false,
+        retryCount: METORIK_REQUEST_RETRY_COUNT
+      }
+    );
+    if (!result.success) {
+      throw new MetorikSyncValidationError(
+        `Metorik ${resource} request failed on page ${requestedPage}`,
+        metorikPageDiagnostics(requestedPage, result)
+      );
+    }
+    if (!result.recordsShapeValid) {
+      throw new MetorikSyncValidationError(
+        `Metorik ${resource} response has no record collection on page ${requestedPage}`,
+        metorikPageDiagnostics(requestedPage, result, 'malformed_response')
+      );
+    }
+
+    const pagination = result.pagination;
+    let currentPage;
+    let perPage;
+    try {
+      currentPage = metorikInteger(
+        pagination?.current_page,
+        'pagination.current_page',
+        { required: true }
+      );
+      perPage = metorikInteger(
+        pagination?.per_page,
+        'pagination.per_page',
+        { required: true }
+      );
+    } catch (error) {
+      if (!(error instanceof MetorikSyncValidationError)) throw error;
+      throw new MetorikSyncValidationError(
+        error.message,
+        metorikPageDiagnostics(
+          requestedPage,
+          result,
+          'pagination_validation_failure'
+        )
+      );
+    }
+    if (
+      currentPage !== requestedPage ||
+      perPage !== METORIK_CATALOGUE_PER_PAGE
+    ) {
+      throw new MetorikSyncValidationError(
+        `Metorik ${resource} pagination did not match page ${requestedPage}`,
+        metorikPageDiagnostics(
+          requestedPage,
+          result,
+          'pagination_validation_failure'
+        )
+      );
+    }
+    if (typeof pagination?.has_more_pages !== 'boolean') {
+      throw new MetorikSyncValidationError(
+        'pagination.has_more_pages is missing or invalid',
+        metorikPageDiagnostics(
+          requestedPage,
+          result,
+          'pagination_validation_failure'
+        )
+      );
+    }
+    if (result.records.some(record =>
+      !record || Array.isArray(record) || typeof record !== 'object'
+    )) {
+      throw new MetorikSyncValidationError(
+        `Metorik ${resource} page ${requestedPage} contains a non-object record`,
+        metorikPageDiagnostics(requestedPage, result, 'malformed_response')
+      );
+    }
+
+    const signature = JSON.stringify(
+      result.records.map(record => record[identityField])
+    );
+    if (pageSignatures.has(signature)) {
+      throw new MetorikSyncValidationError(
+        `Metorik repeated ${resource} page content at page ${requestedPage}`,
+        metorikPageDiagnostics(
+          requestedPage,
+          result,
+          'pagination_validation_failure'
+        )
+      );
+    }
+    pageSignatures.add(signature);
+    records.push(...result.records);
+
+    if (!pagination.has_more_pages) {
+      return {
+        records,
+        pagesFetched: requestedPage,
+        paginationCompleted: true,
+        pageDelayMs: METORIK_PAGE_DELAY_MS
+      };
+    }
+    if (result.records.length === 0) {
+      throw new MetorikSyncValidationError(
+        `Metorik returned an empty non-final ${resource} page at page ${requestedPage}`,
+        metorikPageDiagnostics(
+          requestedPage,
+          result,
+          'pagination_validation_failure'
+        )
+      );
+    }
+    await sleep(METORIK_PAGE_DELAY_MS);
+  }
+
+  throw new MetorikSyncValidationError(
+    `Metorik ${resource} pagination exceeded the safety page limit`
+  );
+}
+
 async function ensureMetorikUKDatasetAndTables() {
   const dataset = bigquery.dataset(METORIK_UK_DATASET);
   const [datasetExists] = await dataset.exists();
@@ -5977,6 +6227,313 @@ app.post(
         error: error instanceof MetorikSyncValidationError
           ? error.message
           : 'Metorik UK orders sync failed',
+        ...(error instanceof MetorikSyncValidationError && error.diagnostics
+          ? { diagnostics: error.diagnostics }
+          : {})
+      });
+    }
+  }
+);
+
+async function ensureMetorikUKCatalogueTables() {
+  const dataset = bigquery.dataset(METORIK_UK_DATASET);
+  const [datasetExists] = await dataset.exists();
+  if (!datasetExists) await bigquery.createDataset(METORIK_UK_DATASET);
+
+  for (const [tableName, schema] of [
+    [METORIK_PRODUCTS_TABLE, METORIK_PRODUCTS_SCHEMA],
+    [METORIK_PRODUCT_VARIATIONS_TABLE, METORIK_PRODUCT_VARIATIONS_SCHEMA]
+  ]) {
+    const table = dataset.table(tableName);
+    const [exists] = await table.exists();
+    if (!exists) await dataset.createTable(tableName, { schema });
+  }
+  return dataset;
+}
+
+function numberFromBigQuery(value) {
+  return Number(value?.value ?? value ?? 0);
+}
+
+async function getMetorikCatalogueDiagnostics(
+  stagingProductsName,
+  stagingVariationsName
+) {
+  const [relationshipRows] = await bigquery.query({ query: `
+    SELECT
+      COUNT(DISTINCT v.product_id) AS variation_parent_ids,
+      COUNTIF(p.product_id IS NOT NULL) AS variation_parents_present,
+      COUNTIF(p.product_id IS NULL) AS variation_parents_absent
+    FROM \`${GOOGLE_PROJECT_ID}.${METORIK_UK_DATASET}.${stagingVariationsName}\` v
+    LEFT JOIN \`${GOOGLE_PROJECT_ID}.${METORIK_UK_DATASET}.${stagingProductsName}\` p
+      USING (product_id)
+  ` });
+  const [historicalRows] = await bigquery.query({ query: `
+    WITH historical_products AS (
+      SELECT DISTINCT product_id
+      FROM \`${GOOGLE_PROJECT_ID}.${METORIK_UK_DATASET}.${METORIK_ORDER_LINE_ITEMS_TABLE}\`
+      WHERE product_id IS NOT NULL
+    ), historical_variations AS (
+      SELECT DISTINCT variation_id
+      FROM \`${GOOGLE_PROJECT_ID}.${METORIK_UK_DATASET}.${METORIK_ORDER_LINE_ITEMS_TABLE}\`
+      WHERE variation_id IS NOT NULL AND variation_id != 0
+    ), product_comparison AS (
+      SELECT h.product_id, p.product_id IS NOT NULL AS is_present
+      FROM historical_products h
+      LEFT JOIN \`${GOOGLE_PROJECT_ID}.${METORIK_UK_DATASET}.${stagingProductsName}\` p
+        USING (product_id)
+    ), variation_comparison AS (
+      SELECT h.variation_id, v.variation_id IS NOT NULL AS is_present
+      FROM historical_variations h
+      LEFT JOIN \`${GOOGLE_PROJECT_ID}.${METORIK_UK_DATASET}.${stagingVariationsName}\` v
+        USING (variation_id)
+    )
+    SELECT
+      (SELECT COUNT(*) FROM product_comparison) AS historical_product_ids,
+      (SELECT COUNTIF(is_present) FROM product_comparison)
+        AS historical_product_ids_present,
+      (SELECT COUNTIF(NOT is_present) FROM product_comparison)
+        AS historical_product_ids_absent,
+      ARRAY(
+        SELECT product_id FROM product_comparison
+        WHERE NOT is_present ORDER BY product_id LIMIT 10
+      ) AS sample_absent_product_ids,
+      (SELECT COUNT(*) FROM variation_comparison) AS historical_variation_ids,
+      (SELECT COUNTIF(is_present) FROM variation_comparison)
+        AS historical_variation_ids_present,
+      (SELECT COUNTIF(NOT is_present) FROM variation_comparison)
+        AS historical_variation_ids_absent,
+      ARRAY(
+        SELECT variation_id FROM variation_comparison
+        WHERE NOT is_present ORDER BY variation_id LIMIT 10
+      ) AS sample_absent_variation_ids
+  ` });
+
+  const relationship = relationshipRows[0] ?? {};
+  const historical = historicalRows[0] ?? {};
+  const historicalProductIds = numberFromBigQuery(
+    historical.historical_product_ids
+  );
+  const historicalProductIdsPresent = numberFromBigQuery(
+    historical.historical_product_ids_present
+  );
+  const historicalVariationIds = numberFromBigQuery(
+    historical.historical_variation_ids
+  );
+  const historicalVariationIdsPresent = numberFromBigQuery(
+    historical.historical_variation_ids_present
+  );
+
+  return {
+    variation_parent_ids: numberFromBigQuery(relationship.variation_parent_ids),
+    variation_parents_present: numberFromBigQuery(
+      relationship.variation_parents_present
+    ),
+    variation_parents_absent: numberFromBigQuery(
+      relationship.variation_parents_absent
+    ),
+    historical_product_ids: historicalProductIds,
+    historical_product_ids_present: historicalProductIdsPresent,
+    historical_product_ids_absent: numberFromBigQuery(
+      historical.historical_product_ids_absent
+    ),
+    historical_product_ids_present_percentage: historicalProductIds === 0
+      ? null
+      : 100 * historicalProductIdsPresent / historicalProductIds,
+    sample_absent_product_ids: historical.sample_absent_product_ids ?? [],
+    historical_variation_ids: historicalVariationIds,
+    historical_variation_ids_present: historicalVariationIdsPresent,
+    historical_variation_ids_absent: numberFromBigQuery(
+      historical.historical_variation_ids_absent
+    ),
+    historical_variation_ids_present_percentage: historicalVariationIds === 0
+      ? null
+      : 100 * historicalVariationIdsPresent / historicalVariationIds,
+    sample_absent_variation_ids: historical.sample_absent_variation_ids ?? []
+  };
+}
+
+async function safelyReplaceMetorikUKCatalogue(productRows, variationRows) {
+  const dataset = await ensureMetorikUKCatalogueTables();
+  const suffix = `${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+  const stagingProductsName = `_staging_products_${suffix}`;
+  const stagingVariationsName = `_staging_product_variations_${suffix}`;
+  const [stagingProducts] = await dataset.createTable(stagingProductsName, {
+    schema: METORIK_PRODUCTS_SCHEMA,
+    expirationTime: Date.now() + 24 * 60 * 60 * 1000
+  });
+  let stagingVariations;
+
+  try {
+    [stagingVariations] = await dataset.createTable(stagingVariationsName, {
+      schema: METORIK_PRODUCT_VARIATIONS_SCHEMA,
+      expirationTime: Date.now() + 24 * 60 * 60 * 1000
+    });
+    await insertMetorikRows(stagingProducts, productRows);
+    await insertMetorikRows(stagingVariations, variationRows);
+
+    const [counts] = await bigquery.query({ query: `
+      SELECT
+        (SELECT COUNT(*) FROM \`${GOOGLE_PROJECT_ID}.${METORIK_UK_DATASET}.${stagingProductsName}\`)
+          AS products_count,
+        (SELECT COUNT(*) FROM \`${GOOGLE_PROJECT_ID}.${METORIK_UK_DATASET}.${stagingVariationsName}\`)
+          AS variations_count
+    ` });
+    if (
+      numberFromBigQuery(counts[0]?.products_count) !== productRows.length ||
+      numberFromBigQuery(counts[0]?.variations_count) !== variationRows.length
+    ) {
+      throw new MetorikSyncValidationError(
+        'BigQuery catalogue staging row counts did not match validated source data'
+      );
+    }
+
+    const diagnostics = await getMetorikCatalogueDiagnostics(
+      stagingProductsName,
+      stagingVariationsName
+    );
+
+    // One transaction prevents current products and variations from ever
+    // representing different successful ingestion runs.
+    await bigquery.query({ query: `
+      BEGIN TRANSACTION;
+      DELETE FROM \`${GOOGLE_PROJECT_ID}.${METORIK_UK_DATASET}.${METORIK_PRODUCTS_TABLE}\`
+        WHERE TRUE;
+      INSERT INTO \`${GOOGLE_PROJECT_ID}.${METORIK_UK_DATASET}.${METORIK_PRODUCTS_TABLE}\`
+        SELECT * FROM \`${GOOGLE_PROJECT_ID}.${METORIK_UK_DATASET}.${stagingProductsName}\`;
+      DELETE FROM \`${GOOGLE_PROJECT_ID}.${METORIK_UK_DATASET}.${METORIK_PRODUCT_VARIATIONS_TABLE}\`
+        WHERE TRUE;
+      INSERT INTO \`${GOOGLE_PROJECT_ID}.${METORIK_UK_DATASET}.${METORIK_PRODUCT_VARIATIONS_TABLE}\`
+        SELECT * FROM \`${GOOGLE_PROJECT_ID}.${METORIK_UK_DATASET}.${stagingVariationsName}\`;
+      COMMIT TRANSACTION;
+    ` });
+
+    return {
+      ...diagnostics,
+      staging_products_count: productRows.length,
+      staging_variations_count: variationRows.length,
+      coordinated_transactional_replacement: true
+    };
+  } finally {
+    await Promise.allSettled([
+      stagingProducts.delete({ ignoreNotFound: true }),
+      stagingVariations?.delete({ ignoreNotFound: true })
+    ]);
+  }
+}
+
+async function syncMetorikUKProducts() {
+  const fetchedProducts = await fetchAllMetorikUKCatalogueResource(
+    'products',
+    'product_id'
+  );
+  const fetchedVariations = await fetchAllMetorikUKCatalogueResource(
+    'variations',
+    'variation_id'
+  );
+  if (!fetchedProducts.paginationCompleted || fetchedProducts.records.length === 0) {
+    throw new MetorikSyncValidationError(
+      'Metorik did not return a complete, non-empty product catalogue'
+    );
+  }
+  if (!fetchedVariations.paginationCompleted || fetchedVariations.records.length === 0) {
+    throw new MetorikSyncValidationError(
+      'Metorik did not return a complete, non-empty variation catalogue'
+    );
+  }
+
+  const syncedAt = new Date().toISOString();
+  const productRows = fetchedProducts.records.map(product =>
+    transformMetorikProduct(product, syncedAt)
+  );
+  const variationRows = fetchedVariations.records.map(variation =>
+    transformMetorikProductVariation(variation, syncedAt)
+  );
+  if (productRows.length !== fetchedProducts.records.length ||
+      variationRows.length !== fetchedVariations.records.length) {
+    throw new MetorikSyncValidationError(
+      'Transformed catalogue counts did not match fetched source counts'
+    );
+  }
+  const duplicateProductIds = duplicateMetorikIds(productRows, 'product_id');
+  const duplicateVariationIds = duplicateMetorikIds(variationRows, 'variation_id');
+  if (duplicateProductIds.length > 0) {
+    throw new MetorikSyncValidationError(
+      `Duplicate product IDs detected (${duplicateProductIds.length})`
+    );
+  }
+  if (duplicateVariationIds.length > 0) {
+    throw new MetorikSyncValidationError(
+      `Duplicate variation IDs detected (${duplicateVariationIds.length})`
+    );
+  }
+  if (productRows.some(row => row.product_id === null)) {
+    throw new MetorikSyncValidationError('A product is missing required product_id');
+  }
+  if (variationRows.some(row =>
+    row.variation_id === null || row.product_id === null
+  )) {
+    throw new MetorikSyncValidationError(
+      'A variation is missing required variation_id or product_id'
+    );
+  }
+
+  const productTypes = {};
+  for (const row of productRows) {
+    const type = row.type ?? '(null)';
+    productTypes[type] = (productTypes[type] ?? 0) + 1;
+  }
+  const validation = await safelyReplaceMetorikUKCatalogue(
+    productRows,
+    variationRows
+  );
+
+  return {
+    success: true,
+    store: 'UK',
+    products_fetched: fetchedProducts.records.length,
+    products_imported: productRows.length,
+    variations_fetched: fetchedVariations.records.length,
+    variations_imported: variationRows.length,
+    product_types: productTypes,
+    products_pages_fetched: fetchedProducts.pagesFetched,
+    variations_pages_fetched: fetchedVariations.pagesFetched,
+    page_delay_ms: METORIK_PAGE_DELAY_MS,
+    duplicate_product_ids_detected: 0,
+    duplicate_variation_ids_detected: 0,
+    ...validation,
+    destination_tables: [
+      `${GOOGLE_PROJECT_ID}.${METORIK_UK_DATASET}.${METORIK_PRODUCTS_TABLE}`,
+      `${GOOGLE_PROJECT_ID}.${METORIK_UK_DATASET}.${METORIK_PRODUCT_VARIATIONS_TABLE}`
+    ]
+  };
+}
+
+app.post(
+  '/sync-metorik-uk-products',
+  requireSyncSecret,
+  async (req, res) => {
+    if (!METORIK_UK_API_KEY) {
+      return res.status(500).json({
+        success: false,
+        store: 'UK',
+        error: 'METORIK_UK_API_KEY is not configured'
+      });
+    }
+
+    try {
+      return res.json(await syncMetorikUKProducts());
+    } catch (error) {
+      console.error('Metorik UK product catalogue sync failed:', error.name);
+      if (error instanceof MetorikSyncValidationError && error.diagnostics) {
+        console.error('Metorik UK product sync diagnostics:', error.diagnostics);
+      }
+      return res.status(500).json({
+        success: false,
+        store: 'UK',
+        error: error instanceof MetorikSyncValidationError
+          ? error.message
+          : 'Metorik UK product catalogue sync failed',
         ...(error instanceof MetorikSyncValidationError && error.diagnostics
           ? { diagnostics: error.diagnostics }
           : {})
