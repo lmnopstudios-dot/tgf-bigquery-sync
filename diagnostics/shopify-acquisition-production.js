@@ -96,8 +96,8 @@ export function buildQueries(project, dataset) {
         FROM batch_moments GROUP BY 1
       )
       SELECT ARRAY_AGG(STRUCT(d.utc_order_date, d.acquisition_rows, d.unique_orders,
-        d.reported_moments, COALESCE(m.journey_moment_rows, 0) journey_moment_rows,
-        COALESCE(m.unique_moments, 0) unique_moments, d.min_order_created_at,
+        d.reported_moments, COALESCE(m.journey_moment_rows, 0) AS journey_moment_rows,
+        COALESCE(m.unique_moments, 0) AS unique_moments, d.min_order_created_at,
         d.max_order_created_at, d.safe_order_examples) ORDER BY d.utc_order_date) utc_date_groups,
         MIN(d.min_order_created_at) affected_batch_min_order_created_at,
         MAX(d.max_order_created_at) affected_batch_max_order_created_at
