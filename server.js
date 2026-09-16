@@ -6,6 +6,10 @@ import os from 'os';
 import path from 'path';
 import OpenAI from 'openai';
 import { createEcommerceManagementReportService } from './oracle/ecommerce-management-report.js';
+import {
+  AcquisitionValidationError,
+  syncShopifyAcquisition
+} from './shopify/acquisition.js';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -7085,6 +7089,35 @@ app.post(
           error:
             error.message
         });
+    }
+  }
+);
+
+/* Shopify journeys are order-associated converting journeys, not evidence about
+ * all traffic or non-converting sessions. Conversion/funnel claims require GA4
+ * or an equivalent session analytics source. */
+app.post(
+  '/sync-shopify-acquisition',
+  requireSyncSecret,
+  express.json({ limit: '10kb' }),
+  async (req, res) => {
+    try {
+      const token = await getShopifyAccessToken();
+      const result = await syncShopifyAcquisition({
+        body: req.body,
+        graphql: (query, variables) => shopifyGraphQL(token, query, variables),
+        bigquery,
+        projectId: GOOGLE_PROJECT_ID
+      });
+      res.json({ success: true, ...result });
+    } catch (error) {
+      console.error('Shopify acquisition sync failed:', error.name);
+      res.status(error instanceof AcquisitionValidationError ? 400 : 500).json({
+        success: false,
+        error: error instanceof AcquisitionValidationError
+          ? error.message
+          : 'Shopify acquisition sync failed'
+      });
     }
   }
 );
