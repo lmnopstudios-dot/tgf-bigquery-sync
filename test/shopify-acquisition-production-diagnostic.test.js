@@ -17,6 +17,20 @@ test('every production statement is parameterized and SELECT-only', () => {
   }
 });
 
+test('typed STRUCT fields use BigQuery AS aliases', () => {
+  const queries = buildQueries('project', 'dataset');
+  assert.match(queries.moments, /COUNT\(\*\) AS total\) all_moments_utm/);
+  assert.equal((queries.coverage.match(/ AS total_visits/g) || []).length, 2);
+  for (const alias of ['null_count', 'min', 'max', 'average', 'same_day', 'days_1_7', 'days_8_30', 'days_31_90', 'days_over_90']) {
+    assert.match(queries.coverage, new RegExp(`\\) AS ${alias}(?:,|\\))`));
+  }
+  assert.equal((queries.examples.match(/\) AS utms/g) || []).length, 2);
+
+  const typedStructAliases = ['total', 'total_visits', 'null_count', 'min', 'max', 'average', 'same_day', 'days_1_7', 'days_8_30', 'days_31_90', 'days_over_90', 'utms'];
+  const missingAs = new RegExp(`\\)\\s+(?:${typedStructAliases.join('|')})(?=\\s*[,\\)])`);
+  for (const query of Object.values(queries)) assert.doesNotMatch(query, missingAs);
+});
+
 test('diagnostic emits one structured result and never submits a write', async () => {
   const submitted = [];
   const fixtures = [{ acquisition_row_count: 64 }, {}, {}, {}, { duplicate_order_ids: 0, duplicate_order_moment_pairs: 0, orphan_journey_moments: 0, moment_count_mismatches: 0, visit_flag_mismatches: 0, incomplete_pagination_orders: 0, summary_visit_ids_missing_from_moments: 0, privacy_indicator_rows: 0 }, []];
