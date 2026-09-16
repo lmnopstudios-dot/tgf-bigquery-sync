@@ -5322,15 +5322,17 @@ const METORIK_ORDER_LINE_ITEMS_SCHEMA = [
   { name: 'synced_at', type: 'TIMESTAMP', mode: 'REQUIRED' }
 ];
 
-// Current catalogue state only. Metorik's date-window-dependent product
-// analytics are deliberately excluded because BigQuery remains financial truth.
+// Current catalogue state only. Metorik can return product tags as an empty
+// string, an array, or an object, so the complete value is retained as JSON.
+// Metorik's date-window-dependent product analytics are deliberately excluded
+// because BigQuery remains financial truth.
 const METORIK_PRODUCTS_SCHEMA = [
   { name: 'product_id', type: 'INT64', mode: 'REQUIRED' },
   { name: 'title', type: 'STRING' },
   { name: 'sku', type: 'STRING' },
   { name: 'type', type: 'STRING' },
   { name: 'status', type: 'STRING' },
-  { name: 'tags', type: 'STRING' },
+  { name: 'tags_json', type: 'STRING', mode: 'REQUIRED' },
   { name: 'image', type: 'STRING' },
   { name: 'current_price', type: 'NUMERIC' },
   { name: 'regular_price', type: 'NUMERIC' },
@@ -5480,6 +5482,16 @@ function metorikJson(value, field) {
   }
 }
 
+function metorikProductTagsJson(value) {
+  // Metorik uses both an empty string and an empty collection for "no tags".
+  // Canonicalise only those semantically empty cases; populated arrays and
+  // objects are serialized without flattening or scalar coercion.
+  return metorikJson(
+    value === undefined || value === null || value === '' ? [] : value,
+    'product tags'
+  );
+}
+
 function getMetorikLineItemMetadata(item) {
   return firstMetorikValue(item, ['meta_data', 'metadata', 'meta']) ?? [];
 }
@@ -5609,7 +5621,7 @@ function transformMetorikProduct(product, syncedAt) {
     sku: metorikString(product?.sku, 'product sku'),
     type: metorikString(product?.type, 'product type'),
     status: metorikString(product?.status, 'product status'),
-    tags: metorikString(product?.tags, 'product tags'),
+    tags_json: metorikProductTagsJson(product?.tags),
     image: metorikString(product?.image, 'product image'),
     current_price: metorikNumeric(product?.current_price, 'product current_price'),
     regular_price: metorikNumeric(product?.regular_price, 'product regular_price'),
@@ -6251,6 +6263,87 @@ async function ensureMetorikUKCatalogueTables() {
   return dataset;
 }
 
+function normalizedBigQueryField(field) {
+  const typeAliases = { INTEGER: 'INT64', BOOLEAN: 'BOOL' };
+  return {
+    name: field.name,
+    type: typeAliases[field.type] ?? field.type,
+    mode: field.mode ?? 'NULLABLE'
+  };
+}
+
+function metorikSchemaMatches(actualFields, expectedFields) {
+  if (actualFields.length !== expectedFields.length) return false;
+  return actualFields.every((field, index) => {
+    const actual = normalizedBigQueryField(field);
+    const expected = normalizedBigQueryField(expectedFields[index]);
+    return actual.name === expected.name &&
+      actual.type === expected.type && actual.mode === expected.mode;
+  });
+}
+
+async function reconcileMetorikProductsSchema(dataset) {
+  const table = dataset.table(METORIK_PRODUCTS_TABLE);
+  const [metadata] = await table.getMetadata();
+  const actualFields = metadata.schema?.fields ?? [];
+  if (metorikSchemaMatches(actualFields, METORIK_PRODUCTS_SCHEMA)) return;
+
+  const oldProductsSchema = METORIK_PRODUCTS_SCHEMA.map(field =>
+    field.name === 'tags_json'
+      ? { name: 'tags', type: 'STRING' }
+      : field
+  );
+  if (!metorikSchemaMatches(actualFields, oldProductsSchema)) {
+    throw new MetorikSyncValidationError(
+      'Existing Metorik products table has an unexpected schema'
+    );
+  }
+
+  // CREATE OR REPLACE is atomic in BigQuery. This preserves every existing row
+  // while upgrading a table created by the prior release; an empty/null legacy
+  // tag becomes the canonical empty JSON array and a populated scalar remains
+  // represented as that scalar's JSON value.
+  await bigquery.query({ query: `
+    CREATE OR REPLACE TABLE
+      \`${GOOGLE_PROJECT_ID}.${METORIK_UK_DATASET}.${METORIK_PRODUCTS_TABLE}\` (
+        product_id INT64 NOT NULL,
+        title STRING,
+        sku STRING,
+        type STRING,
+        status STRING,
+        tags_json STRING NOT NULL,
+        image STRING,
+        current_price NUMERIC,
+        regular_price NUMERIC,
+        sale_price NUMERIC,
+        stock_quantity INT64,
+        in_stock BOOL,
+        product_created_at TIMESTAMP,
+        product_updated_at TIMESTAMP,
+        synced_at TIMESTAMP NOT NULL
+      )
+    AS SELECT
+      product_id, title, sku, type, status,
+      CASE
+        WHEN tags IS NULL OR tags = '' THEN '[]'
+        ELSE TO_JSON_STRING(tags)
+      END AS tags_json,
+      image, current_price, regular_price, sale_price, stock_quantity,
+      in_stock, product_created_at, product_updated_at, synced_at
+    FROM \`${GOOGLE_PROJECT_ID}.${METORIK_UK_DATASET}.${METORIK_PRODUCTS_TABLE}\`
+  ` });
+
+  const [updatedMetadata] = await table.getMetadata();
+  if (!metorikSchemaMatches(
+    updatedMetadata.schema?.fields ?? [],
+    METORIK_PRODUCTS_SCHEMA
+  )) {
+    throw new MetorikSyncValidationError(
+      'Metorik products table schema reconciliation did not succeed'
+    );
+  }
+}
+
 function numberFromBigQuery(value) {
   return Number(value?.value ?? value ?? 0);
 }
@@ -6392,6 +6485,11 @@ async function safelyReplaceMetorikUKCatalogue(productRows, variationRows) {
       stagingProductsName,
       stagingVariationsName
     );
+
+    // Reconcile only after the complete source has transformed and both
+    // staging tables and diagnostics have succeeded. Unexpected schemas abort
+    // without modifying production.
+    await reconcileMetorikProductsSchema(dataset);
 
     // One transaction prevents current products and variations from ever
     // representing different successful ingestion runs.
