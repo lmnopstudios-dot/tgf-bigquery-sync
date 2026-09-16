@@ -24,11 +24,24 @@ test('typed STRUCT fields use BigQuery AS aliases', () => {
   for (const alias of ['null_count', 'min', 'max', 'average', 'same_day', 'days_1_7', 'days_8_30', 'days_31_90', 'days_over_90']) {
     assert.match(queries.coverage, new RegExp(`\\) AS ${alias}(?:,|\\))`));
   }
-  assert.equal((queries.examples.match(/\) AS utms/g) || []).length, 2);
+  assert.equal((queries.examples.match(/\) AS utms/g) || []).length, 3);
 
   const typedStructAliases = ['total', 'total_visits', 'null_count', 'min', 'max', 'average', 'same_day', 'days_1_7', 'days_8_30', 'days_31_90', 'days_over_90', 'utms'];
   const missingAs = new RegExp(`\\)\\s+(?:${typedStructAliases.join('|')})(?=\\s*[,\\)])`);
   for (const query of Object.values(queries)) assert.doesNotMatch(query, missingAs);
+});
+
+test('cross-table checks use set-based joins instead of correlated table subqueries', () => {
+  const queries = buildQueries('project', 'dataset');
+
+  assert.match(queries.quality, /actual AS \(SELECT order_id, COUNT\(\*\) n FROM m GROUP BY 1\)/);
+  assert.match(queries.quality, /a LEFT JOIN actual USING\(order_id\)/);
+  assert.match(queries.quality, /m JOIN a USING\(order_id\)/);
+  assert.match(queries.quality, /ids LEFT JOIN m ON m\.order_id=ids\.order_id AND m\.moment_id=ids\.id/);
+
+  assert.match(queries.examples, /moments_by_order AS \([\s\S]*ARRAY_AGG\([\s\S]*FROM m GROUP BY order_id/);
+  assert.match(queries.examples, /FROM chosen LEFT JOIN moments_by_order USING\(order_id\)/);
+  assert.doesNotMatch(queries.examples, /ARRAY\s*\(\s*SELECT[\s\S]*FROM m WHERE m\.order_id\s*=\s*chosen\.order_id/i);
 });
 
 test('diagnostic emits one structured result and never submits a write', async () => {
