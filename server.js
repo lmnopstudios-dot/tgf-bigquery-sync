@@ -5,6 +5,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import OpenAI from 'openai';
+import { createEcommerceManagementReportService } from './oracle/ecommerce-management-report.js';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -4246,6 +4247,36 @@ async function getSalesSummary({
   return rows[0] || {};
 }
 
+async function getEcommerceFinanceReport({ start_date, end_date }) {
+  const query = `
+    SELECT
+      currency,
+      COUNTIF(transaction_type = 'sale') AS sales_transaction_count,
+      COUNTIF(transaction_type = 'refund') AS refund_transaction_count,
+      CAST(SUM(IF(transaction_type = 'sale', gross, 0)) AS FLOAT64) AS gross_sales,
+      CAST(SUM(IF(transaction_type = 'refund', gross, 0)) AS FLOAT64) AS refunds,
+      CAST(SUM(gross) AS FLOAT64) AS net_gross,
+      CAST(SUM(tax) AS FLOAT64) AS tax,
+      CAST(SUM(net_ex_tax) AS FLOAT64) AS net_ex_tax
+    FROM \`${GOOGLE_PROJECT_ID}.finance.accountant_transactions\`
+    WHERE date >= @start_date AND date <= @end_date
+    GROUP BY currency
+    ORDER BY currency
+  `;
+  const [rows] = await bigquery.query({
+    query,
+    params: { start_date, end_date }
+  });
+  return rows;
+}
+
+const getEcommerceManagementReport = createEcommerceManagementReportService({
+  getFinanceReport: getEcommerceFinanceReport,
+  getConversionKpis: getShopifyConversionKpis,
+  getCustomerKpis: getShopifyCustomerKpis,
+  getProductPerformance: getShopifyProductPerformance
+});
+
 async function getSalesByLocation({
   start_date,
   end_date,
@@ -7971,6 +8002,28 @@ app.post(
       const tools = [
         {
           type: 'function',
+          name: 'get_ecommerce_management_report',
+          description:
+            'Get the complete deterministic Ecommerce Management Report v1 for an explicit date range, including canonical finance by currency, Shopify conversion, customer and product evidence, comparisons, provenance and limitations.',
+          strict: true,
+          parameters: {
+            type: 'object',
+            additionalProperties: false,
+            properties: {
+              start_date: {
+                type: 'string',
+                description: 'Inclusive start date in YYYY-MM-DD format.'
+              },
+              end_date: {
+                type: 'string',
+                description: 'Inclusive end date in YYYY-MM-DD format.'
+              }
+            },
+            required: ['start_date', 'end_date']
+          }
+        },
+        {
+          type: 'function',
           name: 'get_sales_summary',
           description:
             'Get TGF sales totals for a date range, optionally filtered by location, channel or source.',
@@ -8598,6 +8651,7 @@ You answer questions using the supplied tools.
 Current date: ${currentDate}
 
 Important rules:
+- For an ecommerce report, monthly ecommerce report, management ecommerce report or ecommerce performance overview, call get_ecommerce_management_report first. Analyse that semantic report, then use lower-level tools only for requested or necessary drill-downs.
 - Never ask the user for an explicit date when their requested date range can be unambiguously resolved from the current date.
 - Interpret "2026 so far", "2026 YTD", "year to date" when referring to 2026, and equivalent wording as 2026-01-01 through today's date.
 - More generally, "<year> so far" means January 1 of that year through the earlier of today's date or December 31 of that year.
@@ -8702,7 +8756,11 @@ Important rules:
           try {
             const args = JSON.parse(item.arguments || '{}');
 
-            if (item.name === 'get_sales_summary') {
+            if (item.name === 'get_ecommerce_management_report') {
+
+  result = await getEcommerceManagementReport(args);
+
+} else if (item.name === 'get_sales_summary') {
 
   result = await getSalesSummary(args);
 
