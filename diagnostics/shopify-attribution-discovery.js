@@ -13,7 +13,7 @@ const MATRIXIFY_SOURCE_APP_ID = 'gid://shopify/App/1758145';
 const MOMENT_PAGE_SIZE = 10;
 const STRATUM_SIZE = 10;
 const TARGET_ORDER_FIELDS = [
-  'app', 'sourceName', 'sourceIdentifier', 'sourceUrl', 'channelInformation',
+  'app', 'attribution', 'sourceName', 'sourceIdentifier', 'sourceUrl', 'channelInformation',
   'landingPageDisplayText', 'referringSite', 'customerJourneySummary'
 ];
 const TARGET_SUMMARY_FIELDS = [
@@ -42,6 +42,8 @@ const output = {
   },
   access_scopes: [],
   schema: {},
+  order_attribution_definitions: {},
+  order_attribution_comparison: {},
   capabilities: {},
   sample_methodology: {},
   representative_orders: [],
@@ -214,6 +216,32 @@ function selectionIf(type, name, subSelection = '') {
   return field(type, name) ? `${name}${subSelection ? ` { ${subSelection} }` : ''}` : '';
 }
 
+const SAFE_ATTRIBUTION_FIELD = /^(id|handle|displayName|name|icon|type|classification|category|app|channel|channelDefinition)$/i;
+
+function safeSemanticSelection(type, types) {
+  return (type?.fields || []).flatMap(item => {
+    if (item.args?.some(arg => arg.defaultValue == null && arg.type?.kind === 'NON_NULL')) return [];
+    const kind = item.type?.kind === 'NON_NULL' ? item.type.ofType?.kind : item.type?.kind;
+    if (['SCALAR', 'ENUM'].includes(kind)) return [item.name];
+    if (!SAFE_ATTRIBUTION_FIELD.test(item.name)) return [];
+    const related = types[namedType(item.type)];
+    const children = (related?.fields || [])
+      .filter(child => /^(id|handle|displayName|name|type|classification|url)$/i.test(child.name))
+      .filter(child => ['SCALAR', 'ENUM'].includes(child.type?.kind === 'NON_NULL' ? child.type.ofType?.kind : child.type?.kind))
+      .map(child => child.name);
+    return children.length ? [`${item.name} { ${children.join(' ')} }`] : [];
+  });
+}
+
+function safeAttribution(value) {
+  if (!value || typeof value !== 'object') return value ?? null;
+  if (Array.isArray(value)) return value.map(safeAttribution);
+  return Object.fromEntries(Object.entries(value).map(([key, item]) => {
+    if (/icon|url/i.test(key) && typeof item === 'string') return [key, sanitizeUrl(item, false)];
+    return [key, typeof item === 'object' ? safeAttribution(item) : sanitizeEvidence(item)];
+  }));
+}
+
 function visitSelection(types) {
   const visit = types.CustomerVisit;
   if (!visit) return '__typename';
@@ -238,6 +266,10 @@ function buildSelections(types) {
   const orderParts = ['id', 'createdAt', 'updatedAt'].filter(name => field(order, name));
   if (field(order, 'customer')) orderParts.push('customer { id }'); // Used only as a boolean; never emitted.
   if (field(order, 'app') && appFields.length) orderParts.push(`app { ${appFields.join(' ')} }`);
+  const attributionField = field(order, 'attribution');
+  const attributionType = types[namedType(attributionField?.type)];
+  const attributionFields = safeSemanticSelection(attributionType, types);
+  if (attributionField && attributionFields.length) orderParts.push(`attribution { ${attributionFields.join(' ')} }`);
   for (const name of ['sourceName', 'sourceIdentifier']) if (field(order, name)) orderParts.push(name);
   for (const name of ['sourceUrl', 'landingPageDisplayText', 'referringSite']) if (field(order, name)) orderParts.push(name);
 
@@ -291,6 +323,7 @@ function safeOrder(order, category = null, queryCost = null) {
       classification: order.app?.id === MATRIXIFY_SOURCE_APP_ID ? 'matrixify_import' : (/pos/i.test(order.sourceName || '') ? 'pos_non_web' : 'native_or_other'),
       app_id: order.app?.id || null,
       app_name: sanitizeEvidence(order.app?.name),
+      attribution: safeAttribution(order.attribution),
       source_name: sanitizeEvidence(order.sourceName),
       source_identifier: sanitizeEvidence(order.sourceIdentifier),
       source_url: sanitizeUrl(order.sourceUrl, true),
@@ -401,7 +434,7 @@ async function run() {
     output.access_scopes = scopes.currentAppInstallation.accessScopes.map(scope => scope.handle).sort();
   } catch (error) { output.errors.push(safeError(error, 'access_scopes')); }
 
-  const names = ['Order', 'CustomerJourneySummary', 'CustomerVisit', 'UTMParameters', 'ChannelInformation', 'App'];
+  const names = ['QueryRoot', 'Order', 'OrderAttribution', 'CustomerJourneySummary', 'CustomerVisit', 'UTMParameters', 'ChannelInformation', 'App'];
   const types = {};
   for (const name of names) {
     try { types[name] = await inspectType(ctx, name); }
@@ -425,9 +458,45 @@ async function run() {
   }
   const channelName = namedType(field(types.Order, 'channelInformation')?.type);
   if (channelName && !types[channelName]) types[channelName] = await inspectType(ctx, channelName);
+  const attributionField = field(types.Order, 'attribution');
+  const attributionName = namedType(attributionField?.type);
+  if (attributionName && !types[attributionName]) types[attributionName] = await inspectType(ctx, attributionName);
+  const attributionType = types[attributionName];
+  for (const item of attributionType?.fields || []) {
+    const relatedName = namedType(item.type);
+    if (relatedName && !types[relatedName] && !['String', 'ID', 'Int', 'Float', 'Boolean'].includes(relatedName)) {
+      try { types[relatedName] = await inspectType(ctx, relatedName); } catch (error) { output.errors.push(safeError(error, `schema:${relatedName}`)); }
+    }
+  }
+
+  const definitionsField = field(types.QueryRoot, 'orderAttributionDefinitions');
+  const definitionsReturnName = namedType(definitionsField?.type);
+  if (definitionsReturnName && !types[definitionsReturnName]) types[definitionsReturnName] = await inspectType(ctx, definitionsReturnName);
+  const definitionsReturnType = types[definitionsReturnName];
+  let definitionTypeName = definitionsReturnName;
+  let definitionPagination = 'not_a_connection';
+  const definitionContainerField = field(definitionsReturnType, 'nodes') || field(definitionsReturnType, 'edges');
+  if (definitionContainerField) {
+    definitionPagination = 'connection';
+    let containedName = namedType(definitionContainerField.type);
+    if (definitionContainerField.name === 'edges') {
+      if (containedName && !types[containedName]) types[containedName] = await inspectType(ctx, containedName);
+      containedName = namedType(field(types[containedName], 'node')?.type);
+    }
+    definitionTypeName = containedName;
+  }
+  if (definitionTypeName && !types[definitionTypeName]) types[definitionTypeName] = await inspectType(ctx, definitionTypeName);
+  const definitionType = types[definitionTypeName];
+  for (const item of definitionType?.fields || []) {
+    const relatedName = namedType(item.type);
+    if (relatedName && !types[relatedName] && !['String', 'ID', 'Int', 'Float', 'Boolean'].includes(relatedName)) {
+      try { types[relatedName] = await inspectType(ctx, relatedName); } catch (error) { output.errors.push(safeError(error, `schema:${relatedName}`)); }
+    }
+  }
 
   output.schema = {
     Order: pickFields(types.Order, TARGET_ORDER_FIELDS),
+    OrderAttribution: attributionType ? { actual_type: attributionName, fields: Object.fromEntries((attributionType.fields || []).map(item => [item.name, fieldMetadata(item)])) } : { exists: false },
     CustomerJourneySummary: pickFields(types.CustomerJourneySummary, TARGET_SUMMARY_FIELDS),
     CustomerVisit: pickFields(types.CustomerVisit, TARGET_VISIT_FIELDS),
     UTMParameters: {
@@ -446,8 +515,48 @@ async function run() {
     concrete_moment_types: Object.fromEntries((momentNodeType?.possibleTypes || []).map(item => [item.name, { fields: Object.fromEntries((types[item.name]?.fields || []).map(f => [f.name, fieldMetadata(f)])) }]))
   };
 
+  output.order_attribution_definitions = {
+    query: definitionsField ? fieldMetadata(definitionsField) : { exists: false },
+    return_type: definitionsField ? typeRef(definitionsField.type) : null,
+    pagination_model: definitionPagination,
+    definition_type: definitionTypeName || null,
+    definition_fields: Object.fromEntries((definitionType?.fields || []).map(item => [item.name, fieldMetadata(item)])),
+    items: [],
+    query_attempted: false
+  };
+  if (definitionsField && definitionType) {
+    const safeFields = safeSemanticSelection(definitionType, types);
+    if (safeFields.length) {
+      const args = new Set((definitionsField.args || []).map(arg => arg.name));
+      const variableDefs = [];
+      const callArgs = [];
+      const variables = {};
+      if (args.has('first')) {
+        const firstArg = definitionsField.args.find(arg => arg.name === 'first');
+        variableDefs.push(`$first: ${typeRef(firstArg.type)}`);
+        callArgs.push('first: $first');
+        variables.first = 50;
+      }
+      const selection = definitionPagination === 'connection'
+        ? `${definitionContainerField.name} { ${definitionContainerField.name === 'edges' ? `node { ${safeFields.join(' ')} }` : safeFields.join(' ')} }${field(definitionsReturnType, 'pageInfo') ? ' pageInfo { hasNextPage endCursor }' : ''}`
+        : safeFields.join(' ');
+      const query = `query DiagnosticOrderAttributionDefinitions${variableDefs.length ? `(${variableDefs.join(', ')})` : ''} { orderAttributionDefinitions${callArgs.length ? `(${callArgs.join(', ')})` : ''} { ${selection} } }`;
+      output.order_attribution_definitions.query_attempted = true;
+      try {
+        const data = await graphql(shop, token, query, variables, 'order_attribution_definitions');
+        const result = data.orderAttributionDefinitions;
+        const connectedItems = definitionContainerField?.name === 'edges'
+          ? result?.edges?.map(edge => edge.node)
+          : result?.nodes;
+        output.order_attribution_definitions.items = safeAttribution(definitionPagination === 'connection' ? connectedItems : result) || [];
+        if (definitionPagination === 'connection') output.order_attribution_definitions.page_info = result?.pageInfo || null;
+      } catch (error) { output.errors.push(safeError(error, 'order_attribution_definitions')); }
+    }
+  }
+
   const selections = buildSelections(types);
   output.capabilities = {
+    order_attribution_field_exists: Boolean(attributionField),
     order_journey_field_exists: Boolean(field(types.Order, 'customerJourneySummary')),
     moments_paginated_connection: selections.momentsPaginated,
     customer_visit_available: Boolean(types.CustomerVisit),
@@ -520,13 +629,66 @@ async function run() {
     reason: 'Introspection cannot prove that Shopify Bulk Operations accepts a particular nested connection; this diagnostic deliberately does not launch an operation.'
   };
 
+  const deprecatedChannelFields = (types[channelName]?.fields || [])
+    .filter(item => item.isDeprecated)
+    .map(item => ({ name: item.name, deprecation_reason: item.deprecationReason || null }));
+  const observedValues = key => [...new Set(sampled.map(order => order[key]).filter(value => typeof value === 'string').map(sanitizeEvidence))];
+  output.order_attribution_comparison = {
+    evidence_basis: 'live_schema_descriptions_deprecations_and_bounded_order_samples',
+    order_attribution: {
+      represents: attributionField?.description || attributionType?.description || null,
+      graphql_type: typeRef(attributionField?.type),
+      observed_non_null_samples: sampled.filter(order => order.attribution != null).length,
+      semantic_dimension: 'Shopify order attribution definition'
+    },
+    source_name: {
+      represents: field(types.Order, 'sourceName')?.description || null,
+      observed_values: observedValues('sourceName'),
+      semantic_dimension: 'order source name'
+    },
+    order_app: {
+      represents: field(types.Order, 'app')?.description || null,
+      observed_app_ids: [...new Set(sampled.map(order => order.app?.id).filter(Boolean))],
+      semantic_dimension: 'application associated with the order'
+    },
+    customer_journey_summary: {
+      represents: field(types.Order, 'customerJourneySummary')?.description || types.CustomerJourneySummary?.description || null,
+      observed_non_null_samples: sampled.filter(order => order.customerJourneySummary != null).length,
+      semantic_dimension: 'customer journey and visit evidence'
+    },
+    deprecated_channel_information_fields: deprecatedChannelFields,
+    replacement_assessment: {
+      should_order_attribution_replace_channel_information: Boolean(attributionField) && deprecatedChannelFields.some(item => /Order\.attribution|OrderAttribution/.test(item.deprecation_reason || '')),
+      basis: 'true only when the live schema exposes Order.attribution and a ChannelInformation deprecation reason explicitly recommends Order.attribution or OrderAttribution',
+      keep_as_separate_semantic_dimensions: true,
+      dimensions: ['order_attribution', 'source_name', 'order_app', 'customer_journey_summary']
+    }
+  };
+
   const nativeOrders = byClass.native_online || [];
   const readyFalse = nativeOrders.some(order => order.customerJourneySummary?.ready === false);
   const earliest = output.historical_coverage.earliest_sampled_native_order_with_journey_evidence;
+  const persistedAttributionSelections = safeSemanticSelection(attributionType, types);
+  const persistedAttributionRoots = new Set(persistedAttributionSelections.map(selection => selection.split(/[ {]/, 1)[0]));
   output.implementation_recommendation = {
     evidence_basis: 'live_introspection_and_bounded_samples_only',
     proposed_tables: field(types.Order, 'customerJourneySummary')
       ? ['shopify_data.order_acquisition', 'shopify_data.order_journey_moments'] : [],
+    order_acquisition: {
+      order_attribution_type: attributionName || null,
+      persist_verified_fields: persistedAttributionSelections,
+      field_metadata: Object.fromEntries((attributionType?.fields || [])
+        .filter(item => persistedAttributionRoots.has(item.name))
+        .map(item => [item.name, fieldMetadata(item)])),
+      preserve_separate_dimensions: ['attribution', 'sourceName', 'app', 'customerJourneySummary'],
+      channel_information_strategy: output.order_attribution_comparison.replacement_assessment.should_order_attribution_replace_channel_information
+        ? 'Use Order.attribution instead of deprecated ChannelInformation fields for future ingestion.'
+        : 'Do not replace ChannelInformation without an explicit live-schema replacement signal.'
+    },
+    order_journey_moments: {
+      storage: 'shopify_data.order_journey_moments',
+      keep_separate_from_order_acquisition: true
+    },
     extraction_architecture: selections.momentsPaginated
       ? { recommendation: 'paginated_order_acquisition_plus_targeted_journey_continuation', reason: 'Moments is a verified paginated connection; initial order pages cannot prove completeness.' }
       : { recommendation: 'bounded_per_order_journey_extraction', reason: 'A paginated moments signature was not verified.' },
