@@ -46,11 +46,114 @@ test('builds a versioned report without combining currencies', async () => {
 
   const report = await service({ start_date: '2026-08-01', end_date: '2026-08-31' });
   assert.equal(report.report_type, 'ecommerce_management');
-  assert.equal(report.version, '1.0');
+  assert.equal(report.version, '1.1');
   assert.deepEqual(report.finance.current.map(row => row.currency), ['GBP', 'USD']);
   assert.equal(report.finance.comparisons.previous_period[0].metrics.net_gross.absolute_change, 10);
   assert.equal(report.finance.comparisons.previous_period[1].metrics.net_gross.comparison, null);
   assert.equal(report.conversion.comparisons.previous_period.sessions.percentage_change, 100);
   assert.equal(report.products.current[0].product_title, 'Ring');
   assert.equal(report.freshness.finance, null);
+});
+
+test('uses Metorik customer and product evidence without manufacturing identity or conversion continuity', async () => {
+  const historical = {
+    source: 'metorik_uk',
+    system: 'Metorik / WooCommerce',
+    dataset: 'metorik_uk',
+    available: true,
+    customers: {
+      by_currency: [{
+        currency: 'GBP',
+        orders: 30,
+        registered_purchasing_customers: 20,
+        canonical_new_customers: 12,
+        guest_orders: 5,
+        orders_per_registered_customer: 1.5
+      }]
+    },
+    products: [{
+      currency: 'GBP', product_id: 7, variation_id: 9, sku: 'WOO-7',
+      quantity_sold: 4, order_count: 3, gross_line_sales: 400, net_line_sales: 360
+    }]
+  };
+  const service = createEcommerceManagementReportService({
+    getFinanceReport: async () => [{ currency: 'GBP', net_gross: 100 }],
+    getConversionKpis: async ({ start_date }) => {
+      if (start_date === '2025-08-01') throw new Error('Shopify unavailable');
+      return { metrics: { sessions: 100, conversion_rate: 0.02 } };
+    },
+    getCustomerKpis: async ({ start_date }) => {
+      if (start_date === '2025-08-01') throw new Error('Shopify unavailable');
+      return {
+        overall: { customers: 25, new_customers: 15, returning_customers: 10, returning_customer_rate: 0.4, orders: 35 },
+        customer_types: {}
+      };
+    },
+    getProductPerformance: async () => ({ products: [{ product_id: 'shopify-7', product_title: 'Ring', net_sales: 500 }] }),
+    getHistoricalEcommerce: async period => ({
+      sources: period.start_date === '2025-08-01'
+        ? [{ ...historical, period }]
+        : []
+    })
+  });
+
+  const report = await service({ start_date: '2026-08-01', end_date: '2026-08-31' });
+  const comparison = report.customers.cross_platform_comparisons.prior_year[0]
+    .metrics_by_currency[0];
+  assert.equal(comparison.purchasing_customers.comparison, 20);
+  assert.equal(comparison.new_customers.comparison, 12);
+  assert.equal(comparison.orders_per_customer.comparison, 1.5);
+  assert.equal(comparison.purchasing_customers.comparability.level, 'directional');
+  assert.equal(comparison.returning_customers.comparison, null);
+  assert.equal(comparison.returning_customers.comparability.level, 'unavailable');
+  assert.equal(report.conversion.comparisons.prior_year, null);
+  assert.equal(report.conversion.comparability.prior_year.level, 'unavailable');
+  assert.equal(report.products.historical.prior_year[0].products[0].product_id, 7);
+  assert.equal(report.products.current[0].product_id, 'shopify-7');
+  assert.equal(report.products.cross_platform_comparability.level, 'not_comparable');
+  assert.match(report.customers.identity_models.metorik_canonical, /metorik_customer_id/);
+  assert.match(report.customers.identity_models.woo_order_level, /Woo customer_id/);
+  assert.ok(report.evidence.some(item =>
+    item.dataset === 'metorik_uk' &&
+    item.metric_family === 'historical_ecommerce_customers' &&
+    item.comparability_level === 'directional'
+  ));
+  assert.ok(report.limitations.some(item => item.includes('session-based conversion')));
+});
+
+test('keeps currencies and mixed platform sources isolated and degrades gracefully without history', async () => {
+  const historical = period => ({
+    sources: [{
+      source: 'metorik_us',
+      system: 'Metorik / WooCommerce',
+      dataset: 'metorik_us',
+      period,
+      available: true,
+      customers: {
+        by_currency: [{ currency: 'USD', orders: 2, registered_purchasing_customers: 1 }]
+      },
+      products: []
+    }]
+  });
+  let historyCall = 0;
+  const service = createEcommerceManagementReportService({
+    getFinanceReport: async () => [{ currency: 'GBP', net_gross: 1 }, { currency: 'USD', net_gross: 2 }],
+    getConversionKpis: async () => ({ metrics: { sessions: 1 } }),
+    getCustomerKpis: async () => ({ overall: { customers: 1, orders: 1 }, customer_types: {} }),
+    getProductPerformance: async () => ({ products: [] }),
+    getHistoricalEcommerce: async period => {
+      historyCall++;
+      if (historyCall === 1) return historical(period);
+      if (historyCall === 2) throw new Error('history unavailable');
+      return { sources: [{ available: false }] };
+    }
+  });
+
+  const report = await service({ start_date: '2026-08-01', end_date: '2026-08-31' });
+  assert.equal(report.ecommerce_sources.current.boundary, 'mixed_source_period_not_merged');
+  assert.deepEqual(report.customers.historical.current[0].customers.by_currency.map(row => row.currency), ['USD']);
+  assert.deepEqual(report.finance.current.map(row => row.currency), ['GBP', 'USD']);
+  assert.deepEqual(report.customers.historical.previous_period, []);
+  assert.deepEqual(report.customers.historical.prior_year, []);
+  assert.equal(report.customers.cross_platform_comparisons.prior_year, null);
 });
