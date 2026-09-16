@@ -4270,11 +4270,116 @@ async function getEcommerceFinanceReport({ start_date, end_date }) {
   return rows;
 }
 
+async function getMetorikEcommerceEvidence({ start_date, end_date }) {
+  validateShopifyReportDate(start_date, 'start_date');
+  validateShopifyReportDate(end_date, 'end_date');
+  if (start_date > end_date) {
+    throw new Error('start_date must be on or before end_date');
+  }
+
+  const period = { start_date, end_date };
+  const stores = Object.values(METORIK_STORES);
+  const sources = await Promise.all(stores.map(async store => {
+    // Dataset names come only from the fixed METORIK_STORES configuration, never
+    // from report input. Currency remains a grouping key and is never converted.
+    const customerQuery = `
+      WITH order_metrics AS (
+        SELECT
+          currency,
+          COUNT(*) AS orders,
+          COUNT(DISTINCT customer_id) AS registered_purchasing_customers,
+          COUNTIF(customer_id IS NULL) AS guest_orders
+        FROM \`${GOOGLE_PROJECT_ID}.${store.dataset}.${METORIK_ORDERS_TABLE}\`
+        WHERE DATE(order_created_at) BETWEEN @start_date AND @end_date
+        GROUP BY currency
+      ),
+      new_customer_metrics AS (
+        SELECT
+          currency,
+          COUNT(DISTINCT metorik_customer_id) AS canonical_new_customers
+        FROM \`${GOOGLE_PROJECT_ID}.${store.dataset}.${METORIK_CUSTOMERS_TABLE}\`
+        WHERE DATE(first_order_date) BETWEEN @start_date AND @end_date
+        GROUP BY currency
+      )
+      SELECT
+        COALESCE(o.currency, n.currency) AS currency,
+        CAST(COALESCE(o.orders, 0) AS FLOAT64) AS orders,
+        CAST(COALESCE(o.registered_purchasing_customers, 0) AS FLOAT64)
+          AS registered_purchasing_customers,
+        CAST(COALESCE(o.guest_orders, 0) AS FLOAT64) AS guest_orders,
+        CAST(COALESCE(n.canonical_new_customers, 0) AS FLOAT64)
+          AS canonical_new_customers,
+        SAFE_DIVIDE(o.orders, o.registered_purchasing_customers)
+          AS orders_per_registered_customer
+      FROM order_metrics o
+      FULL OUTER JOIN new_customer_metrics n USING (currency)
+      ORDER BY currency`;
+    const productQuery = `
+      WITH products AS (
+        SELECT
+          currency,
+          product_id,
+          variation_id,
+          sku,
+          ANY_VALUE(name HAVING MAX order_created_at) AS product_name,
+          CAST(SUM(quantity) AS FLOAT64) AS quantity_sold,
+          CAST(COUNT(DISTINCT order_id) AS FLOAT64) AS order_count,
+          CAST(SUM(subtotal) AS FLOAT64) AS gross_line_sales,
+          CAST(SUM(total) AS FLOAT64) AS net_line_sales
+        FROM \`${GOOGLE_PROJECT_ID}.${store.dataset}.${METORIK_ORDER_LINE_ITEMS_TABLE}\`
+        WHERE DATE(order_created_at) BETWEEN @start_date AND @end_date
+        GROUP BY currency, product_id, variation_id, sku
+      )
+      SELECT *
+      FROM products
+      QUALIFY ROW_NUMBER() OVER (
+        PARTITION BY currency ORDER BY net_line_sales DESC, product_id, variation_id
+      ) <= 10
+      ORDER BY currency, net_line_sales DESC`;
+    const params = { start_date, end_date };
+    const [[customerRows], [productRows]] = await Promise.all([
+      bigquery.query({ query: customerQuery, params }),
+      bigquery.query({ query: productQuery, params })
+    ]);
+    const available = customerRows.length > 0 || productRows.length > 0;
+    return {
+      source: store.dataset,
+      system: 'Metorik / WooCommerce',
+      dataset: store.dataset,
+      period,
+      available,
+      customers: {
+        by_currency: customerRows,
+        identity_models: {
+          registered_purchasing_customers: 'Distinct non-null orders.customer_id (Woo identity); guests excluded.',
+          canonical_new_customers: 'Distinct customers.metorik_customer_id with first_order_date in period; not joined to orders.'
+        }
+      },
+      products: productRows,
+      product_metrics: {
+        quantity_sold: 'Sum of Metorik line-item quantity.',
+        order_count: 'Distinct Woo order_id count containing the source-native product/variation/SKU grouping.',
+        gross_line_sales: 'Sum of Metorik line-item subtotal, separated by source currency.',
+        net_line_sales: 'Sum of Metorik line-item total, separated by source currency.'
+      },
+      product_identity: 'Source-native Woo product_id and variation_id; SKU is descriptive only and is not a cross-platform key.',
+      attribution: {
+        available_in_source: available,
+        exposed_by_report: false,
+        fields: ['landing_path', 'referer', 'utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term', 'utm_id']
+      }
+    };
+  }));
+
+  return { period, sources };
+}
+
 const getEcommerceManagementReport = createEcommerceManagementReportService({
   getFinanceReport: getEcommerceFinanceReport,
   getConversionKpis: getShopifyConversionKpis,
   getCustomerKpis: getShopifyCustomerKpis,
-  getProductPerformance: getShopifyProductPerformance
+  getProductPerformance: getShopifyProductPerformance,
+  getHistoricalEcommerce: getMetorikEcommerceEvidence
 });
 
 async function getSalesByLocation({
