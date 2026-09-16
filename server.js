@@ -5218,8 +5218,11 @@ addMetorikDiscoveryRoute({
 const METORIK_UK_DATASET = 'metorik_uk';
 const METORIK_ORDERS_TABLE = 'orders';
 const METORIK_ORDER_LINE_ITEMS_TABLE = 'order_line_items';
+const METORIK_CUSTOMERS_TABLE = 'customers';
 const METORIK_ORDERS_PER_PAGE = 100;
+const METORIK_CUSTOMERS_PER_PAGE = 100;
 const METORIK_MAX_ORDER_PAGES = 100000;
+const METORIK_MAX_CUSTOMER_PAGES = 100000;
 const METORIK_DEFAULT_PAGE_DELAY_MS = 1250;
 const METORIK_MAX_PAGE_DELAY_MS = 60000;
 
@@ -5312,6 +5315,28 @@ const METORIK_ORDER_LINE_ITEMS_SCHEMA = [
   { name: 'cogs', type: 'NUMERIC' },
   { name: 'ring_size', type: 'STRING' },
   { name: 'metadata_json', type: 'STRING', mode: 'REQUIRED' },
+  { name: 'synced_at', type: 'TIMESTAMP', mode: 'REQUIRED' }
+];
+
+// This is deliberately an analytics-only schema. In particular, it excludes
+// names, email addresses, telephone numbers, street addresses, postcodes,
+// companies, and notes even when those values are present in the API response.
+const METORIK_CUSTOMERS_SCHEMA = [
+  { name: 'metorik_customer_id', type: 'INT64', mode: 'REQUIRED' },
+  { name: 'customer_id', type: 'INT64' },
+  { name: 'created_at', type: 'TIMESTAMP' },
+  { name: 'first_order_date', type: 'TIMESTAMP' },
+  { name: 'last_order_date', type: 'TIMESTAMP' },
+  { name: 'order_count', type: 'INT64', mode: 'REQUIRED' },
+  { name: 'total_spend', type: 'NUMERIC' },
+  { name: 'net_spend', type: 'NUMERIC' },
+  { name: 'average_order_value', type: 'NUMERIC' },
+  { name: 'status', type: 'STRING' },
+  { name: 'type', type: 'STRING' },
+  { name: 'country', type: 'STRING' },
+  { name: 'state', type: 'STRING' },
+  { name: 'currency', type: 'STRING' },
+  { name: 'resource_link', type: 'STRING' },
   { name: 'synced_at', type: 'TIMESTAMP', mode: 'REQUIRED' }
 ];
 
@@ -5547,6 +5572,161 @@ function duplicateMetorikLineItemIdentities(rows) {
     seen.add(identity);
   }
   return [...duplicates];
+}
+
+function transformMetorikCustomer(customer, syncedAt) {
+  if (!customer || Array.isArray(customer) || typeof customer !== 'object') {
+    throw new MetorikSyncValidationError('A Metorik customer record is not an object');
+  }
+
+  const metorikCustomerId = metorikInteger(
+    customer.metorik_customer_id,
+    'metorik_customer_id',
+    { required: true }
+  );
+  const wooCustomerId = metorikInteger(customer.customer_id, 'customer_id');
+  const orderCount = metorikInteger(customer.order_count, 'order_count', {
+    required: true
+  });
+  if (metorikCustomerId <= 0) {
+    throw new MetorikSyncValidationError('metorik_customer_id must be positive');
+  }
+  if (wooCustomerId !== null && wooCustomerId < 0) {
+    throw new MetorikSyncValidationError('customer_id must not be negative');
+  }
+  if (orderCount < 0) {
+    throw new MetorikSyncValidationError('order_count must not be negative');
+  }
+
+  return {
+    metorik_customer_id: metorikCustomerId,
+    customer_id: wooCustomerId,
+    created_at: metorikTimestamp(customer.created_at, 'created_at'),
+    first_order_date: metorikTimestamp(customer.first_order_date, 'first_order_date'),
+    last_order_date: metorikTimestamp(customer.last_order_date, 'last_order_date'),
+    order_count: orderCount,
+    total_spend: metorikNumeric(customer.total_spend, 'total_spend'),
+    net_spend: metorikNumeric(customer.net_spend, 'net_spend'),
+    average_order_value: metorikNumeric(
+      customer.average_order_value,
+      'average_order_value'
+    ),
+    status: metorikString(customer.status, 'status'),
+    type: metorikString(customer.type, 'type'),
+    country: metorikString(customer.country, 'country'),
+    state: metorikString(customer.state, 'state'),
+    currency: metorikString(customer.currency, 'currency'),
+    resource_link: metorikString(customer.resource_link, 'resource_link'),
+    synced_at: syncedAt
+  };
+}
+
+async function fetchAllMetorikUKCustomers() {
+  const customers = [];
+  const pageSignatures = new Set();
+
+  for (
+    let requestedPage = 1;
+    requestedPage <= METORIK_MAX_CUSTOMER_PAGES;
+    requestedPage++
+  ) {
+    const result = await requestMetorikResource(
+      'customers',
+      { apiKey: METORIK_UK_API_KEY, storeName: 'UK' },
+      { page: String(requestedPage), per_page: String(METORIK_CUSTOMERS_PER_PAGE) },
+      {
+        includeDiscoveryDateRange: false,
+        retryCount: METORIK_REQUEST_RETRY_COUNT
+      }
+    );
+    if (!result.success) {
+      throw new MetorikSyncValidationError(
+        `Metorik customers request failed on page ${requestedPage}`,
+        metorikPageDiagnostics(requestedPage, result)
+      );
+    }
+    if (!result.recordsShapeValid) {
+      throw new MetorikSyncValidationError(
+        `Metorik customers response has no record collection on page ${requestedPage}`,
+        metorikPageDiagnostics(requestedPage, result, 'malformed_response')
+      );
+    }
+
+    const pagination = result.pagination;
+    let currentPage;
+    let perPage;
+    try {
+      currentPage = metorikInteger(
+        pagination?.current_page,
+        'pagination.current_page',
+        { required: true }
+      );
+      perPage = metorikInteger(
+        pagination?.per_page,
+        'pagination.per_page',
+        { required: true }
+      );
+    } catch (error) {
+      if (!(error instanceof MetorikSyncValidationError)) throw error;
+      throw new MetorikSyncValidationError(
+        error.message,
+        metorikPageDiagnostics(requestedPage, result, 'pagination_validation_failure')
+      );
+    }
+    if (currentPage !== requestedPage || perPage <= 0) {
+      throw new MetorikSyncValidationError(
+        `Metorik pagination did not advance to page ${requestedPage}`,
+        metorikPageDiagnostics(requestedPage, result, 'pagination_validation_failure')
+      );
+    }
+    if (typeof pagination?.has_more_pages !== 'boolean') {
+      throw new MetorikSyncValidationError(
+        'pagination.has_more_pages is missing or invalid',
+        metorikPageDiagnostics(requestedPage, result, 'pagination_validation_failure')
+      );
+    }
+    if (result.records.some(record =>
+      !record || Array.isArray(record) || typeof record !== 'object'
+    )) {
+      throw new MetorikSyncValidationError(
+        `Metorik customers page ${requestedPage} contains a non-object record`,
+        metorikPageDiagnostics(requestedPage, result, 'malformed_response')
+      );
+    }
+
+    const signature = JSON.stringify(
+      result.records.map(record => record.metorik_customer_id)
+    );
+    if (pageSignatures.has(signature)) {
+      throw new MetorikSyncValidationError(
+        `Metorik repeated page content at page ${requestedPage}`,
+        metorikPageDiagnostics(requestedPage, result, 'pagination_validation_failure')
+      );
+    }
+    pageSignatures.add(signature);
+    customers.push(...result.records);
+
+    if (!pagination.has_more_pages) {
+      return {
+        customers,
+        pagesFetched: requestedPage,
+        paginationCompleted: true,
+        pageDelayMs: METORIK_PAGE_DELAY_MS
+      };
+    }
+    if (result.records.length === 0) {
+      throw new MetorikSyncValidationError(
+        `Metorik returned an empty non-final page at page ${requestedPage}`,
+        metorikPageDiagnostics(requestedPage, result, 'pagination_validation_failure')
+      );
+    }
+
+    await sleep(METORIK_PAGE_DELAY_MS);
+  }
+
+  throw new MetorikSyncValidationError(
+    'Metorik customer pagination exceeded the safety page limit'
+  );
 }
 
 async function fetchAllMetorikUKOrders() {
@@ -5797,6 +5977,146 @@ app.post(
         error: error instanceof MetorikSyncValidationError
           ? error.message
           : 'Metorik UK orders sync failed',
+        ...(error instanceof MetorikSyncValidationError && error.diagnostics
+          ? { diagnostics: error.diagnostics }
+          : {})
+      });
+    }
+  }
+);
+
+async function ensureMetorikUKCustomersTable() {
+  const dataset = bigquery.dataset(METORIK_UK_DATASET);
+  const [datasetExists] = await dataset.exists();
+  if (!datasetExists) {
+    await bigquery.createDataset(METORIK_UK_DATASET);
+  }
+
+  const table = dataset.table(METORIK_CUSTOMERS_TABLE);
+  const [tableExists] = await table.exists();
+  if (!tableExists) {
+    await dataset.createTable(METORIK_CUSTOMERS_TABLE, {
+      schema: METORIK_CUSTOMERS_SCHEMA
+    });
+  }
+  return dataset;
+}
+
+async function safelyReplaceMetorikUKCustomers(customerRows) {
+  const dataset = await ensureMetorikUKCustomersTable();
+  const suffix = `${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+  const stagingName = `_staging_customers_${suffix}`;
+  const [stagingTable] = await dataset.createTable(stagingName, {
+    schema: METORIK_CUSTOMERS_SCHEMA,
+    expirationTime: Date.now() + 24 * 60 * 60 * 1000
+  });
+
+  try {
+    await insertMetorikRows(stagingTable, customerRows);
+    const [counts] = await bigquery.query({ query: `
+      SELECT COUNT(*) AS customer_count
+      FROM \`${GOOGLE_PROJECT_ID}.${METORIK_UK_DATASET}.${stagingName}\`
+    ` });
+    if (Number(counts[0]?.customer_count) !== customerRows.length) {
+      throw new MetorikSyncValidationError(
+        'BigQuery customer staging row count did not match the validated source data'
+      );
+    }
+
+    await bigquery.query({ query: `
+      BEGIN TRANSACTION;
+      DELETE FROM \`${GOOGLE_PROJECT_ID}.${METORIK_UK_DATASET}.${METORIK_CUSTOMERS_TABLE}\` WHERE TRUE;
+      INSERT INTO \`${GOOGLE_PROJECT_ID}.${METORIK_UK_DATASET}.${METORIK_CUSTOMERS_TABLE}\`
+        SELECT * FROM \`${GOOGLE_PROJECT_ID}.${METORIK_UK_DATASET}.${stagingName}\`;
+      COMMIT TRANSACTION;
+    ` });
+  } finally {
+    await Promise.allSettled([
+      stagingTable.delete({ ignoreNotFound: true })
+    ]);
+  }
+}
+
+async function syncMetorikUKCustomers() {
+  const fetched = await fetchAllMetorikUKCustomers();
+  if (!fetched.paginationCompleted || fetched.customers.length === 0) {
+    throw new MetorikSyncValidationError(
+      'Metorik did not return a complete, non-empty customer history'
+    );
+  }
+
+  const syncedAt = new Date().toISOString();
+  const customerRows = fetched.customers.map(customer =>
+    transformMetorikCustomer(customer, syncedAt)
+  );
+  const duplicateCustomerIds = duplicateMetorikIds(
+    customerRows,
+    'metorik_customer_id'
+  );
+  if (duplicateCustomerIds.length > 0) {
+    throw new MetorikSyncValidationError(
+      `Duplicate metorik_customer_id identities detected (${duplicateCustomerIds.length})`
+    );
+  }
+
+  const createdDates = customerRows
+    .map(row => row.created_at)
+    .filter(Boolean)
+    .sort();
+  const currencies = [...new Set(
+    customerRows.map(row => row.currency).filter(Boolean)
+  )].sort();
+
+  await safelyReplaceMetorikUKCustomers(customerRows);
+
+  return {
+    success: true,
+    store: 'UK',
+    customers_fetched: customerRows.length,
+    registered_woo_linked_customers: customerRows.filter(
+      row => row.customer_id !== null && row.customer_id > 0
+    ).length,
+    guest_customer_id_zero_count: customerRows.filter(
+      row => row.customer_id === 0
+    ).length,
+    customers_with_orders: customerRows.filter(row => row.order_count > 0).length,
+    customers_with_zero_orders: customerRows.filter(row => row.order_count === 0).length,
+    first_customer_created_date: createdDates[0] ?? null,
+    last_customer_created_date: createdDates.at(-1) ?? null,
+    currencies_observed: currencies,
+    pages_fetched: fetched.pagesFetched,
+    page_delay_ms: fetched.pageDelayMs,
+    duplicate_canonical_identities_detected: 0,
+    destination_table:
+      `${GOOGLE_PROJECT_ID}.${METORIK_UK_DATASET}.${METORIK_CUSTOMERS_TABLE}`
+  };
+}
+
+app.post(
+  '/sync-metorik-uk-customers',
+  requireSyncSecret,
+  async (req, res) => {
+    if (!METORIK_UK_API_KEY) {
+      return res.status(500).json({
+        success: false,
+        store: 'UK',
+        error: 'METORIK_UK_API_KEY is not configured'
+      });
+    }
+
+    try {
+      return res.json(await syncMetorikUKCustomers());
+    } catch (error) {
+      console.error('Metorik UK customer sync failed:', error.name);
+      if (error instanceof MetorikSyncValidationError && error.diagnostics) {
+        console.error('Metorik UK customer sync diagnostics:', error.diagnostics);
+      }
+      return res.status(500).json({
+        success: false,
+        store: 'UK',
+        error: error instanceof MetorikSyncValidationError
+          ? error.message
+          : 'Metorik UK customers sync failed',
         ...(error instanceof MetorikSyncValidationError && error.diagnostics
           ? { diagnostics: error.diagnostics }
           : {})
