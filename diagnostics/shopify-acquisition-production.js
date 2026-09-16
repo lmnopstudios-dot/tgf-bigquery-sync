@@ -8,10 +8,10 @@ const DEFAULT_PROJECT = 'gf-full-data';
 const DEFAULT_DATASET = 'shopify_data';
 const EXAMPLE_LIMIT = 3;
 
-function isoDate(value) {
-  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) throw new Error('--date must be supplied as YYYY-MM-DD');
+function isoDate(value, option = '--date') {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) throw new Error(`${option} must be supplied as YYYY-MM-DD`);
   const parsed = new Date(`${value}T00:00:00.000Z`);
-  if (!Number.isFinite(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== value) throw new Error('--date must be a valid calendar date');
+  if (!Number.isFinite(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== value) throw new Error(`${option} must be a valid calendar date`);
   return value;
 }
 
@@ -23,16 +23,29 @@ function identifier(value, name) {
 export function parseArguments(argv) {
   const values = {};
   for (let i = 0; i < argv.length; i += 2) {
-    if (!['--date', '--project', '--dataset'].includes(argv[i]) || !argv[i + 1]) throw new Error('Usage: node diagnostics/shopify-acquisition-production.js --date YYYY-MM-DD [--project PROJECT] [--dataset DATASET]');
+    if (!['--date', '--batch-start', '--batch-end', '--expected-acquisition-rows', '--expected-moment-rows', '--project', '--dataset'].includes(argv[i]) || !argv[i + 1]) throw new Error('Usage: node diagnostics/shopify-acquisition-production.js --date YYYY-MM-DD [--batch-start YYYY-MM-DD --batch-end YYYY-MM-DD] [--expected-acquisition-rows N --expected-moment-rows N] [--project PROJECT] [--dataset DATASET]');
     values[argv[i].slice(2)] = argv[i + 1];
   }
-  return { date: isoDate(values.date), project: identifier(values.project || process.env.GOOGLE_PROJECT_ID || DEFAULT_PROJECT, 'project'), dataset: identifier(values.dataset || DEFAULT_DATASET, 'dataset') };
+  const date = isoDate(values.date);
+  if (Boolean(values['batch-start']) !== Boolean(values['batch-end'])) throw new Error('--batch-start and --batch-end must be supplied together');
+  const batchStart = values['batch-start'] ? isoDate(values['batch-start'], '--batch-start') : date;
+  const batchEnd = values['batch-end'] ? isoDate(values['batch-end'], '--batch-end') : date;
+  if (batchStart > batchEnd) throw new Error('--batch-start must not be after --batch-end');
+  const endExclusive = new Date(new Date(`${batchEnd}T00:00:00.000Z`).getTime() + 86400000).toISOString();
+  const rowCount = name => {
+    if (values[name] === undefined) return undefined;
+    if (!/^\d+$/.test(values[name])) throw new Error(`--${name} must be a non-negative integer`);
+    return Number(values[name]);
+  };
+  return { date, batchStart, batchEnd, start: `${batchStart}T00:00:00.000Z`, endExclusive,
+    expectedAcquisitionRows: rowCount('expected-acquisition-rows'), expectedMomentRows: rowCount('expected-moment-rows'),
+    project: identifier(values.project || process.env.GOOGLE_PROJECT_ID || DEFAULT_PROJECT, 'project'), dataset: identifier(values.dataset || DEFAULT_DATASET, 'dataset') };
 }
 
 export function buildQueries(project, dataset) {
   const a = `\`${project}.${dataset}.order_acquisition\``;
   const m = `\`${project}.${dataset}.order_journey_moments\``;
-  const window = table => `${table} WHERE order_created_at >= TIMESTAMP(@date) AND order_created_at < TIMESTAMP_ADD(TIMESTAMP(@date), INTERVAL 1 DAY)`;
+  const window = table => `${table} WHERE order_created_at >= TIMESTAMP(@start) AND order_created_at < TIMESTAMP(@endExclusive)`;
   return {
     counts: `SELECT (SELECT COUNT(*) FROM ${window(a)}) acquisition_row_count,
       (SELECT COUNT(DISTINCT order_id) FROM ${window(a)}) unique_order_count,
@@ -100,7 +113,12 @@ export function buildQueries(project, dataset) {
         COALESCE(m.unique_moments, 0) AS unique_moments, d.min_order_created_at,
         d.max_order_created_at, d.safe_order_examples) ORDER BY d.utc_order_date) utc_date_groups,
         MIN(d.min_order_created_at) affected_batch_min_order_created_at,
-        MAX(d.max_order_created_at) affected_batch_max_order_created_at
+        MAX(d.max_order_created_at) affected_batch_max_order_created_at,
+        (SELECT COUNT(*) FROM batch_acquisition) batch_acquisition_row_count,
+        (SELECT COUNT(*) FROM batch_moments) batch_journey_moment_row_count,
+        (SELECT COUNT(*) FROM batch_acquisition WHERE order_created_at < TIMESTAMP(@start) OR order_created_at >= TIMESTAMP(@endExclusive)) out_of_window_acquisition_rows,
+        (SELECT COUNT(*) FROM batch_moments WHERE order_created_at < TIMESTAMP(@start) OR order_created_at >= TIMESTAMP(@endExclusive)) out_of_window_journey_moment_rows,
+        (SELECT COUNT(*) FROM batch_moments m LEFT JOIN batch_acquisition a USING(order_id) WHERE a.order_id IS NULL) batch_orphan_journey_moments
       FROM dates d LEFT JOIN actual_moments m USING (utc_order_date)`,
     examples: `WITH a AS (SELECT * FROM ${window(a)}), m AS (SELECT * FROM ${window(m)}), chosen AS (SELECT * FROM a ORDER BY journey_moment_count DESC, order_id LIMIT ${EXAMPLE_LIMIT}),
       moments_by_order AS (
@@ -128,31 +146,34 @@ function plain(value) {
   return value;
 }
 
-export function recommendation(counts, quality, reconciliation, date) {
+export function recommendation(counts, quality, reconciliation, expected = {}) {
   const failures = [];
   if (!counts.acquisition_row_count) failures.push('empty_acquisition_window');
   for (const key of ['duplicate_order_ids','duplicate_order_moment_pairs','orphan_journey_moments','moment_count_mismatches','visit_flag_mismatches','incomplete_pagination_orders','summary_visit_ids_missing_from_moments','privacy_indicator_rows']) if (Number(quality[key]) !== 0) failures.push(key);
-  if (date && reconciliation?.utc_date_groups?.some(group => String(group.utc_order_date) !== date)) {
+  if (Number(reconciliation?.out_of_window_acquisition_rows || 0) !== 0 || Number(reconciliation?.out_of_window_journey_moment_rows || 0) !== 0) {
     failures.push('sync_batch_contains_orders_outside_utc_window');
   }
+  if (Number(reconciliation?.batch_orphan_journey_moments || 0) !== 0) failures.push('sync_batch_contains_orphan_journey_moments');
+  if (expected.acquisitionRows !== undefined && Number(counts.acquisition_row_count) !== expected.acquisitionRows) failures.push('unexpected_acquisition_row_count');
+  if (expected.momentRows !== undefined && Number(counts.journey_moment_row_count) !== expected.momentRows) failures.push('unexpected_journey_moment_row_count');
   return { safe_to_proceed_with_larger_backfill: failures.length === 0, decision: failures.length ? 'DO_NOT_PROCEED' : 'PROCEED', deterministic_failures: failures };
 }
 
-export async function runDiagnostic({ bigquery, date, project, dataset }) {
+export async function runDiagnostic({ bigquery, date, batchStart = date, batchEnd = date, start = `${batchStart}T00:00:00.000Z`, endExclusive = new Date(new Date(`${batchEnd}T00:00:00.000Z`).getTime()+86400000).toISOString(), expectedAcquisitionRows, expectedMomentRows, project, dataset }) {
   const queries = buildQueries(project, dataset);
   const results = {};
   for (const [name, query] of Object.entries(queries)) {
     if (!/^\s*(SELECT|WITH)\b/i.test(query) || /\b(INSERT|UPDATE|DELETE|MERGE|CREATE|DROP|ALTER|TRUNCATE|CALL)\b/i.test(query)) throw new Error(`Read-only guard rejected ${name}`);
-    const [rows] = await bigquery.query({ query, params: { date }, useLegacySql: false });
+    const [rows] = await bigquery.query({ query, params: { start, endExclusive }, useLegacySql: false });
     results[name] = plain(name === 'examples' ? rows : rows[0] || {});
   }
   const { counts, distributions, moments, coverage, quality, examples, reconciliation } = results;
-  return { diagnostic: 'shopify_acquisition_production_validation', window: { date, start_inclusive: `${date}T00:00:00.000Z`, end_exclusive: new Date(new Date(`${date}T00:00:00.000Z`).getTime()+86400000).toISOString(), project, dataset }, counts,
+  return { diagnostic: 'shopify_acquisition_production_validation', window: { date, batch_start: batchStart, batch_end: batchEnd, start_inclusive: start, end_exclusive: endExclusive, project, dataset }, counts,
     journey_coverage: { moment_count_distribution: distributions.journey_moment_count, availability_ready_combinations: distributions.journey_availability, pagination_complete_counts: distributions.journey_pagination_complete, first_visit_id_present: counts.first_visit_id_present, last_visit_id_present: counts.last_visit_id_present, first_last_visit_ids_same: counts.first_last_visit_ids_same },
     order_attribution: { attribution: distributions.attribution, source_name: distributions.source_name, apps: distributions.apps, matrixify_import_count: counts.matrixify_import_count, customer_order_index_distribution: distributions.customer_order_index },
     journey_sources: { first_visit: distributions.first_visit_sources, last_visit: distributions.last_visit_sources, all_moments: moments.source_types },
     utm_coverage: { first_visits: coverage.first_visits, last_visits: coverage.last_visits, all_moments: moments.all_moments_utm }, landing_evidence: { top_landing_paths: moments.top_landing_paths, top_referrer_hosts: moments.top_referrer_hosts }, conversion_lag: coverage.conversion_lag,
-    data_quality: quality, sync_batch_reconciliation: reconciliation, representative_journeys: examples, privacy_checks: { prohibited_customer_identity_selected: false, raw_url_query_string_indicator_rows: quality.privacy_indicator_rows }, recommendation: recommendation(counts, quality, reconciliation, date) };
+    data_quality: quality, sync_batch_reconciliation: reconciliation, representative_journeys: examples, privacy_checks: { prohibited_customer_identity_selected: false, raw_url_query_string_indicator_rows: quality.privacy_indicator_rows }, recommendation: recommendation(counts, quality, reconciliation, { acquisitionRows: expectedAcquisitionRows, momentRows: expectedMomentRows }) };
 }
 
 async function main() {
