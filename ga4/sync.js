@@ -8,6 +8,13 @@ import { dateRange, datesBetween, normalizeAcquisition, normalizeDimension, norm
 export const TABLES = ['daily', 'acquisition', 'landing_pages', 'device_geo', 'ecommerce_funnel'];
 const METRICS = ['sessions', 'totalUsers', 'newUsers', 'engagedSessions', 'engagementRate', 'screenPageViews'];
 const EVENTS = ['view_item', 'add_to_cart', 'begin_checkout', 'purchase'];
+const SEMANTIC_KEYS = {
+  daily: ['date'],
+  acquisition: ['date', 'session_default_channel_group', 'session_source', 'session_medium', 'session_campaign_name'],
+  landing_pages: ['date', 'landing_path'],
+  device_geo: ['date', 'device_category', 'browser', 'country'],
+  ecommerce_funnel: ['date']
+};
 const SCHEMAS = {
   daily: 'date DATE, sessions INT64, total_users INT64, new_users INT64, engaged_sessions INT64, engagement_rate FLOAT64, screen_page_views INT64, view_item INT64, add_to_cart INT64, begin_checkout INT64, purchase INT64, ecommerce_status STRING, ecommerce_observed BOOL, ecommerce_reliable BOOL, synced_at TIMESTAMP',
   acquisition: 'date DATE, session_default_channel_group STRING, session_source STRING, session_medium STRING, session_campaign_name STRING, sessions INT64, total_users INT64, engaged_sessions INT64, engagement_rate FLOAT64, synced_at TIMESTAMP',
@@ -63,6 +70,7 @@ export function validateCollected(data, startDate, endDate) {
 export async function ensureSchema({ bigquery, project, dataset = 'ga4', location = 'EU' }) {
   safeId(project); safeId(dataset); await bigquery.query({ query: `CREATE SCHEMA IF NOT EXISTS \`${project}.${dataset}\` OPTIONS(location="${location}")` });
   for (const [name, schema] of Object.entries(SCHEMAS)) await bigquery.query({ query: `CREATE TABLE IF NOT EXISTS \`${project}.${dataset}.${name}\` (${schema})${TABLES.includes(name) ? ' PARTITION BY date' : ''}` });
+  await bigquery.query({ query: `ASSERT (SELECT COUNT(*) = ${TABLES.length} AND COUNTIF(data_type != 'DATE') = 0 FROM \`${project}.${dataset}.INFORMATION_SCHEMA.COLUMNS\` WHERE table_name IN (${TABLES.map(table => `'${table}'`).join(',')}) AND column_name = 'date') AS 'Every GA4 aggregate table must have exactly one DATE column named date';` });
   await bigquery.query({ query: `DELETE FROM \`${project}.${dataset}.tracking_eras\` WHERE TRUE; INSERT INTO \`${project}.${dataset}.tracking_eras\` (era_id,platform,from_date,to_date,traffic_status,ecommerce_status,ecommerce_observed,ecommerce_reliable,comparability,evidence_note) VALUES ${TRACKING_ERAS.map(e => `('${e.era_id}','${e.platform}',${e.from_date ? `DATE '${e.from_date}'` : 'NULL'},${e.to_date ? `DATE '${e.to_date}'` : 'NULL'},'${e.traffic_status}','${e.ecommerce_status}',${e.ecommerce_observed},${e.ecommerce_reliable},'${e.comparability}','${e.evidence_note.replaceAll("'", "''")}')`).join(',')}` });
 }
 export function promotionSql(project, dataset, table) { safeId(project); safeId(dataset); safeId(table); return `BEGIN TRANSACTION;\nDELETE FROM \`${project}.${dataset}.${table}\` WHERE date BETWEEN @startDate AND @endDate;\nINSERT INTO \`${project}.${dataset}.${table}\` SELECT * FROM \`${project}.${dataset}._stage_${table}\`;\nCOMMIT TRANSACTION;`; }
@@ -73,7 +81,20 @@ export function stageTableNames(runId) {
 }
 export function createStageRunId() { return randomUUID().replaceAll('-', ''); }
 function validateStageNames(stageNames) { for (const table of TABLES) safeId(stageNames[table]); return stageNames; }
-export function coordinatedPromotionSql(project, dataset, stageNames = Object.fromEntries(TABLES.map(table => [table, `_stage_${table}`]))) { safeId(project); safeId(dataset); validateStageNames(stageNames); return `BEGIN TRANSACTION;\n${TABLES.map(table => `DELETE FROM \`${project}.${dataset}.${table}\` WHERE date BETWEEN @startDate AND @endDate;\nINSERT INTO \`${project}.${dataset}.${table}\` SELECT * FROM \`${project}.${dataset}.${stageNames[table]}\`;`).join('\n')}\nCOMMIT TRANSACTION;`; }
+export function dateParameters(startDate, endDate) { return { startDate: BigQuery.date(startDate), endDate: BigQuery.date(endDate) }; }
+export function coordinatedPromotionSql(project, dataset, stageNames = Object.fromEntries(TABLES.map(table => [table, `_stage_${table}`]))) {
+  safeId(project); safeId(dataset); validateStageNames(stageNames);
+  const statements = TABLES.map(table => {
+    const target = `\`${project}.${dataset}.${table}\``;
+    const stage = `\`${project}.${dataset}.${stageNames[table]}\``;
+    const keys = SEMANTIC_KEYS[table].join(',');
+    const completeness = table === 'daily' || table === 'ecommerce_funnel'
+      ? `\nASSERT (SELECT COUNT(*) FROM ${target} WHERE date BETWEEN @startDate AND @endDate) = DATE_DIFF(@endDate, @startDate, DAY) + 1 AS '${table} must contain exactly one row per requested date';`
+      : '';
+    return `DELETE FROM ${target} WHERE date BETWEEN @startDate AND @endDate;\nINSERT INTO ${target} SELECT * FROM ${stage};\nASSERT (SELECT COUNT(*) FROM ${target} WHERE date BETWEEN @startDate AND @endDate) = (SELECT COUNT(*) FROM ${stage}) AS '${table} promoted row count must match its stage';\nASSERT NOT EXISTS (SELECT 1 FROM ${target} WHERE date BETWEEN @startDate AND @endDate GROUP BY ${keys} HAVING COUNT(*) != 1) AS '${table} must not contain duplicate semantic keys';${completeness}`;
+  });
+  return `BEGIN TRANSACTION;\n${statements.join('\n')}\nCOMMIT TRANSACTION;`;
+}
 export function stagingSql(project, dataset, stageNames = Object.fromEntries(TABLES.map(table => [table, `_stage_${table}`]))) { safeId(project); safeId(dataset); validateStageNames(stageNames); return TABLES.map(table => `CREATE TABLE \`${project}.${dataset}.${stageNames[table]}\` LIKE \`${project}.${dataset}.${table}\`;`).join('\n'); }
 export function cleanupSql(project, dataset, stageNames) { safeId(project); safeId(dataset); validateStageNames(stageNames); return TABLES.map(table => `DROP TABLE IF EXISTS \`${project}.${dataset}.${stageNames[table]}\`;`).join('\n'); }
 export async function promote({ bigquery, project, dataset, data, startDate, endDate, runId = createStageRunId() }) {
@@ -85,7 +106,7 @@ export async function promote({ bigquery, project, dataset, data, startDate, end
     // row array, so an empty aggregate is represented by its empty stage table.
     await bigquery.query({ query: stagingSql(project, dataset, stageNames) });
     for (let i = 0; i < TABLES.length; i++) if (data[TABLES[i]].length) await stages[i].insert(data[TABLES[i]], { createInsertId: false });
-    await bigquery.query({ query: coordinatedPromotionSql(project, dataset, stageNames), params: { startDate, endDate }, types: { startDate: 'DATE', endDate: 'DATE' } });
+    await bigquery.query({ query: coordinatedPromotionSql(project, dataset, stageNames), params: dateParameters(startDate, endDate), types: { startDate: 'DATE', endDate: 'DATE' } });
   } finally {
     // DROP is itself an awaited BigQuery job. Unique names make this cleanup
     // incapable of deleting a stage created by another invocation.
