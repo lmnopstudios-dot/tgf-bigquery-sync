@@ -35,7 +35,7 @@ These are descriptions of the existing finance contract, not proof that similarl
 fields carry those meanings. In particular, a new retail model must not silently replace the VAT,
 gift-card, or refund treatment in `finance.sales_master`.
 
-## Diagnostic
+## Follow-up diagnostic
 
 `diagnostics/square-semantic-discovery.js` first reads `INFORMATION_SCHEMA`, then builds only
 `SELECT`/`WITH` queries for the tables and scalar columns it actually finds. It reports:
@@ -48,14 +48,35 @@ gift-card, or refund treatment in `finance.sales_master`.
   invented business meanings);
 * discovered relationship cardinalities and orphan counts for orders, lines, payments, refunds,
   catalog items/variations, customers, team members, locations, and inventory;
-* monthly order/payment row counts by raw location ID and per-location date/amount coverage;
+* completed/canceled/open/draft monthly order coverage at raw location-ID grain and the same
+  coverage window by location, with completed gross/net candidates clearly labelled;
+* monthly and per-location `square_sales` dates, rows, gross sales, discounts, returns, and net
+  totals for reconciliation only;
+* every persisted location's raw canonical ID, name, status, creation time, currency, and timezone;
+* safe JSON-key discovery and aggregate `orders.line_items` profiling for IDs, transaction-time
+  product snapshots, prices/components, modifiers, and return/refund fields without printing raw
+  line JSON;
+* order-level return/refund JSON structures, when present;
+* catalogue row/distinct-ID/version/update/deletion evidence and a proposed deterministic latest-row
+  rule, without applying it or changing source tables;
+* unmatched payment-order and refund-payment evidence by month, location, status, and source/tender,
+  including matches against other persisted identifier columns;
 * schemas and view SQL for `finance.sales_master` and `finance.accountant_transactions`, when those
   objects are views.
 
 Table roles, primary IDs, and relationships in the output are explicitly **candidates inferred from
 names**. A missing relationship result means the expected scalar keys were not discovered; it does
-not prove that the entities are unrelated. Nested/repeated fields remain visible in the schema but
-are not flattened or profiled automatically.
+not prove that the entities are unrelated. The follow-up specifically profiles persisted
+JSON/string `orders.line_items`; other nested/repeated fields remain schema evidence only.
+
+The output explicitly separates **transaction-time product truth** (historical order-line name,
+quantity, price, and components) from **current catalogue enrichment** (an optional future lookup
+ordered by descending `version`, then `updated_at`). Current enrichment must never overwrite
+transaction-time history. No deduplication is performed.
+
+It also records that the current 59-row `customers` table is not a viable historical customer
+dimension because the first production run found zero matches to customer IDs referenced by orders
+or payments. Customer modeling remains deferred, and fuzzy PII matching is prohibited.
 
 ### Exact Render production command
 
@@ -79,26 +100,22 @@ node -e 'const r=require("/tmp/square-semantic-discovery.json"); console.log(JSO
 
 The command does not invoke an ingestion endpoint, call the Square API, or execute DDL/DML.
 
-## Questions requiring the production artifact
+## What the follow-up production artifact must prove
 
-The following remain unanswered until the diagnostic output is reviewed:
-
-1. Exact `square_data` inventory, physical schemas, grains, and canonical keys.
-2. Earliest/latest trustworthy order, line, payment, refund, and inventory dates; sync freshness;
-   gaps or suspicious monthly/location periods.
-3. Duplicate and null rates, currencies, complete raw location list, persisted names, and whether
-   each location has recent activity.
-4. Actual states (including cancelled/open/incomplete), tender types, and whether customers or team
-   members are persisted.
-5. Join coverage and cardinality for every requested relationship, including whether line-item
-   catalog identifiers refer to items or variations.
-6. Whether transaction-time product names, variation names, SKUs, prices, categories, and discounts
-   are captured on lines or require present-day catalog joins.
-7. Whether partially/fully refunded orders can be identified, whether refunds post after the sale,
-   and whether payment collections reconcile to order totals.
-8. The exact Square sources, filters, transformations, VAT/gift-card rules, and reconciliation in
-   `finance.sales_master`. If it is a physical table rather than a view, its creating pipeline must
-   be located separately because BigQuery cannot recover application transformation code from it.
+1. Whether all seven observed raw location IDs map to persisted location identities, and the exact
+   order and `square_sales` activity for each ID without merging locations.
+2. Where raw-order and `square_sales` monthly/location coverage starts, ends, overlaps, or gaps.
+3. The actual line-item JSON keys and aggregate completeness/uniqueness of transaction-time product
+   IDs, names, prices, monetary components, modifiers, and return/refund evidence.
+4. Whether repeated catalogue IDs behave as version history according to `version`, `updated_at`,
+   and `is_deleted`, and whether the proposed latest-row ordering is deterministic.
+5. Whether the 1,374 unmatched payment order IDs and 134 unmatched refund payment IDs cluster
+   outside parent-table coverage, at particular locations/statuses/tenders, or match a different
+   persisted identifier. The conclusion remains unresolved unless those aggregates support a
+   historical-coverage, legacy/deletion, or differing-identifier explanation.
+6. That finance sources remain evidence-only and unchanged: business-wide money truth stays in
+   `finance.sales_master`; raw Square orders remain operational truth for future product/location
+   analytics.
 
 ## Preliminary financial semantics
 
