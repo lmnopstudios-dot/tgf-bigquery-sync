@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { collect, coordinatedPromotionSql, parseArgs, promote, promotionSql, stagingSql, TABLES, validateCollected, backfillChunks } from '../ga4/sync.js';
+import { cleanupSql, collect, coordinatedPromotionSql, parseArgs, promote, promotionSql, stageTableNames, stagingSql, TABLES, validateCollected, backfillChunks } from '../ga4/sync.js';
 import { metricComparability, normalizeAcquisition, normalizeGa4Date, normalizeLandingPath, rangeCoverage, trackingStatus } from '../ga4/semantic.js';
 import { createGa4QueryService } from '../ga4/query.js';
 
@@ -41,7 +41,7 @@ test('promotion is range-scoped and idempotent rather than destructive', () => {
   const coordinated = coordinatedPromotionSql('p','ga4'); assert.equal((coordinated.match(/BEGIN TRANSACTION/g) || []).length, 1); assert.equal((coordinated.match(/DELETE FROM/g) || []).length, 5);
 });
 
-test('promotion establishes empty stages and atomically replaces only the requested range', async () => {
+test('two consecutive promotions use owned stages, preserve empty aggregates, and finish cleanup', async () => {
   const events = []; const stages = new Map();
   const production = Object.fromEntries(TABLES.map(table => [table, [
     { date: '2022-08-17', marker: `${table}-before` },
@@ -53,21 +53,25 @@ test('promotion establishes empty stages and atomically replaces only the reques
       assert.equal(dataset, 'ga4'); assert.deepEqual(options, { projectId: 'p' });
       return { table(name) { return {
         async insert(rows) { events.push(`insert:${name}`); assert.ok(stages.has(name), `${name} exists before write`); stages.get(name).push(...rows); },
-        async delete() { events.push(`cleanup:${name}`); stages.delete(name); }
       }; } };
     },
     async query(options) {
-      if (options.query === stagingSql('p', 'ga4')) {
-        events.push('create-all');
-        for (const table of TABLES) stages.set(`_stage_${table}`, []);
-      } else {
-        assert.equal(options.query, coordinatedPromotionSql('p', 'ga4'));
-        events.push('promote');
-        assert.deepEqual([...stages.keys()], TABLES.map(table => `_stage_${table}`));
+      const runId = ['run1', 'run2'].find(id => options.query === stagingSql('p', 'ga4', stageTableNames(id)) || options.query === coordinatedPromotionSql('p', 'ga4', stageTableNames(id)) || options.query === cleanupSql('p', 'ga4', stageTableNames(id)));
+      assert.ok(runId, 'only SQL for an owned staging set is executed');
+      const names = stageTableNames(runId);
+      if (options.query === stagingSql('p', 'ga4', names)) {
+        events.push(`create:${runId}`);
+        for (const table of TABLES) stages.set(names[table], []);
+      } else if (options.query === coordinatedPromotionSql('p', 'ga4', names)) {
+        events.push(`promote:${runId}`);
+        assert.ok(TABLES.every(table => stages.has(names[table])));
         for (const table of TABLES) production[table] = [
           ...production[table].filter(row => row.date < options.params.startDate || row.date > options.params.endDate),
-          ...stages.get(`_stage_${table}`)
+          ...stages.get(names[table])
         ];
+      } else {
+        events.push(`cleanup:${runId}`);
+        for (const table of TABLES) stages.delete(names[table]);
       }
       return [[]];
     }
@@ -75,14 +79,56 @@ test('promotion establishes empty stages and atomically replaces only the reques
   const data = Object.fromEntries(TABLES.map(table => [table, [{ date: '2022-08-18', marker: `${table}-new` }]]));
   data.acquisition = [];
 
-  await promote({ bigquery, project: 'p', dataset: 'ga4', data, startDate: '2022-08-18', endDate: '2022-09-17' });
+  await promote({ bigquery, project: 'p', dataset: 'ga4', data, startDate: '2022-08-18', endDate: '2022-09-17', runId: 'run1' });
+  assert.equal(stages.size, 0);
+  await promote({ bigquery, project: 'p', dataset: 'ga4', data, startDate: '2022-08-18', endDate: '2022-09-17', runId: 'run2' });
 
-  assert.equal(events[0], 'create-all');
-  assert.ok(!events.includes('insert:_stage_acquisition'));
-  assert.ok(events.indexOf('promote') < events.indexOf('cleanup:_stage_daily'));
+  assert.deepEqual(events.filter(event => !event.startsWith('insert:')), ['create:run1', 'promote:run1', 'cleanup:run1', 'create:run2', 'promote:run2', 'cleanup:run2']);
+  assert.ok(!events.some(event => event.includes('acquisition')));
   assert.deepEqual(production.acquisition.map(row => row.date), ['2022-08-17', '2022-09-18']);
   assert.deepEqual(production.daily.map(row => row.date), ['2022-08-17', '2022-09-18', '2022-08-18']);
   assert.equal(stages.size, 0);
+});
+
+test('overlapping promotions cannot clean up or reference another run staging set', async () => {
+  const stages = new Set(); const created = new Map(); const promoted = [];
+  let releaseFirstCleanup;
+  const firstCleanupBlocked = new Promise(resolve => { releaseFirstCleanup = resolve; });
+  let notifyFirstCleanup;
+  const firstCleanupReached = new Promise(resolve => { notifyFirstCleanup = resolve; });
+  let releaseSecondCleanup;
+  const secondCleanupBlocked = new Promise(resolve => { releaseSecondCleanup = resolve; });
+  let notifySecondCleanup;
+  const secondCleanupReached = new Promise(resolve => { notifySecondCleanup = resolve; });
+  const bigquery = {
+    dataset(dataset, options) { assert.equal(dataset, 'ga4'); assert.deepEqual(options, { projectId: 'p' }); return { table(name) { return { async insert() { assert.ok(stages.has(name)); } }; } }; },
+    async query(options) {
+      const runId = ['overlap1', 'overlap2'].find(id => options.query.includes(`_stage_${id}_`));
+      assert.ok(runId);
+      const names = stageTableNames(runId); const owned = TABLES.map(table => names[table]);
+      if (options.query === stagingSql('p', 'ga4', names)) { owned.forEach(name => stages.add(name)); created.set(runId, new Set(owned)); }
+      else if (options.query === coordinatedPromotionSql('p', 'ga4', names)) { assert.ok(owned.every(name => stages.has(name))); promoted.push(runId); }
+      else {
+        assert.equal(options.query, cleanupSql('p', 'ga4', names));
+        if (runId === 'overlap1') { notifyFirstCleanup(); await firstCleanupBlocked; }
+        if (runId === 'overlap2') { notifySecondCleanup(); await secondCleanupBlocked; }
+        owned.forEach(name => stages.delete(name));
+      }
+      return [[]];
+    }
+  };
+  const data = Object.fromEntries(TABLES.map(table => [table, table === 'acquisition' ? [] : [{ date: '2022-08-18' }]]));
+  const first = promote({ bigquery, project: 'p', dataset: 'ga4', data, startDate: '2022-08-18', endDate: '2022-09-17', runId: 'overlap1' });
+  await firstCleanupReached;
+  const second = promote({ bigquery, project: 'p', dataset: 'ga4', data, startDate: '2022-08-18', endDate: '2022-09-17', runId: 'overlap2' });
+  await secondCleanupReached;
+  assert.ok([...created.get('overlap2')].every(name => stages.has(name)), 'run 2 stages survive while run 1 cleanup is pending');
+  releaseFirstCleanup();
+  releaseSecondCleanup();
+  await Promise.all([first, second]);
+  assert.deepEqual(promoted.sort(), ['overlap1', 'overlap2']);
+  assert.equal(stages.size, 0);
+  assert.equal(new Set([...created.get('overlap1'), ...created.get('overlap2')]).size, TABLES.length * 2);
 });
 
 test('controlled query helpers attach provenance and fail closed for mixed ecommerce eras', async () => {
