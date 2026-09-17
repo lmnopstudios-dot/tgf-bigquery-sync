@@ -66,7 +66,21 @@ export async function ensureSchema({ bigquery, project, dataset = 'ga4', locatio
 }
 export function promotionSql(project, dataset, table) { safeId(project); safeId(dataset); safeId(table); return `BEGIN TRANSACTION;\nDELETE FROM \`${project}.${dataset}.${table}\` WHERE date BETWEEN @startDate AND @endDate;\nINSERT INTO \`${project}.${dataset}.${table}\` SELECT * FROM \`${project}.${dataset}._stage_${table}\`;\nCOMMIT TRANSACTION;`; }
 export function coordinatedPromotionSql(project, dataset) { return `BEGIN TRANSACTION;\n${TABLES.map(table => `DELETE FROM \`${project}.${dataset}.${table}\` WHERE date BETWEEN @startDate AND @endDate;\nINSERT INTO \`${project}.${dataset}.${table}\` SELECT * FROM \`${project}.${dataset}._stage_${table}\`;`).join('\n')}\nCOMMIT TRANSACTION;`; }
-export async function promote({ bigquery, project, dataset, data, startDate, endDate }) { const stages = []; try { for (const table of TABLES) { const target = bigquery.dataset(dataset).table(`_stage_${table}`); stages.push(target); await target.delete({ ignoreNotFound: true }).catch(() => {}); await bigquery.query({ query: `CREATE TABLE \`${project}.${dataset}._stage_${table}\` LIKE \`${project}.${dataset}.${table}\`` }); await target.insert(data[table], { createInsertId: false }); } await bigquery.query({ query: coordinatedPromotionSql(project, dataset), params: { startDate, endDate }, types: { startDate: 'DATE', endDate: 'DATE' } }); } finally { await Promise.all(stages.map(target => target.delete({ ignoreNotFound: true }).catch(() => {}))); } }
+export function stagingSql(project, dataset) { safeId(project); safeId(dataset); return TABLES.map(table => `CREATE OR REPLACE TABLE \`${project}.${dataset}._stage_${table}\` LIKE \`${project}.${dataset}.${table}\`;`).join('\n'); }
+export async function promote({ bigquery, project, dataset, data, startDate, endDate }) {
+  safeId(project); safeId(dataset);
+  const stages = TABLES.map(table => bigquery.dataset(dataset, { projectId: project }).table(`_stage_${table}`));
+  try {
+    // Establish every transaction dependency first. Table.insert rejects an empty
+    // row array, so an empty aggregate is represented by its empty stage table.
+    await bigquery.query({ query: stagingSql(project, dataset) });
+    for (let i = 0; i < TABLES.length; i++) if (data[TABLES[i]].length) await stages[i].insert(data[TABLES[i]], { createInsertId: false });
+    await bigquery.query({ query: coordinatedPromotionSql(project, dataset), params: { startDate, endDate }, types: { startDate: 'DATE', endDate: 'DATE' } });
+  } finally {
+    // Cleanup starts only after the coordinated query has completed or failed.
+    await Promise.all(stages.map(target => target.delete({ ignoreNotFound: true }).catch(() => {})));
+  }
+}
 export async function syncGa4({ bigquery, client, project, propertyId, ...options }) { dateRange(options.startDate, options.endDate, { maxDays: options.maxDays || 93 }); await ensureSchema({ bigquery, project, dataset: options.dataset }); const data = await collect({ client, propertyId, ...options }); await promote({ bigquery, project, dataset: options.dataset, data, startDate: options.startDate, endDate: options.endDate }); return { property_id: propertyId, dataset: options.dataset, range: { start_date: options.startDate, end_date: options.endDate }, rows: Object.fromEntries(TABLES.map(t => [t, data[t].length])), ecommerce_source: 'GA4 Data API only', transaction_truth: false }; }
 async function main() { const options = parseArgs(process.argv.slice(2)); const { propertyId, credentials } = loadConfig(); const project = process.env.GOOGLE_PROJECT_ID || credentials.project_id; const { BetaAnalyticsDataClient } = await import('@google-analytics/data'); const result = await syncGa4({ ...options, project, propertyId, client: new BetaAnalyticsDataClient({ credentials }), bigquery: new BigQuery({ projectId: project, credentials }) }); process.stdout.write(`${JSON.stringify(result, null, 2)}\n`); }
 if (import.meta.url === pathToFileURL(process.argv[1] || '').href) main().catch(error => { console.error(error.message); process.exitCode = 1; });
