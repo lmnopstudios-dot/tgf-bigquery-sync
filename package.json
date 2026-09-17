@@ -8,6 +8,7 @@
     "deploy:square-retail": "node square/retail-semantic.js",
     "validate:square-retail": "node diagnostics/square-retail-semantic-validation.js",
     "diagnose:ga4-access": "node diagnostics/ga4-access.js",
+    "diagnose:ga4-coverage": "node diagnostics/ga4-coverage-discovery.js",
     "test": "node --test"
   },
   "engines": {
