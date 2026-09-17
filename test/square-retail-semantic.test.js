@@ -49,9 +49,20 @@ test('validator is entirely read-only and covers reconciliation and summaries', 
   assert.match(queries.integrity, /return_count_reconciles/);
   assert.match(queries.integrity, /duplicate_order_line_ids/);
   assert.ok(queries.top_products && queries.returns_by_location_product && queries.coverage);
+  assert.match(queries.coverage, /COUNT\(\*\) AS row_count/);
+  // ROWS is a BigQuery window-frame keyword, not a safe unquoted count alias.
+  assert.ok(Object.values(queries).every(sql => !/COUNT\(\*\)\s+(?:AS\s+)?rows\b/i.test(sql)));
   assert.ok(Object.values(queries).every(sql => /^\s*(SELECT|WITH)\b/.test(sql)));
   assert.ok(Object.values(queries).every(sql => !/\b(CREATE|INSERT|UPDATE|DELETE|DROP|ALTER|MERGE)\b/i.test(sql)));
   const submitted = [];
-  await validate({ bigquery: { query: async request => { submitted.push(request.query); return [[]]; } }, project: 'p' });
+  await validate({ bigquery: { query: async request => { submitted.push(request); return [[]]; } }, project: 'p' });
   assert.equal(submitted.length, Object.keys(queries).length);
+  assert.deepEqual(submitted.map(request => request.query), Object.values(queries));
+  assert.deepEqual(submitted.map(request => request.labels.validation_query), Object.keys(queries));
+  assert.ok(submitted.every(request => request.labels.component === 'square_retail_validator'));
+});
+
+test('validator errors identify the failing named query', async () => {
+  const bigquery = { query: async () => { throw new Error('invalid query'); } };
+  await assert.rejects(validate({ bigquery, project: 'p' }), /validation query "integrity" failed: invalid query/);
 });
