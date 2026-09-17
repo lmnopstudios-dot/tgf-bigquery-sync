@@ -55,6 +55,8 @@ test('follow-up emits targeted coverage, JSON, catalogue, and orphan evidence re
   let first = true;
   const bigquery = { query: async ({ query }) => {
     submitted.push(query);
+    // Match BigQuery's treatment of ROWS as a reserved window-frame keyword.
+    if (/^SELECT COUNT\(\*\) rows\b/i.test(query)) throw new Error('Expected end of input but got keyword ROWS at [1:17]');
     if (first) { first = false; return [metadata]; }
     if (query.includes('INFORMATION_SCHEMA.')) return [[]];
     if (query.includes('JSON_KEYS(line')) return [[
@@ -76,6 +78,7 @@ test('follow-up emits targeted coverage, JSON, catalogue, and orphan evidence re
   assert.ok(submitted.some(sql => sql.includes('total_orders')));
   assert.ok(submitted.some(sql => sql.includes('sale_rows')));
   assert.ok(submitted.some(sql => sql.includes('JSON_KEYS(line')));
+  assert.ok(submitted.some(sql => sql.startsWith('SELECT COUNT(*) AS `rows`,')));
   assert.ok(submitted.every(sql => /^\s*(SELECT|WITH)\b/i.test(sql)));
   assert.ok(submitted.every(sql => !/\b(INSERT|UPDATE|DELETE|MERGE|CREATE|DROP|ALTER|TRUNCATE)\b/i.test(sql)));
 });
