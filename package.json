@@ -4,7 +4,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "deploy:square-retail": "node square/retail-semantic.js",
+    "validate:square-retail": "node diagnostics/square-retail-semantic-validation.js",
+    "test": "node --test"
   },
   "engines": {
     "node": ">=20"
