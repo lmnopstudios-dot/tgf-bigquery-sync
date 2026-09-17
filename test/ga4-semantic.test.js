@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { cleanupSql, collect, coordinatedPromotionSql, parseArgs, promote, promotionSql, stageTableNames, stagingSql, TABLES, validateCollected, backfillChunks } from '../ga4/sync.js';
+import { BigQuery } from '@google-cloud/bigquery';
+import { cleanupSql, collect, coordinatedPromotionSql, dateParameters, parseArgs, promote, promotionSql, stageTableNames, stagingSql, TABLES, validateCollected, backfillChunks } from '../ga4/sync.js';
 import { metricComparability, normalizeAcquisition, normalizeGa4Date, normalizeLandingPath, rangeCoverage, trackingStatus } from '../ga4/semantic.js';
 import { createGa4QueryService } from '../ga4/query.js';
 
@@ -39,6 +40,15 @@ test('collect normalizes responses, represents observed zero, and detects incomp
 test('promotion is range-scoped and idempotent rather than destructive', () => {
   const sql = promotionSql('p','ga4','daily'); assert.match(sql, /BEGIN TRANSACTION/); assert.match(sql, /BETWEEN @startDate AND @endDate/); assert.doesNotMatch(sql, /TRUNCATE/);
   const coordinated = coordinatedPromotionSql('p','ga4'); assert.equal((coordinated.match(/BEGIN TRANSACTION/g) || []).length, 1); assert.equal((coordinated.match(/DELETE FROM/g) || []).length, 5);
+  assert.equal((coordinated.match(/must not contain duplicate semantic keys/g) || []).length, 5);
+  assert.equal((coordinated.match(/must contain exactly one row per requested date/g) || []).length, 2);
+  assert.equal((coordinated.match(/promoted row count must match its stage/g) || []).length, 5);
+});
+
+test('DATE query parameters serialize as values rather than NULL', () => {
+  const params = dateParameters('2022-08-18', '2022-09-17');
+  assert.deepEqual(BigQuery.valueToQueryParameter_(params.startDate, 'DATE').parameterValue, { value: '2022-08-18' });
+  assert.deepEqual(BigQuery.valueToQueryParameter_('2022-08-18', 'DATE').parameterValue, { value: undefined });
 });
 
 test('two consecutive promotions use owned stages, preserve empty aggregates, and finish cleanup', async () => {
@@ -65,8 +75,9 @@ test('two consecutive promotions use owned stages, preserve empty aggregates, an
       } else if (options.query === coordinatedPromotionSql('p', 'ga4', names)) {
         events.push(`promote:${runId}`);
         assert.ok(TABLES.every(table => stages.has(names[table])));
+        const startDate = options.params.startDate.value; const endDate = options.params.endDate.value;
         for (const table of TABLES) production[table] = [
-          ...production[table].filter(row => row.date < options.params.startDate || row.date > options.params.endDate),
+          ...production[table].filter(row => row.date < startDate || row.date > endDate),
           ...stages.get(names[table])
         ];
       } else {
@@ -88,6 +99,45 @@ test('two consecutive promotions use owned stages, preserve empty aggregates, an
   assert.deepEqual(production.acquisition.map(row => row.date), ['2022-08-17', '2022-09-18']);
   assert.deepEqual(production.daily.map(row => row.date), ['2022-08-17', '2022-09-18', '2022-08-18']);
   assert.equal(stages.size, 0);
+});
+
+test('replacement deletes an already duplicated range while preserving rows outside it', async () => {
+  const stageNames = stageTableNames('repair');
+  const production = Object.fromEntries(TABLES.map(table => [table, [
+    { date: '2022-08-17', key: 'outside-before' }, { date: '2022-08-18', key: 'old' },
+    { date: '2022-08-18', key: 'old' }, { date: '2022-09-18', key: 'outside-after' }
+  ]]));
+  const stages = new Map();
+  const bigquery = {
+    dataset() { return { table(name) { return { async insert(rows) { stages.get(name).push(...rows); } }; } }; },
+    async query(options) {
+      if (options.query === stagingSql('p', 'ga4', stageNames)) for (const table of TABLES) stages.set(stageNames[table], []);
+      else if (options.query === coordinatedPromotionSql('p', 'ga4', stageNames)) {
+        assert.deepEqual([options.params.startDate.value, options.params.endDate.value], ['2022-08-18', '2022-09-17']);
+        for (const table of TABLES) production[table] = [...production[table].filter(row => row.date < '2022-08-18' || row.date > '2022-09-17'), ...stages.get(stageNames[table])];
+      } else for (const table of TABLES) stages.delete(stageNames[table]);
+      return [[]];
+    }
+  };
+  const data = Object.fromEntries(TABLES.map(table => [table, (table === 'acquisition' ? [] : [{ date: '2022-08-18', key: 'new' }])]));
+  await promote({ bigquery, project: 'p', dataset: 'ga4', data, startDate: '2022-08-18', endDate: '2022-09-17', runId: 'repair' });
+  assert.deepEqual(production.daily.map(row => row.key), ['outside-before', 'outside-after', 'new']);
+  assert.deepEqual(production.acquisition.map(row => row.key), ['outside-before', 'outside-after']);
+});
+
+test('a failed post-promotion assertion fails the sync and still cleans owned stages', async () => {
+  const names = stageTableNames('badstate'); let cleaned = false;
+  const bigquery = {
+    dataset() { return { table() { return { async insert() {} }; } }; },
+    async query(options) {
+      if (options.query === coordinatedPromotionSql('p', 'ga4', names)) throw new Error('daily must not contain duplicate semantic keys');
+      if (options.query === cleanupSql('p', 'ga4', names)) cleaned = true;
+      return [[]];
+    }
+  };
+  const data = Object.fromEntries(TABLES.map(table => [table, [{ date: '2022-08-18' }]]));
+  await assert.rejects(promote({ bigquery, project: 'p', dataset: 'ga4', data, startDate: '2022-08-18', endDate: '2022-08-18', runId: 'badstate' }), /duplicate semantic keys/);
+  assert.equal(cleaned, true);
 });
 
 test('overlapping promotions cannot clean up or reference another run staging set', async () => {
