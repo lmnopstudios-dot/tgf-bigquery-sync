@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { collect, coordinatedPromotionSql, parseArgs, promotionSql, validateCollected, backfillChunks } from '../ga4/sync.js';
+import { collect, coordinatedPromotionSql, parseArgs, promote, promotionSql, stagingSql, TABLES, validateCollected, backfillChunks } from '../ga4/sync.js';
 import { metricComparability, normalizeAcquisition, normalizeGa4Date, normalizeLandingPath, rangeCoverage, trackingStatus } from '../ga4/semantic.js';
 import { createGa4QueryService } from '../ga4/query.js';
 
@@ -39,6 +39,50 @@ test('collect normalizes responses, represents observed zero, and detects incomp
 test('promotion is range-scoped and idempotent rather than destructive', () => {
   const sql = promotionSql('p','ga4','daily'); assert.match(sql, /BEGIN TRANSACTION/); assert.match(sql, /BETWEEN @startDate AND @endDate/); assert.doesNotMatch(sql, /TRUNCATE/);
   const coordinated = coordinatedPromotionSql('p','ga4'); assert.equal((coordinated.match(/BEGIN TRANSACTION/g) || []).length, 1); assert.equal((coordinated.match(/DELETE FROM/g) || []).length, 5);
+});
+
+test('promotion establishes empty stages and atomically replaces only the requested range', async () => {
+  const events = []; const stages = new Map();
+  const production = Object.fromEntries(TABLES.map(table => [table, [
+    { date: '2022-08-17', marker: `${table}-before` },
+    { date: '2022-08-18', marker: `${table}-stale` },
+    { date: '2022-09-18', marker: `${table}-after` }
+  ]]));
+  const bigquery = {
+    dataset(dataset, options) {
+      assert.equal(dataset, 'ga4'); assert.deepEqual(options, { projectId: 'p' });
+      return { table(name) { return {
+        async insert(rows) { events.push(`insert:${name}`); assert.ok(stages.has(name), `${name} exists before write`); stages.get(name).push(...rows); },
+        async delete() { events.push(`cleanup:${name}`); stages.delete(name); }
+      }; } };
+    },
+    async query(options) {
+      if (options.query === stagingSql('p', 'ga4')) {
+        events.push('create-all');
+        for (const table of TABLES) stages.set(`_stage_${table}`, []);
+      } else {
+        assert.equal(options.query, coordinatedPromotionSql('p', 'ga4'));
+        events.push('promote');
+        assert.deepEqual([...stages.keys()], TABLES.map(table => `_stage_${table}`));
+        for (const table of TABLES) production[table] = [
+          ...production[table].filter(row => row.date < options.params.startDate || row.date > options.params.endDate),
+          ...stages.get(`_stage_${table}`)
+        ];
+      }
+      return [[]];
+    }
+  };
+  const data = Object.fromEntries(TABLES.map(table => [table, [{ date: '2022-08-18', marker: `${table}-new` }]]));
+  data.acquisition = [];
+
+  await promote({ bigquery, project: 'p', dataset: 'ga4', data, startDate: '2022-08-18', endDate: '2022-09-17' });
+
+  assert.equal(events[0], 'create-all');
+  assert.ok(!events.includes('insert:_stage_acquisition'));
+  assert.ok(events.indexOf('promote') < events.indexOf('cleanup:_stage_daily'));
+  assert.deepEqual(production.acquisition.map(row => row.date), ['2022-08-17', '2022-09-18']);
+  assert.deepEqual(production.daily.map(row => row.date), ['2022-08-17', '2022-09-18', '2022-08-18']);
+  assert.equal(stages.size, 0);
 });
 
 test('controlled query helpers attach provenance and fail closed for mixed ecommerce eras', async () => {
