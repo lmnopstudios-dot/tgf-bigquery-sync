@@ -234,7 +234,7 @@ async function catalogueDiscovery(bigquery, project, dataset, tables) {
     const version = column(table, ['version']);
     const updated = column(table, ['updated_at']);
     const deleted = column(table, ['is_deleted', 'deleted']);
-    const [summary] = await query(bigquery, `SELECT COUNT(*) rows, COUNT(DISTINCT CAST(${quote(id.column_name)} AS STRING)) distinct_ids,
+    const [summary] = await query(bigquery, `SELECT COUNT(*) AS ${quote('rows')}, COUNT(DISTINCT CAST(${quote(id.column_name)} AS STRING)) distinct_ids,
       COUNT(*) - COUNT(DISTINCT CAST(${quote(id.column_name)} AS STRING)) repeated_id_rows,
       ${version ? `MIN(SAFE_CAST(${quote(version.column_name)} AS INT64))` : 'NULL'} min_version,
       ${version ? `MAX(SAFE_CAST(${quote(version.column_name)} AS INT64))` : 'NULL'} max_version,
