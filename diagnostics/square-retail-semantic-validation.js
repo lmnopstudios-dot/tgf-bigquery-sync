@@ -66,7 +66,7 @@ export function validationQueries(project, dataset = 'square_data') {
       COUNT(*) return_lines, SUM(quantity) returned_units, SUM(total_return_amount) operational_return_total
       FROM ${t('retail_returns')} GROUP BY location_id, location_name, transaction_item_name, currency
       ORDER BY return_lines DESC`,
-    coverage: `SELECT 'orders' entity, MIN(created_at) earliest, MAX(created_at) latest, COUNT(*) rows FROM ${t('retail_orders')}
+    coverage: `SELECT 'orders' entity, MIN(created_at) earliest, MAX(created_at) latest, COUNT(*) AS row_count FROM ${t('retail_orders')}
       UNION ALL SELECT 'order_items', MIN(order_timestamp), MAX(order_timestamp), COUNT(*) FROM ${t('retail_order_items')}
       UNION ALL SELECT 'returns', MIN(return_timestamp), MAX(return_timestamp), COUNT(*) FROM ${t('retail_returns')}`,
     transaction_snapshot_independence: `SELECT COUNT(*) lines,
@@ -81,7 +81,15 @@ export async function validate({ bigquery, project, dataset = 'square_data' }) {
   const output = {};
   for (const [name, query] of Object.entries(validationQueries(project, dataset))) {
     if (!/^\s*(SELECT|WITH)\b/i.test(query)) throw new Error('Validator refused non-read-only SQL');
-    [output[name]] = await bigquery.query({ query, useLegacySql: false });
+    try {
+      [output[name]] = await bigquery.query({
+        query,
+        useLegacySql: false,
+        labels: { component: 'square_retail_validator', validation_query: name }
+      });
+    } catch (error) {
+      throw new Error(`Square retail validation query "${name}" failed: ${error.message}`, { cause: error });
+    }
   }
   return output;
 }
