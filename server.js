@@ -5,6 +5,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import OpenAI from 'openai';
+import { syncGa4, parseArgs as parseGa4SyncArgs } from './ga4/sync.js';
 import { createEcommerceManagementReportService } from './oracle/ecommerce-management-report.js';
 import {
   AcquisitionValidationError,
@@ -22,6 +23,7 @@ const {
 
   GOOGLE_PROJECT_ID = 'gf-full-data',
   GOOGLE_SERVICE_ACCOUNT_JSON,
+  GA4_PROPERTY_ID,
 
   SYNC_SECRET,
 
@@ -7118,6 +7120,29 @@ app.post(
           ? error.message
           : 'Shopify acquisition sync failed'
       });
+    }
+  }
+);
+
+/* Aggregate-only GA4 behavioural evidence. This never reads Shopify orders and
+ * never treats GA4 purchases as transaction or revenue truth. */
+app.post(
+  '/sync-ga4',
+  requireSyncSecret,
+  express.json({ limit: '10kb' }),
+  async (req, res) => {
+    try {
+      if (!GA4_PROPERTY_ID || !/^\d+$/.test(GA4_PROPERTY_ID)) throw new Error('GA4_PROPERTY_ID is not configured');
+      const args = [];
+      if (req.body?.start_date) args.push('--start', req.body.start_date);
+      if (req.body?.end_date) args.push('--end', req.body.end_date);
+      const options = parseGa4SyncArgs(args);
+      const { BetaAnalyticsDataClient } = await import('@google-analytics/data');
+      const result = await syncGa4({ ...options, project: GOOGLE_PROJECT_ID, propertyId: GA4_PROPERTY_ID, client: new BetaAnalyticsDataClient({ credentials }), bigquery });
+      res.json({ success: true, ...result });
+    } catch (error) {
+      console.error('GA4 semantic sync failed:', error.name);
+      res.status(/date|range|configured|maximum/i.test(error.message) ? 400 : 500).json({ success: false, error: 'GA4 semantic sync failed', detail: String(error.message).slice(0, 300) });
     }
   }
 );
