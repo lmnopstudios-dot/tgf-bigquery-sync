@@ -10,6 +10,7 @@
     "diagnose:ga4-access": "node diagnostics/ga4-access.js",
     "diagnose:ga4-coverage": "node diagnostics/ga4-coverage-discovery.js",
     "diagnose:ga4-shopify-transition": "node diagnostics/ga4-shopify-transition.js",
+    "diagnose:search-console-access": "node diagnostics/search-console-access.js",
     "sync:ga4": "node ga4/sync.js",
     "validate:ga4": "node diagnostics/ga4-semantic-validation.js",
     "test": "node --test"
@@ -22,6 +23,7 @@
     "@google-cloud/bigquery": "^8.1.1",
     "exceljs": "^4.4.0",
     "express": "^5.1.0",
+    "googleapis": "^160.0.0",
     "openai": "^6.0.0"
   }
 }
