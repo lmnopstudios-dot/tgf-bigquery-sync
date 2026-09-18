@@ -9,6 +9,7 @@ import { DOMAIN_PROPERTY, WWW_PROPERTY, PROPERTIES, HISTORY_START, assertDate, d
 export const TABLES=['daily','queries','pages','device_country'];
 export const KEYS={daily:['source_property','date'],queries:['source_property','date','query'],pages:['source_property','date','page'],device_country:['source_property','date','device','country']};
 export const SCHEMAS={daily:'source_property STRING, property_scope STRING, property_hostname STRING, date DATE, clicks INT64, impressions INT64, ctr FLOAT64, position FLOAT64, coverage_status STRING, synced_at TIMESTAMP',queries:'source_property STRING, property_scope STRING, property_hostname STRING, date DATE, query STRING, clicks INT64, impressions INT64, ctr FLOAT64, position FLOAT64, coverage_status STRING, synced_at TIMESTAMP',pages:'source_property STRING, property_scope STRING, property_hostname STRING, date DATE, page STRING, normalized_hostname STRING, normalized_path STRING, clicks INT64, impressions INT64, ctr FLOAT64, position FLOAT64, coverage_status STRING, synced_at TIMESTAMP',device_country:'source_property STRING, property_scope STRING, property_hostname STRING, date DATE, device STRING, country STRING, clicks INT64, impressions INT64, ctr FLOAT64, position FLOAT64, coverage_status STRING, synced_at TIMESTAMP',canonical_daily:'date DATE, clicks INT64, impressions INT64, ctr FLOAT64, position FLOAT64, selected_source_property STRING, selected_property_scope STRING, selection_reason STRING, coverage_status STRING, synced_at TIMESTAMP'};
+export const SCHEMA_FIELDS=Object.fromEntries(Object.entries(SCHEMAS).map(([table,schema])=>[table,schema.split(',').map(declaration=>{const [name,type]=declaration.trim().split(/\s+/);return {name,type,mode:'NULLABLE'}})]));
 const MAX_REPORTED_INSERT_FAILURES=10;
 const safe=v=>{if(!/^[A-Za-z0-9_-]+$/.test(v))throw new Error('Invalid BigQuery identifier');return v};
 
@@ -43,9 +44,29 @@ export function partialFailureDiagnostics(error,{table,sourceProperty,batchSize,
 export class StageInsertError extends Error{
   constructor(diagnostics,{cause}={}){super(JSON.stringify(diagnostics));this.name='StageInsertError';this.diagnostics=diagnostics;this.cause=cause}
 }
-export async function insertStageRows({bigquery,dataset,stage,table,sourceProperty,rows}){
+export class StageSchemaError extends Error{
+  constructor(diagnostics){super(JSON.stringify(diagnostics));this.name='StageSchemaError';this.diagnostics=diagnostics}
+}
+export function stageCreationSql(project,dataset,stage,table){safe(project);safe(dataset);safe(stage);safe(table);if(!SCHEMAS[table])throw new Error('Unknown Search Console table');return `CREATE OR REPLACE TABLE \`${project}.${dataset}.${stage}\`\nLIKE \`${project}.${dataset}.${table}\`\nOPTIONS(expiration_timestamp=TIMESTAMP_ADD(CURRENT_TIMESTAMP(), INTERVAL 1 DAY))`}
+export function stageSchemaQuery(project,dataset){safe(project);safe(dataset);return `SELECT column_name, data_type, is_nullable\nFROM \`${project}.${dataset}.INFORMATION_SCHEMA.COLUMNS\`\nWHERE table_name=@stage\nORDER BY ordinal_position`}
+export async function assertStageSchema({bigquery,project,dataset,stage,table}){
+  const [columns]=await bigquery.query({query:stageSchemaQuery(project,dataset),params:{stage},types:{stage:'STRING'}});
+  const expected=SCHEMA_FIELDS[table];
+  const actual=(columns||[]).map(column=>({name:column.column_name,type:String(column.data_type).toUpperCase(),mode:column.is_nullable==='NO'?'REQUIRED':'NULLABLE'}));
+  const actualByName=new Map(actual.map(field=>[field.name,field]));
+  const missing=expected.filter(field=>!actualByName.has(field.name)).map(field=>field.name);
+  const incompatible=expected.filter(field=>actualByName.has(field.name)&&(actualByName.get(field.name).type!==field.type||actualByName.get(field.name).mode!==field.mode)).map(field=>({column_name:field.name,expected_type:field.type,actual_type:actualByName.get(field.name).type,expected_mode:field.mode,actual_mode:actualByName.get(field.name).mode}));
+  const unexpected=actual.filter(field=>!expected.some(item=>item.name===field.name)).map(field=>field.name);
+  if(missing.length||incompatible.length||unexpected.length)throw new StageSchemaError({operation:'stage_schema_mismatch',logical_target_table:table,project,dataset,stage,missing_fields:missing,unexpected_fields:unexpected,incompatible_fields:incompatible});
+  return true;
+}
+export async function createAndAssertStage({bigquery,project,dataset,stage,table}){
+  await bigquery.query({query:stageCreationSql(project,dataset,stage,table)});
+  await assertStageSchema({bigquery,project,dataset,stage,table});
+}
+export async function insertStageRows({bigquery,project,dataset,stage,table,sourceProperty,rows}){
   if(!rows.length)return;
-  try{await bigquery.dataset(dataset).table(stage).insert(rows)}catch(error){
+  try{await bigquery.dataset(dataset,{projectId:project}).table(stage).insert(rows)}catch(error){
     if(error?.name!=='PartialFailureError')throw error;
     throw new StageInsertError(partialFailureDiagnostics(error,{table,sourceProperty,batchSize:rows.length,rows}),{cause:error});
   }
@@ -61,6 +82,7 @@ export async function collect({client,startDate,endDate,maxRows=500000,syncedAt=
 export async function ensureSchema({bigquery,project,dataset='search_console',location='EU'}){safe(project);safe(dataset);await bigquery.query({query:`CREATE SCHEMA IF NOT EXISTS \`${project}.${dataset}\` OPTIONS(location="${location}")`});for(const [name,schema] of Object.entries(SCHEMAS))await bigquery.query({query:`CREATE TABLE IF NOT EXISTS \`${project}.${dataset}.${name}\` (${schema}) PARTITION BY date`});await bigquery.query({query:`ASSERT (SELECT COUNT(*)=${Object.keys(SCHEMAS).length} AND COUNTIF(data_type!='DATE')=0 FROM \`${project}.${dataset}.INFORMATION_SCHEMA.COLUMNS\` WHERE table_name IN (${Object.keys(SCHEMAS).map(x=>`'${x}'`).join(',')}) AND column_name='date') AS 'Search Console tables require DATE date columns'`});for(const [view,table] of [['canonical_queries','queries'],['canonical_pages','pages'],['canonical_device_country','device_country']])await bigquery.query({query:`CREATE OR REPLACE VIEW \`${project}.${dataset}.${view}\` AS SELECT d.* FROM \`${project}.${dataset}.${table}\` d JOIN \`${project}.${dataset}.canonical_daily\` c ON d.date=c.date AND d.source_property=c.selected_source_property WHERE c.coverage_status='available'`})}
 export function promotionSql(project,dataset,table,stage){safe(project);safe(dataset);safe(table);safe(stage);const keys=KEYS[table].join(',');return `BEGIN TRANSACTION;\nDELETE FROM \`${project}.${dataset}.${table}\` WHERE source_property=@sourceProperty AND date BETWEEN @startDate AND @endDate;\nINSERT INTO \`${project}.${dataset}.${table}\` SELECT * FROM \`${project}.${dataset}.${stage}\`;\nASSERT (SELECT COUNT(*)=COUNT(DISTINCT TO_JSON_STRING(STRUCT(${keys}))) FROM \`${project}.${dataset}.${table}\` WHERE source_property=@sourceProperty AND date BETWEEN @startDate AND @endDate) AS 'duplicate semantic keys';\nCOMMIT TRANSACTION;`}
 export async function promote({bigquery,project,dataset,data,startDate,endDate,invocationId=randomUUID().replaceAll('-','_')}){
+  safe(project);safe(dataset);safe(invocationId);
   const stages=[];
   let primaryError;
   try {
@@ -68,13 +90,13 @@ export async function promote({bigquery,project,dataset,data,startDate,endDate,i
     for(const property of PROPERTIES) for(const table of TABLES){
       const stage=`_stage_${table}_${invocationId}_${property.property_scope}`; stages.push(stage);
       const rows=data[table].filter(r=>r.source_property===property.source_property);
-      await bigquery.dataset(dataset).createTable(stage,{schema:SCHEMAS[table],expirationTime:Date.now()+86400000});
-      await insertStageRows({bigquery,dataset,stage,table,sourceProperty:property.source_property,rows});
+      await createAndAssertStage({bigquery,project,dataset,stage,table});
+      await insertStageRows({bigquery,project,dataset,stage,table,sourceProperty:property.source_property,rows});
       sourceStages.push({property,table,stage});
     }
     const canonicalStage=`_stage_canonical_daily_${invocationId}`; stages.push(canonicalStage);
-    await bigquery.dataset(dataset).createTable(canonicalStage,{schema:SCHEMAS.canonical_daily,expirationTime:Date.now()+86400000});
-    await insertStageRows({bigquery,dataset,stage:canonicalStage,table:'canonical_daily',sourceProperty:null,rows:data.canonical_daily});
+    await createAndAssertStage({bigquery,project,dataset,stage:canonicalStage,table:'canonical_daily'});
+    await insertStageRows({bigquery,project,dataset,stage:canonicalStage,table:'canonical_daily',sourceProperty:null,rows:data.canonical_daily});
     const statements=['BEGIN TRANSACTION;'];
     const params={...dateParameters(startDate,endDate)},types={startDate:'DATE',endDate:'DATE'};
     for(const [i,{property,table,stage}] of sourceStages.entries()){
@@ -90,7 +112,7 @@ export async function promote({bigquery,project,dataset,data,startDate,endDate,i
     await bigquery.query({query:statements.join('\n'),params,types});
   } catch(error){primaryError=error;throw error}
   finally {
-    const cleanup=await Promise.allSettled(stages.map(stage=>bigquery.dataset(dataset).table(stage).delete({ignoreNotFound:true})));
+    const cleanup=await Promise.allSettled(stages.map(stage=>bigquery.dataset(dataset,{projectId:project}).table(stage).delete({ignoreNotFound:true})));
     if(!primaryError){const failed=cleanup.find(result=>result.status==='rejected');if(failed)throw failed.reason}
   }
 }

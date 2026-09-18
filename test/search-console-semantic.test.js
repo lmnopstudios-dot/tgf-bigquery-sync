@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { BigQuery } from '@google-cloud/bigquery';
 import { DOMAIN_PROPERTY, WWW_PROPERTY, PROPERTIES, normalizePage, aggregate, canonicalDaily, validateRows } from '../search-console/semantic.js';
-import { dateParameters, fetchRows, validateAccess, promotionSql, parseArgs, syncSummary, emitSyncSuccess, partialFailureDiagnostics, promote } from '../search-console/sync.js';
+import { dateParameters, fetchRows, validateAccess, promotionSql, parseArgs, syncSummary, emitSyncSuccess, partialFailureDiagnostics, promote, SCHEMA_FIELDS, stageCreationSql, assertStageSchema } from '../search-console/sync.js';
 import { redactSecrets } from '../diagnostics/search-console-access.js';
 import { validationQuery, coverageQuery, validate } from '../diagnostics/search-console-semantic-validation.js';
 
@@ -42,19 +42,58 @@ test('partial insert failures are bounded and expose safe fields without rejecte
   assert.doesNotMatch(JSON.stringify(output),/private query|private\.example|token-|access-|secret-|BEGIN PRIVATE KEY/);
 });
 
+test('the production unknown-field symptom is safely recognized as a malformed stage',()=>{
+  const fields=['coverage_status','property_hostname','date','position','ctr','clicks','coverage_status'];
+  const rows=fields.map((_,index)=>({private_value:`row-${index}`}));
+  const errors=rows.map((row,index)=>({row,errors:[{reason:'invalid',message:`Unknown field: ${fields[index]}`}]}));
+  const output=partialFailureDiagnostics({name:'PartialFailureError',errors},{table:'daily',sourceProperty:DOMAIN_PROPERTY,batchSize:7,rows});
+  assert.deepEqual(output.failures.map(failure=>failure.field),fields);
+  assert.equal(output.failed_row_count,7);
+  assert.doesNotMatch(JSON.stringify(output),/private_value|row-/);
+});
+
+test('all five stages use fully qualified CREATE OR REPLACE TABLE LIKE production DDL',()=>{
+  for(const table of Object.keys(SCHEMA_FIELDS)){
+    const sql=stageCreationSql('project','search_console',`_stage_${table}_run`,table);
+    assert.ok(sql.startsWith(`CREATE OR REPLACE TABLE \`project.search_console._stage_${table}_run\``));
+    assert.ok(sql.includes(`LIKE \`project.search_console.${table}\``));
+    assert.match(sql,/expiration_timestamp/);
+  }
+});
+
+test('stage schema assertion accepts every exact schema and safely rejects malformed schemas',async()=>{
+  for(const [table,fields] of Object.entries(SCHEMA_FIELDS)){
+    const bigquery={query:async()=>[fields.map(field=>({column_name:field.name,data_type:field.type,is_nullable:'YES'}))]};
+    await assertStageSchema({bigquery,project:'project',dataset:'search_console',stage:`_stage_${table}`,table});
+  }
+  const malformed=SCHEMA_FIELDS.daily.slice(0,2).map(field=>({column_name:`${field.name} ${field.type}`,data_type:'STRING',is_nullable:'YES'}));
+  await assert.rejects(()=>assertStageSchema({bigquery:{query:async()=>[malformed]},project:'project',dataset:'search_console',stage:'_stage_daily_bad',table:'daily'}),error=>{
+    const output=JSON.parse(error.message);
+    assert.equal(output.operation,'stage_schema_mismatch');
+    assert.equal(output.logical_target_table,'daily');
+    assert.ok(output.missing_fields.includes('date'));
+    assert.deepEqual(output.unexpected_fields,['source_property STRING','property_scope STRING']);
+    assert.doesNotMatch(error.message,/row|query text|page URL/);
+    return true;
+  });
+});
+
 test('staging partial failure has table/property context, skips promotion, and cleans every owned stage',async()=>{
-  const created=[],deleted=[],queries=[];
+  const created=[],deleted=[],promotions=[];
   const data=Object.fromEntries([...['daily','queries','pages','device_country','canonical_daily'].map(name=>[name,[]])]);
   for(const property of PROPERTIES)data.queries.push({source_property:property.source_property,query:'sensitive query'});
   const bigquery={
-    dataset:()=>({
-      createTable:async name=>created.push(name),
+    dataset:(dataset,options)=>({
       table:name=>({
-        insert:async rows=>{if(name.includes('_stage_queries_')&&name.endsWith('_domain')){const error=new Error();error.name='PartialFailureError';error.errors=[{row:rows[0],errors:[{reason:'invalid',message:'Invalid value for type INT64: sensitive query'}]}];throw error}},
+        insert:async rows=>{assert.equal(options.projectId,'project');if(name.includes('_stage_queries_')&&name.endsWith('_domain')){const error=new Error();error.name='PartialFailureError';error.errors=[{row:rows[0],errors:[{reason:'invalid',message:'Invalid value for type INT64: sensitive query'}]}];throw error}},
         delete:async()=>deleted.push(name)
       })
     }),
-    query:async options=>queries.push(options)
+    query:async options=>{
+      if(options.query.startsWith('CREATE OR REPLACE')){created.push(options.query.match(/`project\.search_console\.([^`]+)`/)[1]);return [[]]}
+      if(options.query.startsWith('SELECT column_name')){const table=created.at(-1).match(/^_stage_(daily|queries|pages|device_country|canonical_daily)_/)[1];return [SCHEMA_FIELDS[table].map(field=>({column_name:field.name,data_type:field.type,is_nullable:'YES'}))]}
+      promotions.push(options);return [[]];
+    }
   };
   await assert.rejects(()=>promote({bigquery,project:'project',dataset:'search_console',data,startDate:'2026-09-08',endDate:'2026-09-14',invocationId:'test'}),error=>{
     const output=JSON.parse(error.message);
@@ -64,7 +103,50 @@ test('staging partial failure has table/property context, skips promotion, and c
     assert.doesNotMatch(error.message,/sensitive query/);
     return true;
   });
-  assert.equal(queries.length,0,'coordinated promotion must not run');
+  assert.equal(promotions.length,0,'coordinated promotion must not run');
   assert.equal(created.length,2);
   assert.deepEqual(new Set(deleted),new Set(created));
+});
+
+test('stage creation and schema assertion finish before insert; schema failure skips promotion and cleans up',async()=>{
+  const events=[];
+  const data=Object.fromEntries(Object.keys(SCHEMA_FIELDS).map(table=>[table,[]]));
+  data.daily=[{source_property:DOMAIN_PROPERTY,date:'2026-09-08'}];
+  const bigquery={
+    query:async options=>{
+      if(options.query.startsWith('CREATE OR REPLACE')){events.push('create-complete');return [[]]}
+      if(options.query.startsWith('SELECT column_name')){events.push('schema-mismatch');return [[{column_name:'wrong',data_type:'STRING',is_nullable:'YES'}]]}
+      events.push('promotion');return [[]];
+    },
+    dataset:(dataset,options)=>({table:name=>({insert:async()=>events.push('insert'),delete:async()=>{assert.equal(options.projectId,'project');events.push(`cleanup:${name}`)}})})
+  };
+  await assert.rejects(()=>promote({bigquery,project:'project',dataset:'search_console',data,startDate:'2026-09-08',endDate:'2026-09-14',invocationId:'test'}),/stage_schema_mismatch/);
+  assert.deepEqual(events.slice(0,2),['create-complete','schema-mismatch']);
+  assert.equal(events.includes('insert'),false);
+  assert.equal(events.includes('promotion'),false);
+  assert.equal(events.filter(event=>event.startsWith('cleanup:')).length,1);
+});
+
+test('successful staging preserves coordinated same-range replacement and cleans all owned stages',async()=>{
+  const stages=new Map(),promotions=[],deleted=[];
+  const data=Object.fromEntries(Object.keys(SCHEMA_FIELDS).map(table=>[table,[]]));
+  const bigquery={
+    query:async options=>{
+      if(options.query.startsWith('CREATE OR REPLACE')){
+        const [,stage,table]=options.query.match(/`project\.search_console\.([^`]+)`[\s\S]+LIKE `project\.search_console\.([^`]+)`/);
+        stages.set(stage,table);return [[]];
+      }
+      if(options.query.startsWith('SELECT column_name'))return [SCHEMA_FIELDS[stages.get(options.params.stage)].map(field=>({column_name:field.name,data_type:field.type,is_nullable:'YES'}))];
+      promotions.push(options);return [[]];
+    },
+    dataset:()=>({table:stage=>({insert:async()=>{},delete:async()=>deleted.push(stage)})})
+  };
+  await promote({bigquery,project:'project',dataset:'search_console',data,startDate:'2026-09-08',endDate:'2026-09-14',invocationId:'test'});
+  assert.equal(stages.size,PROPERTIES.length*4+1);
+  assert.equal(promotions.length,1);
+  assert.match(promotions[0].query,/BEGIN TRANSACTION;/);
+  assert.match(promotions[0].query,/DELETE FROM `project\.search_console\.daily` WHERE source_property=@sourceProperty0 AND date BETWEEN @startDate AND @endDate;/);
+  assert.match(promotions[0].query,/INSERT INTO `project\.search_console\.canonical_daily` SELECT \* FROM `project\.search_console\._stage_canonical_daily_test`;/);
+  assert.match(promotions[0].query,/COMMIT TRANSACTION;/);
+  assert.equal(deleted.length,stages.size);
 });
