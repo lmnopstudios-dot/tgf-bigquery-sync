@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { BigQuery } from '@google-cloud/bigquery';
 import { DOMAIN_PROPERTY, WWW_PROPERTY, PROPERTIES, normalizePage, aggregate, canonicalDaily, validateRows } from '../search-console/semantic.js';
-import { dateParameters, fetchRows, validateAccess, promotionSql, parseArgs, syncSummary, emitSyncSuccess } from '../search-console/sync.js';
+import { dateParameters, fetchRows, validateAccess, promotionSql, parseArgs, syncSummary, emitSyncSuccess, partialFailureDiagnostics, promote } from '../search-console/sync.js';
 import { redactSecrets } from '../diagnostics/search-console-access.js';
 import { validationQuery, coverageQuery, validate } from '../diagnostics/search-console-semantic-validation.js';
 
@@ -24,3 +24,47 @@ test('sync output is emitted only after success and never on failure',async()=>{
 test('query omission is not materialized as zero rows',()=>{const c=canonicalDaily([], '2025-05-06','2025-05-06');assert.equal(c[0].coverage_status,'unavailable');assert.equal(c[0].clicks,null)});
 
 test('credentials, tokens, and private keys are redacted',()=>assert.doesNotMatch(redactSecrets('Bearer abc.def private_key=secret'),/abc\.def|secret/));
+
+test('partial insert failures are bounded and expose safe fields without rejected row values',()=>{
+  const rows=Array.from({length:12},(_,i)=>({query:`private query ${i}`,page:`https://private.example/${i}`,access_token:`token-${i}`}));
+  const errors=rows.map((row,i)=>({row,errors:[{reason:'invalid',message:i===0?'No such field: unexpected_field. Value: private query 0':`Invalid value for type INT64: private query ${i} at https://private.example/${i} Bearer access-${i} private_key=-----BEGIN PRIVATE KEY-----secret-${i}-----END PRIVATE KEY-----`}] }));
+  const output=partialFailureDiagnostics({name:'PartialFailureError',errors},{table:'queries',sourceProperty:DOMAIN_PROPERTY,batchSize:rows.length,rows});
+  assert.equal(output.operation,'bigquery_stage_insert');
+  assert.equal(output.logical_target_table,'queries');
+  assert.equal(output.source_property,DOMAIN_PROPERTY);
+  assert.equal(output.failed_row_count,12);
+  assert.equal(output.reported_failure_count,10);
+  assert.equal(output.failures_truncated,true);
+  assert.equal(output.failures[0].row_index,0);
+  assert.equal(output.failures[0].field,'unexpected_field');
+  assert.equal(output.failures[0].reason,'invalid');
+  assert.equal(output.error_class,'PartialFailureError');
+  assert.doesNotMatch(JSON.stringify(output),/private query|private\.example|token-|access-|secret-|BEGIN PRIVATE KEY/);
+});
+
+test('staging partial failure has table/property context, skips promotion, and cleans every owned stage',async()=>{
+  const created=[],deleted=[],queries=[];
+  const data=Object.fromEntries([...['daily','queries','pages','device_country','canonical_daily'].map(name=>[name,[]])]);
+  for(const property of PROPERTIES)data.queries.push({source_property:property.source_property,query:'sensitive query'});
+  const bigquery={
+    dataset:()=>({
+      createTable:async name=>created.push(name),
+      table:name=>({
+        insert:async rows=>{if(name.includes('_stage_queries_')&&name.endsWith('_domain')){const error=new Error();error.name='PartialFailureError';error.errors=[{row:rows[0],errors:[{reason:'invalid',message:'Invalid value for type INT64: sensitive query'}]}];throw error}},
+        delete:async()=>deleted.push(name)
+      })
+    }),
+    query:async options=>queries.push(options)
+  };
+  await assert.rejects(()=>promote({bigquery,project:'project',dataset:'search_console',data,startDate:'2026-09-08',endDate:'2026-09-14',invocationId:'test'}),error=>{
+    const output=JSON.parse(error.message);
+    assert.equal(output.logical_target_table,'queries');
+    assert.equal(output.source_property,DOMAIN_PROPERTY);
+    assert.equal(output.batch_size,1);
+    assert.doesNotMatch(error.message,/sensitive query/);
+    return true;
+  });
+  assert.equal(queries.length,0,'coordinated promotion must not run');
+  assert.equal(created.length,2);
+  assert.deepEqual(new Set(deleted),new Set(created));
+});

@@ -4,7 +4,7 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { main, runCli } from '../search-console/sync.js';
+import { main, runCli, StageInsertError } from '../search-console/sync.js';
 
 test('direct CLI follows a symlink and cannot silently exit successfully',()=>{
   const directory=mkdtempSync(join(tmpdir(),'search-console-cli-'));
@@ -50,6 +50,21 @@ test('CLI failure is redacted, emits no success, and sets a non-zero exit',async
     assert.equal(process.exitCode,1);
     assert.equal(errors.length,1);
     assert.doesNotMatch(errors[0],/secret-token/);
+  }finally{process.exitCode=previous}
+});
+
+test('CLI partial failure prints only structured safe diagnostics, no success, and exits non-zero',async()=>{
+  const stdout=[],stderr=[];
+  const previous=process.exitCode;
+  process.exitCode=undefined;
+  try{
+    const diagnostics={operation:'bigquery_stage_insert',logical_target_table:'pages',source_property:'sc-domain:example.com',batch_size:1,failed_row_count:1,reported_failure_count:1,failures:[{row_index:0,reason:'invalid',code:null,field:'date',message:'Invalid value for BigQuery type DATE: [REDACTED]'}],failures_truncated:false,error_class:'PartialFailureError'};
+    const result=await runCli(async()=>{throw new StageInsertError(diagnostics)},line=>stderr.push(line));
+    assert.equal(result,undefined);
+    assert.equal(process.exitCode,1);
+    assert.deepEqual(stdout,[]);
+    assert.equal(stderr.length,1);
+    assert.deepEqual(JSON.parse(stderr[0]),diagnostics);
   }finally{process.exitCode=previous}
 });
 

@@ -9,7 +9,47 @@ import { DOMAIN_PROPERTY, WWW_PROPERTY, PROPERTIES, HISTORY_START, assertDate, d
 export const TABLES=['daily','queries','pages','device_country'];
 export const KEYS={daily:['source_property','date'],queries:['source_property','date','query'],pages:['source_property','date','page'],device_country:['source_property','date','device','country']};
 export const SCHEMAS={daily:'source_property STRING, property_scope STRING, property_hostname STRING, date DATE, clicks INT64, impressions INT64, ctr FLOAT64, position FLOAT64, coverage_status STRING, synced_at TIMESTAMP',queries:'source_property STRING, property_scope STRING, property_hostname STRING, date DATE, query STRING, clicks INT64, impressions INT64, ctr FLOAT64, position FLOAT64, coverage_status STRING, synced_at TIMESTAMP',pages:'source_property STRING, property_scope STRING, property_hostname STRING, date DATE, page STRING, normalized_hostname STRING, normalized_path STRING, clicks INT64, impressions INT64, ctr FLOAT64, position FLOAT64, coverage_status STRING, synced_at TIMESTAMP',device_country:'source_property STRING, property_scope STRING, property_hostname STRING, date DATE, device STRING, country STRING, clicks INT64, impressions INT64, ctr FLOAT64, position FLOAT64, coverage_status STRING, synced_at TIMESTAMP',canonical_daily:'date DATE, clicks INT64, impressions INT64, ctr FLOAT64, position FLOAT64, selected_source_property STRING, selected_property_scope STRING, selection_reason STRING, coverage_status STRING, synced_at TIMESTAMP'};
+const MAX_REPORTED_INSERT_FAILURES=10;
 const safe=v=>{if(!/^[A-Za-z0-9_-]+$/.test(v))throw new Error('Invalid BigQuery identifier');return v};
+
+function failedField(message){
+  const text=String(message??'');
+  for(const pattern of [/(?:no such|unknown|unrecognized) field[: ]+[`'\"]?([A-Za-z_][A-Za-z0-9_]*)/i,/missing required field[: ]+[`'\"]?([A-Za-z_][A-Za-z0-9_]*)/i,/(?:field|column) [`'\"]([A-Za-z_][A-Za-z0-9_]*)[`'\"]/i]){
+    const match=text.match(pattern); if(match)return match[1];
+  }
+  return null;
+}
+function safeBigQueryMessage(message,reason,field){
+  const text=redactSecrets(message);
+  if(field&&/(?:no such|unknown|unrecognized) field/i.test(text))return `Unknown field: ${field}`;
+  if(field&&/missing required field/i.test(text))return `Missing required field: ${field}`;
+  const type=text.match(/(?:invalid value for|could not convert(?: value)? to|cannot convert(?: value)? to) (?:type )?([A-Z][A-Z0-9_<>]*)/i);
+  if(type)return `Invalid value for BigQuery type ${type[1].toUpperCase()}: [REDACTED]`;
+  return `BigQuery rejected row${reason?` (${String(reason).replace(/[^A-Za-z0-9_-]/g,'')})`:''}; message redacted`;
+}
+export function partialFailureDiagnostics(error,{table,sourceProperty,batchSize,rows},limit=MAX_REPORTED_INSERT_FAILURES){
+  const failures=Array.isArray(error?.errors)?error.errors:[];
+  const details=[];
+  for(const failure of failures){
+    const nested=Array.isArray(failure?.errors)&&failure.errors.length?failure.errors:[{}];
+    const rowIndex=rows.indexOf(failure?.row);
+    for(const item of nested){
+      const reason=item?.reason??null,field=failedField(item?.message);
+      details.push({row_index:rowIndex>=0?rowIndex:null,reason,code:item?.code??error?.code??null,field,message:safeBigQueryMessage(item?.message,reason,field)});
+    }
+  }
+  return {operation:'bigquery_stage_insert',logical_target_table:table,source_property:sourceProperty??null,batch_size:batchSize,failed_row_count:failures.length,reported_failure_count:Math.min(details.length,limit),failures:details.slice(0,limit),failures_truncated:details.length>limit,error_class:error?.name||error?.constructor?.name||'Error'};
+}
+export class StageInsertError extends Error{
+  constructor(diagnostics,{cause}={}){super(JSON.stringify(diagnostics));this.name='StageInsertError';this.diagnostics=diagnostics;this.cause=cause}
+}
+export async function insertStageRows({bigquery,dataset,stage,table,sourceProperty,rows}){
+  if(!rows.length)return;
+  try{await bigquery.dataset(dataset).table(stage).insert(rows)}catch(error){
+    if(error?.name!=='PartialFailureError')throw error;
+    throw new StageInsertError(partialFailureDiagnostics(error,{table,sourceProperty,batchSize:rows.length,rows}),{cause:error});
+  }
+}
 export function dateParameters(startDate,endDate){return {startDate:BigQuery.date(startDate),endDate:BigQuery.date(endDate)}}
 export function parseArgs(argv,now=new Date()){const final=new Date(Date.UTC(now.getUTCFullYear(),now.getUTCMonth(),now.getUTCDate()-3)).toISOString().slice(0,10),start=new Date(`${final}T00:00:00Z`);start.setUTCDate(start.getUTCDate()-6);const o={startDate:start.toISOString().slice(0,10),endDate:final,finalDataCutoff:final,dataset:'search_console',maxDays:31,maxRows:500000};for(let i=0;i<argv.length;i++){const a=argv[i],v=argv[++i];if(a==='--start')o.startDate=v;else if(a==='--end')o.endDate=v;else if(a==='--dataset')o.dataset=v;else if(a==='--max-days')o.maxDays=Number(v);else if(a==='--max-rows')o.maxRows=Number(v);else throw new Error(`Unknown argument: ${a}`)}safe(o.dataset);assertDate(o.startDate);assertDate(o.endDate);const days=datesBetween(o.startDate,o.endDate).length;if(o.startDate<HISTORY_START)throw new Error(`start precedes governed history (${HISTORY_START})`);if(o.endDate>final)throw new Error(`end exceeds latest final-data candidate (${final})`);if(days>o.maxDays)throw new Error(`date range exceeds bounded maximum of ${o.maxDays} days`);if(!Number.isInteger(o.maxRows)||o.maxRows<1||o.maxRows>1000000)throw new Error('invalid maxRows');return o}
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
@@ -22,18 +62,19 @@ export async function ensureSchema({bigquery,project,dataset='search_console',lo
 export function promotionSql(project,dataset,table,stage){safe(project);safe(dataset);safe(table);safe(stage);const keys=KEYS[table].join(',');return `BEGIN TRANSACTION;\nDELETE FROM \`${project}.${dataset}.${table}\` WHERE source_property=@sourceProperty AND date BETWEEN @startDate AND @endDate;\nINSERT INTO \`${project}.${dataset}.${table}\` SELECT * FROM \`${project}.${dataset}.${stage}\`;\nASSERT (SELECT COUNT(*)=COUNT(DISTINCT TO_JSON_STRING(STRUCT(${keys}))) FROM \`${project}.${dataset}.${table}\` WHERE source_property=@sourceProperty AND date BETWEEN @startDate AND @endDate) AS 'duplicate semantic keys';\nCOMMIT TRANSACTION;`}
 export async function promote({bigquery,project,dataset,data,startDate,endDate,invocationId=randomUUID().replaceAll('-','_')}){
   const stages=[];
+  let primaryError;
   try {
     const sourceStages=[];
     for(const property of PROPERTIES) for(const table of TABLES){
       const stage=`_stage_${table}_${invocationId}_${property.property_scope}`; stages.push(stage);
       const rows=data[table].filter(r=>r.source_property===property.source_property);
       await bigquery.dataset(dataset).createTable(stage,{schema:SCHEMAS[table],expirationTime:Date.now()+86400000});
-      if(rows.length) await bigquery.dataset(dataset).table(stage).insert(rows);
+      await insertStageRows({bigquery,dataset,stage,table,sourceProperty:property.source_property,rows});
       sourceStages.push({property,table,stage});
     }
     const canonicalStage=`_stage_canonical_daily_${invocationId}`; stages.push(canonicalStage);
     await bigquery.dataset(dataset).createTable(canonicalStage,{schema:SCHEMAS.canonical_daily,expirationTime:Date.now()+86400000});
-    await bigquery.dataset(dataset).table(canonicalStage).insert(data.canonical_daily);
+    await insertStageRows({bigquery,dataset,stage:canonicalStage,table:'canonical_daily',sourceProperty:null,rows:data.canonical_daily});
     const statements=['BEGIN TRANSACTION;'];
     const params={...dateParameters(startDate,endDate)},types={startDate:'DATE',endDate:'DATE'};
     for(const [i,{property,table,stage}] of sourceStages.entries()){
@@ -47,7 +88,11 @@ export async function promote({bigquery,project,dataset,data,startDate,endDate,i
     statements.push(`ASSERT (SELECT COUNT(*)=DATE_DIFF(@endDate,@startDate,DAY)+1 AND COUNT(*)=COUNT(DISTINCT date) FROM \`${project}.${dataset}.canonical_daily\` WHERE date BETWEEN @startDate AND @endDate) AS 'canonical coverage';`);
     statements.push('COMMIT TRANSACTION;');
     await bigquery.query({query:statements.join('\n'),params,types});
-  } finally { for(const stage of stages) await bigquery.dataset(dataset).table(stage).delete({ignoreNotFound:true}); }
+  } catch(error){primaryError=error;throw error}
+  finally {
+    const cleanup=await Promise.allSettled(stages.map(stage=>bigquery.dataset(dataset).table(stage).delete({ignoreNotFound:true})));
+    if(!primaryError){const failed=cleanup.find(result=>result.status==='rejected');if(failed)throw failed.reason}
+  }
 }
 export function syncSummary(args,data){return {status:'success',dataset:args.dataset||'search_console',requested_range:{start_date:args.startDate,end_date:args.endDate},final_data_cutoff:args.finalDataCutoff||args.endDate,governed_properties_processed:PROPERTIES.length,property_rows:PROPERTIES.map(property=>({source_property:property.source_property,tables:Object.fromEntries(TABLES.map(table=>{const count=data[table].filter(row=>row.source_property===property.source_property).length;return [table,{staged:count,inserted:count}]}))})),canonical_daily:{row_count:data.canonical_daily.length},canonical_selection_counts:{preferred_domain:data.canonical_daily.filter(row=>row.selection_reason==='preferred_domain_property').length,fallback_www:data.canonical_daily.filter(row=>row.selection_reason==='fallback_www_property').length,unavailable:data.canonical_daily.filter(row=>row.coverage_status==='unavailable').length}}}
 export async function syncSearchConsole(args){await validateAccess(args.client);await ensureSchema(args);const data=await collect(args);await promote({...args,data});return syncSummary(args,data)}
