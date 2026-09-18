@@ -14,6 +14,7 @@
     "diagnose:search-console-coverage": "node diagnostics/search-console-coverage.js",
     "diagnose:search-console-reconciliation": "node diagnostics/search-console-reconciliation.js",
     "diagnose:woo-geography": "node diagnostics/woo-geography-discovery.js",
+    "diagnose:woo-postcode-country": "node diagnostics/woo-postcode-country-feasibility.js",
     "sync:ga4": "node ga4/sync.js",
     "validate:ga4": "node diagnostics/ga4-semantic-validation.js",
     "test": "node --test",
