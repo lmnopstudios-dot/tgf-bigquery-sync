@@ -7,6 +7,7 @@ import path from 'path';
 import OpenAI from 'openai';
 import { syncGa4, parseArgs as parseGa4SyncArgs } from './ga4/sync.js';
 import { createEcommerceManagementReportService } from './oracle/ecommerce-management-report.js';
+import { createOrderQueryService, ORDER_TOOL_DEFINITIONS } from './oracle/order-query.js';
 import {
   AcquisitionValidationError,
   syncShopifyAcquisition
@@ -95,6 +96,11 @@ const credentials = JSON.parse(
 const bigquery = new BigQuery({
   projectId: GOOGLE_PROJECT_ID,
   credentials
+});
+
+const orderQueryService = createOrderQueryService({
+  bigquery,
+  project: GOOGLE_PROJECT_ID
 });
 
 /* =========================================================
@@ -8163,6 +8169,7 @@ app.post(
         .slice(0, 10);
 
       const tools = [
+        ...ORDER_TOOL_DEFINITIONS,
         {
           type: 'function',
           name: 'get_ecommerce_management_report',
@@ -8837,6 +8844,11 @@ Important rules:
 - When discussing refunds, remember refund gross values are negative. Use refunded_amount when presenting a positive human-readable refund total.
 - Gift card issuance data is incomplete for historical WooCommerce. Mention this limitation when relevant.
 - BigQuery is the source of truth for historical financial reporting.
+- Use search_orders for bounded transaction-level searches, examples underlying an aggregate, order numbers, products/SKUs, refunds, direct shipping country, Shopify Online and POS evidence. Use get_order_details or get_order_line_items only with the exact source_platform + source_order_id identity returned by search; never guess across Woo and Shopify ID namespaces. Use get_order_history_context when explicitly asked whether an exact Shopify identity is native or Matrixify-imported.
+- Metorik is the historical Woo order authority. Shopify is current commerce evidence. Matrixify contains only a limited migrated Woo slice and search_orders excludes those Shopify representations to prevent a second sale. If asked whether an excluded Shopify representation is migrated, explain this classification rather than counting it as Shopify-native.
+- Historical Woo shipping country is incomplete. Country searches use only directly observed shipping_country, never billing country or an inference. Always disclose the geography_warning returned by search_orders.
+- Order-tool money is explicitly source-native operational evidence (source_order_total, source_discount_total, source_refund_total), not canonical accounting truth. Continue to use finance tools for totals and trends; never call source-native order value canonical sales.
+- Order tools are strictly read-only and intentionally exclude customer names, email, phone, street/postal addresses, payment credentials and raw payloads. Never request or reconstruct that PII.
 - Shopify is the source of truth for online-store conversion KPIs wherever Shopify session data exists.
 - Shopify get_shopify_sales_kpis is the source for Online Store operational sales KPIs such as orders and AOV.
 - Use get_shopify_product_performance for historical Shopify Online Store product performance.
@@ -8919,7 +8931,23 @@ Important rules:
           try {
             const args = JSON.parse(item.arguments || '{}');
 
-            if (item.name === 'get_ecommerce_management_report') {
+            if (item.name === 'search_orders') {
+
+  result = await orderQueryService.searchOrders(args);
+
+} else if (item.name === 'get_order_details') {
+
+  result = await orderQueryService.getOrderDetails(args);
+
+} else if (item.name === 'get_order_line_items') {
+
+  result = await orderQueryService.getOrderLineItems(args);
+
+} else if (item.name === 'get_order_history_context') {
+
+  result = await orderQueryService.getOrderHistoryContext(args);
+
+} else if (item.name === 'get_ecommerce_management_report') {
 
   result = await getEcommerceManagementReport(args);
 

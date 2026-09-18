@@ -19,7 +19,8 @@
     "validate:ga4": "node diagnostics/ga4-semantic-validation.js",
     "test": "node --test",
     "sync:search-console": "node search-console/sync.js",
-    "validate:search-console": "node diagnostics/search-console-semantic-validation.js"
+    "validate:search-console": "node diagnostics/search-console-semantic-validation.js",
+    "validate:orders": "node diagnostics/order-query-validation.js"
   },
   "engines": {
     "node": ">=20"
