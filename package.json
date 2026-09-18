@@ -15,7 +15,9 @@
     "diagnose:search-console-reconciliation": "node diagnostics/search-console-reconciliation.js",
     "sync:ga4": "node ga4/sync.js",
     "validate:ga4": "node diagnostics/ga4-semantic-validation.js",
-    "test": "node --test"
+    "test": "node --test",
+    "sync:search-console": "node search-console/sync.js",
+    "validate:search-console": "node diagnostics/search-console-semantic-validation.js"
   },
   "engines": {
     "node": ">=20"
