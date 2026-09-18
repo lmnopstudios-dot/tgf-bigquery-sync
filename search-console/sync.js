@@ -1,5 +1,7 @@
 #!/usr/bin/env node
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
+import { realpathSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { BigQuery } from '@google-cloud/bigquery';
 import { createSearchConsoleClient, redactSecrets } from '../diagnostics/search-console-access.js';
@@ -50,5 +52,15 @@ export async function promote({bigquery,project,dataset,data,startDate,endDate,i
 export function syncSummary(args,data){return {status:'success',dataset:args.dataset||'search_console',requested_range:{start_date:args.startDate,end_date:args.endDate},final_data_cutoff:args.finalDataCutoff||args.endDate,governed_properties_processed:PROPERTIES.length,property_rows:PROPERTIES.map(property=>({source_property:property.source_property,tables:Object.fromEntries(TABLES.map(table=>{const count=data[table].filter(row=>row.source_property===property.source_property).length;return [table,{staged:count,inserted:count}]}))})),canonical_daily:{row_count:data.canonical_daily.length},canonical_selection_counts:{preferred_domain:data.canonical_daily.filter(row=>row.selection_reason==='preferred_domain_property').length,fallback_www:data.canonical_daily.filter(row=>row.selection_reason==='fallback_www_property').length,unavailable:data.canonical_daily.filter(row=>row.coverage_status==='unavailable').length}}}
 export async function syncSearchConsole(args){await validateAccess(args.client);await ensureSchema(args);const data=await collect(args);await promote({...args,data});return syncSummary(args,data)}
 export async function emitSyncSuccess(run,log=console.log){const result=await run();log(JSON.stringify(result,null,2));return result}
-async function main(){const options=parseArgs(process.argv.slice(2)),credentials=JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON),project=process.env.GOOGLE_PROJECT_ID||credentials.project_id,{google}=await import('googleapis');await emitSyncSuccess(()=>syncSearchConsole({...options,project,credentials,client:createSearchConsoleClient(google,credentials),bigquery:new BigQuery({projectId:project,credentials})}))}
-if(import.meta.url===pathToFileURL(process.argv[1]||'').href)main().catch(e=>{console.error(redactSecrets(e.message));process.exitCode=1});
+export function isDirectExecution(metaUrl=import.meta.url,argv1=process.argv[1]){
+  if(!argv1)return false;
+  try{return realpathSync(fileURLToPath(metaUrl))===realpathSync(resolve(argv1))}catch{return false}
+}
+export async function main({argv=process.argv.slice(2),env=process.env,write=line=>process.stdout.write(`${line}\n`),sync=syncSearchConsole,importGoogle=()=>import('googleapis'),BigQueryClass=BigQuery,createClient=createSearchConsoleClient}={}){
+  const options=parseArgs(argv),credentials=JSON.parse(env.GOOGLE_SERVICE_ACCOUNT_JSON),project=env.GOOGLE_PROJECT_ID||credentials.project_id,{google}=await importGoogle();
+  return emitSyncSuccess(()=>sync({...options,project,credentials,client:createClient(google,credentials),bigquery:new BigQueryClass({projectId:project,credentials})}),write);
+}
+export async function runCli(run=()=>main(),writeError=line=>process.stderr.write(`${line}\n`)){
+  try{return await run()}catch(error){writeError(redactSecrets(error?.message||error));process.exitCode=1;return undefined}
+}
+if(isDirectExecution())await runCli();
