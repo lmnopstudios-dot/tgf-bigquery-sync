@@ -11,6 +11,7 @@
     "diagnose:ga4-coverage": "node diagnostics/ga4-coverage-discovery.js",
     "diagnose:ga4-shopify-transition": "node diagnostics/ga4-shopify-transition.js",
     "diagnose:search-console-access": "node diagnostics/search-console-access.js",
+    "diagnose:search-console-coverage": "node diagnostics/search-console-coverage.js",
     "sync:ga4": "node ga4/sync.js",
     "validate:ga4": "node diagnostics/ga4-semantic-validation.js",
     "test": "node --test"
