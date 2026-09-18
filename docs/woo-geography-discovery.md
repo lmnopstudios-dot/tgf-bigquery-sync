@@ -1,88 +1,88 @@
-# Historical WooCommerce geography discovery
+# Historical Woo geography recoverability audit
 
-## Repository findings
+This diagnostic is read-only. It does not enrich a record, change BigQuery,
+write to Woo/Metorik, or infer a country from currency, billing geography, or a
+postcode. The production evidence supplied before this audit establishes
+38,831 Woo snapshot orders, 6,622 populated shipping countries, and a complete
+numeric-ID match for those Woo rows to the 39,176 canonical Metorik orders.
 
-This work is discovery-only. It does not alter a schema, synchronize an order,
-or persist geography.
+## What the diagnostic measures
 
-### Metorik ingestion
+The JSON output has the requested `temporal_coverage`, `yearly_coverage`,
+`missingness_patterns`, `raw_json_coverage`, `live_woo_probe`,
+`repository_evidence`, `recoverability_buckets`,
+`maximum_recoverable_coverage`, `recommended_recovery_strategy`,
+`privacy_notes`, and `unresolved` sections.
 
-The historical Metorik sync reads `GET https://app.metorik.com/api/v1/store/orders`
-without a field projection and paginates the response. Consequently, the null
-columns in BigQuery do **not** establish that geography was absent upstream.
-`transformMetorikOrder` accepts both top-level `shipping_country` /
-`shipping_state` and nested `shipping.country` / `shipping.state` (and the
-equivalent billing fields). It does not retain the complete order response or
-postcodes. The country columns are active mappings, not intentionally null
-placeholders. The older generic discovery endpoint redacts an entire address
-object, so it could not answer whether a nested country existed.
+Monthly and yearly coverage make a date boundary or intermittent gap visible.
+Bounded currency, year/currency, and first shipping-method aggregates test
+whether missingness is associated with GBP, international orders, a period, or
+a fulfilment mode. They are descriptive only: in particular, GBP is never
+treated as evidence that an order shipped to the UK.
 
-The repository establishes access to Metorik `orders`, `customers`, `products`,
-and `refunds`, but contains no contract or captured response proving that the
-current Metorik order-list endpoint supplies address geography. This remains a
-production question. The new opt-in probe requests only three orders and emits
-only order identifiers, dates, country/state, and postcode-presence booleans.
+`raw_json` is parsed only inside BigQuery `COUNTIF` expressions. The query
+counts availability at these paths without selecting their values:
 
-### Original WooCommerce evidence
+* `shipping.country`, `shipping.state`, `shipping.postcode`
+* `billing.country`, `billing.state`, `billing.postcode`
 
-The strongest repository evidence is the existing UK WooCommerce integration.
-Production is configured for the WooCommerce `wc/v3` API, and the full-history
-import requests `orders?status=any&orderby=id&order=asc`. Its `orders_api`
-normalizer persists `order.id`, `order.number`, `billing.country`, and
-`shipping.country`. It also persisted the complete response in `raw_json`,
-which means state/postcode availability may be recoverable without another
-network extraction. Raw JSON must not be printed because it can contain PII.
+The postcode counts establish evidence availability only. No postcode value is
+returned to Node, printed, or persisted.
 
-The repository also contains Woo US and JP credentials and refund readers, plus
-Coupler-derived `woocommerce_us` and `woocommerce_jp` order tables. It does not
-establish their geography schema or the continued historical reach of those API
-credentials; those stores are outside the default UK diagnostic dataset list.
+## Live Woo sample
 
-### BigQuery and Matrixify
+With `--live-apis`, BigQuery deterministically chooses at most 12 order IDs:
+up to two populated and two blank snapshot rows from each of early, middle, and
+recent history. The program performs one read-only `GET` per selected ID. It
+prints only order ID/date, sample stratum, country/state, and postcode-presence
+booleans. Names, company, street, city, email, phone, and postcode values are
+discarded before output.
 
-The diagnostic inspects only `INFORMATION_SCHEMA.COLUMNS` and submits aggregate
-`SELECT` queries for candidate tables. By default it covers `metorik_uk`,
-`woocommerce_uk`, and `shopify_data`; `--datasets` can supply additional known
-datasets. Candidate output records date bounds, distinct order keys, populated
-country count and percentage, geography semantics, key candidates, and a small
-distinct country-value sample used only to classify representation.
+This sample can demonstrate that current Woo sometimes contains direct shipping
+evidence absent from the snapshot. It cannot defensibly estimate all-history
+recoverability. The diagnostic therefore does not extrapolate the sample or
+perform the prohibited 38,831-order sweep.
 
-Repository code records Matrixify by immutable Shopify app ID
-`gid://shopify/App/1758145` and documents 2,158 imports. The persisted Shopify
-order, customer, financial, and line-item schemas shown in this checkout do not
-retain shipping country. Therefore the migration slice is not presently a
-BigQuery geography source, and the repository does not prove a deterministic
-original-Woo-ID mapping. Matrixify remains bounded corroboration only.
+## Mutually exclusive evidence buckets
 
-## Provisional evidence hierarchy
+Orders are classified in authority order:
 
-1. Original Woo order `shipping.country`, first from the existing
-   `woocommerce_uk.orders_api` snapshot after production coverage validation,
-   then from a bounded read-only `wc/v3` request if snapshot evidence is absent.
-2. Metorik order shipping geography only after its bounded probe establishes
-   that the returned resource actually supplies it.
-3. Shopify Matrixify shipping geography only for a deterministically matched
-   overlap, never as historical coverage authority.
-4. Billing or customer country only as separately labelled fallback evidence,
-   never as shipping country.
+1. `A_shipping_country_direct_normalized`
+2. `B_shipping_country_direct_raw_json`
+3. `C_billing_country_only_not_shipping`
+4. `D_shipping_postcode_only`
+5. `E_billing_postcode_only`
+6. `F_no_geography_evidence`
 
-The safest proposed canonical match is the numeric original Woo `order_id` to
-`metorik_uk.orders.order_id`, with order number and date used as validation—not
-as an unproved substitute identity. Future canonical data should retain source
-value, normalized ISO alpha-2, and normalization provenance. No normalization
-is performed here.
+Only A and B count toward directly observed shipping-country recoverability.
+Billing and postcode-only buckets deliberately remain separate and must not be
+presented as recovered shipping country. A full live-Woo recovery percentage
+remains unresolved until a separately approved, rate-limited extraction has
+actually observed it.
 
-## Required production diagnostic
+## Repository evidence and limitation
 
-Run in the Render service shell, where existing read credentials are available:
+The importer in `server.js` requests `wc/v3/orders` with `status=any`, ascending
+IDs, and 100 rows per page. It truncates and rebuilds `orders_api`, mapping
+`order.shipping.country` directly to `shipping_country` while retaining the
+same response in `raw_json`. Git history shows that mapping was present when
+the Woo importer was introduced; this checkout contains no evidence of an
+older endpoint/version or an earlier transform that dropped country.
+
+Consequently, if normalized and raw country counts agree, the repository
+supports “Woo returned/stored blanks at snapshot time,” not a normalization
+failure. It cannot distinguish an originally blank checkout address from later
+editing, erasure, or anonymisation inside Woo. The bounded live comparison is
+the safe test for whether the current resource has changed.
+
+## Exact Render command
+
+Run this in the existing Render service shell, where the read credentials are
+already configured:
 
 ```bash
-npm run diagnose:woo-geography -- --project gf-full-data --datasets metorik_uk,woocommerce_uk,shopify_data --live-apis
+npm run diagnose:woo-geography -- --project gf-full-data --live-apis --sample-limit 12
 ```
 
-This performs BigQuery metadata/aggregate reads, up to three Metorik order
-reads, and one Woo order read. It performs no API write and no BigQuery DDL or
-DML. Its JSON has the required discovery sections followed by a concise
-conclusion. Production output is still required to supply defensible dates,
-counts, percentages, representation, and join coverage; repository evidence
-alone cannot manufacture those values.
+The command issues aggregate BigQuery `SELECT`s and no more than 12 Woo order
+`GET`s. Review the structured output before approving any recovery build.
