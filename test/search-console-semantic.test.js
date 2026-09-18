@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { BigQuery } from '@google-cloud/bigquery';
 import { DOMAIN_PROPERTY, WWW_PROPERTY, PROPERTIES, normalizePage, aggregate, canonicalDaily, validateRows } from '../search-console/semantic.js';
-import { dateParameters, fetchRows, validateAccess, promotionSql, parseArgs, syncSummary, emitSyncSuccess, partialFailureDiagnostics, promote, SCHEMA_FIELDS, stageCreationSql, assertStageSchema } from '../search-console/sync.js';
+import { dateParameters, fetchRows, validateAccess, promotionSql, parseArgs, syncSummary, emitSyncSuccess, partialFailureDiagnostics, promote, collect, SCHEMA_FIELDS, STAGE_INSERT_BATCH_SIZE, stageCreationSql, assertStageSchema } from '../search-console/sync.js';
 import { redactSecrets } from '../diagnostics/search-console-access.js';
 import { validationQuery, coverageQuery, validate } from '../diagnostics/search-console-semantic-validation.js';
 
@@ -14,6 +14,53 @@ test('CTR and position aggregate by impressions',()=>assert.deepEqual(aggregate(
 test('canonical prefers Domain, falls back to www, and represents unavailable without zeroes',()=>{const base={property_scope:'domain',coverage_status:'available',ctr:.1,position:2};const rows=[{...base,source_property:DOMAIN_PROPERTY,date:'2025-05-06',clicks:1,impressions:10},{...base,source_property:WWW_PROPERTY,date:'2025-05-06',clicks:9,impressions:10},{...base,property_scope:'url_prefix',source_property:WWW_PROPERTY,date:'2025-05-07',clicks:0,impressions:0,ctr:0,position:null}];const c=canonicalDaily(rows,'2025-05-06','2025-05-08','now');assert.equal(c[0].clicks,1);assert.equal(c[0].selection_reason,'preferred_domain_property');assert.equal(c[1].clicks,0);assert.equal(c[1].selection_reason,'fallback_www_property');assert.equal(c[2].clicks,null);assert.equal(c[2].coverage_status,'unavailable')});
 test('duplicate semantic keys and invalid metrics are rejected',()=>{const r={source_property:DOMAIN_PROPERTY,property_scope:'domain',property_hostname:'thegreatfroglondon.com',date:'2025-05-06',clicks:1,impressions:2,ctr:.5,position:1};assert.throws(()=>validateRows('daily',[r,r]),/duplicate/);assert.throws(()=>validateRows('daily',[{...r,clicks:3}]),/invalid metrics/)});
 test('pagination is bounded and requests only final data',async()=>{const calls=[];const client={searchanalytics:{query:async x=>{calls.push(x);return {data:{rows:calls.length===1?[{keys:['x']}]:[]}}}}};const rows=await fetchRows(client,DOMAIN_PROPERTY,'2025-05-06','2025-05-07',['date'],{maxRows:4,pageSize:2});assert.equal(rows.length,1);assert.equal(calls[0].requestBody.dataState,'final');assert.equal(calls.length,1);const full={searchanalytics:{query:async()=>({data:{rows:[{},{}]}})}};await assert.rejects(()=>fetchRows(full,DOMAIN_PROPERTY,'2025-05-06','2025-05-07',['date'],{maxRows:4,pageSize:2}),/bounded/)});
+
+test('high-volume dimensional collection and staging are iterative, complete, batched, and transactional',async()=>{
+  const domainQueries=130000,wwwQueries=20000,pageSize=25000,calls=[];
+  const client={searchanalytics:{query:async({siteUrl,requestBody})=>{
+    calls.push({siteUrl,dimensions:requestBody.dimensions.join(','),startRow:requestBody.startRow,rowLimit:requestBody.rowLimit});
+    if(requestBody.dimensions.join(',')==='date')return {data:{rows:requestBody.startRow===0?[{keys:['2025-05-06'],clicks:1,impressions:10,ctr:.1,position:2}]:[]}};
+    if(requestBody.dimensions.join(',')!=='date,query')return {data:{rows:[]}};
+    const total=siteUrl===DOMAIN_PROPERTY?domainQueries:wwwQueries;
+    const count=Math.max(0,Math.min(requestBody.rowLimit,total-requestBody.startRow));
+    return {data:{rows:Array.from({length:count},(_,index)=>({keys:['2025-05-06',`${siteUrl===DOMAIN_PROPERTY?'domain':'www'} query ${requestBody.startRow+index}`],clicks:1,impressions:2,ctr:.5,position:1}))}};
+  }}};
+  const data=await collect({client,startDate:'2025-05-06',endDate:'2025-05-06',maxRows:150000,syncedAt:'2026-09-18T00:00:00.000Z'});
+  assert.equal(data.queries.length,domainQueries+wwwQueries);
+  assert.equal(calls.filter(call=>call.siteUrl===DOMAIN_PROPERTY&&call.dimensions==='date,query').length,Math.ceil(domainQueries/pageSize));
+  assert.equal(calls.filter(call=>call.siteUrl===WWW_PROPERTY&&call.dimensions==='date,query').length,1);
+  assert.equal(data.canonical_daily.length,1);
+  assert.equal(data.canonical_daily[0].selection_reason,'preferred_domain_property');
+
+  const stages=new Map(),insertions=[],deleted=[],promotions=[];
+  const bigquery={
+    query:async options=>{
+      if(options.query.startsWith('CREATE OR REPLACE')){const [,stage,table]=options.query.match(/`project\.search_console\.([^`]+)`[\s\S]+LIKE `project\.search_console\.([^`]+)`/);stages.set(stage,table);return [[]]}
+      if(options.query.startsWith('SELECT column_name'))return [SCHEMA_FIELDS[stages.get(options.params.stage)].map(field=>({column_name:field.name,data_type:field.type,is_nullable:'YES'}))];
+      promotions.push(options);return [[]];
+    },
+    dataset:()=>({table:stage=>({insert:async rows=>insertions.push({stage,size:rows.length}),delete:async()=>deleted.push(stage)})})
+  };
+  await promote({bigquery,project:'project',dataset:'search_console',data,startDate:'2025-05-06',endDate:'2025-05-06',invocationId:'volume'});
+  const domainStage='_stage_queries_volume_domain',wwwStage='_stage_queries_volume_url_prefix';
+  assert.equal(insertions.filter(item=>item.stage===domainStage).reduce((sum,item)=>sum+item.size,0),domainQueries);
+  assert.equal(insertions.filter(item=>item.stage===wwwStage).reduce((sum,item)=>sum+item.size,0),wwwQueries);
+  assert.ok(insertions.every(item=>item.size<=STAGE_INSERT_BATCH_SIZE));
+  assert.equal(promotions.length,1);
+  assert.equal(deleted.length,stages.size);
+  const summary=syncSummary({startDate:'2025-05-06',endDate:'2025-05-06'},data);
+  assert.deepEqual(summary.property_rows.map(item=>item.tables.queries.inserted),[domainQueries,wwwQueries]);
+});
+
+test('collection failures include safe phase, table, property, range, count, and class context',async()=>{
+  const client={searchanalytics:{query:async()=>{const error=new RangeError('Maximum call stack size exceeded at https://private.example/?token=secret');throw error}}};
+  await assert.rejects(()=>collect({client,startDate:'2025-05-06',endDate:'2025-05-07'}),error=>{
+    const output=JSON.parse(error.message);
+    assert.deepEqual(output,{operation:'search_console_collection',logical_target_table:'daily',source_property:DOMAIN_PROPERTY,requested_range:{start_date:'2025-05-06',end_date:'2025-05-07'},accumulated_row_count:0,batch_size:null,batch_offset:null,error_class:'RangeError',message:'Maximum call stack size exceeded'});
+    assert.doesNotMatch(error.message,/private\.example|token=secret/);
+    return true;
+  });
+});
 test('promotion is property-scoped, transactional and stage-owned',()=>{const sql=promotionSql('p','search_console','daily','_stage_daily_inv_domain');assert.match(sql,/source_property=@sourceProperty/);assert.match(sql,/BEGIN TRANSACTION/);assert.match(sql,/COMMIT TRANSACTION/);assert.match(sql,/_stage_daily_inv_domain/)});
 test('range parser enforces history, final lag, and bounded ranges',()=>{const now=new Date('2026-09-18T00:00:00Z');assert.equal(parseArgs(['--start','2026-09-08','--end','2026-09-15'],now).endDate,'2026-09-15');assert.throws(()=>parseArgs(['--start','2026-09-16','--end','2026-09-16'],now),/latest final/)});
 test('validator covers canonical and dimensional anti-mixing semantics',()=>{const q=validationQuery('p');assert.match(q,/canonical_mismatch/);assert.match(q,/canonical_dimension_mixed_property/);assert.match(q,/preferred_domain_property/);assert.match(q,/fallback_www_property/)});
