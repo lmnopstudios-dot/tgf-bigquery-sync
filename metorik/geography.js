@@ -38,7 +38,7 @@ const COUNTRY_NAMES = new Map([
 ]);
 
 function normalizedHeader(value) {
-  return value.replace(/^\uFEFF/, '').trim().toLowerCase().replace(/[\s-]+/g, ' ');
+  return value.trim().toLowerCase().replace(/[\s-]+/g, ' ');
 }
 
 export function recognizeMetorikHeaders(headers) {
@@ -70,8 +70,13 @@ export function normalizeCountry(value) {
 export async function* csvRecords(readable) {
   readable.setEncoding?.('utf8');
   let row = [], field = '', quoted = false, pendingQuote = false;
+  let atStart = true;
   for await (const chunk of readable) {
     for (const character of chunk.toString('utf8')) {
+      if (atStart) {
+        atStart = false;
+        if (character === '\uFEFF') continue;
+      }
       if (quoted) {
         if (pendingQuote) {
           if (character === '"') { field += '"'; pendingQuote = false; continue; }

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Readable } from 'node:stream';
 import {
-  geographyRow, importMetorikGeography, normalizeCountry, parseImportArguments,
+  csvRecords, geographyRow, importMetorikGeography, normalizeCountry, parseImportArguments,
   recognizeMetorikHeaders
 } from '../metorik/geography.js';
 import { geographyValidationQueries, validateMetorikGeography } from '../diagnostics/metorik-geography-validation.js';
@@ -34,6 +34,33 @@ test('runtime schema recognition accepts documented equivalents and lists missin
     { source_order_id: 0, source_order_number: 1, shipping_country: 2 });
   assert.throws(() => recognizeMetorikHeaders(['Order ID', 'Email']),
     /source_order_number.*shipping_country/);
+});
+
+test('production header resolves governed fields with and without a UTF-8 BOM', async () => {
+  const header = '"Order ID","Order Number","Shipping Address Country"';
+  for (const prefix of ['', '\uFEFF']) {
+    const records = [];
+    for await (const record of csvRecords(Readable.from([Buffer.from(`${prefix}${header}\n169587,#33653,GB`)]))) {
+      records.push(record);
+    }
+    const columns = recognizeMetorikHeaders(records[0]);
+    assert.deepEqual(columns, { source_order_id: 0, source_order_number: 1, shipping_country: 2 });
+    const row = geographyRow(records[1], columns, 'ww', '2026-01-01T00:00:00Z');
+    assert.equal(row.source_order_id, '169587');
+  }
+});
+
+test('BOM handling is limited to the start of input and preserves ordinary Unicode values', async () => {
+  const bq = fakeBigQuery();
+  await importMetorikGeography({ bigquery: bq, project: 'p', store: 'ww', file: 'virtual',
+    readable: csv('\uFEFF"Order ID","Order Number","Shipping Address Country"', '42,#café雪,GB'),
+    now: () => new Date('2026-01-01T00:00:00Z') });
+  assert.equal(bq.inserted[0].source_order_id, '42');
+  assert.equal(bq.inserted[0].source_order_number, '#café雪');
+
+  const records = [];
+  for await (const record of csvRecords(csv('Order ID,Order Number,Shipping Address Country', '43,\uFEFF#43,GB'))) records.push(record);
+  assert.equal(records[1][1], '\uFEFF#43');
 });
 
 test('country normalization is direct, deterministic, and unresolved remains null', () => {
