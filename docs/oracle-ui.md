@@ -13,12 +13,14 @@ This is deliberately a single shared internal administrator login, not a user-ma
 All routes below use the `/api/oracle` prefix. Reads require a valid session; mutations additionally require CSRF and origin validation.
 
 * `POST /auth/login` accepts `{password}`; `POST /auth/logout` expires the session; `GET /session` checks it.
-* `POST /chat` accepts `{message}` and returns `{answer, proposal}`. The server calls the existing protected `/agent` implementation internally with `SYNC_SECRET`; the browser never sees that secret or tool protocol.
-* `POST /propose` creates a validated, non-persistent knowledge/memory candidate from a natural-language message.
+* `POST /chat` accepts `{message}` and returns `{answer, proposals, proposal_error}`. The normal answer comes from the existing protected `/agent`; a failure in the secondary proposal call does not discard it.
+* `POST /propose` creates zero or more validated, non-persistent knowledge/memory candidates from a natural-language message.
 * `POST /knowledge/approve` and `POST /memory/approve` accept only `{kind, proposal, proposal_id?}`. They revalidate against the existing governed schemas and call the existing administrative writer. There is no table, SQL, dataset or generic write parameter.
 * `GET /knowledge` and `GET /memory` support `text`, `status`, date and tag filters plus `kind` or `memory_type`. `GET /knowledge/:id` and `GET /memory/:id` return exact records.
 
-Chat proposals carry only a message hash/timestamp reference and authenticated creator, not the transcript. Explicit “remember” wording and selected durable statements can produce proposal cards, but never writes. Uncertain language is `working`. Findings without governed tool evidence are downgraded to working hypotheses. Users can edit allowed business fields, discard locally, or explicitly Save. Supersession uses the same Save path with an opaque `supersedes` ID; the writer requires a same-table existing, non-superseded target and keeps both records.
+Proposal generation is a separate bounded OpenAI Responses call using the strict `propose_governed_records` function schema. Its only input is the current message, a bounded set of duplicate candidates, and safe evidence references; it has no analytical tools or write capability. The response may contain up to 12 facts, events, definitions, or memories. Every candidate is independently normalized and passed through the governed validators before the UI labels it saveable. Exact content duplicates are labelled already known, and exact title matches may suggest an opaque supersession target; neither operation mutates data.
+
+Explicit “remember” wording strengthens intent but never writes. Questions return an empty list. Uncertain statements become working hypotheses or are omitted. Confirmed memories require governed evidence. Users can select, edit, discard, save individually, or save selected; every Save remains a separate authenticated/CSRF-protected administrative request and is revalidated server-side. Invalid model candidates are non-saveable until edited. `ORACLE_PROPOSAL_MODEL` optionally selects the proposal model and defaults to `gpt-5.6`; no dataset or schema change is required.
 
 ## Deployment
 
@@ -34,6 +36,10 @@ Errors returned to browsers are allow-listed validation messages or generic fail
 
 ## Proposal intent and response rendering
 
-The UI proposes governed records only from declarative assertions in the current user message. Interrogative clauses are excluded, explicit persistence language strengthens intent without bypassing Save/Edit/Discard approval, uncertain assertions remain working, and an exact normalized governed-content match suppresses a duplicate. A deterministic same-title match may populate `supersedes`; no fuzzy destructive matching is performed. Agent answers, retrieved context, and tool output are never proposal source material.
+The proposal model semantically decomposes realistic documents into a compact set of durable records and preserves material campaign windows, channel/store timing, offers, exclusions, and stated provenance. It returns no proposals for questions, comparisons, analytical requests, or casual chat. Deterministic code remains authoritative for schema, date, status, provenance, length, tag, PII-key, evidence, duplicate, and supersession validation. The analytical agent remains read-only, and model output never reaches BigQuery without an explicit approval request.
 
 Oracle answers are rendered by the local DOM-based Markdown renderer. It creates an allowlisted set of elements for headings, paragraphs, emphasis, lists, tables, code, and safe links without `innerHTML`. Raw HTML remains text, link protocols are restricted to HTTP, HTTPS, and mailto, and numeric entities are converted to text before DOM construction.
+
+The chat view is a viewport-bounded flex layout in which the conversation thread—not each message—is the vertical scroll container. Messages and proposal cards grow to their full content height, while wide Markdown tables and code blocks scroll horizontally. The composer remains at the bottom of the view. New content follows the bottom only when the reader was already within 120 pixels of it, so a reader who scrolls upward is not pulled away from older content.
+
+Manual layout acceptance: send several short messages, then receive one very long response, a response with a wide/large table, and several proposal cards. Verify that the complete thread scrolls vertically; ordinary messages and proposals have no vertical scrollbar; tables/code can scroll horizontally; the composer stays accessible on desktop and mobile; content follows when already near the bottom; and new responses do not move a reader who intentionally scrolled upward.
