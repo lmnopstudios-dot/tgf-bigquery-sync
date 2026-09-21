@@ -1,13 +1,13 @@
 import crypto from 'node:crypto';
 import express from 'express';
 import { writeRecord } from '../knowledge/admin.js';
-import { proposalSearchText, proposeFromMessage, validateApprovedProposal } from './proposals.js';
+import { invalidProposal, normalizeModelProposal, validateApprovedProposal } from './proposals.js';
 import { createSession, csrfToken, parseCookies, safeError, verifySession } from './ui-security.js';
 
 const json = express.json({ limit: '48kb', type: 'application/json' });
 const allowedOrigins = request => new Set([`${request.protocol}://${request.get('host')}`, process.env.ORACLE_UI_ORIGIN].filter(Boolean));
 
-export function createOracleUiRouter({ knowledgeService, bigquery, project, chat, env = process.env }) {
+export function createOracleUiRouter({ knowledgeService, bigquery, project, chat, generateProposals, env = process.env }) {
   const router = express.Router();
   const password = env.ORACLE_UI_PASSWORD;
   const sessionSecret = env.ORACLE_UI_SESSION_SECRET;
@@ -24,16 +24,21 @@ export function createOracleUiRouter({ knowledgeService, bigquery, project, chat
     if (!req.is('application/json')) return res.status(415).json({ success: false, error: 'application/json is required' });
     next();
   };
-  const proposalFor = async (message, createdBy) => {
-    const candidate = proposeFromMessage(message, { createdBy });
-    if (!candidate || candidate.kind === 'memory') return candidate;
+  const proposalsFor = async (message, createdBy) => {
+    if (!generateProposals) throw new Error('proposal generator unavailable');
+    let existing = [];
     try {
-      const result = await knowledgeService.searchKnowledge({ text: proposalSearchText(candidate), knowledge_type: candidate.kind, start_date: null, end_date: null, status: null, tags: [], limit: 10 });
-      return proposeFromMessage(message, { createdBy, existing: result.items || [] });
-    } catch (error) {
-      console.error('Oracle UI duplicate check failed:', safeError(error));
-      return candidate;
-    }
+      const [knowledge, memory] = await Promise.all([
+        knowledgeService.searchKnowledge({ text: message.slice(0, 1000), knowledge_type: null, start_date: null, end_date: null, status: null, tags: [], limit: 20 }),
+        knowledgeService.searchMemory({ text: message.slice(0, 1000), start_date: null, end_date: null, status: null, memory_type: null, tags: [], limit: 10 })
+      ]);
+      existing = [...(knowledge.items || []), ...(memory.items || [])];
+    } catch (error) { console.error('Oracle UI proposal context lookup failed:', safeError(error)); }
+    const candidates = await generateProposals({ message, existing, evidence: [] });
+    return candidates.slice(0, 12).map(candidate => {
+      try { return normalizeModelProposal(candidate, { createdBy, existing }); }
+      catch (error) { console.error('Oracle UI rejected model proposal:', safeError(error)); return invalidProposal(candidate); }
+    });
   };
   router.post('/auth/login', json, (req, res) => {
     if (!allowedOrigins(req).has(req.get('origin'))) return res.status(403).json({ success: false, error: 'Invalid request origin' });
@@ -51,13 +56,17 @@ export function createOracleUiRouter({ knowledgeService, bigquery, project, chat
     try {
       if (typeof req.body?.message !== 'string' || !req.body.message.trim() || req.body.message.length > 12000) return res.status(400).json({ success: false, error: 'message must be a non-empty string of at most 12000 characters' });
       const answer = await chat(req.body.message);
-      const proposal = await proposalFor(req.body.message, req.oracleUser.sub);
-      res.json({ success: true, answer: answer.answer, proposal });
+      let proposals = [], proposal_error = null;
+      try { proposals = await proposalsFor(req.body.message, req.oracleUser.sub); }
+      catch (error) { console.error('Oracle UI proposal generation failed:', safeError(error)); proposal_error = 'Knowledge proposal could not be generated.'; }
+      res.json({ success: true, answer: answer.answer, proposals, proposal_error });
     } catch (error) { console.error('Oracle UI chat failed:', safeError(error)); res.status(500).json({ success: false, error: safeError(error) }); }
   });
   router.post('/propose', authenticate, protectWrite, json, async (req, res) => {
-    try { res.json({ success: true, proposal: await proposalFor(req.body?.message, req.oracleUser.sub) }); }
-    catch (error) { res.status(400).json({ success: false, error: safeError(error, 'The proposal is invalid') }); }
+    try {
+      if (typeof req.body?.message !== 'string' || !req.body.message.trim() || req.body.message.length > 12000) return res.status(400).json({ success: false, error: 'message must be a non-empty string of at most 12000 characters' });
+      res.json({ success: true, proposals: await proposalsFor(req.body.message, req.oracleUser.sub) });
+    } catch (error) { console.error('Oracle UI proposal generation failed:', safeError(error)); res.status(503).json({ success: false, error: 'Knowledge proposal could not be generated.' }); }
   });
   const approve = kindScope => async (req, res) => {
     try {

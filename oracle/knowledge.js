@@ -36,7 +36,7 @@ function validateCommon(item, prefix) {
   assertDate(item.effective_from, 'effective_from'); assertDate(item.effective_to, 'effective_to');
   if (item.effective_from && item.effective_to && item.effective_from > item.effective_to) throw new Error('effective_from must be on or before effective_to');
   if (item.supersedes != null && !ID.test(item.supersedes)) throw new Error('supersedes must be an opaque ID');
-  if (item.tags != null && (!Array.isArray(item.tags) || item.tags.some(tag => typeof tag !== 'string' || !tag.trim()))) throw new Error('tags must be non-empty strings');
+  if (item.tags != null && (!Array.isArray(item.tags) || item.tags.length > 20 || item.tags.some(tag => typeof tag !== 'string' || !tag.trim() || tag.length > 100))) throw new Error('tags must contain at most 20 non-empty strings of at most 100 characters');
   checkPrivacy(item);
 }
 
@@ -63,6 +63,7 @@ export function validateMemory(input) {
   if (!Array.isArray(item.evidence) || item.evidence.length === 0) throw new Error('memory evidence is required');
   for (const evidence of item.evidence) { text(evidence.reference, 'evidence.reference', 1000); text(evidence.kind, 'evidence.kind', 100); }
   if (item.status === 'confirmed' && item.memory_type === 'hypothesis') throw new Error('a hypothesis cannot be confirmed without changing its memory_type');
+  if (item.confidence != null && (typeof item.confidence !== 'number' || item.confidence < 0 || item.confidence > 1)) throw new Error('confidence must be null or between 0 and 1');
   return { ...item, id: item.id || `mem_${randomUUID()}` };
 }
 

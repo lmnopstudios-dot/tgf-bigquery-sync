@@ -1,41 +1,80 @@
 import crypto from 'node:crypto';
 import { validateKnowledgeItem, validateMemory } from './knowledge.js';
 
-const uncertain = /\b(i think|maybe|might|perhaps|not (?:sure|certain)|possibly|approximately|around)\b/i;
-const persistenceIntent = /^(?:please\s+)?(?:remember(?:\s+that|\s+this)?|save\s+(?:this\s+)?as\s+business\s+knowledge|add\s+this\s+to\s+oracle(?:'s|’s)\s+knowledge|this\s+is\s+important\s+context\s+for\s+future\s+analysis)\b[\s:,-]*/i;
-const assertionVerb = /\b(?:is|are|was|were|ran|run|offered|used|using|launched|started|ended|changed|means|defined as|participated|included|excluded|applies|applied|found|improved|increased|decreased)\b/i;
-const interrogative = /^(?:what|when|where|who|why|how|which|did|do|does|is|are|was|were|can|could|would|should|tell me|compare|explain)\b/i;
-const MONTHS = { january:1,february:2,march:3,april:4,may:5,june:6,july:7,august:8,september:9,october:10,november:11,december:12 };
-const compact = text => text.trim().replace(/\s+/g, ' ').replace(/^[,;:\s]+|[,;:\s]+$/g, '').slice(0, 4000);
-
-function assertedText(message) {
-  const explicit = persistenceIntent.test(message.trim());
-  const cleaned = message.trim().replace(persistenceIntent, '');
-  const statements = cleaned.split(/(?<=[.!?])\s+/).map(compact).filter(Boolean)
-    .filter(part => !part.includes('?') && !interrogative.test(part) && assertionVerb.test(part));
-  return { assertion: compact(statements.join(' ')) || null, explicit };
-}
-const isoDates = text => {
-  const values = [...text.matchAll(/\b(20\d{2}-\d{2}-\d{2})\b/g)].map(match => match[1]);
-  for (const match of text.matchAll(/\b(\d{1,2})\s+(January|February|March|April|May|June|July|August|September|October|November|December)\s+(20\d{2})\b/gi)) values.push(`${match[3]}-${String(MONTHS[match[2].toLowerCase()]).padStart(2, '0')}-${match[1].padStart(2, '0')}`);
-  for (const match of text.matchAll(/\b(\d{1,2})\s*(?:-|–|—|to)\s*(\d{1,2})\s+(January|February|March|April|May|June|July|August|September|October|November|December)\s+(20\d{2})\b/gi)) { const month=String(MONTHS[match[3].toLowerCase()]).padStart(2,'0'); values.push(`${match[4]}-${month}-${match[1].padStart(2,'0')}`,`${match[4]}-${month}-${match[2].padStart(2,'0')}`); }
-  return [...new Set(values)].sort();
+const nullableString = { type: ['string', 'null'] };
+const common = {
+  status: { type: 'string', enum: ['confirmed', 'working', 'rejected'] },
+  source_type: { type: 'string', enum: ['human_entered', 'business_document', 'governed_data_analysis', 'system_definition', 'external_source'] },
+  source_reference: { type: 'string', maxLength: 1000 },
+  effective_from: nullableString, effective_to: nullableString,
+  supersedes: nullableString,
+  tags: { type: 'array', items: { type: 'string' }, maxItems: 20 }
 };
-function eventTitle(assertion) { const subject=assertion.replace(/\b(?:ran|runs|offered|offers|launched|started|ended|was|were|is|are)\b[\s\S]*$/i,'').replace(/^that\s+/i,'').trim();const base=subject||'Business event';const suffix=/black friday/i.test(base)?'campaign':'event';return compact(/\b(?:campaign|promotion|launch|event)\b/i.test(base)?base:`${base} ${suffix}`).slice(0,140); }
-function comparable(value) { return String(value||'').toLowerCase().replace(/[^a-z0-9]+/g,' ').trim(); }
-export function isDuplicateProposal(wrapper, existing=[]) { if(!wrapper)return false;const candidate=comparable(wrapper.proposal.description||wrapper.proposal.definition||wrapper.proposal.statement);return existing.some(item=>{if(!['confirmed','working',undefined].includes(item.status))return false;const current=comparable(item.content||item.description||item.definition||item.statement);return candidate&&current&&(candidate===current||(candidate.length>24&&current.includes(candidate)));}); }
-export function proposeFromMessage(message,{createdBy='oracle-ui',now=new Date(),existing=[]}={}) {
-  if(typeof message!=='string')return null;const {assertion,explicit}=assertedText(message);if(!assertion||(!explicit&&!assertionVerb.test(assertion)))return null;
-  const source_reference=`Oracle UI user assertion ${crypto.createHash('sha256').update(assertion).digest('hex').slice(0,12)} at ${now.toISOString()}`;const status=uncertain.test(assertion)?'working':'confirmed';const dates=isoDates(assertion);const common={status,source_type:'human_entered',source_reference,created_by:createdBy,supersedes:null,tags:[],effective_from:dates[0]||null,effective_to:dates[1]||dates[0]||null};let kind='fact',proposal;
-  if(/\b(finding|investigation found)\b/i.test(assertion)){kind='memory';proposal=validateMemory({...common,status:'working',source_type:'human_entered',title:compact(assertion).slice(0,140),statement:assertion,memory_type:'hypothesis',evidence:[{kind:'user_attestation',reference:source_reference}]});}
-  else if(/\bmeans|defined as\b/i.test(assertion)){kind='definition';const term=assertion.split(/\bmeans|defined as\b/i)[0].replace(/^that\s+/i,'').trim();proposal=validateKnowledgeItem(kind,{...common,term:term||'Business term',definition:assertion,implementation_reference:'Oracle UI human-entered definition'});}
-  else if(dates.length||/\b(campaign|promotion|launched|started|ended|ran)\b/i.test(assertion)){kind='event';proposal=validateKnowledgeItem(kind,{...common,event_type:/campaign|promotion|offer/i.test(assertion)?'campaign':'business_event',title:eventTitle(assertion),description:assertion,date_precision:dates.length>1?'range':dates.length===1?'day':'unknown'});}
-  else proposal=validateKnowledgeItem(kind,{...common,subject:compact(assertion.split(assertionVerb)[0])||'Business context',predicate:'states',statement:assertion});
-  const wrapper={proposal_id:crypto.randomUUID(),kind,proposal,uncertain:proposal.status==='working',persisted:false,approval_required:true};
-  if(isDuplicateProposal(wrapper,existing))return null;
-  const sameTitle=existing.find(item=>comparable(item.title)===comparable(proposal.title||proposal.term||proposal.subject));
-  if(sameTitle&&/^(?:kn|ev|df|mem)_[0-9a-f-]{16,}$/.test(sameTitle.id||''))proposal.supersedes=sameTitle.id;
-  return wrapper;
+const object = (properties, required = Object.keys(properties)) => ({ type: 'object', additionalProperties: false, properties, required });
+const variants = [
+  object({ kind: { const: 'event' }, event_type: { type: 'string' }, title: { type: 'string' }, description: { type: 'string' }, date_precision: { type: 'string', enum: ['day', 'range', 'month', 'year', 'unknown'] }, ...common }),
+  object({ kind: { const: 'fact' }, subject: { type: 'string' }, predicate: { type: 'string' }, statement: { type: 'string' }, ...common }),
+  object({ kind: { const: 'definition' }, term: { type: 'string' }, definition: { type: 'string' }, implementation_reference: { type: 'string' }, ...common }),
+  object({ kind: { const: 'memory' }, memory_type: { type: 'string', enum: ['finding', 'decision', 'explanation', 'hypothesis', 'rejected_hypothesis', 'data_quality_issue', 'reporting_convention'] }, title: { type: 'string' }, statement: { type: 'string' }, confidence: { type: ['number', 'null'], minimum: 0, maximum: 1 }, evidence: { type: 'array', maxItems: 20, items: object({ kind: { type: 'string' }, reference: { type: 'string' } }) }, ...common })
+];
+
+export const PROPOSE_GOVERNED_RECORDS_TOOL = {
+  type: 'function', name: 'propose_governed_records', strict: true,
+  description: 'Return zero or more non-writing governed record candidates. This tool cannot persist anything.',
+  parameters: object({ proposals: { type: 'array', maxItems: 12, items: { oneOf: variants } } })
+};
+
+export const PROPOSAL_INSTRUCTIONS = `You structure durable business assertions into a small, useful set of governed record proposals. You never save or write anything.
+Return an empty proposals list for questions, comparisons, analytical requests, casual conversation, or text without new durable assertions. A persistence request strengthens intent but never authorizes a write. For mixed input, propose only assertions.
+Preserve material dates, times, offers, exclusions, qualifications, and provenance. Prefer a campaign record plus channel/store/cutoff records when that aids future retrieval; do not make dozens of micro-records. DATE fields are YYYY-MM-DD; retain time-of-day in descriptions.
+Use business_document only when the user clearly identifies pasted email/document content, with a concise non-fabricated reference; otherwise human_entered. Never invent metadata.
+Uncertain assertions must be working hypotheses (memory kind, memory_type hypothesis) or omitted, never confirmed. Confirmed memories require governed evidence references; user attestation alone supports only working memory. Do not include chain-of-thought or raw tool output.
+Do not infer causation. In particular, chronology about made-to-order Christmas delivery is context, not a cause of sales.
+Titles must be concise descriptions, never raw instructions/questions. Use only schema fields. supersedes must be null unless an exact supplied governed record makes the relationship deterministic.`;
+
+export function createProposalGenerator({ openai, model = 'gpt-5.6' }) {
+  if (!openai?.responses?.create) throw new Error('an OpenAI responses client is required');
+  return async ({ message, existing = [], evidence = [] }) => {
+    const context = existing.slice(0, 20).map(item => ({ id: item.id, kind: item.kind, status: item.status, title: item.title || item.term || item.subject, content: item.content || item.description || item.definition || item.statement }));
+    const response = await openai.responses.create({ model, instructions: PROPOSAL_INSTRUCTIONS, input: JSON.stringify({ user_message: message, existing_governed_records: context, governed_evidence_references: evidence.slice(0, 20) }), tools: [PROPOSE_GOVERNED_RECORDS_TOOL], tool_choice: { type: 'function', name: 'propose_governed_records' }, max_output_tokens: 6000 });
+    const call = response.output?.find(item => item.type === 'function_call' && item.name === 'propose_governed_records');
+    if (!call) throw new Error('proposal model returned no structured proposal call');
+    const parsed = JSON.parse(call.arguments || '{}');
+    if (!Array.isArray(parsed.proposals)) throw new Error('proposal model returned an invalid proposal list');
+    return parsed.proposals;
+  };
 }
-export function proposalSearchText(wrapper){return wrapper?.proposal.description||wrapper?.proposal.definition||wrapper?.proposal.statement||'';}
-export function validateApprovedProposal(kind,proposal){return kind==='memory'?validateMemory(proposal):validateKnowledgeItem(kind,proposal);}
+
+const comparable = value => String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+const contentOf = value => value.description || value.definition || value.statement || '';
+const allowedFields = {
+  fact: ['id', 'subject', 'predicate', 'statement'], event: ['id', 'event_type', 'title', 'description', 'date_precision'],
+  definition: ['id', 'term', 'definition', 'implementation_reference'], memory: ['id', 'memory_type', 'title', 'statement', 'confidence', 'evidence']
+};
+const commonFields = ['status', 'source_type', 'source_reference', 'created_by', 'effective_from', 'effective_to', 'supersedes', 'tags'];
+function rejectArbitraryFields(kind, proposal) {
+  const allowed = new Set([...commonFields, ...(allowedFields[kind] || [])]);
+  for (const key of Object.keys(proposal || {})) if (!allowed.has(key)) throw new Error(`invalid proposal field: ${key}`);
+}
+export function isDuplicateProposal(wrapper, existing = []) {
+  const candidate = comparable(contentOf(wrapper?.proposal || {}));
+  return existing.some(item => ['confirmed', 'working', undefined].includes(item.status) && candidate && comparable(item.content || contentOf(item)) === candidate);
+}
+
+export function normalizeModelProposal(candidate, { createdBy = 'oracle-ui', existing = [] } = {}) {
+  if (!candidate || !['fact', 'event', 'definition', 'memory'].includes(candidate.kind)) throw new Error('invalid proposal kind');
+  const { kind, ...fields } = candidate;
+  rejectArbitraryFields(kind, fields);
+  const proposal = kind === 'memory' ? validateMemory({ ...fields, created_by: createdBy }) : validateKnowledgeItem(kind, { ...fields, created_by: createdBy });
+  const wrapper = { proposal_id: crypto.randomUUID(), kind, proposal, uncertain: proposal.status === 'working', persisted: false, approval_required: true, validity: 'valid' };
+  if (isDuplicateProposal(wrapper, existing)) return { ...wrapper, validity: 'already_known', saveable: false };
+  const sameTitle = existing.find(item => comparable(item.title || item.term || item.subject) === comparable(proposal.title || proposal.term || proposal.subject));
+  if (!proposal.supersedes && sameTitle && /^(?:kn|ev|df|mem)_[0-9a-f-]{16,}$/.test(sameTitle.id || '')) proposal.supersedes = sameTitle.id;
+  return { ...wrapper, saveable: true };
+}
+
+export function invalidProposal(candidate) {
+  return { proposal_id: crypto.randomUUID(), kind: ['fact', 'event', 'definition', 'memory'].includes(candidate?.kind) ? candidate.kind : 'fact', proposal: candidate || {}, persisted: false, approval_required: true, validity: 'invalid', saveable: false, validation_error: 'This proposal requires editing before it can be saved.' };
+}
+export function proposalSearchText(wrapper) { return contentOf(wrapper?.proposal || {}); }
+export function validateApprovedProposal(kind, proposal) { rejectArbitraryFields(kind, proposal); return kind === 'memory' ? validateMemory(proposal) : validateKnowledgeItem(kind, proposal); }
