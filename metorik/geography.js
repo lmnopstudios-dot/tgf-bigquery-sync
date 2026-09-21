@@ -25,8 +25,7 @@ export const GEOGRAPHY_SCHEMA = Object.freeze([
 const FIELD_ALIASES = Object.freeze({
   source_order_id: ['order id', 'order_id', 'id'],
   source_order_number: ['order number', 'order_number', 'number'],
-  order_date: ['order date', 'order_date', 'date', 'created at', 'created_at'],
-  shipping_country: ['shipping country', 'shipping_country', 'shipping country code', 'shipping_country_code']
+  shipping_country: ['shipping address country', 'shipping country', 'shipping_country', 'shipping country code', 'shipping_country_code']
 });
 export const ISO2_CODES = Object.freeze(('AD AE AF AG AI AL AM AO AQ AR AS AT AU AW AX AZ BA BB BD BE BF BG BH BI BJ BL BM BN BO BQ BR BS BT BV BW BY BZ CA CC CD CF CG CH CI CK CL CM CN CO CR CU CV CW CX CY CZ DE DJ DK DM DO DZ EC EE EG EH ER ES ET FI FJ FK FM FO FR GA GB GD GE GF GG GH GI GL GM GN GP GQ GR GS GT GU GW GY HK HM HN HR HT HU ID IE IL IM IN IO IQ IR IS IT JE JM JO JP KE KG KH KI KM KN KP KR KW KY KZ LA LB LC LI LK LR LS LT LU LV LY MA MC MD ME MF MG MH MK ML MM MN MO MP MQ MR MS MT MU MV MW MX MY MZ NA NC NE NF NG NI NL NO NP NR NU NZ OM PA PE PF PG PH PK PL PM PN PR PS PT PW PY QA RE RO RS RU RW SA SB SC SD SE SG SH SI SJ SK SL SM SN SO SR SS ST SV SX SY SZ TC TD TF TG TH TJ TK TL TM TN TO TR TT TV TW TZ UA UG UM US UY UZ VA VC VE VG VI VN VU WF WS YE YT ZA ZM ZW').split(' '));
 const ISO2 = new Set(ISO2_CODES);
@@ -66,16 +65,6 @@ export function normalizeCountry(value) {
   return { source, iso2 };
 }
 
-function normalizeDate(value) {
-  const source = value?.trim();
-  if (!source) return null;
-  const match = source.match(/^(\d{4})[-/](\d{2})[-/](\d{2})/);
-  if (!match) throw new Error('invalid order date');
-  const result = `${match[1]}-${match[2]}-${match[3]}`;
-  if (new Date(`${result}T00:00:00Z`).toISOString().slice(0, 10) !== result) throw new Error('invalid order date');
-  return result;
-}
-
 // Streaming RFC 4180 parser. It supports quoted commas/newlines without ever
 // retaining the source file or PII-bearing columns in memory.
 export async function* csvRecords(readable) {
@@ -107,7 +96,7 @@ export function geographyRow(record, columns, store, importedAt) {
   return {
     source_platform: 'woo', source_store: store, source_order_id,
     source_order_number: record[columns.source_order_number]?.trim() || null,
-    order_date: normalizeDate(record[columns.order_date]),
+    order_date: null,
     shipping_country_source_value: source, shipping_country_iso2: iso2,
     geography_status: iso2 ? 'observed' : 'unresolved',
     geography_provenance: iso2 ? 'direct_metorik_export_shipping_country' : 'unresolved',
@@ -165,7 +154,7 @@ export async function importMetorikGeography({ bigquery, project, store, file, r
         COUNTIF(c.order_id IS NOT NULL) canonical_matches,
         COUNTIF(c.order_id IS NULL) extra_export_ids,
         COUNTIF(c.order_id IS NOT NULL AND COALESCE(g.source_order_number, '') != COALESCE(c.order_number, '')) order_number_disagreements,
-        COUNTIF(c.order_id IS NOT NULL AND g.order_date IS NOT NULL AND DATE(c.order_created_at) != g.order_date) date_disagreements,
+        COUNTIF(c.order_id IS NOT NULL AND c.order_created_at IS NULL) missing_canonical_order_dates,
         (SELECT COUNT(*) FROM \`${project}.${canonical}.orders\` c2 LEFT JOIN \`${project}.${GEOGRAPHY_DATASET}.${stageName}\` g2
           ON CAST(c2.order_id AS STRING)=g2.source_order_id WHERE g2.source_order_id IS NULL) missing_canonical_ids
       FROM \`${project}.${GEOGRAPHY_DATASET}.${stageName}\` g
@@ -174,7 +163,7 @@ export async function importMetorikGeography({ bigquery, project, store, file, r
     if (Number(check.stage_count) !== count) throw new Error('Staging validation row-count mismatch');
     if (Number(check.unique_ids) !== count) throw new Error('Metorik CSV has duplicate Order ID values');
     const reconciliationFailures = ['extra_export_ids', 'missing_canonical_ids',
-      'order_number_disagreements', 'date_disagreements']
+      'order_number_disagreements', 'missing_canonical_order_dates']
       .filter(field => Number(check[field] || 0) > 0)
       .map(field => `${field}=${Number(check[field])}`);
     if (reconciliationFailures.length) {
@@ -182,12 +171,21 @@ export async function importMetorikGeography({ bigquery, project, store, file, r
     }
     await bigquery.query({ query: `BEGIN TRANSACTION;
       DELETE FROM \`${project}.${GEOGRAPHY_DATASET}.${GEOGRAPHY_TABLE}\` WHERE source_store = @store;
-      INSERT INTO \`${project}.${GEOGRAPHY_DATASET}.${GEOGRAPHY_TABLE}\` SELECT * FROM \`${project}.${GEOGRAPHY_DATASET}.${stageName}\`;
+      INSERT INTO \`${project}.${GEOGRAPHY_DATASET}.${GEOGRAPHY_TABLE}\`
+        (source_platform, source_store, source_order_id, source_order_number, order_date,
+         shipping_country_source_value, shipping_country_iso2, geography_status,
+         geography_provenance, evidence_tier, source_export_type, imported_at)
+      SELECT g.source_platform, g.source_store, g.source_order_id, g.source_order_number,
+        DATE(c.order_created_at), g.shipping_country_source_value, g.shipping_country_iso2,
+        g.geography_status, g.geography_provenance, g.evidence_tier, g.source_export_type, g.imported_at
+      FROM \`${project}.${GEOGRAPHY_DATASET}.${stageName}\` g
+      JOIN \`${project}.${canonical}.orders\` c ON CAST(c.order_id AS STRING) = g.source_order_id;
       COMMIT TRANSACTION;`, params: { store } });
     return { store, imported_rows: count, observed_rows: observed, unresolved_rows: count - observed,
       coverage_percentage: Number((observed * 100 / count).toFixed(2)), canonical_dataset: canonical,
       canonical_reconciliation: { matched_ids: Number(check.canonical_matches || 0), extra_export_ids: Number(check.extra_export_ids || 0),
-        missing_canonical_ids: Number(check.missing_canonical_ids || 0), order_number_disagreements: Number(check.order_number_disagreements || 0), date_disagreements: Number(check.date_disagreements || 0) } };
+        missing_canonical_ids: Number(check.missing_canonical_ids || 0), order_number_disagreements: Number(check.order_number_disagreements || 0),
+        missing_canonical_order_dates: Number(check.missing_canonical_order_dates || 0) } };
   } finally { await stage.delete({ ignoreNotFound: true }); }
 }
 
