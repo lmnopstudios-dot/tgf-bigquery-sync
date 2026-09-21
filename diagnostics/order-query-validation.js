@@ -1,5 +1,5 @@
 import { BigQuery } from '@google-cloud/bigquery';
-import { assertOrderQuerySafety, MATRIXIFY_APP_ID } from '../oracle/order-query.js';
+import { assertOrderQuerySafety, createOrderQueryService, MATRIXIFY_APP_ID } from '../oracle/order-query.js';
 
 export function validationQueries(project) {
   return {
@@ -8,7 +8,11 @@ export function validationQueries(project) {
     migration: `SELECT COUNTIF(source_app_id = @matrixify_app_id) matrixify_orders, COUNTIF(source_app_id IS NULL OR source_app_id != @matrixify_app_id) native_orders FROM \`${project}.shopify_data.order_locations\``,
     woo_lines: `SELECT COUNT(*) orphan_lines FROM \`${project}.metorik_uk.order_line_items\` li LEFT JOIN \`${project}.metorik_uk.orders\` o USING(order_id) WHERE o.order_id IS NULL`,
     shopify_lines: `SELECT COUNT(*) orphan_lines FROM \`${project}.shopify_data.order_line_items\` li LEFT JOIN \`${project}.shopify_data.order_locations\` o USING(order_id) WHERE o.order_id IS NULL`,
-    country: `SELECT COUNTIF(shipping_country IS NOT NULL) directly_observed, COUNT(*) total_orders FROM \`${project}.metorik_uk.orders\``
+    country: `SELECT COUNTIF(shipping_country IS NOT NULL) directly_observed, COUNT(*) total_orders FROM \`${project}.metorik_uk.orders\``,
+    woo_number_sample: `SELECT CAST(order_id AS STRING) source_order_id, order_number, order_name
+      FROM \`${project}.metorik_uk.orders\`
+      WHERE REGEXP_CONTAINS(order_number, r'^#[A-Za-z0-9][A-Za-z0-9._/-]*$')
+      ORDER BY order_created_at DESC, order_id DESC LIMIT 1`
   };
 }
 
@@ -24,6 +28,30 @@ export async function validateOrderQueryLayer({ bigquery, project }) {
   if (Number(results.shopify_identity.row_count) !== Number(results.shopify_identity.identity_count)) failures.push('duplicate Shopify identity');
   if (Number(results.woo_lines.orphan_lines) !== 0) failures.push('orphan Woo line items');
   if (Number(results.shopify_lines.orphan_lines) !== 0) failures.push('orphan Shopify line items');
+  const sample = results.woo_number_sample;
+  if (!sample?.order_number) {
+    failures.push('no prefixed Woo order-number sample available');
+  } else {
+    const service = createOrderQueryService({ bigquery, project });
+    const bare = sample.order_number.slice(1);
+    const [prefixed, normalized, byId] = await Promise.all([
+      service.searchOrders({ source_platform: 'woo', order_number: sample.order_number, limit: 2 }),
+      service.searchOrders({ source_platform: 'woo', order_number: bare, limit: 2 }),
+      service.searchOrders({ source_platform: 'woo', source_order_id: sample.source_order_id, limit: 2 })
+    ]);
+    const resolves = result => result.orders.some(order =>
+      order.source_platform === 'woo' && order.source_order_id === sample.source_order_id);
+    results.woo_number_lookup = {
+      sampled_order_number: sample.order_number,
+      prefixed_resolves: resolves(prefixed),
+      normalized_resolves: resolves(normalized),
+      source_id_resolves: resolves(byId),
+      source_id_distinct_from_order_number: sample.source_order_id !== bare
+    };
+    if (!results.woo_number_lookup.prefixed_resolves) failures.push('prefixed Woo order number does not resolve');
+    if (!results.woo_number_lookup.normalized_resolves) failures.push('normalized Woo order number does not resolve');
+    if (!results.woo_number_lookup.source_id_resolves) failures.push('Woo source order ID does not resolve');
+  }
   return { valid: failures.length === 0, failures, static_safety: staticSafety, evidence: results };
 }
 
