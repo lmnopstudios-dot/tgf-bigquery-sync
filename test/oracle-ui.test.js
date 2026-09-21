@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import express from 'express';
 import { createOracleUiRouter } from '../oracle/ui-router.js';
-import { createProposalGenerator, needsProposalGeneration, normalizeModelProposal, proposalDiagnostic, PROPOSAL_INSTRUCTIONS, PROPOSE_GOVERNED_RECORDS_TOOL } from '../oracle/proposals.js';
+import { assertStrictToolSchema, createProposalGenerator, needsProposalGeneration, normalizeModelProposal, proposalDiagnostic, PROPOSAL_INSTRUCTIONS, PROPOSE_GOVERNED_RECORDS_TOOL } from '../oracle/proposals.js';
 import { redactError } from '../oracle/ui-security.js';
 
 const env={ORACLE_UI_PASSWORD:'test-password',ORACLE_UI_SESSION_SECRET:'12345678901234567890123456789012',ORACLE_UI_ADMIN_NAME:'test-admin'};
@@ -24,6 +24,21 @@ test('strict proposal tool is non-writing and permits only governed record varia
   assert.ok(PROPOSE_GOVERNED_RECORDS_TOOL.parameters.properties.proposals.items.anyOf);
   assert.match(PROPOSAL_INSTRUCTIONS,/empty proposals list for questions/i);
   assert.match(PROPOSAL_INSTRUCTIONS,/never save or write/i);
+});
+
+test('strict proposal schema recursively types properties, closes objects and types array items',()=>{
+  assert.equal(assertStrictToolSchema(),true);
+  const broken=structuredClone(PROPOSE_GOVERNED_RECORDS_TOOL.parameters);
+  delete broken.properties.proposals.items.anyOf[2].properties.kind.type;
+  assert.throws(()=>assertStrictToolSchema(broken),/kind must declare type or anyOf/);
+  const untypedItem=structuredClone(PROPOSE_GOVERNED_RECORDS_TOOL.parameters);
+  untypedItem.properties.proposals.items.anyOf[3].properties.evidence.items.properties.reference={maxLength:1000};
+  assert.throws(()=>assertStrictToolSchema(untypedItem),/reference must declare type or anyOf/);
+  for(const branch of PROPOSE_GOVERNED_RECORDS_TOOL.parameters.properties.proposals.items.anyOf){
+    assert.equal(branch.additionalProperties,false);
+    assert.deepEqual(new Set(branch.required),new Set(Object.keys(branch.properties)));
+    assert.deepEqual(branch.properties.kind.type,'string');
+  }
 });
 
 test('proposal generator makes one bounded tool-only model call and parses multiple candidates',async()=>{
@@ -47,6 +62,7 @@ test('safe proposal diagnostics distinguish API failures without secrets or payl
   const generate=createProposalGenerator({openai:{responses:{create:async()=>{const error=new Error('invalid schema sk-secret payload={"user_message":"private document"}');error.status=400;error.code='invalid_function_parameters';error.type='invalid_request_error';throw error;}}}});
   let caught;try{await generate({message:'Our campaign happened.'})}catch(error){caught=error}
   const diagnostic=proposalDiagnostic(caught,'gpt-5.6');assert.equal(diagnostic.phase,'openai_request');assert.equal(diagnostic.http_status,400);assert.equal(diagnostic.openai_code,'invalid_function_parameters');assert.doesNotMatch(JSON.stringify(diagnostic),/sk-secret/);assert.doesNotMatch(JSON.stringify(diagnostic),/private document/);
+  assert.equal(caught.cause,undefined);assert.doesNotMatch(JSON.stringify(caught),/private document/);
 });
 
 test('production proposal diagnostic cannot invoke persistence or approval endpoints',async()=>{

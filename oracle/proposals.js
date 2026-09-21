@@ -2,20 +2,21 @@ import crypto from 'node:crypto';
 import { validateKnowledgeItem, validateMemory } from './knowledge.js';
 
 const nullableString = { type: ['string', 'null'] };
+const boundedString = maxLength => ({ type: 'string', maxLength });
 const common = {
   status: { type: 'string', enum: ['confirmed', 'working', 'rejected'] },
   source_type: { type: 'string', enum: ['human_entered', 'business_document', 'governed_data_analysis', 'system_definition', 'external_source'] },
-  source_reference: { type: 'string', maxLength: 1000 },
+  source_reference: boundedString(1000),
   effective_from: nullableString, effective_to: nullableString,
   supersedes: nullableString,
-  tags: { type: 'array', items: { type: 'string' }, maxItems: 20 }
+  tags: { type: 'array', items: boundedString(100), maxItems: 20 }
 };
 const object = (properties, required = Object.keys(properties)) => ({ type: 'object', additionalProperties: false, properties, required });
 const variants = [
-  object({ kind: { const: 'event' }, event_type: { type: 'string' }, title: { type: 'string' }, description: { type: 'string' }, date_precision: { type: 'string', enum: ['day', 'range', 'month', 'year', 'unknown'] }, ...common }),
-  object({ kind: { const: 'fact' }, subject: { type: 'string' }, predicate: { type: 'string' }, statement: { type: 'string' }, ...common }),
-  object({ kind: { const: 'definition' }, term: { type: 'string' }, definition: { type: 'string' }, implementation_reference: { type: 'string' }, ...common }),
-  object({ kind: { const: 'memory' }, memory_type: { type: 'string', enum: ['finding', 'decision', 'explanation', 'hypothesis', 'rejected_hypothesis', 'data_quality_issue', 'reporting_convention'] }, title: { type: 'string' }, statement: { type: 'string' }, confidence: { type: ['number', 'null'], minimum: 0, maximum: 1 }, evidence: { type: 'array', maxItems: 20, items: object({ kind: { type: 'string' }, reference: { type: 'string' } }) }, ...common })
+  object({ kind: { type: 'string', enum: ['event'] }, event_type: boundedString(100), title: boundedString(300), description: boundedString(4000), date_precision: { type: 'string', enum: ['day', 'range', 'month', 'year', 'unknown'] }, ...common }),
+  object({ kind: { type: 'string', enum: ['fact'] }, subject: boundedString(300), predicate: boundedString(200), statement: boundedString(4000), ...common }),
+  object({ kind: { type: 'string', enum: ['definition'] }, term: boundedString(300), definition: boundedString(4000), implementation_reference: boundedString(1000), ...common }),
+  object({ kind: { type: 'string', enum: ['memory'] }, memory_type: { type: 'string', enum: ['finding', 'decision', 'explanation', 'hypothesis', 'rejected_hypothesis', 'data_quality_issue', 'reporting_convention'] }, title: boundedString(300), statement: boundedString(4000), confidence: { type: ['number', 'null'], minimum: 0, maximum: 1 }, evidence: { type: 'array', minItems: 1, maxItems: 20, items: object({ kind: boundedString(100), reference: boundedString(1000) }) }, ...common })
 ];
 
 export const PROPOSE_GOVERNED_RECORDS_TOOL = {
@@ -24,6 +25,40 @@ export const PROPOSE_GOVERNED_RECORDS_TOOL = {
   // Strict Responses function schemas support `anyOf`; `oneOf` is rejected by the API.
   parameters: object({ proposals: { type: 'array', maxItems: 12, items: { anyOf: variants } } })
 };
+
+// The Responses API validates strict function schemas before running the model.
+// Keep this independent of mocks so an implicit property or array item fails at
+// process startup rather than after deployment. `anyOf` is the only untyped
+// composition node used here; every concrete value schema declares its type.
+export function assertStrictToolSchema(schema = PROPOSE_GOVERNED_RECORDS_TOOL.parameters) {
+  const supportedTypes = new Set(['object', 'array', 'string', 'number', 'integer', 'boolean', 'null']);
+  const visit = (node, path) => {
+    if (!node || typeof node !== 'object' || Array.isArray(node)) throw new Error(`${path} must be a schema object`);
+    if (!Object.hasOwn(node, 'type') && !Array.isArray(node.anyOf)) throw new Error(`${path} must declare type or anyOf`);
+    const types = Array.isArray(node.type) ? node.type : [node.type];
+    if (Object.hasOwn(node, 'type') && (!types.length || types.some(type => !supportedTypes.has(type)))) throw new Error(`${path}.type is not supported`);
+    if (node.anyOf) {
+      if (!node.anyOf.length) throw new Error(`${path}.anyOf must not be empty`);
+      node.anyOf.forEach((branch, index) => visit(branch, `${path}.anyOf[${index}]`));
+    }
+    if (node.type === 'object') {
+      if (!node.properties || node.additionalProperties !== false) throw new Error(`${path} must be a closed object schema`);
+      const names = Object.keys(node.properties);
+      if (!Array.isArray(node.required) || new Set(node.required).size !== node.required.length || names.some(name => !node.required.includes(name)) || node.required.some(name => !names.includes(name))) throw new Error(`${path}.required must contain every property exactly`);
+      for (const [name, child] of Object.entries(node.properties)) visit(child, `${path}.properties.${name}`);
+    }
+    if (node.type === 'array') {
+      if (!node.items) throw new Error(`${path}.items is required`);
+      visit(node.items, `${path}.items`);
+    }
+    if (Array.isArray(node.type) && (node.type.length < 2 || new Set(node.type).size !== node.type.length || !node.type.includes('null'))) throw new Error(`${path}.type must be an explicit nullable union`);
+    if (node.enum && node.enum.some(value => value === null ? !types.includes('null') : !types.includes(typeof value))) throw new Error(`${path}.enum must match its declared type`);
+  };
+  visit(schema, 'parameters');
+  return true;
+}
+
+assertStrictToolSchema();
 
 export const PROPOSAL_INSTRUCTIONS = `You structure durable business assertions into a small, useful set of governed record proposals. You never save or write anything.
 Return an empty proposals list for questions, comparisons, analytical requests, casual conversation, or text without new durable assertions. A persistence request strengthens intent but never authorizes a write. For mixed input, propose only assertions.
@@ -48,12 +83,13 @@ export function needsProposalGeneration(message) {
 }
 
 function proposalError(error, phase) {
-  const wrapped = new Error(error?.message || 'Proposal generation failed', { cause: error });
+  const wrapped = new Error(error?.message || 'Proposal generation failed');
   wrapped.name = 'ProposalGenerationError';
   wrapped.phase = phase;
   wrapped.status = error?.status;
   wrapped.code = error?.code;
   wrapped.openaiType = error?.type || error?.error?.type;
+  wrapped.providerErrorClass = error?.constructor?.name;
   return wrapped;
 }
 
@@ -67,7 +103,7 @@ export function proposalDiagnostic(error, model) {
     .slice(0, 300);
   return {
     operation: 'proposal_generation', phase: error?.phase || 'proposal_validation', model,
-    error_class: error?.cause?.constructor?.name || error?.constructor?.name || 'Error',
+    error_class: error?.providerErrorClass || error?.constructor?.name || 'Error',
     ...(Number.isInteger(error?.status) ? { http_status: error.status } : {}),
     ...(error?.code ? { openai_code: String(error.code).slice(0, 80) } : {}),
     ...(error?.openaiType ? { openai_type: String(error.openaiType).slice(0, 80) } : {}),
