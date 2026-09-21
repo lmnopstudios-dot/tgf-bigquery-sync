@@ -1,6 +1,23 @@
 import { BigQuery } from '@google-cloud/bigquery';
 import { assertCustomerQuerySafety, createCustomerQueryService, MATRIXIFY_APP_ID } from '../oracle/customer-query.js';
 
+function safeValidationError(error, checkName, operation) {
+  return {
+    check_name: checkName,
+    operation,
+    error_class: error?.name || error?.constructor?.name || 'Error',
+    message: String(error?.message || 'BigQuery validation failed').replace(/\s+/g, ' ').slice(0, 500)
+  };
+}
+
+export class CustomerValidationError extends Error {
+  constructor(context, cause) {
+    super(context.message, { cause });
+    this.name = 'CustomerValidationError';
+    this.context = context;
+  }
+}
+
 export function customerValidationQueries(project) {
   return {
     source_customers: `SELECT source_store, row_count, identified_count, guest_count FROM (
@@ -22,11 +39,21 @@ export function customerValidationQueries(project) {
 export async function validateCustomerQueryLayer({ bigquery, project }) {
   const evidence = {};
   for (const [name, query] of Object.entries(customerValidationQueries(project))) {
-    const [rows] = await bigquery.query({ query, params: { matrixify_app_id: MATRIXIFY_APP_ID } });
-    evidence[name] = rows;
+    try {
+      const [rows] = await bigquery.query({ query, params: { matrixify_app_id: MATRIXIFY_APP_ID },
+        labels: { component: 'customer_validation', operation: name } });
+      evidence[name] = rows;
+    } catch (error) {
+      throw new CustomerValidationError(safeValidationError(error, name, 'validation_query'), error);
+    }
   }
   const service = createCustomerQueryService({ bigquery, project });
-  const smoke = await service.searchCustomers({ limit: 1 });
+  let smoke;
+  try {
+    smoke = await service.searchCustomers({ limit: 1 });
+  } catch (error) {
+    throw new CustomerValidationError(safeValidationError(error, 'semantic_smoke', 'search_customers'), error);
+  }
   evidence.semantic_smoke = { returned_customer_count: smoke.returned_customer_count, matching_customer_count: smoke.matching_customer_count };
   const failures = [];
   if (Number(evidence.woo_line_orphans[0]?.orphan_lines || 0)) failures.push('orphan Woo line items');
@@ -45,4 +72,7 @@ async function main() {
   if (!result.valid) process.exitCode = 1;
 }
 
-if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href) main().catch(error => { console.error(`Customer query validation failed: ${error.message}`); process.exitCode = 1; });
+if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href) main().catch(error => {
+  console.error(JSON.stringify({ validation_failed: true, ...(error.context || safeValidationError(error, 'validator', 'startup')) }));
+  process.exitCode = 1;
+});
