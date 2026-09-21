@@ -21,7 +21,8 @@ const variants = [
 export const PROPOSE_GOVERNED_RECORDS_TOOL = {
   type: 'function', name: 'propose_governed_records', strict: true,
   description: 'Return zero or more non-writing governed record candidates. This tool cannot persist anything.',
-  parameters: object({ proposals: { type: 'array', maxItems: 12, items: { oneOf: variants } } })
+  // Strict Responses function schemas support `anyOf`; `oneOf` is rejected by the API.
+  parameters: object({ proposals: { type: 'array', maxItems: 12, items: { anyOf: variants } } })
 };
 
 export const PROPOSAL_INSTRUCTIONS = `You structure durable business assertions into a small, useful set of governed record proposals. You never save or write anything.
@@ -32,16 +33,64 @@ Uncertain assertions must be working hypotheses (memory kind, memory_type hypoth
 Do not infer causation. In particular, chronology about made-to-order Christmas delivery is context, not a cause of sales.
 Titles must be concise descriptions, never raw instructions/questions. Use only schema fields. supersedes must be null unless an exact supplied governed record makes the relationship deterministic.`;
 
+export function needsProposalGeneration(message) {
+  const text = String(message || '').trim();
+  if (!text) return false;
+  if (/\b(?:save|remember|record|store|add)\b/i.test(text)) return true;
+  // This deliberately recognizes only obvious, wholly non-assertive requests. It
+  // does not attempt extraction; everything ambiguous is left to the model.
+  const sentences = text.split(/(?<=[?.!])\s+/).filter(Boolean);
+  if (sentences.length > 1) return !sentences.every(sentence => !needsProposalGeneration(sentence));
+  if (/^(?:what|why|when|where|who|whom|whose|which|how|is|are|was|were|do|does|did|can|could|should|would|will|has|have|had)\b[\s\S]*\?$/i.test(text)) return false;
+  if (/^(?:compare|contrast|analyse|analyze|explain|evaluate|summari[sz]e|calculate|show|list|tell me)\b/i.test(text)) return false;
+  if (/^(?:hello|hi|hey|thanks|thank you)[!.]?$/i.test(text)) return false;
+  return true;
+}
+
+function proposalError(error, phase) {
+  const wrapped = new Error(error?.message || 'Proposal generation failed', { cause: error });
+  wrapped.name = 'ProposalGenerationError';
+  wrapped.phase = phase;
+  wrapped.status = error?.status;
+  wrapped.code = error?.code;
+  wrapped.openaiType = error?.type || error?.error?.type;
+  return wrapped;
+}
+
+export function proposalDiagnostic(error, model) {
+  const hasProviderMetadata = Number.isInteger(error?.status) || error?.code || error?.openaiType;
+  const raw = String(hasProviderMetadata ? error?.message : 'Proposal generation failed')
+    .replace(/sk-[A-Za-z0-9_-]+/g, '[REDACTED]')
+    .replace(/Bearer\s+\S+/gi, 'Bearer [REDACTED]')
+    .replace(/\b(?:payload|input|request body)\s*[=:]\s*\{.*$/gi, 'payload=[REDACTED]')
+    .replace(/[\r\n]+/g, ' ')
+    .slice(0, 300);
+  return {
+    operation: 'proposal_generation', phase: error?.phase || 'proposal_validation', model,
+    error_class: error?.cause?.constructor?.name || error?.constructor?.name || 'Error',
+    ...(Number.isInteger(error?.status) ? { http_status: error.status } : {}),
+    ...(error?.code ? { openai_code: String(error.code).slice(0, 80) } : {}),
+    ...(error?.openaiType ? { openai_type: String(error.openaiType).slice(0, 80) } : {}),
+    message: raw
+  };
+}
+
 export function createProposalGenerator({ openai, model = 'gpt-5.6' }) {
   if (!openai?.responses?.create) throw new Error('an OpenAI responses client is required');
   return async ({ message, existing = [], evidence = [] }) => {
+    if (!needsProposalGeneration(message)) return [];
     const context = existing.slice(0, 20).map(item => ({ id: item.id, kind: item.kind, status: item.status, title: item.title || item.term || item.subject, content: item.content || item.description || item.definition || item.statement }));
-    const response = await openai.responses.create({ model, instructions: PROPOSAL_INSTRUCTIONS, input: JSON.stringify({ user_message: message, existing_governed_records: context, governed_evidence_references: evidence.slice(0, 20) }), tools: [PROPOSE_GOVERNED_RECORDS_TOOL], tool_choice: { type: 'function', name: 'propose_governed_records' }, max_output_tokens: 6000 });
-    const call = response.output?.find(item => item.type === 'function_call' && item.name === 'propose_governed_records');
-    if (!call) throw new Error('proposal model returned no structured proposal call');
-    const parsed = JSON.parse(call.arguments || '{}');
-    if (!Array.isArray(parsed.proposals)) throw new Error('proposal model returned an invalid proposal list');
-    return parsed.proposals;
+    let response;
+    try {
+      response = await openai.responses.create({ model, instructions: PROPOSAL_INSTRUCTIONS, input: JSON.stringify({ user_message: message, existing_governed_records: context, governed_evidence_references: evidence.slice(0, 20) }), tools: [PROPOSE_GOVERNED_RECORDS_TOOL], tool_choice: { type: 'function', name: 'propose_governed_records' }, parallel_tool_calls: false, max_output_tokens: 6000 });
+    } catch (error) { throw proposalError(error, 'openai_request'); }
+    try {
+      const call = response.output?.find(item => item.type === 'function_call' && item.name === 'propose_governed_records');
+      if (!call) throw new Error('proposal model returned no structured proposal call');
+      const parsed = JSON.parse(call.arguments || '{}');
+      if (!Array.isArray(parsed.proposals)) throw new Error('proposal model returned an invalid proposal list');
+      return parsed.proposals;
+    } catch (error) { throw proposalError(error, 'response_parse'); }
   };
 }
 

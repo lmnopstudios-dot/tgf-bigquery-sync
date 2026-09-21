@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import express from 'express';
 import { createOracleUiRouter } from '../oracle/ui-router.js';
-import { createProposalGenerator, normalizeModelProposal, PROPOSAL_INSTRUCTIONS, PROPOSE_GOVERNED_RECORDS_TOOL } from '../oracle/proposals.js';
+import { createProposalGenerator, needsProposalGeneration, normalizeModelProposal, proposalDiagnostic, PROPOSAL_INSTRUCTIONS, PROPOSE_GOVERNED_RECORDS_TOOL } from '../oracle/proposals.js';
 import { redactError } from '../oracle/ui-security.js';
 
 const env={ORACLE_UI_PASSWORD:'test-password',ORACLE_UI_SESSION_SECRET:'12345678901234567890123456789012',ORACLE_UI_ADMIN_NAME:'test-admin'};
@@ -20,6 +21,7 @@ test('strict proposal tool is non-writing and permits only governed record varia
   assert.equal(PROPOSE_GOVERNED_RECORDS_TOOL.strict,true);
   assert.equal(PROPOSE_GOVERNED_RECORDS_TOOL.parameters.additionalProperties,false);
   assert.equal(PROPOSE_GOVERNED_RECORDS_TOOL.parameters.properties.proposals.maxItems,12);
+  assert.ok(PROPOSE_GOVERNED_RECORDS_TOOL.parameters.properties.proposals.items.anyOf);
   assert.match(PROPOSAL_INSTRUCTIONS,/empty proposals list for questions/i);
   assert.match(PROPOSAL_INSTRUCTIONS,/never save or write/i);
 });
@@ -27,7 +29,29 @@ test('strict proposal tool is non-writing and permits only governed record varia
 test('proposal generator makes one bounded tool-only model call and parses multiple candidates',async()=>{
   const calls=[];const candidates=[event('Campaign','2024-11-07','2024-11-10','Offer detail'),event('Online sale','2024-11-08','2024-11-10','08:00 GMT through midnight GMT')];
   const generate=createProposalGenerator({openai:{responses:{create:async input=>{calls.push(input);return {output:[{type:'function_call',name:'propose_governed_records',arguments:JSON.stringify({proposals:candidates})}]}}}}});
-  assert.equal((await generate({message:'pasted email',existing:[],evidence:[]})).length,2);assert.equal(calls.length,1);assert.deepEqual(calls[0].tools,[PROPOSE_GOVERNED_RECORDS_TOOL]);assert.equal(calls[0].tool_choice.name,'propose_governed_records');assert.ok(calls[0].max_output_tokens<=6000);
+  assert.equal((await generate({message:'pasted email',existing:[],evidence:[]})).length,2);assert.equal(calls.length,1);assert.deepEqual(calls[0].tools,[PROPOSE_GOVERNED_RECORDS_TOOL]);assert.equal(calls[0].tool_choice.name,'propose_governed_records');assert.equal(calls[0].parallel_tool_calls,false);assert.ok(calls[0].max_output_tokens<=6000);
+});
+
+test('preflight skips obvious questions and analysis but retains assertions and mixed input',()=>{
+  for(const text of ['What do you know about Black Friday 2025?','Why did sales increase?','Compare 2024 with 2025.','When did the campaign run?']) assert.equal(needsProposalGeneration(text),false,text);
+  for(const text of ['Our campaign ran in November.','Remember that our campaign ran in November.','Our campaign ran in November. Why did sales increase?']) assert.equal(needsProposalGeneration(text),true,text);
+});
+
+test('preflight avoids the OpenAI call and an empty structured response is successful',async()=>{
+  let calls=0;const generate=createProposalGenerator({openai:{responses:{create:async()=>{calls++;return {output:[{type:'function_call',name:'propose_governed_records',arguments:'{"proposals":[]}'}]}}}}});
+  assert.deepEqual(await generate({message:'Why did sales increase?'}),[]);assert.equal(calls,0);
+  assert.deepEqual(await generate({message:'Our test campaign happened.'}),[]);assert.equal(calls,1);
+});
+
+test('safe proposal diagnostics distinguish API failures without secrets or payloads',async()=>{
+  const generate=createProposalGenerator({openai:{responses:{create:async()=>{const error=new Error('invalid schema sk-secret payload={"user_message":"private document"}');error.status=400;error.code='invalid_function_parameters';error.type='invalid_request_error';throw error;}}}});
+  let caught;try{await generate({message:'Our campaign happened.'})}catch(error){caught=error}
+  const diagnostic=proposalDiagnostic(caught,'gpt-5.6');assert.equal(diagnostic.phase,'openai_request');assert.equal(diagnostic.http_status,400);assert.equal(diagnostic.openai_code,'invalid_function_parameters');assert.doesNotMatch(JSON.stringify(diagnostic),/sk-secret/);assert.doesNotMatch(JSON.stringify(diagnostic),/private document/);
+});
+
+test('production proposal diagnostic cannot invoke persistence or approval endpoints',async()=>{
+  const source=await readFile(new URL('../diagnostics/oracle-proposals-production.js',import.meta.url),'utf8');
+  assert.doesNotMatch(source,/writeRecord|\/approve|knowledge\/admin/);
 });
 
 function event(title,from,to,description,extra={}){return {kind:'event',event_type:'campaign',title,description,date_precision:from===to?'day':'range',effective_from:from,effective_to:to,status:'confirmed',source_type:'business_document',source_reference:'Black Friday 2024 campaign email supplied by authenticated administrator',tags:['black-friday'],supersedes:null,...extra}}
