@@ -131,38 +131,51 @@ export function customerEvidenceSql(project) {
 
 function searchSql(project, f) {
   const lineFilter = f.purchased_product_id || f.purchased_sku || f.product_title;
+  const currencyFilter = f.currency || f.minimum_lifetime_value !== null || f.maximum_lifetime_value !== null;
   const clauses = [f.source_platform && 'c.source_platform = @source_platform', f.source_store && 'c.source_store = @source_store',
     f.first_purchase_start && 'c.first_observed_purchase_date >= DATE(@first_purchase_start)', f.first_purchase_end && 'c.first_observed_purchase_date <= DATE(@first_purchase_end)',
     f.latest_purchase_start && 'c.latest_observed_purchase_date >= DATE(@latest_purchase_start)', f.latest_purchase_end && 'c.latest_observed_purchase_date <= DATE(@latest_purchase_end)',
     f.minimum_order_count !== null && 'c.qualifying_order_count >= @minimum_order_count', f.maximum_order_count !== null && 'c.qualifying_order_count <= @maximum_order_count',
     f.repeat_customer !== null && 'c.repeat_customer = @repeat_customer', f.inactive_since && 'c.latest_observed_purchase_date < DATE(@inactive_since)',
-    f.shipping_country && 'UPPER(@shipping_country) IN UNNEST(c.observed_shipping_countries)',
-    (f.currency || f.minimum_lifetime_value !== null || f.maximum_lifetime_value !== null) && `EXISTS (SELECT 1 FROM customer_currency v WHERE v.customer_ref = c.customer_ref
-      ${f.currency ? 'AND v.currency = UPPER(@currency)' : ''} ${f.minimum_lifetime_value !== null ? 'AND v.source_native_lifetime_order_value >= @minimum_lifetime_value' : ''}
-      ${f.maximum_lifetime_value !== null ? 'AND v.source_native_lifetime_order_value <= @maximum_lifetime_value' : ''})`,
-    lineFilter && `EXISTS (SELECT 1 FROM qualifying_orders q JOIN line_evidence li USING(source_platform, source_store, source_order_id)
-      WHERE q.customer_ref = c.customer_ref ${f.purchased_product_id ? 'AND li.product_id = @purchased_product_id' : ''}
-      ${f.purchased_sku ? 'AND LOWER(li.sku) = LOWER(@purchased_sku)' : ''} ${f.product_title ? "AND LOWER(li.product_title) LIKE CONCAT('%', LOWER(@product_title), '%')" : ''})`
+    f.shipping_country && 'UPPER(@shipping_country) IN UNNEST(c.observed_shipping_countries)'
   ].filter(Boolean);
-  return `${customerEvidenceSql(project)}, matched AS (SELECT c.customer_ref, c.source_platform, c.source_store,
+  return `${customerEvidenceSql(project)}, currency_values AS (
+    SELECT customer_ref, ARRAY_AGG(STRUCT(currency, source_native_lifetime_order_value,
+      source_native_lifetime_refund_value) ORDER BY currency) source_native_values_by_currency
+    FROM customer_currency GROUP BY customer_ref
+  )${currencyFilter ? `, matching_currency_customers AS (
+    SELECT DISTINCT customer_ref FROM customer_currency WHERE TRUE
+      ${f.currency ? 'AND currency = UPPER(@currency)' : ''} ${f.minimum_lifetime_value !== null ? 'AND source_native_lifetime_order_value >= @minimum_lifetime_value' : ''}
+      ${f.maximum_lifetime_value !== null ? 'AND source_native_lifetime_order_value <= @maximum_lifetime_value' : ''}
+  )` : ''}${lineFilter ? `, matching_product_customers AS (
+    SELECT DISTINCT q.customer_ref FROM qualifying_orders q
+    JOIN line_evidence li USING(source_platform, source_store, source_order_id) WHERE TRUE
+      ${f.purchased_product_id ? 'AND li.product_id = @purchased_product_id' : ''}
+      ${f.purchased_sku ? 'AND LOWER(li.sku) = LOWER(@purchased_sku)' : ''} ${f.product_title ? "AND LOWER(li.product_title) LIKE CONCAT('%', LOWER(@product_title), '%')" : ''}
+  )` : ''}, matched AS (SELECT c.customer_ref, c.source_platform, c.source_store,
     c.first_observed_purchase_date, c.latest_observed_purchase_date, c.qualifying_order_count, c.repeat_customer,
-    c.currencies, c.observed_shipping_countries FROM customer_rollup c WHERE ${clauses.length ? clauses.join(' AND ') : 'TRUE'})
+    c.currencies, c.observed_shipping_countries FROM customer_rollup c
+    ${currencyFilter ? 'JOIN matching_currency_customers mc USING(customer_ref)' : ''}
+    ${lineFilter ? 'JOIN matching_product_customers mp USING(customer_ref)' : ''}
+    WHERE ${clauses.length ? clauses.join(' AND ') : 'TRUE'})
     SELECT c.customer_ref, c.source_platform, c.source_store, c.first_observed_purchase_date,
       c.latest_observed_purchase_date, c.qualifying_order_count, c.repeat_customer, c.currencies,
-      c.observed_shipping_countries,
-      ARRAY(SELECT AS STRUCT v.currency, v.source_native_lifetime_order_value, v.source_native_lifetime_refund_value
-        FROM customer_currency v WHERE v.customer_ref = c.customer_ref ORDER BY v.currency) source_native_values_by_currency,
+      c.observed_shipping_countries, v.source_native_values_by_currency,
       COUNT(*) OVER() matching_customer_count
-    FROM matched c ORDER BY c.qualifying_order_count DESC, c.latest_observed_purchase_date DESC, c.customer_ref LIMIT @limit`;
+    FROM matched c JOIN currency_values v USING(customer_ref)
+    ORDER BY c.qualifying_order_count DESC, c.latest_observed_purchase_date DESC, c.customer_ref LIMIT @limit`;
 }
 
 function baseParams(input) { return Object.fromEntries(Object.entries({ ...input, matrixify_app_id: MATRIXIFY_APP_ID }).filter(([, v]) => v !== null && v !== undefined)); }
+function queryJob(operation, query, params, types) {
+  return { query, params, ...(types && { types }), labels: { component: 'customer_query', operation } };
+}
 
 export function createCustomerQueryService({ bigquery, project }) {
   if (!bigquery?.query || !project) throw new Error('bigquery and project are required');
   async function searchCustomers(input = {}) {
     const filters = validateCustomerSearch(input); const params = baseParams(filters);
-    const [rows] = await bigquery.query({ query: searchSql(project, filters), params });
+    const [rows] = await bigquery.query(queryJob('search_customers', searchSql(project, filters), params));
     return { customers: clean(rows), matching_customer_count: Number(rows[0]?.matching_customer_count || 0), returned_customer_count: rows.length,
       limit: filters.limit, identity_semantics: IDENTITY_SEMANTICS, monetary_semantics: MONEY_SEMANTICS,
       geography_warning: filters.shipping_country ? GEOGRAPHY_WARNING : null };
@@ -170,26 +183,36 @@ export function createCustomerQueryService({ bigquery, project }) {
   async function getCustomerHistory({ customer_ref, limit = 50, order = 'descending' }) {
     validateCustomerRef(customer_ref); integer(limit, 'limit', { min: 1, max: CUSTOMER_HISTORY_MAX_LIMIT });
     if (!['ascending', 'descending'].includes(order)) throw new Error('order must be ascending or descending');
-    const [rows] = await bigquery.query({ query: `${customerEvidenceSql(project)} SELECT q.customer_ref, q.source_platform, q.source_store,
+    const [rows] = await bigquery.query(queryJob('customer_history', `${customerEvidenceSql(project)} SELECT q.customer_ref, q.source_platform, q.source_store,
       q.source_order_id, q.order_date, q.status, q.currency, q.source_order_value, q.source_refund_value,
       q.shipping_country, ARRAY_AGG(STRUCT(li.product_id, li.sku, li.product_title) ORDER BY li.product_title LIMIT 100) products
       FROM qualifying_orders q LEFT JOIN line_evidence li USING(source_platform, source_store, source_order_id)
       WHERE q.customer_ref = @customer_ref GROUP BY q.customer_ref, q.source_platform, q.source_store, q.source_order_id,
       q.order_date, q.status, q.currency, q.source_order_value, q.source_refund_value, q.shipping_country
       ORDER BY q.order_date ${order === 'ascending' ? 'ASC' : 'DESC'}, q.source_order_id ${order === 'ascending' ? 'ASC' : 'DESC'} LIMIT @limit`,
-      params: baseParams({ customer_ref, limit }) });
+      baseParams({ customer_ref, limit })));
     return { customer_ref, orders: clean(rows), returned_order_count: rows.length, limit, identity_semantics: IDENTITY_SEMANTICS, privacy: PRIVACY };
   }
   async function getCustomerSummary({ customer_ref }) {
     validateCustomerRef(customer_ref);
-    const [rows] = await bigquery.query({ query: `${customerEvidenceSql(project)} SELECT c.customer_ref, c.source_platform, c.source_store,
+    const [rows] = await bigquery.query(queryJob('customer_summary', `${customerEvidenceSql(project)}, currency_values AS (
+      SELECT customer_ref, ARRAY_AGG(STRUCT(currency, source_native_lifetime_order_value,
+        source_native_lifetime_refund_value) ORDER BY currency) source_native_values_by_currency
+      FROM customer_currency GROUP BY customer_ref
+    ), product_values AS (
+      SELECT customer_ref, ARRAY_AGG(STRUCT(product_id, sku, product_title, order_count)
+        ORDER BY order_count DESC, product_title LIMIT 50) products
+      FROM (SELECT q.customer_ref, li.product_id, li.sku, ANY_VALUE(li.product_title) product_title,
+        COUNT(DISTINCT q.source_order_id) order_count FROM qualifying_orders q
+        JOIN line_evidence li USING(source_platform, source_store, source_order_id)
+        GROUP BY q.customer_ref, li.product_id, li.sku) li GROUP BY customer_ref
+    ) SELECT c.customer_ref, c.source_platform, c.source_store,
       c.first_observed_purchase_date, c.latest_observed_purchase_date, DATE_DIFF(c.latest_observed_purchase_date, c.first_observed_purchase_date, DAY) observed_active_span_days,
       c.qualifying_order_count, c.repeat_customer, c.currencies, c.observed_shipping_countries,
-      ARRAY(SELECT AS STRUCT v.currency, v.source_native_lifetime_order_value, v.source_native_lifetime_refund_value FROM customer_currency v WHERE v.customer_ref = c.customer_ref ORDER BY currency) source_native_values_by_currency,
-      ARRAY(SELECT AS STRUCT li.product_id, li.sku, ANY_VALUE(li.product_title) product_title, COUNT(DISTINCT q.source_order_id) order_count
-        FROM qualifying_orders q JOIN line_evidence li USING(source_platform, source_store, source_order_id) WHERE q.customer_ref = c.customer_ref
-        GROUP BY li.product_id, li.sku ORDER BY order_count DESC, product_title LIMIT 50) products
-      FROM customer_rollup c WHERE c.customer_ref = @customer_ref LIMIT 1`, params: baseParams({ customer_ref }) });
+      v.source_native_values_by_currency, IFNULL(p.products,
+        ARRAY<STRUCT<product_id STRING, sku STRING, product_title STRING, order_count INT64>>[]) products
+      FROM customer_rollup c JOIN currency_values v USING(customer_ref) LEFT JOIN product_values p USING(customer_ref)
+      WHERE c.customer_ref = @customer_ref LIMIT 1`, baseParams({ customer_ref })));
     return { found: rows.length === 1, customer: clean(rows)[0] || null, identity_semantics: IDENTITY_SEMANTICS, monetary_semantics: MONEY_SEMANTICS, privacy: PRIVACY };
   }
   async function getCustomerMetrics({ mode, start_date, end_date, source_store = null, minimum_order_count = null, inactive_since = null }) {
@@ -197,60 +220,63 @@ export function createCustomerQueryService({ bigquery, project }) {
     validDate(start_date, 'start_date', true); validDate(end_date, 'end_date', true); if (start_date > end_date) throw new Error('start_date must be on or before end_date');
     validDate(inactive_since, 'inactive_since'); integer(minimum_order_count, 'minimum_order_count');
     if (source_store !== null && !STORES.includes(source_store)) throw new Error('invalid source_store');
-    const [rows] = await bigquery.query({ query: `${customerEvidenceSql(project)}, scoped AS (
+    const [rows] = await bigquery.query(queryJob('customer_metrics', `${customerEvidenceSql(project)}, scoped AS (
       SELECT q.source_platform, q.source_store, q.source_order_id, q.source_customer_id, q.order_date, q.status,
         q.currency, q.source_order_value, q.source_refund_value, q.shipping_country, q.customer_ref,
         ROW_NUMBER() OVER(PARTITION BY customer_ref ORDER BY order_date, source_order_id) observed_order_number
       FROM qualifying_orders q WHERE (@source_store IS NULL OR source_store = @source_store)), period AS (
       SELECT source_platform, source_store, source_order_id, source_customer_id, order_date, status, currency,
         source_order_value, source_refund_value, shipping_country, customer_ref, observed_order_number
-      FROM scoped WHERE order_date BETWEEN DATE(@start_date) AND DATE(@end_date))
+      FROM scoped WHERE order_date BETWEEN DATE(@start_date) AND DATE(@end_date)), eligible_customers AS (
+      SELECT customer_ref, repeat_customer FROM customer_rollup
+      WHERE (@inactive_since IS NULL OR (latest_observed_purchase_date < DATE(@inactive_since)
+        AND qualifying_order_count >= COALESCE(@minimum_order_count, 0))), enriched_period AS (
+      SELECT p.*, e.repeat_customer FROM period p JOIN eligible_customers e USING(customer_ref))
       SELECT COUNT(DISTINCT customer_ref) customer_count,
         COUNT(DISTINCT IF(observed_order_number >= 2, customer_ref, NULL)) returning_customer_count,
         COUNT(DISTINCT IF(observed_order_number = 1, customer_ref, NULL)) new_customer_count,
-        COUNT(DISTINCT IF(customer_ref IN (SELECT customer_ref FROM customer_rollup WHERE repeat_customer), customer_ref, NULL)) repeat_customer_count,
-        ROUND(100 * SAFE_DIVIDE(COUNT(DISTINCT IF(customer_ref IN (SELECT customer_ref FROM customer_rollup WHERE repeat_customer), customer_ref, NULL)), COUNT(DISTINCT customer_ref)), 2) repeat_customer_rate_percentage,
+        COUNT(DISTINCT IF(repeat_customer, customer_ref, NULL)) repeat_customer_count,
+        ROUND(100 * SAFE_DIVIDE(COUNT(DISTINCT IF(repeat_customer, customer_ref, NULL)), COUNT(DISTINCT customer_ref)), 2) repeat_customer_rate_percentage,
         COUNT(DISTINCT source_order_id) qualifying_order_count,
         ARRAY_AGG(DISTINCT STRUCT(currency, currency_order_value, currency_order_count) ORDER BY currency) source_native_values_by_currency
       FROM (SELECT p.source_platform, p.source_store, p.source_order_id, p.source_customer_id, p.order_date, p.status,
-        p.currency, p.source_order_value, p.source_refund_value, p.shipping_country, p.customer_ref, p.observed_order_number,
+        p.currency, p.source_order_value, p.source_refund_value, p.shipping_country, p.customer_ref, p.observed_order_number, p.repeat_customer,
         SUM(source_order_value) OVER(PARTITION BY currency) currency_order_value, COUNT(*) OVER(PARTITION BY currency) currency_order_count
-        FROM period p WHERE (@inactive_since IS NULL OR customer_ref IN (SELECT customer_ref FROM customer_rollup WHERE latest_observed_purchase_date < DATE(@inactive_since)
-          AND qualifying_order_count >= COALESCE(@minimum_order_count, 0))))`, params: { start_date, end_date, source_store, inactive_since, minimum_order_count, matrixify_app_id: MATRIXIFY_APP_ID },
-      types: { source_store: 'STRING', inactive_since: 'STRING', minimum_order_count: 'INT64' } });
+        FROM enriched_period p)`, { start_date, end_date, source_store, inactive_since, minimum_order_count, matrixify_app_id: MATRIXIFY_APP_ID },
+      { source_store: 'STRING', inactive_since: 'STRING', minimum_order_count: 'INT64' }));
     return { mode, start_date, end_date, source_store, ...(clean(rows)[0] || {}), definition: REPEAT_DEFINITION, identity_semantics: IDENTITY_SEMANTICS, monetary_semantics: MONEY_SEMANTICS };
   }
   async function getCustomerCohort({ cohort_start, cohort_end, return_start, return_end, source_store = null }) {
     for (const f of ['cohort_start', 'cohort_end', 'return_start', 'return_end']) validDate(arguments[0][f], f, true);
     if (cohort_start > cohort_end || return_start > return_end) throw new Error('date ranges must be ordered');
     if (source_store !== null && !STORES.includes(source_store)) throw new Error('invalid source_store');
-    const [rows] = await bigquery.query({ query: `${customerEvidenceSql(project)}, cohort AS (SELECT customer_ref, source_store, first_observed_purchase_date FROM customer_rollup
-      WHERE first_observed_purchase_date BETWEEN DATE(@cohort_start) AND DATE(@cohort_end) AND (@source_store IS NULL OR source_store = @source_store))
-      SELECT COUNT(*) cohort_customer_count, COUNTIF(EXISTS(SELECT 1 FROM qualifying_orders q WHERE q.customer_ref = c.customer_ref
-        AND q.order_date BETWEEN DATE(@return_start) AND DATE(@return_end) AND q.order_date > c.first_observed_purchase_date)) returned_customer_count,
-        ROUND(100 * SAFE_DIVIDE(COUNTIF(EXISTS(SELECT 1 FROM qualifying_orders q WHERE q.customer_ref = c.customer_ref
-          AND q.order_date BETWEEN DATE(@return_start) AND DATE(@return_end) AND q.order_date > c.first_observed_purchase_date)), COUNT(*)), 2) returned_customer_percentage
-      FROM cohort c`, params: { cohort_start, cohort_end, return_start, return_end, source_store, matrixify_app_id: MATRIXIFY_APP_ID }, types: { source_store: 'STRING' } });
+    const [rows] = await bigquery.query(queryJob('customer_cohort', `${customerEvidenceSql(project)}, cohort AS (SELECT customer_ref, source_store, first_observed_purchase_date FROM customer_rollup
+      WHERE first_observed_purchase_date BETWEEN DATE(@cohort_start) AND DATE(@cohort_end) AND (@source_store IS NULL OR source_store = @source_store)), returned AS (
+      SELECT DISTINCT c.customer_ref FROM cohort c JOIN qualifying_orders q USING(customer_ref)
+      WHERE q.order_date BETWEEN DATE(@return_start) AND DATE(@return_end) AND q.order_date > c.first_observed_purchase_date)
+      SELECT COUNT(*) cohort_customer_count, COUNTIF(r.customer_ref IS NOT NULL) returned_customer_count,
+        ROUND(100 * SAFE_DIVIDE(COUNTIF(r.customer_ref IS NOT NULL), COUNT(*)), 2) returned_customer_percentage
+      FROM cohort c LEFT JOIN returned r USING(customer_ref)`, { cohort_start, cohort_end, return_start, return_end, source_store, matrixify_app_id: MATRIXIFY_APP_ID }, { source_store: 'STRING' }));
     return { ...(clean(rows)[0] || {}), cohort_start, cohort_end, return_start, return_end, denominator: 'Governed identified customers whose first observed qualifying purchase is in the cohort range; unresolved guest orders are excluded.', observed_history_warning: OBSERVED_WARNING };
   }
   async function getFirstToSecondPurchaseTiming({ start_date, end_date, source_store = null }) {
     validDate(start_date, 'start_date', true); validDate(end_date, 'end_date', true); if (start_date > end_date) throw new Error('date range must be ordered');
     if (source_store !== null && !STORES.includes(source_store)) throw new Error('invalid source_store');
-    const [rows] = await bigquery.query({ query: `${customerEvidenceSql(project)}, ranked AS (SELECT customer_ref, source_store, order_date,
+    const [rows] = await bigquery.query(queryJob('purchase_timing', `${customerEvidenceSql(project)}, ranked AS (SELECT customer_ref, source_store, order_date,
       ROW_NUMBER() OVER(PARTITION BY customer_ref ORDER BY order_date, source_order_id) n FROM qualifying_orders), gaps AS (
       SELECT customer_ref, DATE_DIFF(MAX(IF(n=2, order_date, NULL)), MAX(IF(n=1, order_date, NULL)), DAY) days_to_second
       FROM ranked WHERE (@source_store IS NULL OR source_store=@source_store) GROUP BY customer_ref
       HAVING MAX(IF(n=1, order_date, NULL)) BETWEEN DATE(@start_date) AND DATE(@end_date) AND MAX(n)>=2)
       SELECT COUNT(*) customer_count, APPROX_QUANTILES(days_to_second, 100)[OFFSET(50)] median_days,
         ROUND(AVG(days_to_second), 2) average_days, APPROX_QUANTILES(days_to_second, 100)[OFFSET(25)] p25_days,
-        APPROX_QUANTILES(days_to_second, 100)[OFFSET(75)] p75_days FROM gaps`, params: { start_date, end_date, source_store, matrixify_app_id: MATRIXIFY_APP_ID }, types: { source_store: 'STRING' } });
+        APPROX_QUANTILES(days_to_second, 100)[OFFSET(75)] p75_days FROM gaps`, { start_date, end_date, source_store, matrixify_app_id: MATRIXIFY_APP_ID }, { source_store: 'STRING' }));
     return { ...(clean(rows)[0] || {}), start_date, end_date, definition: REPEAT_DEFINITION, observed_history_warning: OBSERVED_WARNING };
   }
   async function getProductPurchaseSequence({ product_id = null, sku = null, product_title = null, source_store = null, limit = 20 }) {
     for (const [v, f] of [[product_id, 'product_id'], [sku, 'sku'], [product_title, 'product_title']]) string(v, f);
     if (![product_id, sku, product_title].some(Boolean)) throw new Error('one product selector is required');
     if (source_store !== null && !STORES.includes(source_store)) throw new Error('invalid source_store'); integer(limit, 'limit', { min: 1, max: 100 });
-    const [rows] = await bigquery.query({ query: `${customerEvidenceSql(project)}, ranked AS (SELECT q.source_platform,
+    const [rows] = await bigquery.query(queryJob('product_sequence', `${customerEvidenceSql(project)}, ranked AS (SELECT q.source_platform,
       q.source_store, q.source_order_id, q.source_customer_id, q.order_date, q.status, q.currency,
       q.source_order_value, q.source_refund_value, q.shipping_country, q.customer_ref,
       DENSE_RANK() OVER(PARTITION BY q.customer_ref ORDER BY q.order_date, q.source_order_id) order_rank FROM qualifying_orders q), seed AS (
@@ -261,8 +287,8 @@ export function createCustomerQueryService({ bigquery, project }) {
       FROM seed s JOIN ranked r ON r.customer_ref=s.customer_ref AND r.order_rank=s.seed_rank+1
       JOIN line_evidence li USING(source_platform,source_store,source_order_id) GROUP BY li.product_id,li.sku)
       SELECT product_id, sku, product_title, customer_count, SUM(customer_count) OVER() next_product_customer_rows FROM next_products
-      ORDER BY customer_count DESC, product_title, product_id LIMIT @limit`, params: { product_id, sku, product_title, source_store, limit, matrixify_app_id: MATRIXIFY_APP_ID },
-      types: { product_id: 'STRING', sku: 'STRING', product_title: 'STRING', source_store: 'STRING' } });
+      ORDER BY customer_count DESC, product_title, product_id LIMIT @limit`, { product_id, sku, product_title, source_store, limit, matrixify_app_id: MATRIXIFY_APP_ID },
+      { product_id: 'STRING', sku: 'STRING', product_title: 'STRING', source_store: 'STRING' }));
     return { next_observed_order_products: clean(rows), returned_product_count: rows.length, limit,
       semantics: 'Observed sequence only: products are on the next qualifying observed order after the first matching order; this is association, not causation.', observed_history_warning: OBSERVED_WARNING };
   }
