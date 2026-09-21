@@ -8210,6 +8210,21 @@ app.post(
         },
         {
           type: 'function',
+          name: 'get_ecommerce_report_v2_evidence',
+          description: 'Get bounded persisted Report v2 evidence and period-specific availability for one domain. For comparison investigations call context, organic and acquisition as relevant; context retrieves both periods independently.',
+          strict: true,
+          parameters: {
+            type: 'object', additionalProperties: false,
+            properties: {
+              section: { type: 'string', enum: ['overview','sales','customers','products','geography','acquisition','organic','context'] },
+              current_start: { type: 'string' }, current_end: { type: 'string' },
+              comparison_start: { type: 'string' }, comparison_end: { type: 'string' }
+            },
+            required: ['section','current_start','current_end','comparison_start','comparison_end']
+          }
+        },
+        {
+          type: 'function',
           name: 'get_sales_summary',
           description:
             'Get TGF sales totals for a date range, optionally filtered by location, channel or source.',
@@ -8862,7 +8877,11 @@ Important rules:
 - Gift card issuance data is incomplete for historical WooCommerce. Mention this limitation when relevant.
 - BigQuery is the source of truth for historical financial reporting.
 - Governed quantitative tools remain authoritative for measured numerical facts. Knowledge and memory provide context and must never override a current governed metric or be used as a numerical cache.
-- For historical analysis, named campaigns/events/initiatives, or questions asking why a metric changed, call get_business_context for the relevant period and topics where useful. For named comparisons such as Black Friday across years, retrieve each governed campaign window before choosing dates; distinguish campaign period, calendar Black Friday day, and Black Friday–Cyber Monday, and explicitly state which comparison is used. Never invent a missing campaign date or offer.
+- For every two-period Report v2 investigation, build an evidence plan for finance, GA4, Search Console, customers, products, geography, Knowledge and relevant Memory. Determine current and comparison availability independently. Distinguish available/comparable, available/not directly comparable, and unavailable. Never turn an unavailable comparison period into “no evidence” when current-period evidence exists.
+- For historical analysis, named campaigns/events/initiatives, or questions asking why a metric changed, retrieve governed business context for the current period AND comparison period with separate bounded calls. Do not use a single broad query: ranking limits can crowd out one side. Consider a nearby pre-period deadline only when materially relevant. For named comparisons, retrieve each governed campaign window before choosing dates; compare campaign windows rather than matching calendar dates. Never invent a missing campaign date or offer.
+- Persisted governed GA4 and Search Console are separate from Shopify operational sessions. Never silently substitute Shopify sessions for GA4. Search Console uses canonical daily Domain-preferred/www-fallback evidence and never sums overlapping properties; query omission can reflect anonymization. Current-only evidence may still be analysed, but cannot support a direct period comparison.
+- Woo and Shopify product rankings can be reported separately even without a cross-platform product identity bridge. Likewise customer evidence with differing identity/guest semantics is available but not directly comparable, rather than unavailable.
+- Temporal overlap between an observed concentration and a governed campaign may be reported as overlap. Do not claim the campaign caused the concentration without causal evidence.
 - Use search_knowledge for structured facts/definitions and search_memory for prior findings. Treat working memory as a labelled hypothesis; never present it as fact. Do not surface rejected or superseded records as current explanations. Definitions must be interpreted for the period being analysed.
 - When context materially affects an analysis, distinguish Observed data, Business context, and Hypothesis/interpretation. Correlation or temporal coincidence is not causation.
 - Normal /agent operation is read-only for knowledge and memory. There is no record_memory tool and you never persist knowledge. In Oracle UI, however, a separate non-writing model step can prepare governed proposals for explicit authenticated human approval. When the user asks to save durable context, acknowledge that proposals will appear below for review, edit, or Save; do not misleadingly say that the UI cannot help because you lack a write tool.
@@ -8988,7 +9007,9 @@ Important rules:
                 );
                 if (knowledgeCall.handled) {
                   result = knowledgeCall.result;
-                } else if (item.name === 'get_ecommerce_management_report') {
+                } else if (item.name === 'get_ecommerce_report_v2_evidence') {
+  result = await ecommerceReportV2(args.section, { start_date: args.current_start, end_date: args.current_end, comparison: 'custom', comparison_start: args.comparison_start, comparison_end: args.comparison_end });
+} else if (item.name === 'get_ecommerce_management_report') {
 
   result = await getEcommerceManagementReport(args);
 
