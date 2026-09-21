@@ -11,6 +11,8 @@ import { createOrderQueryService, executeOrderToolCall, ORDER_TOOL_DEFINITIONS }
 import { createCustomerQueryService, executeCustomerToolCall, CUSTOMER_TOOL_DEFINITIONS } from './oracle/customer-query.js';
 import { KNOWLEDGE_TOOL_DEFINITIONS } from './oracle/knowledge.js';
 import { createKnowledgeService, executeKnowledgeToolCall } from './oracle/knowledge-bigquery.js';
+import { createOracleUiRouter } from './oracle/ui-router.js';
+import { redactError } from './oracle/ui-security.js';
 import {
   AcquisitionValidationError,
   syncShopifyAcquisition
@@ -8818,6 +8820,7 @@ app.post(
 }
       ];
 
+      const toolsUsed = new Set();
       let response = await openai.responses.create({
         model: 'gpt-5.6',
         instructions: `
@@ -8943,6 +8946,8 @@ Important rules:
           if (item.type !== 'function_call') {
             continue;
           }
+
+          toolsUsed.add(item.name);
 
           let result;
 
@@ -9100,18 +9105,47 @@ Important rules:
 
       res.json({
         success: true,
-        answer: response.output_text
+        answer: response.output_text,
+        tools_used: [...toolsUsed]
       });
     } catch (error) {
-      console.error('Agent error:', error);
+      console.error('Agent error:', redactError(error));
 
       res.status(500).json({
         success: false,
-        error: error.message
+        error: 'Oracle could not complete the request'
       });
     }
   }
 );
+
+/* =========================================================
+   ORACLE UI
+========================================================= */
+
+if (process.env.ORACLE_UI_PASSWORD || process.env.ORACLE_UI_SESSION_SECRET) {
+  app.use('/api/oracle', createOracleUiRouter({
+    knowledgeService,
+    bigquery,
+    project: GOOGLE_PROJECT_ID,
+    env: process.env,
+    chat: async message => {
+      const response = await fetch(`http://127.0.0.1:${PORT}/agent`, {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${SYNC_SECRET}`,
+          'content-type': 'application/json'
+        },
+        body: JSON.stringify({ message })
+      });
+      const payload = await response.json();
+      if (!response.ok || !payload.success) throw new Error('Oracle could not complete the conversation');
+      return { answer: payload.answer, tools: payload.tools_used || [] };
+    }
+  }));
+  app.use('/oracle', express.static(new URL('./public/oracle', import.meta.url).pathname, { index: 'index.html' }));
+  app.get('/oracle', (_req, res) => res.redirect('/oracle/'));
+}
 
 
 /* =========================================================
