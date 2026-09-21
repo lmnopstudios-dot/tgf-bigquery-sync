@@ -2,6 +2,13 @@ import { randomUUID } from 'node:crypto';
 import { BigQuery } from '@google-cloud/bigquery';
 import { createKnowledgeService, normalizeKnowledgeRows } from '../oracle/knowledge-bigquery.js';
 import { redactError } from '../oracle/ui-security.js';
+import { bigQueryDateParameters, describeDateParameter } from '../bigquery/date-parameters.js';
+
+const DATE_VALUE = /^\d{4}-\d{2}-\d{2}$/;
+function validatedDateLiteral(value) {
+  if (typeof value !== 'string' || !DATE_VALUE.test(value) || new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) !== value) throw new Error('selected fixture returned an invalid DATE value');
+  return `DATE '${value}'`;
+}
 
 export async function validateKnowledgeProduction({ bigquery, project, dataset = 'oracle_knowledge' }) {
   let queryDiagnostic = null;
@@ -17,7 +24,8 @@ export async function validateKnowledgeProduction({ bigquery, project, dataset =
         operation: queryDiagnostic?.operation || 'validator_assertion',
         active_filter_names: queryDiagnostic?.active_filter_names || [],
         parameter_names: queryDiagnostic?.parameter_names || [],
-        parameter_types: queryDiagnostic?.parameter_types || {},
+        declared_parameter_types: queryDiagnostic?.declared_parameter_types || {},
+        date_parameter_bindings: queryDiagnostic?.date_parameter_bindings || {},
         error_class: error?.name || error?.constructor?.name || 'Error',
         redacted_message: redactError(error?.message || 'Production knowledge validation failed').replace(/\s+/g, ' ').slice(0, 500)
       };
@@ -27,7 +35,7 @@ export async function validateKnowledgeProduction({ bigquery, project, dataset =
   const assertCheck = (condition, name, message, diagnosticEvidence = {}) => {
     if (condition) return;
     const error = new Error(message);
-    error.validationContext = { validator: 'knowledge-production', check_name: name, operation: 'validator_assertion', active_filter_names: [], parameter_names: [], parameter_types: {}, evidence: diagnosticEvidence, error_class: 'Error', redacted_message: message };
+    error.validationContext = { validator: 'knowledge-production', check_name: name, operation: 'validator_assertion', active_filter_names: [], parameter_names: [], declared_parameter_types: {}, date_parameter_bindings: {}, evidence: diagnosticEvidence, error_class: 'Error', redacted_message: message };
     throw error;
   };
 
@@ -51,6 +59,8 @@ export async function validateKnowledgeProduction({ bigquery, project, dataset =
   assertCheck(evidence.exact.found, 'exact_knowledge_retrieval', 'exact knowledge retrieval failed');
   const startDate = dated.effective_from;
   const endDate = dated.effective_to;
+  const startDateLiteral = validatedDateLiteral(startDate);
+  const endDateLiteral = validatedDateLiteral(endDate);
   const fixtureEvidence = { kind: dated.kind, id: dated.id, date_precision: dated.date_precision || null, has_effective_from: Boolean(dated.effective_from), has_effective_to: Boolean(dated.effective_to), bounded_start_date: startDate, bounded_end_date: endDate };
   const idParams = { id: dated.id };
   const idTypes = { id: 'STRING' };
@@ -60,15 +70,26 @@ export async function validateKnowledgeProduction({ bigquery, project, dataset =
   }));
   const physical = normalizeKnowledgeRows(physicalRows)[0] || null;
   const physicalEvidence = physical && { event_id: physical.event_id, status: physical.status, start_date: physical.start_date, end_date: physical.end_date, date_precision: physical.date_precision };
-  assertCheck(physicalRows.length === 1, 'physical_event_by_id', 'acceptance fixture was not uniquely present in the physical event table', { fixture: fixtureEvidence, returned_count: physicalRows.length, rows: normalizeKnowledgeRows(physicalRows).map(({ event_id, status, start_date, end_date, date_precision }) => ({ event_id, status, start_date, end_date, date_precision })), parameter_types: idTypes });
+  assertCheck(physicalRows.length === 1, 'physical_event_by_id', 'acceptance fixture was not uniquely present in the physical event table', { fixture: fixtureEvidence, returned_count: physicalRows.length, rows: normalizeKnowledgeRows(physicalRows).map(({ event_id, status, start_date, end_date, date_precision }) => ({ event_id, status, start_date, end_date, date_precision })), declared_parameter_types: idTypes });
 
-  const rawParams = { id: dated.id, start_date: startDate, end_date: endDate };
+  const dateParams = bigQueryDateParameters({ start_date: startDate, end_date: endDate });
+  const rawParams = { id: dated.id, ...dateParams };
   const rawTypes = { id: 'STRING', start_date: 'DATE', end_date: 'DATE' };
+  const parameterBindings = {
+    start_date: describeDateParameter(dateParams.start_date, rawTypes.start_date),
+    end_date: describeDateParameter(dateParams.end_date, rawTypes.end_date)
+  };
   const predicates = [
     ['id_only', '', idParams, idTypes],
     ['id_status', " AND status='confirmed'", idParams, idTypes],
-    ['id_start_boundary', ' AND start_date <= @end_date', { id: dated.id, end_date: endDate }, { id: 'STRING', end_date: 'DATE' }],
-    ['id_end_boundary', ' AND end_date >= @start_date', { id: dated.id, start_date: startDate }, { id: 'STRING', start_date: 'DATE' }],
+    ['literal_start_equality', ` AND start_date = ${startDateLiteral}`, idParams, idTypes],
+    ['parameter_start_equality', ' AND start_date = @start_date', { id: dated.id, start_date: dateParams.start_date }, { id: 'STRING', start_date: 'DATE' }],
+    ['literal_end_equality', ` AND end_date = ${endDateLiteral}`, idParams, idTypes],
+    ['parameter_end_equality', ' AND end_date = @end_date', { id: dated.id, end_date: dateParams.end_date }, { id: 'STRING', end_date: 'DATE' }],
+    ['literal_start_boundary', ` AND start_date <= ${endDateLiteral}`, idParams, idTypes],
+    ['parameter_start_boundary', ' AND start_date <= @end_date', { id: dated.id, end_date: dateParams.end_date }, { id: 'STRING', end_date: 'DATE' }],
+    ['literal_end_boundary', ` AND end_date >= ${startDateLiteral}`, idParams, idTypes],
+    ['parameter_end_boundary', ' AND end_date >= @start_date', { id: dated.id, start_date: dateParams.start_date }, { id: 'STRING', start_date: 'DATE' }],
     ['id_temporal_overlap', ' AND start_date <= @end_date AND end_date >= @start_date', rawParams, rawTypes],
     ['id_status_temporal_overlap', " AND status='confirmed' AND start_date <= @end_date AND end_date >= @start_date", rawParams, rawTypes]
   ];
@@ -77,11 +98,11 @@ export async function validateKnowledgeProduction({ bigquery, project, dataset =
     const [rows] = await check(`physical_predicate_${name}`, () => bigquery.query({ query: `SELECT event_id FROM \`${project}.${dataset}.events\` WHERE event_id=@id${predicate}`, params, types, labels: { component: 'oracle_knowledge', operation: 'validate_event_predicate' } }));
     predicateMatrix[name] = { matched: rows.length === 1, returned_count: rows.length };
   }
-  assertCheck(predicateMatrix.id_status_temporal_overlap.matched, 'direct_raw_bounded_sql', 'direct physical event predicate matrix rejected its acceptance fixture', { fixture: fixtureEvidence, physical_row: physicalEvidence, physical_schema: eventSchema, predicate_matrix: predicateMatrix, active_filter_names: ['id', 'status', 'start_date', 'end_date'], parameter_types: rawTypes });
+  assertCheck(Object.values(predicateMatrix).every(result => result.matched), 'direct_raw_bounded_sql', 'direct physical event predicate matrix rejected its acceptance fixture', { fixture: fixtureEvidence, physical_row: physicalEvidence, physical_schema: eventSchema, predicate_matrix: predicateMatrix, active_filter_names: ['id', 'status', 'start_date', 'end_date'], declared_parameter_types: rawTypes, date_parameter_bindings: parameterBindings });
 
   const boundedFilters = { knowledge_type: 'event', status: 'confirmed', start_date: startDate, end_date: endDate, tags: [], limit: 50 };
   evidence.bounded = await check('bounded_date_range', () => service.searchKnowledge(boundedFilters));
-  const boundedEvidence = { fixture: fixtureEvidence, returned_count: evidence.bounded.returned_count, returned_ids: evidence.bounded.items.map(item => item.id), active_filter_names: ['statuses', 'knowledge_type', 'start_date', 'end_date', 'limit'], parameter_types: { statuses: ['STRING'], knowledge_type: 'STRING', start_date: 'DATE', end_date: 'DATE', limit: 'INT64' } };
+  const boundedEvidence = { fixture: fixtureEvidence, returned_count: evidence.bounded.returned_count, returned_ids: evidence.bounded.items.map(item => item.id), active_filter_names: ['statuses', 'knowledge_type', 'start_date', 'end_date', 'limit'], declared_parameter_types: { statuses: ['STRING'], knowledge_type: 'STRING', start_date: 'DATE', end_date: 'DATE', limit: 'INT64' }, date_parameter_bindings: parameterBindings };
   assertCheck(evidence.bounded.items.some(item => item.id === dated.id), 'bounded_date_range', 'bounded overlap search did not return its acceptance fixture', boundedEvidence);
 
   evidence.business_context = await check('business_context_retrieval', () => service.getBusinessContext({ start_date: startDate, end_date: endDate, topics: [] }));
@@ -100,7 +121,9 @@ export async function validateKnowledgeProduction({ bigquery, project, dataset =
       physical_event_row: physicalEvidence,
       physical_event_schema: eventSchema,
       physical_predicate_matrix: predicateMatrix,
-      direct_raw_bounded_sql: { returned_count: predicateMatrix.id_status_temporal_overlap.returned_count, returned_ids: predicateMatrix.id_status_temporal_overlap.matched ? [dated.id] : [], parameter_types: rawTypes },
+      date_parameter_bindings: parameterBindings,
+      literal_parameter_controls: Object.fromEntries(['literal_start_equality', 'parameter_start_equality', 'literal_end_equality', 'parameter_end_equality', 'literal_start_boundary', 'parameter_start_boundary', 'literal_end_boundary', 'parameter_end_boundary'].map(name => [name, predicateMatrix[name]])),
+      direct_raw_bounded_sql: { returned_count: predicateMatrix.id_status_temporal_overlap.returned_count, returned_ids: predicateMatrix.id_status_temporal_overlap.matched ? [dated.id] : [], declared_parameter_types: rawTypes, date_parameter_bindings: parameterBindings },
       bounded_date_range: { ...boundedEvidence, start_date: startDate, end_date: endDate, fixture_id: dated.id },
       empty_arrays_and_null_omission: true,
       empty_memory_result: true,
@@ -118,6 +141,6 @@ async function main() {
 }
 
 if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href) main().catch(error => {
-  console.error(JSON.stringify({ validation_failed: true, ...(error.validationContext || { validator: 'knowledge-production', check_name: 'initialization', operation: 'validator_initialization', active_filter_names: [], parameter_names: [], parameter_types: {}, error_class: error?.name || 'Error', redacted_message: redactError(error?.message || 'Production knowledge validation failed').slice(0, 500) }) }));
+  console.error(JSON.stringify({ validation_failed: true, ...(error.validationContext || { validator: 'knowledge-production', check_name: 'initialization', operation: 'validator_initialization', active_filter_names: [], parameter_names: [], declared_parameter_types: {}, date_parameter_bindings: {}, error_class: error?.name || 'Error', redacted_message: redactError(error?.message || 'Production knowledge validation failed').slice(0, 500) }) }));
   process.exitCode = 1;
 });
