@@ -20,7 +20,7 @@ function fakeBigQuery({ reconciliation = {} } = {}) {
       calls.push(job);
       if (job.query.includes('stage_count')) return [[{ stage_count: inserted.length, unique_ids: inserted.length,
         canonical_matches: inserted.length, extra_export_ids: 0, order_number_disagreements: 0,
-        date_disagreements: 0, ...reconciliation }]];
+        missing_canonical_order_dates: 0, ...reconciliation }]];
       return [[]];
     } };
 }
@@ -28,10 +28,12 @@ function fakeBigQuery({ reconciliation = {} } = {}) {
 const csv = (...rows) => Readable.from(rows.join('\n'));
 
 test('runtime schema recognition accepts documented equivalents and lists missing safe fields', () => {
-  assert.deepEqual(recognizeMetorikHeaders(['Order ID', 'Order Number', 'Order Date', 'Shipping Country', 'Email']),
-    { source_order_id: 0, source_order_number: 1, order_date: 2, shipping_country: 3 });
+  assert.deepEqual(recognizeMetorikHeaders([' Order ID ', 'ORDER NUMBER', ' Shipping Address Country ', 'Email']),
+    { source_order_id: 0, source_order_number: 1, shipping_country: 2 });
+  assert.deepEqual(recognizeMetorikHeaders(['order_id', 'order_number', 'shipping_country']),
+    { source_order_id: 0, source_order_number: 1, shipping_country: 2 });
   assert.throws(() => recognizeMetorikHeaders(['Order ID', 'Email']),
-    /source_order_number.*order_date.*shipping_country/);
+    /source_order_number.*shipping_country/);
 });
 
 test('country normalization is direct, deterministic, and unresolved remains null', () => {
@@ -42,12 +44,13 @@ test('country normalization is direct, deterministic, and unresolved remains nul
 });
 
 test('row projection drops PII and applies governed observed/unresolved semantics', () => {
-  const columns = recognizeMetorikHeaders(['Order ID', 'Order Number', 'Order Date', 'Shipping Country', 'Email']);
-  const observed = geographyRow(['169587', '#33653', '2025-01-02 03:00', 'GB', 'private@example.com'], columns, 'ww', '2026-01-01T00:00:00Z');
+  const columns = recognizeMetorikHeaders(['Order ID', 'Order Number', 'Shipping Address Country', 'Email']);
+  const observed = geographyRow(['169587', '#33653', 'GB', 'private@example.com'], columns, 'ww', '2026-01-01T00:00:00Z');
   assert.equal(observed.shipping_country_iso2, 'GB');
+  assert.equal(observed.order_date, null);
   assert.equal(observed.geography_provenance, 'direct_metorik_export_shipping_country');
   assert.doesNotMatch(JSON.stringify(observed), /private|email/i);
-  const unresolved = geographyRow(['9', '#9', '2025-01-03', '', 'secret'], columns, 'usd', '2026-01-01T00:00:00Z');
+  const unresolved = geographyRow(['9', '#9', '', 'secret'], columns, 'usd', '2026-01-01T00:00:00Z');
   assert.equal(unresolved.shipping_country_iso2, null);
   assert.equal(unresolved.geography_status, 'unresolved');
 });
@@ -63,12 +66,14 @@ test('WW and USD imports preserve colliding IDs as separate store-qualified rows
   for (const store of ['ww', 'usd']) {
     const bq = fakeBigQuery();
     const result = await importMetorikGeography({ bigquery: bq, project: 'p', store, file: 'virtual',
-      readable: csv('Order ID,Order Number,Order Date,Shipping Country,Customer Email', '169587,#33653,2025-01-02,GB,private@example.com'),
+      readable: csv('"Order ID","Order Number","Shipping Address Country"', '169587,#33653,GB'),
       now: () => new Date('2026-01-01T00:00:00Z') });
     assert.equal(bq.inserted[0].source_store, store);
     assert.equal(result.imported_rows, 1);
     const promotion = bq.calls.find(call => call.query?.includes('BEGIN TRANSACTION'));
     assert.match(promotion.query, /WHERE source_store = @store/);
+    assert.match(promotion.query, /DATE\(c\.order_created_at\)/);
+    assert.match(promotion.query, new RegExp(`metorik_${store === 'ww' ? 'uk' : 'us'}\\.orders`));
     assert.equal(promotion.params.store, store);
     assert.equal(bq.deleted.length, 1);
   }
@@ -77,7 +82,7 @@ test('WW and USD imports preserve colliding IDs as separate store-qualified rows
 test('duplicate or malformed imports fail before promotion and clean their invocation-owned stage', async () => {
   const bq = fakeBigQuery({ reconciliation: { unique_ids: 1 } });
   await assert.rejects(() => importMetorikGeography({ bigquery: bq, project: 'p', store: 'ww', file: 'virtual',
-    readable: csv('Order ID,Order Number,Order Date,Shipping Country', '1,#1,2025-01-01,GB', '1,#2,2025-01-02,US') }), /duplicate Order ID/);
+    readable: csv('Order ID,Order Number,Shipping Address Country', '1,#1,GB', '1,#2,US') }), /duplicate Order ID/);
   assert.equal(bq.calls.some(call => call.query?.includes('BEGIN TRANSACTION')), false);
   assert.equal(bq.deleted.length, 1);
 });
@@ -85,10 +90,20 @@ test('duplicate or malformed imports fail before promotion and clean their invoc
 test('canonical reconciliation failure rolls back safely without replacing valid store rows', async () => {
   const bq = fakeBigQuery({ reconciliation: { canonical_matches: 0, extra_export_ids: 1 } });
   await assert.rejects(() => importMetorikGeography({ bigquery: bq, project: 'p', store: 'usd', file: 'virtual',
-    readable: csv('Order ID,Order Number,Order Date,Shipping Country', '77,#77,2025-01-01,US') }),
+    readable: csv('Order ID,Order Number,Shipping Address Country', '77,#77,US') }),
   /metorik_us\.orders reconciliation failed: extra_export_ids=1/);
   assert.equal(bq.calls.some(call => call.query?.includes('BEGIN TRANSACTION')), false);
   assert.equal(bq.deleted.length, 1);
+});
+
+test('missing canonical date and order-number disagreement both fail before promotion', async () => {
+  for (const reconciliation of [{ missing_canonical_order_dates: 1 }, { order_number_disagreements: 1 }]) {
+    const bq = fakeBigQuery({ reconciliation });
+    await assert.rejects(() => importMetorikGeography({ bigquery: bq, project: 'p', store: 'ww', file: 'virtual',
+      readable: csv('Order ID,Order Number,Shipping Address Country', '77,#77,GB') }),
+    /reconciliation failed: (missing_canonical_order_dates|order_number_disagreements)=1/);
+    assert.equal(bq.calls.some(call => call.query?.includes('BEGIN TRANSACTION')), false);
+  }
 });
 
 test('coverage helper is store-qualified and reports unknown evidence without estimation', async () => {

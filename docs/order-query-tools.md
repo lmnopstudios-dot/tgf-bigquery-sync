@@ -16,8 +16,13 @@ Required headings are discovered at runtime. Accepted equivalents are:
 | --- | --- |
 | Order identity | `Order ID`, `order_id`, `id` |
 | Human order number | `Order Number`, `order_number`, `number` |
-| Order date | `Order Date`, `order_date`, `date`, `Created At`, `created_at` |
-| Direct shipping country | `Shipping Country`, `shipping_country`, `Shipping Country Code`, `shipping_country_code` |
+| Direct shipping country | `Shipping Address Country`, `Shipping Country`, `shipping_country`, `Shipping Country Code`, `shipping_country_code` |
+
+The minimal export is exactly `Order ID`, `Order Number`, and `Shipping Address
+Country`, with one row per order. Order Date is intentionally not required in
+the CSV: after identity and order-number reconciliation, the importer derives
+it from the canonical `orders.order_created_at` timestamp in `metorik_uk` (WW)
+or `metorik_us` (USD). A missing canonical timestamp fails before promotion.
 
 All other columns—including names, emails, phones, streets, postcodes, cities,
 notes, and raw customer/address fields—are dropped and never included in row
