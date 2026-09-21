@@ -9,6 +9,8 @@ import { syncGa4, parseArgs as parseGa4SyncArgs } from './ga4/sync.js';
 import { createEcommerceManagementReportService } from './oracle/ecommerce-management-report.js';
 import { createOrderQueryService, executeOrderToolCall, ORDER_TOOL_DEFINITIONS } from './oracle/order-query.js';
 import { createCustomerQueryService, executeCustomerToolCall, CUSTOMER_TOOL_DEFINITIONS } from './oracle/customer-query.js';
+import { KNOWLEDGE_TOOL_DEFINITIONS } from './oracle/knowledge.js';
+import { createKnowledgeService, executeKnowledgeToolCall } from './oracle/knowledge-bigquery.js';
 import {
   AcquisitionValidationError,
   syncShopifyAcquisition
@@ -104,6 +106,7 @@ const orderQueryService = createOrderQueryService({
   project: GOOGLE_PROJECT_ID
 });
 const customerQueryService = createCustomerQueryService({ bigquery, project: GOOGLE_PROJECT_ID });
+const knowledgeService = createKnowledgeService({ bigquery, project: GOOGLE_PROJECT_ID });
 
 /* =========================================================
    SHOPIFY
@@ -8173,6 +8176,7 @@ app.post(
       const tools = [
         ...ORDER_TOOL_DEFINITIONS,
         ...CUSTOMER_TOOL_DEFINITIONS,
+        ...KNOWLEDGE_TOOL_DEFINITIONS,
         {
           type: 'function',
           name: 'get_ecommerce_management_report',
@@ -8847,6 +8851,11 @@ Important rules:
 - When discussing refunds, remember refund gross values are negative. Use refunded_amount when presenting a positive human-readable refund total.
 - Gift card issuance data is incomplete for historical WooCommerce. Mention this limitation when relevant.
 - BigQuery is the source of truth for historical financial reporting.
+- Governed quantitative tools remain authoritative for measured numerical facts. Knowledge and memory provide context and must never override a current governed metric or be used as a numerical cache.
+- For historical analysis, named campaigns/events/initiatives, or questions asking why a metric changed, call get_business_context for the relevant period and topics where useful. For named comparisons such as Black Friday across years, retrieve each governed campaign window before choosing dates; distinguish campaign period, calendar Black Friday day, and Black Friday–Cyber Monday, and explicitly state which comparison is used. Never invent a missing campaign date or offer.
+- Use search_knowledge for structured facts/definitions and search_memory for prior findings. Treat working memory as a labelled hypothesis; never present it as fact. Do not surface rejected or superseded records as current explanations. Definitions must be interpreted for the period being analysed.
+- When context materially affects an analysis, distinguish Observed data, Business context, and Hypothesis/interpretation. Correlation or temporal coincidence is not causation.
+- Normal /agent operation is read-only for knowledge and memory. There is no record_memory tool: never claim to have saved a conversation, inference, or finding.
 - Use search_orders for bounded transaction-level searches, examples underlying an aggregate, order numbers, products/SKUs, refunds, direct shipping country, Shopify Online and POS evidence. Use get_order_details or get_order_line_items only with the exact source_platform + source_order_id identity returned by search; never guess across Woo and Shopify ID namespaces. Use get_order_history_context when explicitly asked whether an exact Shopify identity is native or Matrixify-imported.
 - For a human-facing order reference such as "#33653", "33653", "order #33653", or "order 33653", call search_orders with order_number populated and source_order_id null. Do not strip it into or guess a source_order_id. The tool performs governed exact normalization and can return platform-qualified candidates when namespaces collide.
 - Metorik is the historical Woo order authority. Shopify is current commerce evidence. Matrixify contains only a limited migrated Woo slice and search_orders excludes those Shopify representations to prevent a second sale. If asked whether an excluded Shopify representation is migrated, explain this classification rather than counting it as Shopify-native.
@@ -8958,7 +8967,16 @@ Important rules:
               );
               if (customerCall.handled) {
                 result = customerCall.result;
-              } else if (item.name === 'get_ecommerce_management_report') {
+              } else {
+                const knowledgeCall = await executeKnowledgeToolCall(
+                  knowledgeService,
+                  item.name,
+                  args,
+                  diagnostic => console.info('Agent knowledge tool call:', diagnostic)
+                );
+                if (knowledgeCall.handled) {
+                  result = knowledgeCall.result;
+                } else if (item.name === 'get_ecommerce_management_report') {
 
   result = await getEcommerceManagementReport(args);
 
@@ -9043,6 +9061,7 @@ Important rules:
               error: `Unknown tool: ${item.name}`
             };
             }
+              }
             }
           } catch (error) {
             const throttled = error?.code === 'THROTTLED';
