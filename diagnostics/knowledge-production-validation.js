@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { BigQuery } from '@google-cloud/bigquery';
-import { createKnowledgeService } from '../oracle/knowledge-bigquery.js';
+import { createKnowledgeService, normalizeKnowledgeRows } from '../oracle/knowledge-bigquery.js';
 import { redactError } from '../oracle/ui-security.js';
 
 export async function validateKnowledgeProduction({ bigquery, project, dataset = 'oracle_knowledge' }) {
@@ -32,12 +32,14 @@ export async function validateKnowledgeProduction({ bigquery, project, dataset =
   };
 
   const [schemaRows] = await check('persisted_temporal_schema', () => bigquery.query({
-    query: `SELECT table_name, column_name, data_type FROM \`${project}.${dataset}.INFORMATION_SCHEMA.COLUMNS\` WHERE (table_name='events' AND column_name IN ('start_date','end_date')) OR (table_name IN ('facts','definitions','findings') AND column_name IN ('effective_from','effective_to')) ORDER BY table_name, column_name`,
+    query: `SELECT table_name, column_name, data_type FROM \`${project}.${dataset}.INFORMATION_SCHEMA.COLUMNS\` WHERE (table_name='events' AND column_name IN ('event_id','status','start_date','end_date','date_precision')) OR (table_name IN ('facts','definitions','findings') AND column_name IN ('effective_from','effective_to')) ORDER BY table_name, column_name`,
     params: {}, types: {}, labels: { component: 'oracle_knowledge', operation: 'validate_schema' }
   }));
   evidence.schema = schemaRows;
-  const expectedSchemaCount = 8;
-  assertCheck(schemaRows.length === expectedSchemaCount && schemaRows.every(row => row.data_type === 'DATE'), 'persisted_temporal_schema', 'persisted temporal columns are not all DATE', { returned_column_count: schemaRows.length, columns: schemaRows.map(({ table_name, column_name, data_type }) => ({ table_name, column_name, data_type })) });
+  const expectedSchema = { event_id: 'STRING', status: 'STRING', start_date: 'DATE', end_date: 'DATE', date_precision: 'STRING' };
+  const eventSchema = Object.fromEntries(schemaRows.filter(row => row.table_name === 'events').map(row => [row.column_name, row.data_type]));
+  const temporalSchema = schemaRows.filter(row => row.table_name !== 'events');
+  assertCheck(Object.entries(expectedSchema).every(([name, type]) => eventSchema[name] === type) && temporalSchema.length === 6 && temporalSchema.every(row => row.data_type === 'DATE'), 'persisted_temporal_schema', 'persisted knowledge schema does not match the physical contract', { columns: schemaRows.map(({ table_name, column_name, data_type }) => ({ table_name, column_name, data_type })) });
 
   evidence.unbounded = await check('unbounded_knowledge', () => service.searchKnowledge({ text: null, start_date: null, end_date: undefined, tags: [], limit: 50 }));
   assertCheck(evidence.unbounded.items.length, 'unbounded_knowledge', 'unbounded knowledge search returned no governed records');
@@ -50,13 +52,32 @@ export async function validateKnowledgeProduction({ bigquery, project, dataset =
   const startDate = dated.effective_from;
   const endDate = dated.effective_to;
   const fixtureEvidence = { kind: dated.kind, id: dated.id, date_precision: dated.date_precision || null, has_effective_from: Boolean(dated.effective_from), has_effective_to: Boolean(dated.effective_to), bounded_start_date: startDate, bounded_end_date: endDate };
+  const idParams = { id: dated.id };
+  const idTypes = { id: 'STRING' };
+  const [physicalRows] = await check('physical_event_by_id', () => bigquery.query({
+    query: `SELECT event_id, status, start_date, end_date, date_precision FROM \`${project}.${dataset}.events\` WHERE event_id=@id`,
+    params: idParams, types: idTypes, labels: { component: 'oracle_knowledge', operation: 'validate_physical_event' }
+  }));
+  const physical = normalizeKnowledgeRows(physicalRows)[0] || null;
+  const physicalEvidence = physical && { event_id: physical.event_id, status: physical.status, start_date: physical.start_date, end_date: physical.end_date, date_precision: physical.date_precision };
+  assertCheck(physicalRows.length === 1, 'physical_event_by_id', 'acceptance fixture was not uniquely present in the physical event table', { fixture: fixtureEvidence, returned_count: physicalRows.length, rows: normalizeKnowledgeRows(physicalRows).map(({ event_id, status, start_date, end_date, date_precision }) => ({ event_id, status, start_date, end_date, date_precision })), parameter_types: idTypes });
+
   const rawParams = { id: dated.id, start_date: startDate, end_date: endDate };
   const rawTypes = { id: 'STRING', start_date: 'DATE', end_date: 'DATE' };
-  const [rawRows] = await check('direct_raw_bounded_sql', () => bigquery.query({
-    query: `SELECT event_id id FROM \`${project}.${dataset}.events\` WHERE event_id=@id AND status='confirmed' AND COALESCE(start_date, DATE '0001-01-01') <= @end_date AND COALESCE(end_date, DATE '9999-12-31') >= @start_date`,
-    params: rawParams, types: rawTypes, labels: { component: 'oracle_knowledge', operation: 'validate_raw_overlap' }
-  }));
-  assertCheck(rawRows.some(row => row.id === dated.id), 'direct_raw_bounded_sql', 'direct raw bounded SQL did not return its acceptance fixture', { fixture: fixtureEvidence, returned_count: rawRows.length, returned_ids: rawRows.map(row => row.id), active_filter_names: ['id', 'status', 'start_date', 'end_date'], parameter_types: rawTypes });
+  const predicates = [
+    ['id_only', '', idParams, idTypes],
+    ['id_status', " AND status='confirmed'", idParams, idTypes],
+    ['id_start_boundary', ' AND start_date <= @end_date', { id: dated.id, end_date: endDate }, { id: 'STRING', end_date: 'DATE' }],
+    ['id_end_boundary', ' AND end_date >= @start_date', { id: dated.id, start_date: startDate }, { id: 'STRING', start_date: 'DATE' }],
+    ['id_temporal_overlap', ' AND start_date <= @end_date AND end_date >= @start_date', rawParams, rawTypes],
+    ['id_status_temporal_overlap', " AND status='confirmed' AND start_date <= @end_date AND end_date >= @start_date", rawParams, rawTypes]
+  ];
+  const predicateMatrix = {};
+  for (const [name, predicate, params, types] of predicates) {
+    const [rows] = await check(`physical_predicate_${name}`, () => bigquery.query({ query: `SELECT event_id FROM \`${project}.${dataset}.events\` WHERE event_id=@id${predicate}`, params, types, labels: { component: 'oracle_knowledge', operation: 'validate_event_predicate' } }));
+    predicateMatrix[name] = { matched: rows.length === 1, returned_count: rows.length };
+  }
+  assertCheck(predicateMatrix.id_status_temporal_overlap.matched, 'direct_raw_bounded_sql', 'direct physical event predicate matrix rejected its acceptance fixture', { fixture: fixtureEvidence, physical_row: physicalEvidence, physical_schema: eventSchema, predicate_matrix: predicateMatrix, active_filter_names: ['id', 'status', 'start_date', 'end_date'], parameter_types: rawTypes });
 
   const boundedFilters = { knowledge_type: 'event', status: 'confirmed', start_date: startDate, end_date: endDate, tags: [], limit: 50 };
   evidence.bounded = await check('bounded_date_range', () => service.searchKnowledge(boundedFilters));
@@ -76,7 +97,10 @@ export async function validateKnowledgeProduction({ bigquery, project, dataset =
       persisted_temporal_schema: schemaRows.map(({ table_name, column_name, data_type }) => ({ table_name, column_name, data_type })),
       selected_fixture: fixtureEvidence,
       direct_exact_id_retrieval: evidence.exact.found,
-      direct_raw_bounded_sql: { returned_count: rawRows.length, returned_ids: rawRows.map(row => row.id), parameter_types: rawTypes },
+      physical_event_row: physicalEvidence,
+      physical_event_schema: eventSchema,
+      physical_predicate_matrix: predicateMatrix,
+      direct_raw_bounded_sql: { returned_count: predicateMatrix.id_status_temporal_overlap.returned_count, returned_ids: predicateMatrix.id_status_temporal_overlap.matched ? [dated.id] : [], parameter_types: rawTypes },
       bounded_date_range: { ...boundedEvidence, start_date: startDate, end_date: endDate, fixture_id: dated.id },
       empty_arrays_and_null_omission: true,
       empty_memory_result: true,
