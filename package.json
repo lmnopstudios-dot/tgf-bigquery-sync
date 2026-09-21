@@ -21,6 +21,7 @@
     "sync:search-console": "node search-console/sync.js",
     "validate:search-console": "node diagnostics/search-console-semantic-validation.js",
     "validate:orders": "node diagnostics/order-query-validation.js",
+    "validate:customers": "node diagnostics/customer-query-validation.js",
     "import:metorik-geography": "node metorik/geography.js",
     "validate:metorik-geography": "node diagnostics/metorik-geography-validation.js"
   },
