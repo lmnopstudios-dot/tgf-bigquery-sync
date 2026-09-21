@@ -3,11 +3,12 @@ import express from 'express';
 import { writeRecord } from '../knowledge/admin.js';
 import { invalidProposal, needsProposalGeneration, normalizeModelProposal, proposalDiagnostic, validateApprovedProposal } from './proposals.js';
 import { createSession, csrfToken, parseCookies, safeError, verifySession } from './ui-security.js';
+import { reportCsv, reportPdf, reportWorkbook } from './report-export.js';
 
 const json = express.json({ limit: '48kb', type: 'application/json' });
 const allowedOrigins = request => new Set([`${request.protocol}://${request.get('host')}`, process.env.ORACLE_UI_ORIGIN].filter(Boolean));
 
-export function createOracleUiRouter({ knowledgeService, bigquery, project, chat, generateProposals, env = process.env }) {
+export function createOracleUiRouter({ knowledgeService, bigquery, project, chat, generateProposals, reportService, env = process.env }) {
   const router = express.Router();
   const password = env.ORACLE_UI_PASSWORD;
   const sessionSecret = env.ORACLE_UI_SESSION_SECRET;
@@ -87,6 +88,23 @@ export function createOracleUiRouter({ knowledgeService, bigquery, project, chat
   router.get('/knowledge/:id', authenticate, async (req, res) => { try { res.json({ success: true, ...(await knowledgeService.getKnowledgeItem({ knowledge_id: req.params.id })) }); } catch (error) { res.status(400).json({ success: false, error: safeError(error) }); } });
   router.get('/memory', authenticate, async (req, res) => { try { res.json({ success: true, ...(await knowledgeService.searchMemory(queryFilters(req.query, true))) }); } catch (error) { res.status(400).json({ success: false, error: safeError(error) }); } });
   router.get('/memory/:id', authenticate, async (req, res) => { try { res.json({ success: true, ...(await knowledgeService.getMemoryItem({ memory_id: req.params.id })) }); } catch (error) { res.status(400).json({ success: false, error: safeError(error) }); } });
+  router.get('/reports/:section', authenticate, async (req, res) => {
+    try {
+      if (!reportService) throw new Error('Reports are unavailable');
+      res.json({ success: true, ...(await reportService(req.params.section, req.query)) });
+    } catch (error) { res.status(/date|period|comparison|Unknown/.test(error.message) ? 400 : 503).json({ success: false, error: safeError(error) }); }
+  });
+  router.get('/reports/export/:format', authenticate, async (req, res) => {
+    try {
+      if (!reportService) throw new Error('Reports are unavailable');
+      const report = await reportService(req.query.section || 'overview', req.query);
+      const format = req.params.format;
+      if (format === 'csv') { res.type('text/csv').attachment('tgf-ecommerce-report.csv').send(reportCsv(report.rows || [])); return; }
+      if (format === 'xlsx') { res.type('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet').attachment('tgf-ecommerce-report.xlsx').send(Buffer.from(await reportWorkbook(report))); return; }
+      if (format === 'pdf') { res.type('application/pdf').attachment('tgf-ecommerce-report.pdf').send(reportPdf(report)); return; }
+      res.status(400).json({ success: false, error: 'format must be pdf, xlsx, or csv' });
+    } catch (error) { res.status(503).json({ success: false, error: safeError(error) }); }
+  });
   router.use((error, _req, res, _next) => {
     const tooLarge = error?.type === 'entity.too.large';
     res.status(tooLarge ? 413 : 400).json({ success: false, error: tooLarge ? 'Request body is too large' : 'Invalid JSON request' });

@@ -12,6 +12,7 @@ import { createCustomerQueryService, executeCustomerToolCall, CUSTOMER_TOOL_DEFI
 import { KNOWLEDGE_TOOL_DEFINITIONS } from './oracle/knowledge.js';
 import { createKnowledgeService, executeKnowledgeToolCall } from './oracle/knowledge-bigquery.js';
 import { createOracleUiRouter } from './oracle/ui-router.js';
+import { createEcommerceReportV2 } from './oracle/ecommerce-report-v2.js';
 import { createProposalGenerator } from './oracle/proposals.js';
 import { redactError } from './oracle/ui-security.js';
 import {
@@ -114,6 +115,7 @@ const knowledgeService = createKnowledgeService({
   project: GOOGLE_PROJECT_ID,
   onDiagnostic: diagnostic => console.error('Oracle knowledge query failed:', diagnostic)
 });
+const ecommerceReportV2 = createEcommerceReportV2({ bigquery, project: GOOGLE_PROJECT_ID, knowledgeService });
 
 /* =========================================================
    SHOPIFY
@@ -9133,6 +9135,7 @@ if (process.env.ORACLE_UI_PASSWORD || process.env.ORACLE_UI_SESSION_SECRET) {
     knowledgeService,
     bigquery,
     project: GOOGLE_PROJECT_ID,
+    reportService: ecommerceReportV2,
     env: process.env,
     generateProposals: createProposalGenerator({ openai, model: process.env.ORACLE_PROPOSAL_MODEL || 'gpt-5.6' }),
     chat: async message => {
