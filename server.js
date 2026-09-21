@@ -8,6 +8,7 @@ import OpenAI from 'openai';
 import { syncGa4, parseArgs as parseGa4SyncArgs } from './ga4/sync.js';
 import { createEcommerceManagementReportService } from './oracle/ecommerce-management-report.js';
 import { createOrderQueryService, executeOrderToolCall, ORDER_TOOL_DEFINITIONS } from './oracle/order-query.js';
+import { createCustomerQueryService, executeCustomerToolCall, CUSTOMER_TOOL_DEFINITIONS } from './oracle/customer-query.js';
 import {
   AcquisitionValidationError,
   syncShopifyAcquisition
@@ -102,6 +103,7 @@ const orderQueryService = createOrderQueryService({
   bigquery,
   project: GOOGLE_PROJECT_ID
 });
+const customerQueryService = createCustomerQueryService({ bigquery, project: GOOGLE_PROJECT_ID });
 
 /* =========================================================
    SHOPIFY
@@ -8170,6 +8172,7 @@ app.post(
 
       const tools = [
         ...ORDER_TOOL_DEFINITIONS,
+        ...CUSTOMER_TOOL_DEFINITIONS,
         {
           type: 'function',
           name: 'get_ecommerce_management_report',
@@ -8850,6 +8853,11 @@ Important rules:
 - Historical Woo shipping country is incomplete. Country searches use only directly observed governed Metorik-export geography, never billing country or an inference. Always disclose the geography_warning returned by search_orders and call get_geography_coverage for the requested period when reporting a historical Woo country result or count.
 - Order-tool money is explicitly source-native operational evidence (source_order_total, source_discount_total, source_refund_total), not canonical accounting truth. Continue to use finance tools for totals and trends; never call source-native order value canonical sales.
 - Order tools are strictly read-only and intentionally exclude customer names, email, phone, street/postal addresses, payment credentials and raw payloads. Never request or reconstruct that PII.
+- Use customer tools for repeat purchasing, pseudonymous histories, cohorts, lapse, first-to-second timing, and customer-level product sequences. Do not use order tools to dump transactions and reconstruct customer aggregates.
+- A customer_ref is an opaque, source-qualified governed identity. Never reverse it, expose source customer IDs, join people by PII, or assume WW, USD, and Shopify identities are the same person. There is no governed cross-platform identity bridge.
+- Customer repeat means at least two distinct qualifying observed orders for one identified source-qualified customer. Guests without stable customer IDs, cancelled/failed/pending and fully refunded orders, and Matrixify Shopify representations are excluded. Say “first observed purchase”, not lifetime acquisition, because source history may be bounded.
+- Customer monetary values are source-native operational order values grouped by currency. Never combine currencies or call them canonical LTV; use finance tools for company revenue and canonical financial totals.
+- Customer country filters use directly observed commerce.order_geography evidence only. State that coverage is incomplete and do not estimate unresolved geography.
 - Shopify is the source of truth for online-store conversion KPIs wherever Shopify session data exists.
 - Shopify get_shopify_sales_kpis is the source for Online Store operational sales KPIs such as orders and AOV.
 - Use get_shopify_product_performance for historical Shopify Online Store product performance.
@@ -8941,7 +8949,16 @@ Important rules:
 
             if (orderCall.handled) {
               result = orderCall.result;
-            } else if (item.name === 'get_ecommerce_management_report') {
+            } else {
+              const customerCall = await executeCustomerToolCall(
+                customerQueryService,
+                item.name,
+                args,
+                diagnostic => console.info('Agent customer tool call:', diagnostic)
+              );
+              if (customerCall.handled) {
+                result = customerCall.result;
+              } else if (item.name === 'get_ecommerce_management_report') {
 
   result = await getEcommerceManagementReport(args);
 
@@ -9026,6 +9043,7 @@ Important rules:
               error: `Unknown tool: ${item.name}`
             };
             }
+            }
           } catch (error) {
             const throttled = error?.code === 'THROTTLED';
 
@@ -9046,7 +9064,6 @@ Important rules:
               retryable: throttled && error.retryable === true
             };
           }
-
           outputs.push({
             type: 'function_call_output',
             call_id: item.call_id,
