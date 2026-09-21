@@ -5,9 +5,10 @@ export const MATRIXIFY_APP_ID = 'gid://shopify/App/1758145';
 
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 const SOURCES = ['woo', 'shopify'];
+const STORES = ['ww', 'usd', 'shopify'];
 const CHANNELS = ['online', 'pos'];
 const SEARCH_FILTER_FIELDS = [
-  'start_date', 'end_date', 'source_platform', 'channel', 'order_number', 'source_order_id',
+  'start_date', 'end_date', 'source_platform', 'source_store', 'channel', 'order_number', 'source_order_id',
   'status', 'currency', 'minimum_order_value', 'maximum_order_value', 'shipping_country',
   'product_id', 'product_title', 'sku', 'location', 'refund_status', 'customer_id'
 ];
@@ -32,6 +33,12 @@ function validateIdentity(identity) {
   }
   optionalString(identity.source_order_id, 'identity.source_order_id');
   if (identity.source_order_id === null) throw new Error('identity.source_order_id is required');
+  if (identity.source_platform === 'woo' && !['ww', 'usd'].includes(identity.source_store)) {
+    throw new Error('identity.source_store must be ww or usd for Woo identities');
+  }
+  if (identity.source_platform === 'shopify' && identity.source_store !== 'shopify') {
+    throw new Error('identity.source_store must be shopify for Shopify identities');
+  }
 }
 
 function cleanRows(rows) {
@@ -53,7 +60,7 @@ export function normalizeOrderNumber(value) {
 
 export function validateSearchFilters(input = {}) {
   const defaults = {
-    start_date: null, end_date: null, source_platform: null, channel: null,
+    start_date: null, end_date: null, source_platform: null, source_store: null, channel: null,
     order_number: null, source_order_id: null, status: null, currency: null,
     minimum_order_value: null, maximum_order_value: null, shipping_country: null,
     product_id: null, product_title: null, sku: null, location: null,
@@ -70,6 +77,9 @@ export function validateSearchFilters(input = {}) {
   }
   if (filters.source_platform !== null && !SOURCES.includes(filters.source_platform)) {
     throw new Error('source_platform must be null, woo, or shopify');
+  }
+  if (filters.source_store !== null && !STORES.includes(filters.source_store)) {
+    throw new Error('source_store must be null, ww, usd, or shopify');
   }
   if (filters.channel !== null && !CHANNELS.includes(filters.channel)) {
     throw new Error('channel must be null, online, or pos');
@@ -125,6 +135,7 @@ function searchSql(project, filters) {
     filters.start_date && 'order_date >= DATE(@start_date)',
     filters.end_date && 'order_date <= DATE(@end_date)',
     filters.source_platform && 'source_platform = @source_platform',
+    filters.source_store && 'source_store = @source_store',
     filters.channel && 'channel = @channel',
     filters.order_number && `(
       LOWER(source_order_number) IN (LOWER(@order_number_bare), LOWER(@order_number_prefixed))
@@ -144,6 +155,7 @@ function searchSql(project, filters) {
     filters.customer_id && 'customer_id = @customer_id',
     productFilter && `EXISTS (
       SELECT 1 FROM line_items li WHERE li.source_platform = orders.source_platform
+      AND li.source_store = orders.source_store
       AND li.source_order_id = orders.source_order_id
       ${filters.product_id ? 'AND li.product_id = @product_id' : ''}
       ${filters.sku ? 'AND LOWER(li.sku) = LOWER(@sku)' : ''}
@@ -152,7 +164,7 @@ function searchSql(project, filters) {
   ].filter(Boolean);
   return `
     WITH orders AS (
-      SELECT 'woo' source_platform, 'metorik_uk.orders' source_dataset,
+      SELECT 'woo' source_platform, 'ww' source_store, 'metorik_uk.orders' source_dataset,
         CAST(order_id AS STRING) source_order_id, order_number source_order_number,
         order_name source_order_name, DATE(order_created_at) order_date, status,
         'online' channel, CAST(NULL AS STRING) location, currency,
@@ -160,12 +172,23 @@ function searchSql(project, filters) {
         ABS(COALESCE(total_refunds, 0)) source_refund_total,
         COALESCE(payment_method_title, payment_method) payment_method,
         shipping_method_title shipping_method,
-        shipping_country, IF(shipping_country IS NULL, NULL, 'metorik_uk.orders.shipping_country') shipping_country_provenance,
+        g.shipping_country_iso2 shipping_country, g.geography_provenance shipping_country_provenance,
         CAST(customer_id AS STRING) customer_id, FALSE is_migrated_order,
         CAST(NULL AS STRING) migration_source
-      FROM \`${project}.metorik_uk.orders\`
+      FROM \`${project}.metorik_uk.orders\` o
+      LEFT JOIN \`${project}.commerce.order_geography\` g
+        ON g.source_store = 'ww' AND g.source_order_id = CAST(o.order_id AS STRING)
       UNION ALL
-      SELECT 'shopify', 'shopify_data.order_locations', l.order_id, l.order_name,
+      SELECT 'woo', 'usd', 'metorik_us.orders', CAST(o.order_id AS STRING), o.order_number,
+        o.order_name, DATE(o.order_created_at), o.status, 'online', CAST(NULL AS STRING), o.currency,
+        o.total, o.total_discount, ABS(COALESCE(o.total_refunds, 0)),
+        COALESCE(o.payment_method_title, o.payment_method), o.shipping_method_title,
+        g.shipping_country_iso2, g.geography_provenance, CAST(o.customer_id AS STRING), FALSE, CAST(NULL AS STRING)
+      FROM \`${project}.metorik_us.orders\` o
+      LEFT JOIN \`${project}.commerce.order_geography\` g
+        ON g.source_store = 'usd' AND g.source_order_id = CAST(o.order_id AS STRING)
+      UNION ALL
+      SELECT 'shopify', 'shopify', 'shopify_data.order_locations', l.order_id, l.order_name,
         l.order_name, DATE(l.created_at), c.display_financial_status,
         IF(l.retail_location_id IS NULL, 'online', 'pos'), l.retail_location_name,
         f.shop_currency, f.original_total_shop, f.original_discounts_shop,
@@ -178,21 +201,24 @@ function searchSql(project, filters) {
       LEFT JOIN \`${project}.shopify_data.order_customers\` c USING (order_id)
       WHERE (l.source_app_id IS NULL OR l.source_app_id != @matrixify_app_id)
     ), line_items AS (
-      SELECT 'woo' source_platform, CAST(order_id AS STRING) source_order_id,
+      SELECT 'woo' source_platform, 'ww' source_store, CAST(order_id AS STRING) source_order_id,
         CAST(product_id AS STRING) product_id, name product_title, sku
       FROM \`${project}.metorik_uk.order_line_items\`
       UNION ALL
-      SELECT 'shopify', order_id, product_id, title, sku
+      SELECT 'woo', 'usd', CAST(order_id AS STRING), CAST(product_id AS STRING), name, sku
+      FROM \`${project}.metorik_us.order_line_items\`
+      UNION ALL
+      SELECT 'shopify', 'shopify', order_id, product_id, title, sku
       FROM \`${project}.shopify_data.order_line_items\`
     ), matched AS (
-      SELECT source_platform, source_dataset, source_order_id, source_order_number,
+      SELECT source_platform, source_store, source_dataset, source_order_id, source_order_number,
         source_order_name, order_date, status, channel, location, currency,
         source_order_total, source_discount_total, source_refund_total,
         payment_method, shipping_method, shipping_country, shipping_country_provenance,
         is_migrated_order, migration_source
       FROM orders WHERE ${clauses.length ? clauses.join('\n AND ') : 'TRUE'}
     )
-    SELECT source_platform, source_dataset, source_order_id, source_order_number,
+    SELECT source_platform, source_store, source_dataset, source_order_id, source_order_number,
       source_order_name, order_date, status, channel, location, currency,
       source_order_total, source_discount_total, source_refund_total,
       payment_method, shipping_method,
@@ -201,16 +227,17 @@ function searchSql(project, filters) {
       COUNTIF(source_platform = 'woo') OVER() woo_result_count,
       COUNTIF(source_platform = 'shopify') OVER() shopify_result_count
     FROM matched
-    ORDER BY order_date DESC, source_platform, source_order_id
+    ORDER BY order_date DESC, source_platform, source_store, source_order_id
     LIMIT @limit`;
 }
 
-function lineSql(project, source) {
+function lineSql(project, source, store) {
+  const dataset = store === 'usd' ? 'metorik_us' : 'metorik_uk';
   return source === 'woo' ? `SELECT CAST(order_id AS STRING) source_order_id,
       CAST(line_item_id AS STRING) line_item_id, CAST(product_id AS STRING) product_id,
       CAST(variation_id AS STRING) variant_id, name product_title, CAST(NULL AS STRING) variant_title,
       sku, quantity, currency, price source_unit_price, total source_line_total, total_tax source_line_tax
-    FROM \`${project}.metorik_uk.order_line_items\` WHERE order_id = SAFE_CAST(@source_order_id AS INT64)
+    FROM \`${project}.${dataset}.order_line_items\` WHERE order_id = SAFE_CAST(@source_order_id AS INT64)
     ORDER BY line_item_id LIMIT @line_limit`
     : `SELECT order_id source_order_id, line_item_id, product_id, variant_id, title product_title,
       variant_title, sku, quantity, shop_currency currency, original_unit_price_shop source_unit_price,
@@ -272,7 +299,7 @@ export function createOrderQueryService({ bigquery, project }) {
       throw new Error(`limit must be an integer between 1 and ${ORDER_LINE_ITEM_MAX_LIMIT}`);
     }
     const [rows] = await bigquery.query({
-      query: lineSql(project, identity.source_platform),
+      query: lineSql(project, identity.source_platform, identity.source_store),
       params: { source_order_id: identity.source_order_id, line_limit: limit }
     });
     return { identity, line_items: cleanRows(rows), returned_line_item_count: rows.length, limit };
@@ -282,11 +309,13 @@ export function createOrderQueryService({ bigquery, project }) {
     validateIdentity(identity);
     const result = await searchOrders({
       source_platform: identity.source_platform,
+      source_store: identity.source_store,
       source_order_id: identity.source_order_id,
       limit: 2
     });
     const exact = result.orders.filter(row => row.source_platform === identity.source_platform &&
-      row.source_order_id === identity.source_order_id);
+      row.source_order_id === identity.source_order_id &&
+      (identity.source_platform !== 'woo' || row.source_store === identity.source_store));
     if (exact.length !== 1) return { identity, found: false, order: null, line_items: [] };
     const lines = await getOrderLineItems({ identity, limit: line_item_limit });
     return {
@@ -322,7 +351,25 @@ export function createOrderQueryService({ bigquery, project }) {
         ? 'This is a historical Woo order represented in Shopify by migration, not a second sale.'
         : 'No Matrixify app-ID evidence classifies this order as a migrated Woo representation.' };
   }
-  return { searchOrders, getOrderDetails, getOrderLineItems, getOrderHistoryContext };
+  async function getGeographyCoverage({ start_date, end_date, source_store = null }) {
+    date(start_date, 'start_date'); date(end_date, 'end_date');
+    if (!start_date || !end_date) throw new Error('start_date and end_date are required');
+    if (source_store !== null && !['ww', 'usd'].includes(source_store)) throw new Error('source_store must be null, ww, or usd');
+    const [rows] = await bigquery.query({ query: `WITH woo_orders AS (
+      SELECT 'ww' source_store, CAST(order_id AS STRING) source_order_id, DATE(order_created_at) order_date FROM \`${project}.metorik_uk.orders\`
+      UNION ALL SELECT 'usd', CAST(order_id AS STRING), DATE(order_created_at) FROM \`${project}.metorik_us.orders\`)
+      SELECT COUNT(*) total_orders, COUNTIF(g.geography_status = 'observed') observed_country_orders,
+        COUNTIF(g.geography_status IS NULL OR g.geography_status = 'unresolved') unresolved_orders,
+        ROUND(100 * SAFE_DIVIDE(COUNTIF(g.geography_status = 'observed'), COUNT(*)), 2) coverage_percentage
+      FROM woo_orders o LEFT JOIN \`${project}.commerce.order_geography\` g
+        ON g.source_store = o.source_store AND g.source_order_id = o.source_order_id
+      WHERE o.order_date BETWEEN DATE(@start_date) AND DATE(@end_date)
+        AND (@source_store IS NULL OR o.source_store = @source_store)`,
+      params: { start_date, end_date, source_store }, types: { source_store: 'STRING' } });
+    return { start_date, end_date, source_store, ...(cleanRows(rows)[0] || {}),
+      semantics: 'Coverage counts direct Metorik-export shipping-country evidence; unresolved orders are not estimated.' };
+  }
+  return { searchOrders, getOrderDetails, getOrderLineItems, getOrderHistoryContext, getGeographyCoverage };
 }
 
 export function safeOrderToolCallDiagnostic(name, args = {}) {
@@ -344,6 +391,7 @@ export function safeOrderToolCallDiagnostic(name, args = {}) {
   } else if (['get_order_details', 'get_order_line_items', 'get_order_history_context'].includes(name)) {
     diagnostic.identity = args.identity ? {
       source_platform: args.identity.source_platform ?? null,
+      source_store: args.identity.source_store ?? null,
       source_order_id: args.identity.source_order_id ?? null
     } : null;
   }
@@ -355,7 +403,8 @@ export async function executeOrderToolCall(service, name, args, onDiagnostic = (
     search_orders: 'searchOrders',
     get_order_details: 'getOrderDetails',
     get_order_line_items: 'getOrderLineItems',
-    get_order_history_context: 'getOrderHistoryContext'
+    get_order_history_context: 'getOrderHistoryContext',
+    get_geography_coverage: 'getGeographyCoverage'
   };
   const method = methods[name];
   if (!method) return { handled: false, result: null };
@@ -376,6 +425,7 @@ export const ORDER_TOOL_DEFINITIONS = [
       properties: {
         start_date: { type: ['string', 'null'] }, end_date: { type: ['string', 'null'] },
         source_platform: { type: ['string', 'null'], enum: ['woo', 'shopify', null] },
+        source_store: { type: ['string', 'null'], enum: ['ww', 'usd', 'shopify', null] },
         channel: { type: ['string', 'null'], enum: ['online', 'pos', null] },
         order_number: { type: ['string', 'null'], description: 'Human-facing order number/name. Put values such as #33653 or 33653 here; never reinterpret them as a source order ID.' },
         source_order_id: { type: ['string', 'null'], description: 'Internal source identity only (for example Woo Metorik order_id 169587), not the human-facing order number.' },
@@ -387,7 +437,7 @@ export const ORDER_TOOL_DEFINITIONS = [
         refund_status: { type: ['string', 'null'], enum: ['any', 'refunded', 'none', 'partial', 'full', null], description: 'Refund filter. Use any or null when no refund constraint was requested; refunded means any positive refund, while any adds no SQL predicate.' },
         customer_id: { type: ['string', 'null'] }, limit: { type: 'integer', minimum: 1, maximum: 100 }
       },
-      required: ['start_date', 'end_date', 'source_platform', 'channel', 'order_number', 'source_order_id',
+      required: ['start_date', 'end_date', 'source_platform', 'source_store', 'channel', 'order_number', 'source_order_id',
         'status', 'currency', 'minimum_order_value', 'maximum_order_value', 'shipping_country', 'product_id',
         'product_title', 'sku', 'location', 'refund_status', 'customer_id', 'limit']
     }
@@ -397,8 +447,8 @@ export const ORDER_TOOL_DEFINITIONS = [
     description: 'Get one exact governed order identity and bounded line items without customer PII.',
     parameters: { type: 'object', additionalProperties: false, properties: {
       identity: { type: 'object', additionalProperties: false, properties: {
-        source_platform: { type: 'string', enum: ['woo', 'shopify'] }, source_order_id: { type: 'string' }
-      }, required: ['source_platform', 'source_order_id'] },
+        source_platform: { type: 'string', enum: ['woo', 'shopify'] }, source_store: { type: 'string', enum: ['ww', 'usd', 'shopify'] }, source_order_id: { type: 'string' }
+      }, required: ['source_platform', 'source_store', 'source_order_id'] },
       line_item_limit: { type: 'integer', minimum: 1, maximum: 100 }
     }, required: ['identity', 'line_item_limit'] }
   },
@@ -407,8 +457,8 @@ export const ORDER_TOOL_DEFINITIONS = [
     description: 'Get bounded line items for one exact governed order identity without customer PII.',
     parameters: { type: 'object', additionalProperties: false, properties: {
       identity: { type: 'object', additionalProperties: false, properties: {
-        source_platform: { type: 'string', enum: ['woo', 'shopify'] }, source_order_id: { type: 'string' }
-      }, required: ['source_platform', 'source_order_id'] },
+        source_platform: { type: 'string', enum: ['woo', 'shopify'] }, source_store: { type: 'string', enum: ['ww', 'usd', 'shopify'] }, source_order_id: { type: 'string' }
+      }, required: ['source_platform', 'source_store', 'source_order_id'] },
       limit: { type: 'integer', minimum: 1, maximum: 100 }
     }, required: ['identity', 'limit'] }
   },
@@ -417,9 +467,17 @@ export const ORDER_TOOL_DEFINITIONS = [
     description: 'Inspect migration/import classification for one exact order identity; this does not invent event history.',
     parameters: { type: 'object', additionalProperties: false, properties: {
       identity: { type: 'object', additionalProperties: false, properties: {
-        source_platform: { type: 'string', enum: ['woo', 'shopify'] }, source_order_id: { type: 'string' }
-      }, required: ['source_platform', 'source_order_id'] }
+        source_platform: { type: 'string', enum: ['woo', 'shopify'] }, source_store: { type: 'string', enum: ['ww', 'usd', 'shopify'] }, source_order_id: { type: 'string' }
+      }, required: ['source_platform', 'source_store', 'source_order_id'] }
     }, required: ['identity'] }
+  },
+  {
+    type: 'function', name: 'get_geography_coverage', strict: true,
+    description: 'Return direct shipping-country evidence coverage for a bounded historical Woo period.',
+    parameters: { type: 'object', additionalProperties: false, properties: {
+      start_date: { type: 'string' }, end_date: { type: 'string' },
+      source_store: { type: ['string', 'null'], enum: ['ww', 'usd', null] }
+    }, required: ['start_date', 'end_date', 'source_store'] }
   }
 ];
 
