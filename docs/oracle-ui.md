@@ -22,6 +22,10 @@ Proposal generation is a separate bounded OpenAI Responses call using the strict
 
 Explicit “remember” wording strengthens intent but never writes. Questions return an empty list. Uncertain statements become working hypotheses or are omitted. Confirmed memories require governed evidence. Users can select, edit, discard, save individually, or save selected; every Save remains a separate authenticated/CSRF-protected administrative request and is revalidated server-side. Invalid model candidates are non-saveable until edited. `ORACLE_PROPOSAL_MODEL` optionally selects the proposal model and defaults to `gpt-5.6`; no dataset or schema change is required.
 
+A deliberately narrow preflight skips proposal context lookup and the secondary model request for obvious pure questions, comparisons, and analytical commands. Ambiguous, declarative, persistence-directed, and mixed assertion/question messages continue to the model. The model is forced to make one strict `propose_governed_records` Responses API function call; an empty `proposals` array is successful. The strict schema uses the API-supported `anyOf` union rather than `oneOf` and disables parallel tool calls.
+
+After deployment, run `npm run validate:oracle-proposals-production` first. It uses synthetic question, assertion, and multi-record campaign fixtures with the configured proposal model. It imports no writer and invokes no approval endpoint, so it cannot persist a proposal. Failure logs identify the operation, phase, model, error class, HTTP status, and provider code/type where available without logging payloads, credentials, raw responses, or stack traces.
+
 ## Deployment
 
 No build step or dataset seed is required. Configure the three variables above on the existing Render web service and deploy the committed revision using the existing start command:

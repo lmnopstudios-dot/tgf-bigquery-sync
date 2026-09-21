@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import express from 'express';
 import { writeRecord } from '../knowledge/admin.js';
-import { invalidProposal, normalizeModelProposal, validateApprovedProposal } from './proposals.js';
+import { invalidProposal, needsProposalGeneration, normalizeModelProposal, proposalDiagnostic, validateApprovedProposal } from './proposals.js';
 import { createSession, csrfToken, parseCookies, safeError, verifySession } from './ui-security.js';
 
 const json = express.json({ limit: '48kb', type: 'application/json' });
@@ -11,6 +11,8 @@ export function createOracleUiRouter({ knowledgeService, bigquery, project, chat
   const router = express.Router();
   const password = env.ORACLE_UI_PASSWORD;
   const sessionSecret = env.ORACLE_UI_SESSION_SECRET;
+  const proposalModel = env.ORACLE_PROPOSAL_MODEL || 'gpt-5.6';
+  const logProposalError = error => console.error('Oracle UI proposal generation failed:', proposalDiagnostic(error, proposalModel));
   if (!password || !sessionSecret || sessionSecret.length < 32) throw new Error('ORACLE_UI_PASSWORD and ORACLE_UI_SESSION_SECRET (32+ characters) are required');
   const authenticate = (req, res, next) => {
     const session = verifySession(parseCookies(req.headers.cookie).oracle_session, sessionSecret);
@@ -25,6 +27,7 @@ export function createOracleUiRouter({ knowledgeService, bigquery, project, chat
     next();
   };
   const proposalsFor = async (message, createdBy) => {
+    if (!needsProposalGeneration(message)) return [];
     if (!generateProposals) throw new Error('proposal generator unavailable');
     let existing = [];
     try {
@@ -37,7 +40,7 @@ export function createOracleUiRouter({ knowledgeService, bigquery, project, chat
     const candidates = await generateProposals({ message, existing, evidence: [] });
     return candidates.slice(0, 12).map(candidate => {
       try { return normalizeModelProposal(candidate, { createdBy, existing }); }
-      catch (error) { console.error('Oracle UI rejected model proposal:', safeError(error)); return invalidProposal(candidate); }
+      catch (error) { error.phase = 'proposal_validation'; logProposalError(error); return invalidProposal(candidate); }
     });
   };
   router.post('/auth/login', json, (req, res) => {
@@ -58,7 +61,7 @@ export function createOracleUiRouter({ knowledgeService, bigquery, project, chat
       const answer = await chat(req.body.message);
       let proposals = [], proposal_error = null;
       try { proposals = await proposalsFor(req.body.message, req.oracleUser.sub); }
-      catch (error) { console.error('Oracle UI proposal generation failed:', safeError(error)); proposal_error = 'Knowledge proposal could not be generated.'; }
+      catch (error) { logProposalError(error); proposal_error = 'Knowledge proposal could not be generated.'; }
       res.json({ success: true, answer: answer.answer, proposals, proposal_error });
     } catch (error) { console.error('Oracle UI chat failed:', safeError(error)); res.status(500).json({ success: false, error: safeError(error) }); }
   });
@@ -66,7 +69,7 @@ export function createOracleUiRouter({ knowledgeService, bigquery, project, chat
     try {
       if (typeof req.body?.message !== 'string' || !req.body.message.trim() || req.body.message.length > 12000) return res.status(400).json({ success: false, error: 'message must be a non-empty string of at most 12000 characters' });
       res.json({ success: true, proposals: await proposalsFor(req.body.message, req.oracleUser.sub) });
-    } catch (error) { console.error('Oracle UI proposal generation failed:', safeError(error)); res.status(503).json({ success: false, error: 'Knowledge proposal could not be generated.' }); }
+    } catch (error) { logProposalError(error); res.status(503).json({ success: false, error: 'Knowledge proposal could not be generated.' }); }
   });
   const approve = kindScope => async (req, res) => {
     try {
