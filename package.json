@@ -25,6 +25,7 @@
     "setup:knowledge": "node knowledge/cli.js setup && node knowledge/cli.js seed",
     "knowledge:write": "node knowledge/cli.js write",
     "validate:knowledge": "node diagnostics/knowledge-validation.js",
+    "validate:knowledge-production": "node diagnostics/knowledge-production-validation.js",
     "import:metorik-geography": "node metorik/geography.js",
     "validate:metorik-geography": "node diagnostics/metorik-geography-validation.js"
   },
