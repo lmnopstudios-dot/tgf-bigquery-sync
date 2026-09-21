@@ -39,7 +39,7 @@ test('search is parameterized, deterministic, collision-safe, direct-country-onl
   assert.match(query, /LIKE CONCAT\('%', LOWER\(@product_title\), '%'/);
   assert.match(query, /source_platform = @source_platform/);
   assert.match(query, /l\.source_app_id IS NULL OR l\.source_app_id != @matrixify_app_id/);
-  assert.match(query, /ORDER BY order_date DESC, source_platform, source_order_id/);
+  assert.match(query, /ORDER BY order_date DESC, source_platform, source_store, source_order_id/);
   assert.doesNotMatch(query, /billing_country\s+shipping_country|SELECT\s+\*/i);
   assert.equal(params.matrixify_app_id, MATRIXIFY_APP_ID);
   assert.equal(params.shipping_country, 'DE');
@@ -118,15 +118,15 @@ test('Shopify exact order-name lookup uses the same safe normalization', async (
 });
 
 test('exact Woo and Shopify detail identities retrieve source-specific bounded lines', async () => {
-  for (const [source, id, expected] of [
-    ['woo', '33653', /SAFE_CAST\(@source_order_id AS INT64\)/],
-    ['shopify', 'gid:\/\/shopify\/Order\/1', /shopify_data\.order_line_items/]
+  for (const [source, store, id, expected] of [
+    ['woo', 'ww', '33653', /SAFE_CAST\(@source_order_id AS INT64\)/],
+    ['shopify', 'shopify', 'gid:\/\/shopify\/Order\/1', /shopify_data\.order_line_items/]
   ]) {
     const bq = fakeBigQuery([[
-      { source_platform: source, source_order_id: id, source_dataset: 'x', matching_order_count: 1 }
+      { source_platform: source, source_store: store, source_order_id: id, source_dataset: 'x', matching_order_count: 1 }
     ], [{ source_order_id: id, line_item_id: '1', product_title: 'Ring' }]]);
     const service = createOrderQueryService({ bigquery: bq, project: 'p' });
-    const result = await service.getOrderDetails({ identity: { source_platform: source, source_order_id: id }, line_item_limit: 10 });
+    const result = await service.getOrderDetails({ identity: { source_platform: source, source_store: store, source_order_id: id }, line_item_limit: 10 });
     assert.equal(result.found, true);
     assert.equal(result.line_items.length, 1);
     assert.match(bq.calls[1].query, expected);
@@ -138,14 +138,14 @@ test('exact Woo and Shopify detail identities retrieve source-specific bounded l
 test('PII, raw payloads, mutations, and ambiguous identity are excluded', async () => {
   assert.deepEqual(assertOrderQuerySafety().valid, true);
   await assert.rejects(() => createOrderQueryService({ bigquery: { query() {} }, project: 'p' })
-    .getOrderLineItems({ identity: { source_platform: 'woo', source_order_id: null } }), /required/);
+    .getOrderLineItems({ identity: { source_platform: 'woo', source_store: 'ww', source_order_id: null } }), /required/);
   const tools = JSON.stringify(ORDER_TOOL_DEFINITIONS).toLowerCase();
   for (const field of ['email', 'phone', 'postcode', 'raw_json']) assert.doesNotMatch(tools, new RegExp(field));
 });
 
 test('Oracle registers all controlled order tools with strict schemas', () => {
   assert.deepEqual(ORDER_TOOL_DEFINITIONS.map(tool => tool.name),
-    ['search_orders', 'get_order_details', 'get_order_line_items', 'get_order_history_context']);
+    ['search_orders', 'get_order_details', 'get_order_line_items', 'get_order_history_context', 'get_geography_coverage']);
   assert.ok(ORDER_TOOL_DEFINITIONS.every(tool => tool.strict === true));
 });
 
@@ -153,7 +153,7 @@ test('Oracle routing records safe arguments and chains returned identity to deta
   const diagnostics = [];
   const calls = [];
   const service = {
-    async searchOrders(args) { calls.push(['search', args]); return { orders: [{ source_platform: 'woo', source_order_id: '169587' }] }; },
+    async searchOrders(args) { calls.push(['search', args]); return { orders: [{ source_platform: 'woo', source_store: 'ww', source_order_id: '169587' }] }; },
     async getOrderDetails(args) { calls.push(['details', args]); return { found: true }; },
     async getOrderLineItems(args) { calls.push(['lines', args]); return { line_items: [] }; }
   };
@@ -163,10 +163,10 @@ test('Oracle routing records safe arguments and chains returned identity to deta
   await executeOrderToolCall(service, 'get_order_details', { identity, line_item_limit: 50 }, value => diagnostics.push(value));
   await executeOrderToolCall(service, 'get_order_line_items', { identity, limit: 50 }, value => diagnostics.push(value));
   assert.deepEqual(calls.map(call => call[0]), ['search', 'details', 'lines']);
-  assert.deepEqual(calls[1][1].identity, { source_platform: 'woo', source_order_id: '169587' });
+  assert.deepEqual(calls[1][1].identity, { source_platform: 'woo', source_store: 'ww', source_order_id: '169587' });
   assert.deepEqual(diagnostics[0].order_number_normalized, { bare: '33653', prefixed: '#33653' });
   assert.equal(diagnostics[0].source_order_id, null);
-  assert.deepEqual(diagnostics[2].identity, { source_platform: 'woo', source_order_id: '169587' });
+  assert.deepEqual(diagnostics[2].identity, { source_platform: 'woo', source_store: 'ww', source_order_id: '169587' });
   assert.doesNotMatch(JSON.stringify(diagnostics), /email|phone|postcode|raw_json/i);
   assert.deepEqual(safeOrderToolCallDiagnostic('search_orders', searchArgs).populated_filters.sort(),
     ['limit', 'order_number']);
@@ -198,7 +198,7 @@ test('full search execution reports safe branch counts and returns a non-empty s
 test('explicit migration context classifies Matrixify without adding it to search', async () => {
   const bq = fakeBigQuery([[{ source_order_id: 's1', is_migrated_order: true, migration_source: 'Matrixify/WooCommerce' }]]);
   const service = createOrderQueryService({ bigquery: bq, project: 'p' });
-  const result = await service.getOrderHistoryContext({ identity: { source_platform: 'shopify', source_order_id: 's1' } });
+  const result = await service.getOrderHistoryContext({ identity: { source_platform: 'shopify', source_store: 'shopify', source_order_id: 's1' } });
   assert.equal(result.migration_classification, 'migrated_woo_representation');
   assert.match(result.semantics, /not a second sale/);
   assert.equal(bq.calls[0].params.matrixify_app_id, MATRIXIFY_APP_ID);
@@ -208,7 +208,8 @@ test('validator covers identity, migration, line linkage and direct geography', 
   const queries = validationQueries('p');
   assert.deepEqual(Object.keys(queries), ['woo_identity', 'shopify_identity', 'migration', 'woo_lines', 'shopify_lines', 'country', 'woo_number_sample']);
   assert.match(queries.migration, /@matrixify_app_id/);
-  assert.match(queries.country, /shipping_country IS NOT NULL/);
+  assert.match(queries.country, /geography_status = 'observed'/);
+  assert.match(queries.country, /commerce\.order_geography/);
   assert.match(queries.woo_number_sample, /REGEXP_CONTAINS\(order_number/);
 });
 

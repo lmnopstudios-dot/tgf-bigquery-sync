@@ -8,7 +8,9 @@ export function validationQueries(project) {
     migration: `SELECT COUNTIF(source_app_id = @matrixify_app_id) matrixify_orders, COUNTIF(source_app_id IS NULL OR source_app_id != @matrixify_app_id) native_orders FROM \`${project}.shopify_data.order_locations\``,
     woo_lines: `SELECT COUNT(*) orphan_lines FROM \`${project}.metorik_uk.order_line_items\` li LEFT JOIN \`${project}.metorik_uk.orders\` o USING(order_id) WHERE o.order_id IS NULL`,
     shopify_lines: `SELECT COUNT(*) orphan_lines FROM \`${project}.shopify_data.order_line_items\` li LEFT JOIN \`${project}.shopify_data.order_locations\` o USING(order_id) WHERE o.order_id IS NULL`,
-    country: `SELECT COUNTIF(shipping_country IS NOT NULL) directly_observed, COUNT(*) total_orders FROM \`${project}.metorik_uk.orders\``,
+    country: `SELECT COUNTIF(g.geography_status = 'observed') directly_observed, COUNT(*) total_orders
+      FROM \`${project}.metorik_uk.orders\` o LEFT JOIN \`${project}.commerce.order_geography\` g
+      ON g.source_store = 'ww' AND g.source_order_id = CAST(o.order_id AS STRING)`,
     woo_number_sample: `SELECT CAST(order_id AS STRING) source_order_id, order_number, order_name
       FROM \`${project}.metorik_uk.orders\`
       WHERE REGEXP_CONTAINS(order_number, r'^#[A-Za-z0-9][A-Za-z0-9._/-]*$')
