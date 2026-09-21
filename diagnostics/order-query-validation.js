@@ -34,9 +34,11 @@ export async function validateOrderQueryLayer({ bigquery, project }) {
   } else {
     const service = createOrderQueryService({ bigquery, project });
     const bare = sample.order_number.slice(1);
-    const [prefixed, normalized, byId] = await Promise.all([
-      service.searchOrders({ source_platform: 'woo', order_number: sample.order_number, limit: 2 }),
+    const [prefixed, normalized, wooSpecific, sentinelAny, byId] = await Promise.all([
+      service.searchOrders({ order_number: sample.order_number, limit: 2 }),
+      service.searchOrders({ order_number: bare, limit: 2 }),
       service.searchOrders({ source_platform: 'woo', order_number: bare, limit: 2 }),
+      service.searchOrders({ order_number: sample.order_number, refund_status: 'any', limit: 2 }),
       service.searchOrders({ source_platform: 'woo', source_order_id: sample.source_order_id, limit: 2 })
     ]);
     const resolves = result => result.orders.some(order =>
@@ -45,12 +47,20 @@ export async function validateOrderQueryLayer({ bigquery, project }) {
       sampled_order_number: sample.order_number,
       prefixed_resolves: resolves(prefixed),
       normalized_resolves: resolves(normalized),
+      woo_specific_resolves: resolves(wooSpecific),
+      refund_any_does_not_filter: resolves(sentinelAny) &&
+        !sentinelAny.execution_diagnostic.filters_applied.includes('refund_status'),
       source_id_resolves: resolves(byId),
-      source_id_distinct_from_order_number: sample.source_order_id !== bare
+      source_id_distinct_from_order_number: sample.source_order_id !== bare,
+      final_identity_matches: [prefixed, normalized, wooSpecific, sentinelAny, byId].every(resolves),
+      complete_search_diagnostics: prefixed.execution_diagnostic
     };
     if (!results.woo_number_lookup.prefixed_resolves) failures.push('prefixed Woo order number does not resolve');
     if (!results.woo_number_lookup.normalized_resolves) failures.push('normalized Woo order number does not resolve');
+    if (!results.woo_number_lookup.woo_specific_resolves) failures.push('Woo-specific order number does not resolve');
+    if (!results.woo_number_lookup.refund_any_does_not_filter) failures.push('refund_status any incorrectly filters');
     if (!results.woo_number_lookup.source_id_resolves) failures.push('Woo source order ID does not resolve');
+    if (!results.woo_number_lookup.final_identity_matches) failures.push('complete search result identity mismatch');
   }
   return { valid: failures.length === 0, failures, static_safety: staticSafety, evidence: results };
 }

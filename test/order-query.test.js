@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   assertOrderQuerySafety, createOrderQueryService, executeOrderToolCall, MATRIXIFY_APP_ID,
-  normalizeOrderNumber, ORDER_TOOL_DEFINITIONS, safeOrderToolCallDiagnostic, validateSearchFilters
+  normalizeOrderNumber, ORDER_TOOL_DEFINITIONS, safeOrderToolCallDiagnostic, searchFilterSemantics,
+  validateSearchFilters
 } from '../oracle/order-query.js';
 import { validateOrderQueryLayer, validationQueries } from '../diagnostics/order-query-validation.js';
 
@@ -48,11 +49,32 @@ test('search is parameterized, deterministic, collision-safe, direct-country-onl
   assert.ok(!('customer_id' in result.orders[0]));
 });
 
-test('refund filtering uses explicit source-native values', async () => {
-  const bq = fakeBigQuery([[]]);
+test('refund filtering distinguishes no-filter sentinels from explicit source-native values', async () => {
+  const bq = fakeBigQuery([[], [], [], []]);
   const service = createOrderQueryService({ bigquery: bq, project: 'p' });
+  await service.searchOrders({ refund_status: 'any', limit: 20 });
+  await service.searchOrders({ refund_status: 'refunded', limit: 20 });
+  await service.searchOrders({ refund_status: 'none', limit: 20 });
   await service.searchOrders({ refund_status: 'partial', limit: 20 });
-  assert.match(bq.calls[0].query, /source_refund_total > 0 AND source_refund_total < source_order_total/);
+  assert.doesNotMatch(bq.calls[0].query, /source_refund_total\s*(?:[>=]|<)/);
+  assert.ok(!('refund_status' in bq.calls[0].params));
+  assert.match(bq.calls[1].query, /source_refund_total > 0/);
+  assert.match(bq.calls[2].query, /source_refund_total = 0/);
+  assert.match(bq.calls[3].query, /source_refund_total > 0 AND source_refund_total < source_order_total/);
+});
+
+test('optional filter activation rejects invalid sentinels and applies only semantic filters', () => {
+  const semantics = searchFilterSemantics({
+    start_date: null, source_platform: undefined, order_number: '#33653', refund_status: 'any',
+    minimum_order_value: 0, limit: 20
+  });
+  assert.deepEqual(semantics.supplied, ['order_number', 'minimum_order_value', 'refund_status']);
+  assert.deepEqual(semantics.applied, ['order_number', 'minimum_order_value']);
+  assert.equal(semantics.filters.source_platform, null);
+  for (const refund_status of [false, '']) {
+    assert.throws(() => validateSearchFilters({ refund_status }), /refund_status must be/);
+  }
+  assert.throws(() => validateSearchFilters({ status: '' }), /non-empty string/);
 });
 
 test('governed order-number normalization accepts user wrappers but remains exact', async () => {
@@ -144,10 +166,33 @@ test('Oracle routing records safe arguments and chains returned identity to deta
   assert.deepEqual(calls[1][1].identity, { source_platform: 'woo', source_order_id: '169587' });
   assert.deepEqual(diagnostics[0].order_number_normalized, { bare: '33653', prefixed: '#33653' });
   assert.equal(diagnostics[0].source_order_id, null);
-  assert.deepEqual(diagnostics[1].identity, { source_platform: 'woo', source_order_id: '169587' });
+  assert.deepEqual(diagnostics[2].identity, { source_platform: 'woo', source_order_id: '169587' });
   assert.doesNotMatch(JSON.stringify(diagnostics), /email|phone|postcode|raw_json/i);
   assert.deepEqual(safeOrderToolCallDiagnostic('search_orders', searchArgs).populated_filters.sort(),
     ['limit', 'order_number']);
+});
+
+test('full search execution reports safe branch counts and returns a non-empty serialized result to Oracle', async () => {
+  const row = { source_platform: 'woo', source_order_id: '169587', source_order_number: '#33653',
+    product_title: 'not projected here', matching_order_count: 1, woo_result_count: 1,
+    shopify_result_count: 0 };
+  const bq = fakeBigQuery([[row]]);
+  const diagnostics = [];
+  const service = createOrderQueryService({ bigquery: bq, project: 'p' });
+  const call = await executeOrderToolCall(service, 'search_orders', {
+    order_number: '#33653', refund_status: 'any', limit: 20
+  }, diagnostic => diagnostics.push(diagnostic));
+  assert.equal(call.result.orders[0].source_order_id, '169587');
+  assert.ok(!('woo_result_count' in call.result.orders[0]));
+  assert.deepEqual(call.result.execution_diagnostic, {
+    filters_supplied: ['order_number', 'refund_status'], filters_applied: ['order_number'],
+    parameter_names: ['limit', 'matrixify_app_id', 'order_number_bare', 'order_number_prefixed'],
+    source_branches_queried: ['woo', 'shopify'], woo_result_count: 1,
+    shopify_result_count: 0, final_result_count: 1
+  });
+  assert.equal(diagnostics[1].phase, 'result');
+  assert.equal(diagnostics[1].final_result_count, 1);
+  assert.doesNotMatch(JSON.stringify(diagnostics), /product_title|not projected here/);
 });
 
 test('explicit migration context classifies Matrixify without adding it to search', async () => {
@@ -173,15 +218,24 @@ test('validator semantically resolves a sampled Woo number by prefix, bare form,
   const bq = fakeBigQuery([
     [{ row_count: 1, identity_count: 1 }], [{ row_count: 1, identity_count: 1 }],
     [{ matrixify_orders: 0, native_orders: 1 }], [{ orphan_lines: 0 }], [{ orphan_lines: 0 }],
-    [{ directly_observed: 0, total_orders: 1 }], [sample], found, found, found
+    [{ directly_observed: 0, total_orders: 1 }], [sample], found, found, found, found, found
   ]);
   const result = await validateOrderQueryLayer({ bigquery: bq, project: 'p' });
   assert.equal(result.valid, true);
   assert.deepEqual(result.evidence.woo_number_lookup, {
     sampled_order_number: '#33653', prefixed_resolves: true, normalized_resolves: true,
-    source_id_resolves: true, source_id_distinct_from_order_number: true
+    woo_specific_resolves: true, refund_any_does_not_filter: true, source_id_resolves: true,
+    source_id_distinct_from_order_number: true, final_identity_matches: true,
+    complete_search_diagnostics: {
+      filters_supplied: ['order_number'], filters_applied: ['order_number'],
+      parameter_names: ['limit', 'matrixify_app_id', 'order_number_bare', 'order_number_prefixed'],
+      source_branches_queried: ['woo', 'shopify'], woo_result_count: 0,
+      shopify_result_count: 0, final_result_count: 1
+    }
   });
   assert.equal(bq.calls[7].params.order_number_prefixed, '#33653');
   assert.equal(bq.calls[8].params.order_number_bare, '33653');
-  assert.equal(bq.calls[9].params.source_order_id, '169587');
+  assert.equal(bq.calls[9].params.source_platform, 'woo');
+  assert.ok(!('refund_status' in bq.calls[10].params));
+  assert.equal(bq.calls[11].params.source_order_id, '169587');
 });
