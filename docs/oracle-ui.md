@@ -31,3 +31,9 @@ npm start
 Open `https://<existing-render-service>/oracle/`. Existing production knowledge—including Black Friday records—is queried from BigQuery and is not copied or seeded by this feature.
 
 Errors returned to browsers are allow-listed validation messages or generic failures. Raw BigQuery errors and stack traces are not serialized. Logging passes errors through central credential redaction, including Google `Authorization: Bearer` values, token fields, client secrets and private keys.
+
+## Proposal intent and response rendering
+
+The UI proposes governed records only from declarative assertions in the current user message. Interrogative clauses are excluded, explicit persistence language strengthens intent without bypassing Save/Edit/Discard approval, uncertain assertions remain working, and an exact normalized governed-content match suppresses a duplicate. A deterministic same-title match may populate `supersedes`; no fuzzy destructive matching is performed. Agent answers, retrieved context, and tool output are never proposal source material.
+
+Oracle answers are rendered by the local DOM-based Markdown renderer. It creates an allowlisted set of elements for headings, paragraphs, emphasis, lists, tables, code, and safe links without `innerHTML`. Raw HTML remains text, link protocols are restricted to HTTP, HTTPS, and mailto, and numeric entities are converted to text before DOM construction.

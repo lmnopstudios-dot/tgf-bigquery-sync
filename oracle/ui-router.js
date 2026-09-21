@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import express from 'express';
 import { writeRecord } from '../knowledge/admin.js';
-import { proposeFromMessage, validateApprovedProposal } from './proposals.js';
+import { proposalSearchText, proposeFromMessage, validateApprovedProposal } from './proposals.js';
 import { createSession, csrfToken, parseCookies, safeError, verifySession } from './ui-security.js';
 
 const json = express.json({ limit: '48kb', type: 'application/json' });
@@ -24,6 +24,17 @@ export function createOracleUiRouter({ knowledgeService, bigquery, project, chat
     if (!req.is('application/json')) return res.status(415).json({ success: false, error: 'application/json is required' });
     next();
   };
+  const proposalFor = async (message, createdBy) => {
+    const candidate = proposeFromMessage(message, { createdBy });
+    if (!candidate || candidate.kind === 'memory') return candidate;
+    try {
+      const result = await knowledgeService.searchKnowledge({ text: proposalSearchText(candidate), knowledge_type: candidate.kind, start_date: null, end_date: null, status: null, tags: [], limit: 10 });
+      return proposeFromMessage(message, { createdBy, existing: result.items || [] });
+    } catch (error) {
+      console.error('Oracle UI duplicate check failed:', safeError(error));
+      return candidate;
+    }
+  };
   router.post('/auth/login', json, (req, res) => {
     if (!allowedOrigins(req).has(req.get('origin'))) return res.status(403).json({ success: false, error: 'Invalid request origin' });
     const supplied = Buffer.from(String(req.body?.password || ''));
@@ -40,12 +51,12 @@ export function createOracleUiRouter({ knowledgeService, bigquery, project, chat
     try {
       if (typeof req.body?.message !== 'string' || !req.body.message.trim() || req.body.message.length > 12000) return res.status(400).json({ success: false, error: 'message must be a non-empty string of at most 12000 characters' });
       const answer = await chat(req.body.message);
-      const proposal = proposeFromMessage(req.body.message, { createdBy: req.oracleUser.sub, tools: answer.tools || [] });
+      const proposal = await proposalFor(req.body.message, req.oracleUser.sub);
       res.json({ success: true, answer: answer.answer, proposal });
     } catch (error) { console.error('Oracle UI chat failed:', safeError(error)); res.status(500).json({ success: false, error: safeError(error) }); }
   });
-  router.post('/propose', authenticate, protectWrite, json, (req, res) => {
-    try { res.json({ success: true, proposal: proposeFromMessage(req.body?.message, { createdBy: req.oracleUser.sub, tools: req.body?.tools || [] }) }); }
+  router.post('/propose', authenticate, protectWrite, json, async (req, res) => {
+    try { res.json({ success: true, proposal: await proposalFor(req.body?.message, req.oracleUser.sub) }); }
     catch (error) { res.status(400).json({ success: false, error: safeError(error, 'The proposal is invalid') }); }
   });
   const approve = kindScope => async (req, res) => {
