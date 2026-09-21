@@ -108,7 +108,11 @@ const orderQueryService = createOrderQueryService({
   project: GOOGLE_PROJECT_ID
 });
 const customerQueryService = createCustomerQueryService({ bigquery, project: GOOGLE_PROJECT_ID });
-const knowledgeService = createKnowledgeService({ bigquery, project: GOOGLE_PROJECT_ID });
+const knowledgeService = createKnowledgeService({
+  bigquery,
+  project: GOOGLE_PROJECT_ID,
+  onDiagnostic: diagnostic => console.error('Oracle knowledge query failed:', diagnostic)
+});
 
 /* =========================================================
    SHOPIFY
