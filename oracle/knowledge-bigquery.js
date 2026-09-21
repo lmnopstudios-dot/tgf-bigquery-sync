@@ -1,5 +1,6 @@
 import { MAX_RETRIEVAL_LIMIT } from './knowledge.js';
 import { redactError } from './ui-security.js';
+import { bigQueryDateParameters, describeDateParameter } from '../bigquery/date-parameters.js';
 
 function normalizeValue(value) {
   if (value == null) return value;
@@ -32,7 +33,10 @@ export function createKnowledgeService({ bigquery, project, dataset = 'oracle_kn
   if (!bigquery?.query || !project) throw new Error('bigquery and project are required');
   const table = name => `\`${project}.${dataset}.${name}\``;
   async function query(operation, sql, params = {}, types = {}, context = {}) {
-    const diagnostic = { operation, active_filter_names: context.activeFilters || [], parameter_names: Object.keys(params), parameter_types: types };
+    const dateParameterBindings = Object.fromEntries(Object.entries(types)
+      .filter(([, type]) => type === 'DATE')
+      .map(([name, type]) => [name, describeDateParameter(params[name], type)]));
+    const diagnostic = { operation, active_filter_names: context.activeFilters || [], parameter_names: Object.keys(params), declared_parameter_types: types, date_parameter_bindings: dateParameterBindings };
     try {
       const [rows] = await bigquery.query({ query: sql, params, types, labels: { component: 'oracle_knowledge', operation } });
       return normalizeKnowledgeRows(rows);
@@ -55,7 +59,7 @@ export function createKnowledgeService({ bigquery, project, dataset = 'oracle_kn
     if (nonEmptyArray(f.tags)) add('tags', 'EXISTS(SELECT 1 FROM UNNEST(tags) t WHERE LOWER(t) IN (SELECT LOWER(x) FROM UNNEST(@tags) x))', f.tags, ['STRING']);
     if (nonEmptyText(f.start_date)) {
       predicates.push("COALESCE(effective_from, DATE '0001-01-01') <= @end_date AND COALESCE(effective_to, DATE '9999-12-31') >= @start_date");
-      params.start_date = f.start_date; params.end_date = f.end_date; activeFilters.push('start_date', 'end_date');
+      Object.assign(params, bigQueryDateParameters({ start_date: f.start_date, end_date: f.end_date })); activeFilters.push('start_date', 'end_date');
       types.start_date = 'DATE'; types.end_date = 'DATE';
     }
     params.limit = resultLimit; types.limit = 'INT64'; activeFilters.push('limit');
@@ -89,7 +93,7 @@ export function createKnowledgeService({ bigquery, project, dataset = 'oracle_kn
     if (nonEmptyArray(f.tags)) add('tags', 'EXISTS(SELECT 1 FROM UNNEST(tags) t WHERE LOWER(t) IN (SELECT LOWER(x) FROM UNNEST(@tags) x))', f.tags, ['STRING']);
     if (nonEmptyText(f.start_date)) {
       predicates.push("COALESCE(effective_from,DATE '0001-01-01') <= @end_date AND COALESCE(effective_to,DATE '9999-12-31') >= @start_date");
-      params.start_date = f.start_date; params.end_date = f.end_date; activeFilters.push('start_date', 'end_date');
+      Object.assign(params, bigQueryDateParameters({ start_date: f.start_date, end_date: f.end_date })); activeFilters.push('start_date', 'end_date');
       types.start_date = 'DATE'; types.end_date = 'DATE';
     }
     params.limit = resultLimit; types.limit = 'INT64'; activeFilters.push('limit');

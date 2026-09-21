@@ -4,6 +4,7 @@ import { realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { BigQuery } from '@google-cloud/bigquery';
+import { bigQueryDateParameters } from '../bigquery/date-parameters.js';
 import { createSearchConsoleClient, redactSecrets } from '../diagnostics/search-console-access.js';
 import { DOMAIN_PROPERTY, WWW_PROPERTY, PROPERTIES, HISTORY_START, assertDate, datesBetween, propertyMetadata, normalizePage, metricRow, canonicalDaily, validateRows } from './semantic.js';
 export const TABLES=['daily','queries','pages','device_country'];
@@ -89,7 +90,7 @@ export async function insertStageRows({bigquery,project,dataset,stage,table,sour
   }
   return rows.length;
 }
-export function dateParameters(startDate,endDate){return {startDate:BigQuery.date(startDate),endDate:BigQuery.date(endDate)}}
+export function dateParameters(startDate,endDate){return bigQueryDateParameters({startDate,endDate})}
 export function parseArgs(argv,now=new Date()){const final=new Date(Date.UTC(now.getUTCFullYear(),now.getUTCMonth(),now.getUTCDate()-3)).toISOString().slice(0,10),start=new Date(`${final}T00:00:00Z`);start.setUTCDate(start.getUTCDate()-6);const o={startDate:start.toISOString().slice(0,10),endDate:final,finalDataCutoff:final,dataset:'search_console',maxDays:31,maxRows:500000};for(let i=0;i<argv.length;i++){const a=argv[i],v=argv[++i];if(a==='--start')o.startDate=v;else if(a==='--end')o.endDate=v;else if(a==='--dataset')o.dataset=v;else if(a==='--max-days')o.maxDays=Number(v);else if(a==='--max-rows')o.maxRows=Number(v);else throw new Error(`Unknown argument: ${a}`)}safe(o.dataset);assertDate(o.startDate);assertDate(o.endDate);const days=datesBetween(o.startDate,o.endDate).length;if(o.startDate<HISTORY_START)throw new Error(`start precedes governed history (${HISTORY_START})`);if(o.endDate>final)throw new Error(`end exceeds latest final-data candidate (${final})`);if(days>o.maxDays)throw new Error(`date range exceeds bounded maximum of ${o.maxDays} days`);if(!Number.isInteger(o.maxRows)||o.maxRows<1||o.maxRows>1000000)throw new Error('invalid maxRows');return o}
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
 export async function retry(fn,attempts=5){for(let n=0;;n++)try{return await fn()}catch(e){const code=Number(e?.code??e?.response?.status);if(n===attempts-1||![429,500,502,503,504].includes(code)){const error=new Error(redactSecrets(e?.message||e),{cause:e});error.name=e?.name||'Error';throw error}await sleep(250*2**n)}}
