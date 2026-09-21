@@ -1,7 +1,17 @@
 import { MAX_RETRIEVAL_LIMIT } from './knowledge.js';
 import { redactError } from './ui-security.js';
 
-const clean = rows => rows.map(row => JSON.parse(JSON.stringify(row)));
+function normalizeValue(value) {
+  if (value == null) return value;
+  // BigQuery DATE values are returned as BigQueryDate instances whose JSON shape
+  // is { value: "YYYY-MM-DD" }.  Keep the service boundary independent of the
+  // client library representation without changing arbitrary JSON objects.
+  if (value?.constructor?.name === 'BigQueryDate' && typeof value.value === 'string') return value.value;
+  if (Array.isArray(value)) return value.map(normalizeValue);
+  if (typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, child]) => [key, normalizeValue(child)]));
+  return value;
+}
+export const normalizeKnowledgeRows = rows => rows.map(row => normalizeValue(row));
 const present = value => value !== null && value !== undefined;
 const nonEmptyText = value => present(value) && String(value).trim() !== '';
 const nonEmptyArray = value => Array.isArray(value) && value.length > 0;
@@ -25,7 +35,7 @@ export function createKnowledgeService({ bigquery, project, dataset = 'oracle_kn
     const diagnostic = { operation, active_filter_names: context.activeFilters || [], parameter_names: Object.keys(params), parameter_types: types };
     try {
       const [rows] = await bigquery.query({ query: sql, params, types, labels: { component: 'oracle_knowledge', operation } });
-      return clean(rows);
+      return normalizeKnowledgeRows(rows);
     } catch (error) {
       onDiagnostic({ ...diagnostic, phase: 'error', ...diagnosticError(error) });
       throw error;
@@ -49,12 +59,13 @@ export function createKnowledgeService({ bigquery, project, dataset = 'oracle_kn
       types.start_date = 'DATE'; types.end_date = 'DATE';
     }
     params.limit = resultLimit; types.limit = 'INT64'; activeFilters.push('limit');
+    const temporalOrder = nonEmptyText(f.start_date) ? 'CASE WHEN effective_from IS NOT NULL OR effective_to IS NOT NULL THEN 0 ELSE 1 END,' : '';
     const rows = await query('search_knowledge', `SELECT * FROM (
-      SELECT 'fact' kind, knowledge_id id, subject title, statement content, effective_from, effective_to, status, tags, source_type, source_reference, recorded_at FROM ${table('facts')}
-      UNION ALL SELECT 'event', event_id, title, description, start_date, end_date, status, tags, source_type, source_reference, recorded_at FROM ${table('events')}
-      UNION ALL SELECT 'definition', definition_id, term, definition, effective_from, effective_to, status, tags, source_type, source_reference, recorded_at FROM ${table('definitions')})
+      SELECT 'fact' kind, knowledge_id id, subject title, statement content, effective_from, effective_to, CAST(NULL AS STRING) date_precision, status, tags, source_type, source_reference, recorded_at FROM ${table('facts')}
+      UNION ALL SELECT 'event', event_id, title, description, start_date, end_date, date_precision, status, tags, source_type, source_reference, recorded_at FROM ${table('events')}
+      UNION ALL SELECT 'definition', definition_id, term, definition, effective_from, effective_to, CAST(NULL AS STRING) date_precision, status, tags, source_type, source_reference, recorded_at FROM ${table('definitions')})
       WHERE ${predicates.join(' AND ')}
-      ORDER BY CASE kind WHEN 'definition' THEN 0 ELSE 1 END, CASE status WHEN 'confirmed' THEN 0 WHEN 'working' THEN 1 ELSE 2 END, recorded_at DESC LIMIT @limit`, params, types, { activeFilters });
+      ORDER BY ${temporalOrder} CASE kind WHEN 'definition' THEN 0 ELSE 1 END, CASE status WHEN 'confirmed' THEN 0 WHEN 'working' THEN 1 ELSE 2 END, recorded_at DESC LIMIT @limit`, params, types, { activeFilters });
     return { items: rows, returned_count: rows.length, limit: resultLimit };
   }
   async function getBusinessContext({ start_date, end_date, topics = [] }) {
