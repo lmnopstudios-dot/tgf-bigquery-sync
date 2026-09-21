@@ -12,7 +12,7 @@ No deterministic order-level link to `finance.sales_master` is asserted. Canonic
 
 ## Tools and supported filters
 
-`search_orders` supports inclusive start/end date, platform (`woo`/`shopify`), channel (`online`/`pos`), exact order number/name, exact source order ID, exact status, currency, minimum/maximum source order total, directly observed shipping country, exact product ID, controlled product-title substring, exact SKU, exact location, refund status (`any`, `none`, `partial`, `full`), and safe internal customer ID. Results default to 20, have a hard maximum of 100, and sort by date descending then platform and ID. A window count reports all matches while only the bounded sample is returned.
+`search_orders` supports inclusive start/end date, platform (`woo`/`shopify`), channel (`online`/`pos`), exact order number/name, exact source order ID, exact status, currency, minimum/maximum source order total, directly observed shipping country, exact product ID, controlled product-title substring, exact SKU, exact location, refund status (`any`, `none`, `partial`, `full`), and safe internal customer ID. Human order-number input accepts deterministic `#123`, `123`, `order #123`, and `order 123` forms and compares only the exact bare/prefixed values; it never treats that value as a source order ID or performs fuzzy matching. Original source-native numbers are returned unchanged. Results default to 20, have a hard maximum of 100, and sort by date descending then platform and ID. A window count reports all matches while only the bounded sample is returned. A number shared by Woo and Shopify produces separate platform-qualified candidates.
 
 `get_order_details` and `get_order_line_items` require an exact `{source_platform, source_order_id}` identity. Line items are capped at 100. All SQL is read-only, parameterized, explicitly projected, and never exposes raw JSON.
 
@@ -28,4 +28,4 @@ Money fields are named `source_order_total`, `source_discount_total`, and `sourc
 
 ## Validation
 
-Run `npm run validate:orders` on Render. It checks source identity uniqueness, Matrixify classification counts, line linkage, direct-country coverage, PII/projection safety, read-only SQL, money labels, parameterization, and bounded limits.
+Run `npm run validate:orders` on Render. It checks source identity uniqueness, Matrixify classification counts, line linkage, direct-country coverage, PII/projection safety, read-only SQL, money labels, parameterization, bounded limits, and a dynamically sampled prefixed Woo number through both prefixed and bare lookup forms while separately verifying its source ID.

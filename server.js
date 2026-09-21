@@ -7,7 +7,7 @@ import path from 'path';
 import OpenAI from 'openai';
 import { syncGa4, parseArgs as parseGa4SyncArgs } from './ga4/sync.js';
 import { createEcommerceManagementReportService } from './oracle/ecommerce-management-report.js';
-import { createOrderQueryService, ORDER_TOOL_DEFINITIONS } from './oracle/order-query.js';
+import { createOrderQueryService, executeOrderToolCall, ORDER_TOOL_DEFINITIONS } from './oracle/order-query.js';
 import {
   AcquisitionValidationError,
   syncShopifyAcquisition
@@ -8845,6 +8845,7 @@ Important rules:
 - Gift card issuance data is incomplete for historical WooCommerce. Mention this limitation when relevant.
 - BigQuery is the source of truth for historical financial reporting.
 - Use search_orders for bounded transaction-level searches, examples underlying an aggregate, order numbers, products/SKUs, refunds, direct shipping country, Shopify Online and POS evidence. Use get_order_details or get_order_line_items only with the exact source_platform + source_order_id identity returned by search; never guess across Woo and Shopify ID namespaces. Use get_order_history_context when explicitly asked whether an exact Shopify identity is native or Matrixify-imported.
+- For a human-facing order reference such as "#33653", "33653", "order #33653", or "order 33653", call search_orders with order_number populated and source_order_id null. Do not strip it into or guess a source_order_id. The tool performs governed exact normalization and can return platform-qualified candidates when namespaces collide.
 - Metorik is the historical Woo order authority. Shopify is current commerce evidence. Matrixify contains only a limited migrated Woo slice and search_orders excludes those Shopify representations to prevent a second sale. If asked whether an excluded Shopify representation is migrated, explain this classification rather than counting it as Shopify-native.
 - Historical Woo shipping country is incomplete. Country searches use only directly observed shipping_country, never billing country or an inference. Always disclose the geography_warning returned by search_orders.
 - Order-tool money is explicitly source-native operational evidence (source_order_total, source_discount_total, source_refund_total), not canonical accounting truth. Continue to use finance tools for totals and trends; never call source-native order value canonical sales.
@@ -8931,23 +8932,16 @@ Important rules:
           try {
             const args = JSON.parse(item.arguments || '{}');
 
-            if (item.name === 'search_orders') {
+            const orderCall = await executeOrderToolCall(
+              orderQueryService,
+              item.name,
+              args,
+              diagnostic => console.info('Agent order tool call:', diagnostic)
+            );
 
-  result = await orderQueryService.searchOrders(args);
-
-} else if (item.name === 'get_order_details') {
-
-  result = await orderQueryService.getOrderDetails(args);
-
-} else if (item.name === 'get_order_line_items') {
-
-  result = await orderQueryService.getOrderLineItems(args);
-
-} else if (item.name === 'get_order_history_context') {
-
-  result = await orderQueryService.getOrderHistoryContext(args);
-
-} else if (item.name === 'get_ecommerce_management_report') {
+            if (orderCall.handled) {
+              result = orderCall.result;
+            } else if (item.name === 'get_ecommerce_management_report') {
 
   result = await getEcommerceManagementReport(args);
 

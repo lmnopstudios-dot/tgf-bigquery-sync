@@ -33,6 +33,19 @@ function cleanRows(rows) {
   return rows.map(row => JSON.parse(JSON.stringify(row)));
 }
 
+// Human-facing order numbers are not source identities.  Normalize only the
+// bounded wrappers users commonly add; do not remove arbitrary punctuation or
+// perform substring/fuzzy matching.
+export function normalizeOrderNumber(value) {
+  if (value === null || value === undefined) return null;
+  const unwrapped = value.trim().replace(/^order\s+/i, '').trim();
+  const bare = unwrapped.startsWith('#') ? unwrapped.slice(1).trim() : unwrapped;
+  if (!bare || !/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(bare)) {
+    throw new Error('order_number must be an exact number/name optionally prefixed by "order" and/or "#"');
+  }
+  return { supplied: value, bare, prefixed: `#${bare}` };
+}
+
 export function validateSearchFilters(input = {}) {
   const filters = {
     start_date: null, end_date: null, source_platform: null, channel: null,
@@ -78,6 +91,7 @@ export function validateSearchFilters(input = {}) {
   if (!Number.isInteger(filters.limit) || filters.limit < 1 || filters.limit > ORDER_SEARCH_MAX_LIMIT) {
     throw new Error(`limit must be an integer between 1 and ${ORDER_SEARCH_MAX_LIMIT}`);
   }
+  if (filters.order_number !== null) normalizeOrderNumber(filters.order_number);
   return filters;
 }
 
@@ -88,7 +102,10 @@ function searchSql(project, filters) {
     filters.end_date && 'order_date <= DATE(@end_date)',
     filters.source_platform && 'source_platform = @source_platform',
     filters.channel && 'channel = @channel',
-    filters.order_number && '(LOWER(source_order_number) = LOWER(@order_number) OR LOWER(source_order_name) = LOWER(@order_number))',
+    filters.order_number && `(
+      LOWER(source_order_number) IN (LOWER(@order_number_bare), LOWER(@order_number_prefixed))
+      OR LOWER(source_order_name) IN (LOWER(@order_number_bare), LOWER(@order_number_prefixed))
+    )`,
     filters.source_order_id && 'source_order_id = @source_order_id',
     filters.status && 'LOWER(status) = LOWER(@status)',
     filters.currency && 'currency = UPPER(@currency)',
@@ -180,14 +197,26 @@ export function createOrderQueryService({ bigquery, project }) {
   if (!bigquery?.query || !project) throw new Error('bigquery and project are required');
   async function searchOrders(input) {
     const filters = validateSearchFilters(input);
-    const params = Object.fromEntries(Object.entries({ ...filters, matrixify_app_id: MATRIXIFY_APP_ID })
-      .filter(([, value]) => value !== null));
+    const normalizedNumber = normalizeOrderNumber(filters.order_number);
+    const { order_number: _orderNumber, ...queryFilters } = filters;
+    const params = Object.fromEntries(Object.entries({
+      ...queryFilters,
+      order_number_bare: normalizedNumber?.bare,
+      order_number_prefixed: normalizedNumber?.prefixed,
+      matrixify_app_id: MATRIXIFY_APP_ID
+    })
+      .filter(([, value]) => value !== null && value !== undefined));
     const [rows] = await bigquery.query({ query: searchSql(project, filters), params });
     return {
       orders: cleanRows(rows),
       matching_order_count: Number(rows[0]?.matching_order_count || 0),
       returned_order_count: rows.length,
       limit: filters.limit,
+      order_number_lookup: normalizedNumber ? {
+        match: 'exact_normalized',
+        bare: normalizedNumber.bare,
+        prefixed: normalizedNumber.prefixed
+      } : null,
       monetary_semantics: 'Filters and returned values use source_order_total in source currency; canonical finance remains authoritative for business reporting.',
       geography_warning: filters.shipping_country
         ? 'Country matches use directly observed shipping-country evidence only. Historical Woo shipping geography is incomplete, so this is not complete country coverage.'
@@ -255,6 +284,39 @@ export function createOrderQueryService({ bigquery, project }) {
   return { searchOrders, getOrderDetails, getOrderLineItems, getOrderHistoryContext };
 }
 
+export function safeOrderToolCallDiagnostic(name, args = {}) {
+  const diagnostic = { tool: name };
+  if (name === 'search_orders') {
+    diagnostic.populated_filters = Object.keys(args).filter(key => args[key] !== null && args[key] !== undefined);
+    diagnostic.order_number = args.order_number ?? null;
+    diagnostic.source_order_id = args.source_order_id ?? null;
+    diagnostic.source_platform = args.source_platform ?? null;
+    if (args.order_number !== null && args.order_number !== undefined) {
+      const normalized = normalizeOrderNumber(args.order_number);
+      diagnostic.order_number_normalized = { bare: normalized.bare, prefixed: normalized.prefixed };
+    }
+  } else if (['get_order_details', 'get_order_line_items', 'get_order_history_context'].includes(name)) {
+    diagnostic.identity = args.identity ? {
+      source_platform: args.identity.source_platform ?? null,
+      source_order_id: args.identity.source_order_id ?? null
+    } : null;
+  }
+  return diagnostic;
+}
+
+export async function executeOrderToolCall(service, name, args, onDiagnostic = () => {}) {
+  const methods = {
+    search_orders: 'searchOrders',
+    get_order_details: 'getOrderDetails',
+    get_order_line_items: 'getOrderLineItems',
+    get_order_history_context: 'getOrderHistoryContext'
+  };
+  const method = methods[name];
+  if (!method) return { handled: false, result: null };
+  onDiagnostic(safeOrderToolCallDiagnostic(name, args));
+  return { handled: true, result: await service[method](args) };
+}
+
 export const ORDER_TOOL_DEFINITIONS = [
   {
     type: 'function', name: 'search_orders', strict: true,
@@ -265,7 +327,8 @@ export const ORDER_TOOL_DEFINITIONS = [
         start_date: { type: ['string', 'null'] }, end_date: { type: ['string', 'null'] },
         source_platform: { type: ['string', 'null'], enum: ['woo', 'shopify', null] },
         channel: { type: ['string', 'null'], enum: ['online', 'pos', null] },
-        order_number: { type: ['string', 'null'] }, source_order_id: { type: ['string', 'null'] },
+        order_number: { type: ['string', 'null'], description: 'Human-facing order number/name. Put values such as #33653 or 33653 here; never reinterpret them as a source order ID.' },
+        source_order_id: { type: ['string', 'null'], description: 'Internal source identity only (for example Woo Metorik order_id 169587), not the human-facing order number.' },
         status: { type: ['string', 'null'] }, currency: { type: ['string', 'null'] },
         minimum_order_value: { type: ['number', 'null'], minimum: 0 }, maximum_order_value: { type: ['number', 'null'], minimum: 0 },
         shipping_country: { type: ['string', 'null'] }, product_id: { type: ['string', 'null'] },
