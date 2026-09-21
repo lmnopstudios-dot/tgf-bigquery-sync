@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import ExcelJS from 'exceljs';
 import { reportPeriod } from '../oracle/report-period.js';
 import { reportCsv, reportPdf, reportWorkbook } from '../oracle/report-export.js';
-import { createEcommerceReportV2 } from '../oracle/ecommerce-report-v2.js';
+import { createEcommerceReportV2, periodAvailability } from '../oracle/ecommerce-report-v2.js';
+import { reportOracleContext } from '../public/oracle/report-context.js';
 
 test('report periods default to complete days and validate bounded custom comparisons', () => {
   const period = reportPeriod({}, new Date('2026-09-21T18:00:00Z'));
@@ -27,6 +28,37 @@ test('missing sections are explicit unavailable states rather than zeroes', asyn
   const service=createEcommerceReportV2({bigquery:{},project:'test',knowledgeService:{}});
   const products=await service('products',{start_date:'2026-01-01',end_date:'2026-01-02'});
   assert.equal(products.status,'unavailable'); assert.deepEqual(products.rows,[]); assert.match(products.limitations[0],/cross-source product identity/);
+});
+
+test('business context retrieves current and comparison independently with bounded nearby look-behind', async () => {
+  const calls=[]; const knowledgeService={getBusinessContext:async input=>{calls.push(input);return {items:[{id:`event-${calls.length}`,status:'confirmed',effective_from:input.start_date,effective_to:input.start_date}]}}};
+  const service=createEcommerceReportV2({bigquery:{},project:'test',knowledgeService});
+  const result=await service('context',{start_date:'2026-04-01',end_date:'2026-04-30',comparison:'custom',comparison_start:'2025-04-01',comparison_end:'2025-04-30'});
+  assert.deepEqual(calls,[{start_date:'2026-03-18',end_date:'2026-04-30',topics:[]},{start_date:'2025-03-18',end_date:'2025-04-30',topics:[]}]);
+  assert.equal(result.context.current[0].temporal_relation,'nearby_before_period');
+  assert.equal(result.context.comparison[0].temporal_relation,'nearby_before_period');
+  assert.notEqual(result.context.current,result.context.comparison);
+});
+
+test('period availability preserves asymmetric and semantic-mismatch states',()=>{
+  assert.equal(periodAvailability([{}],[]).comparability,'comparison_unavailable');
+  assert.equal(periodAvailability([{}],[{}]).comparability,'comparable');
+  assert.equal(periodAvailability([{}],[{}],{semanticMismatch:true}).comparability,'not_directly_comparable');
+  assert.equal(periodAvailability([],[]).current.status,'unavailable');
+});
+
+test('Search Console and GA4 availability are assessed independently for all combinations',async()=>{
+  for(const section of ['organic','acquisition']) for(const [current,comparison,expected] of [[true,false,'comparison_unavailable'],[true,true,'comparable'],[false,false,'comparison_unavailable']]){
+    let call=0; const bigquery={query:async()=>[[++call===1?(current?{date:'2026-01-01'}:null):(comparison?{date:'2025-01-01'}:null)].filter(Boolean)]};
+    const result=await createEcommerceReportV2({bigquery,project:'test',knowledgeService:{}})(section,{start_date:'2026-01-01',end_date:'2026-01-31'});
+    const availability=result.evidence_availability[section==='organic'?'search_console':'ga4']; assert.equal(availability.comparability,expected); assert.equal(availability.current.available,current); assert.equal(availability.comparison.available,comparison);
+    if(current&&!comparison)assert.doesNotMatch(result.limitations.join(' '),/no evidence/i);
+  }
+});
+
+test('Oracle report handoff makes both periods and selection contract explicit',()=>{
+  const context=reportOracleContext({period:{start_date:'2025-11-01',end_date:'2025-11-30'},comparison:{mode:'custom',start_date:'2024-11-01',end_date:'2024-11-30'},currencies:['GBP','USD'],kpis:[{metric:'net_gross'}]},'sales');
+  assert.deepEqual(context.current_period,{start_date:'2025-11-01',end_date:'2025-11-30'}); assert.equal(context.comparison_period.start_date,'2024-11-01'); assert.equal(context.comparison_type,'custom'); assert.deepEqual(context.selected_currencies,['GBP','USD']); assert.deepEqual(context.relevant_metric_identifiers,['net_gross']);
 });
 
 test('PDF, XLSX and CSV exports are real bounded formats with numeric cells', async () => {
