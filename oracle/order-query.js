@@ -6,6 +6,11 @@ export const MATRIXIFY_APP_ID = 'gid://shopify/App/1758145';
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 const SOURCES = ['woo', 'shopify'];
 const CHANNELS = ['online', 'pos'];
+const SEARCH_FILTER_FIELDS = [
+  'start_date', 'end_date', 'source_platform', 'channel', 'order_number', 'source_order_id',
+  'status', 'currency', 'minimum_order_value', 'maximum_order_value', 'shipping_country',
+  'product_id', 'product_title', 'sku', 'location', 'refund_status', 'customer_id'
+];
 
 function date(value, field) {
   if (value === null) return;
@@ -47,14 +52,17 @@ export function normalizeOrderNumber(value) {
 }
 
 export function validateSearchFilters(input = {}) {
-  const filters = {
+  const defaults = {
     start_date: null, end_date: null, source_platform: null, channel: null,
     order_number: null, source_order_id: null, status: null, currency: null,
     minimum_order_value: null, maximum_order_value: null, shipping_country: null,
     product_id: null, product_title: null, sku: null, location: null,
     refund_status: null, customer_id: null, limit: ORDER_SEARCH_DEFAULT_LIMIT,
-    ...input
   };
+  // Treat undefined exactly like an omitted optional property. Strict tool calls
+  // normally use null, but direct callers should have identical semantics.
+  const filters = { ...defaults, ...Object.fromEntries(Object.entries(input)
+    .filter(([, value]) => value !== undefined)) };
   date(filters.start_date, 'start_date');
   date(filters.end_date, 'end_date');
   if (filters.start_date && filters.end_date && filters.start_date > filters.end_date) {
@@ -76,8 +84,8 @@ export function validateSearchFilters(input = {}) {
   if (filters.shipping_country !== null && !/^[A-Za-z]{2}$/.test(filters.shipping_country)) {
     throw new Error('shipping_country must be a two-letter country code');
   }
-  if (![null, 'any', 'none', 'partial', 'full'].includes(filters.refund_status)) {
-    throw new Error('refund_status must be null, any, none, partial, or full');
+  if (![null, 'any', 'refunded', 'none', 'partial', 'full'].includes(filters.refund_status)) {
+    throw new Error('refund_status must be null, any, refunded, none, partial, or full');
   }
   for (const field of ['minimum_order_value', 'maximum_order_value']) {
     if (filters[field] !== null && (!Number.isFinite(filters[field]) || filters[field] < 0)) {
@@ -93,6 +101,22 @@ export function validateSearchFilters(input = {}) {
   }
   if (filters.order_number !== null) normalizeOrderNumber(filters.order_number);
   return filters;
+}
+
+function isAppliedSearchFilter(field, value) {
+  if (value === null || value === undefined) return false;
+  if (field === 'refund_status' && value === 'any') return false;
+  return true;
+}
+
+export function searchFilterSemantics(input = {}) {
+  const filters = validateSearchFilters(input);
+  return {
+    filters,
+    supplied: SEARCH_FILTER_FIELDS.filter(field =>
+      Object.hasOwn(input, field) && input[field] !== null && input[field] !== undefined),
+    applied: SEARCH_FILTER_FIELDS.filter(field => isAppliedSearchFilter(field, filters[field]))
+  };
 }
 
 function searchSql(project, filters) {
@@ -113,7 +137,7 @@ function searchSql(project, filters) {
     filters.maximum_order_value !== null && 'source_order_total <= @maximum_order_value',
     filters.shipping_country && 'shipping_country = UPPER(@shipping_country)',
     filters.location && 'LOWER(COALESCE(location, \'\')) = LOWER(@location)',
-    filters.refund_status === 'any' && 'source_refund_total > 0',
+    filters.refund_status === 'refunded' && 'source_refund_total > 0',
     filters.refund_status === 'none' && 'source_refund_total = 0',
     filters.refund_status === 'partial' && 'source_refund_total > 0 AND source_refund_total < source_order_total',
     filters.refund_status === 'full' && 'source_refund_total >= source_order_total',
@@ -173,7 +197,9 @@ function searchSql(project, filters) {
       source_order_total, source_discount_total, source_refund_total,
       payment_method, shipping_method,
       shipping_country, shipping_country_provenance, is_migrated_order,
-      migration_source, COUNT(*) OVER() matching_order_count
+      migration_source, COUNT(*) OVER() matching_order_count,
+      COUNTIF(source_platform = 'woo') OVER() woo_result_count,
+      COUNTIF(source_platform = 'shopify') OVER() shopify_result_count
     FROM matched
     ORDER BY order_date DESC, source_platform, source_order_id
     LIMIT @limit`;
@@ -196,22 +222,37 @@ function lineSql(project, source) {
 export function createOrderQueryService({ bigquery, project }) {
   if (!bigquery?.query || !project) throw new Error('bigquery and project are required');
   async function searchOrders(input) {
-    const filters = validateSearchFilters(input);
+    const semantics = searchFilterSemantics(input);
+    const { filters } = semantics;
     const normalizedNumber = normalizeOrderNumber(filters.order_number);
     const { order_number: _orderNumber, ...queryFilters } = filters;
+    const activeQueryFilters = Object.fromEntries(Object.entries(queryFilters)
+      .filter(([field, value]) => field === 'limit' || isAppliedSearchFilter(field, value)));
     const params = Object.fromEntries(Object.entries({
-      ...queryFilters,
+      ...activeQueryFilters,
       order_number_bare: normalizedNumber?.bare,
       order_number_prefixed: normalizedNumber?.prefixed,
       matrixify_app_id: MATRIXIFY_APP_ID
     })
       .filter(([, value]) => value !== null && value !== undefined));
     const [rows] = await bigquery.query({ query: searchSql(project, filters), params });
+    const wooResultCount = Number(rows[0]?.woo_result_count || 0);
+    const shopifyResultCount = Number(rows[0]?.shopify_result_count || 0);
+    const orders = cleanRows(rows).map(({ woo_result_count: _woo, shopify_result_count: _shopify, ...row }) => row);
     return {
-      orders: cleanRows(rows),
+      orders,
       matching_order_count: Number(rows[0]?.matching_order_count || 0),
       returned_order_count: rows.length,
       limit: filters.limit,
+      execution_diagnostic: {
+        filters_supplied: semantics.supplied,
+        filters_applied: semantics.applied,
+        parameter_names: Object.keys(params).sort(),
+        source_branches_queried: filters.source_platform ? [filters.source_platform] : [...SOURCES],
+        woo_result_count: wooResultCount,
+        shopify_result_count: shopifyResultCount,
+        final_result_count: rows.length
+      },
       order_number_lookup: normalizedNumber ? {
         match: 'exact_normalized',
         bare: normalizedNumber.bare,
@@ -287,7 +328,12 @@ export function createOrderQueryService({ bigquery, project }) {
 export function safeOrderToolCallDiagnostic(name, args = {}) {
   const diagnostic = { tool: name };
   if (name === 'search_orders') {
-    diagnostic.populated_filters = Object.keys(args).filter(key => args[key] !== null && args[key] !== undefined);
+    const semantics = searchFilterSemantics(args);
+    diagnostic.filters_supplied = semantics.supplied;
+    diagnostic.filters_applied = semantics.applied;
+    // Kept during the diagnostic transition for existing log consumers.
+    diagnostic.populated_filters = Object.keys(args)
+      .filter(key => args[key] !== null && args[key] !== undefined);
     diagnostic.order_number = args.order_number ?? null;
     diagnostic.source_order_id = args.source_order_id ?? null;
     diagnostic.source_platform = args.source_platform ?? null;
@@ -314,7 +360,11 @@ export async function executeOrderToolCall(service, name, args, onDiagnostic = (
   const method = methods[name];
   if (!method) return { handled: false, result: null };
   onDiagnostic(safeOrderToolCallDiagnostic(name, args));
-  return { handled: true, result: await service[method](args) };
+  const result = await service[method](args);
+  if (name === 'search_orders') {
+    onDiagnostic({ tool: name, phase: 'result', ...result.execution_diagnostic });
+  }
+  return { handled: true, result };
 }
 
 export const ORDER_TOOL_DEFINITIONS = [
@@ -334,7 +384,7 @@ export const ORDER_TOOL_DEFINITIONS = [
         shipping_country: { type: ['string', 'null'] }, product_id: { type: ['string', 'null'] },
         product_title: { type: ['string', 'null'] }, sku: { type: ['string', 'null'] },
         location: { type: ['string', 'null'] },
-        refund_status: { type: ['string', 'null'], enum: ['any', 'none', 'partial', 'full', null] },
+        refund_status: { type: ['string', 'null'], enum: ['any', 'refunded', 'none', 'partial', 'full', null], description: 'Refund filter. Use any or null when no refund constraint was requested; refunded means any positive refund, while any adds no SQL predicate.' },
         customer_id: { type: ['string', 'null'] }, limit: { type: 'integer', minimum: 1, maximum: 100 }
       },
       required: ['start_date', 'end_date', 'source_platform', 'channel', 'order_number', 'source_order_id',
