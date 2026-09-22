@@ -94,3 +94,18 @@ test('all validator jobs carry stable check and operation labels', async () => {
   assert.deepEqual(calls.map(call => call.labels), Object.entries(VALIDATION_OPERATIONS).map(([check, operation]) => ({ component: 'report_v2_validator', check, operation })));
   assert.ok(calls.every(call => call.useLegacySql === false && call.maximumBytesBilled === '10000000000'));
 });
+
+test('product validator contrasts old/new models and emits pairwise, option, Square, and unresolved contracts', () => {
+  const queries = validationQueries('fixture-project');
+  assert.match(queries.product_identity_previous, /distinct_source_titles/);
+  assert.match(queries.product_identity, /stable_source_products/);
+  assert.match(queries.product_identity, /resolved_sales_percentage/);
+  assert.match(queries.woo_product_audit, /persisted_option_keys/);
+  assert.match(queries.woo_product_audit, /bounded_title_patterns/);
+  assert.match(queries.square_product_audit, /explicit_item_ids/);
+  assert.match(queries.pairwise_product_coverage, /woo:ww/);
+  assert.match(queries.pairwise_product_coverage, /square:square/);
+  assert.match(queries.pairwise_product_coverage, /sales_coverage/);
+  assert.match(queries.unresolved_products, /mapping_reason/);
+  assert.match(queries.unresolved_products, /LIMIT 100/);
+});
