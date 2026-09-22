@@ -30,3 +30,10 @@ test('Oracle layout makes the thread the vertical scroller and lets messages and
   assert.doesNotMatch(css, /\.message\{[^}]*(?:max-height|overflow-y:auto)/);
   assert.match(css, /@media\(max-width:700px\)/);
 });
+
+
+test('report controls grow naturally without a nested vertical scroller',async()=>{
+  const css = await readFile(new URL('../public/oracle/app.css', import.meta.url), 'utf8');
+  assert.match(css,/\.report-controls\{[^}]*flex:0 0 auto[^}]*height:auto[^}]*max-height:none[^}]*overflow:visible/);
+  assert.doesNotMatch(css,/\.report-controls\{[^}]*overflow-y:auto/);
+});

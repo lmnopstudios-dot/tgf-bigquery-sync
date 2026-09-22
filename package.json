@@ -28,7 +28,8 @@
     "validate:knowledge-production": "node diagnostics/knowledge-production-validation.js",
     "validate:oracle-proposals-production": "node diagnostics/oracle-proposals-production.js",
     "import:metorik-geography": "node metorik/geography.js",
-    "validate:metorik-geography": "node diagnostics/metorik-geography-validation.js"
+    "validate:metorik-geography": "node diagnostics/metorik-geography-validation.js",
+    "validate:report-v2-production": "node diagnostics/report-v2-production-validation.js"
   },
   "engines": {
     "node": ">=20"
