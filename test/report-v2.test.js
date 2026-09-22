@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import ExcelJS from 'exceljs';
 import { reportPeriod } from '../oracle/report-period.js';
 import { reportCsv, reportPdf, reportWorkbook } from '../oracle/report-export.js';
-import { createEcommerceReportV2, periodAvailability } from '../oracle/ecommerce-report-v2.js';
+import { createEcommerceReportV2, periodAvailability, productRef } from '../oracle/ecommerce-report-v2.js';
+import { validationQueries, validate as validateProduction } from '../diagnostics/report-v2-production-validation.js';
 import { reportOracleContext } from '../public/oracle/report-context.js';
 
 test('report periods default to complete days and validate bounded custom comparisons', () => {
@@ -24,10 +25,23 @@ test('report finance query is parameterized, bounded, currency-separated and par
   assert.match(result.limitations.join(' '), /never converted/);
 });
 
-test('missing sections are explicit unavailable states rather than zeroes', async () => {
-  const service=createEcommerceReportV2({bigquery:{},project:'test',knowledgeService:{}});
+test('product section uses persisted source evidence rather than a placeholder', async () => {
+  const bigquery={query:async()=>[[{product_ref:'sku:ABC',mapping_method:'exact_normalized_sku',source_platform:'shopify',units:2}]]};
+  const service=createEcommerceReportV2({bigquery,project:'test',knowledgeService:{}});
   const products=await service('products',{start_date:'2026-01-01',end_date:'2026-01-02'});
-  assert.equal(products.status,'unavailable'); assert.deepEqual(products.rows,[]); assert.match(products.limitations[0],/cross-source product identity/);
+  assert.equal(products.status,'available'); assert.equal(products.rows[0].product_ref,'sku:ABC'); assert.match(products.limitations.join(' '),/titles are never matched/);
+});
+
+test('deterministic product identity maps exact normalized SKU and leaves empty SKU unresolved',()=>{
+  assert.deepEqual(productRef({sku:' ab-1 ',source_platform:'woo',source_product_id:'1'}),{product_ref:'sku:AB-1',mapping_method:'exact_normalized_sku',resolved:true});
+  assert.equal(productRef({sku:'',source_platform:'square',source_product_id:'p1',source_variant_id:'v1'}).resolved,false);
+});
+
+test('production validator is aggregate-only and covers required evidence',async()=>{
+  const queries=validationQueries('test'); assert.deepEqual(Object.keys(queries),['finance','shopify_currency','search_console','customers','products','geography']);
+  assert.match(queries.shopify_currency,/presentment_currency/); assert.match(queries.shopify_currency,/bf_window/); assert.match(queries.products,/square_data\.retail_order_items/); assert.match(queries.products,/retail_location_id/);
+  const calls=[];const result=await validateProduction({project:'test',bigquery:{query:async o=>{calls.push(o);return [[]]}}});
+  assert.equal(result.contract.read_only,true);assert.equal(calls.length,6);assert.ok(calls.every(x=>/^\s*(SELECT|WITH)/.test(x.query)));
 });
 
 test('business context retrieves current and comparison independently with bounded nearby look-behind', async () => {

@@ -4,7 +4,8 @@ export const PROPERTIES = Object.freeze([
   { source_property: DOMAIN_PROPERTY, property_scope: 'domain', property_hostname: 'thegreatfroglondon.com' },
   { source_property: WWW_PROPERTY, property_scope: 'url_prefix', property_hostname: 'www.thegreatfroglondon.com' }
 ]);
-export const HISTORY_START = '2025-05-06';
+// Bounded URL-prefix fallback for the required prior-year comparison.
+export const HISTORY_START = '2024-11-01';
 const ISO = /^\d{4}-\d{2}-\d{2}$/;
 export function assertDate(value, name='date') { if (!ISO.test(value||'') || new Date(`${value}T00:00:00Z`).toISOString().slice(0,10)!==value) throw new Error(`${name} must be a valid YYYY-MM-DD date`); return value; }
 export function datesBetween(start,end) { assertDate(start); assertDate(end); const out=[]; for(let d=new Date(`${start}T00:00:00Z`);d<=new Date(`${end}T00:00:00Z`);d.setUTCDate(d.getUTCDate()+1)) out.push(d.toISOString().slice(0,10)); return out; }
