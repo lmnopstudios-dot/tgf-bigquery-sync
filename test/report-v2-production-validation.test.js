@@ -25,6 +25,10 @@ test('SQL-shape checks reject common projection, grouping, and union defects', (
     ''
   ];
   for (const query of malformed) assert.throws(() => assertValidatorSqlShape('fixture', query), /Malformed SQL|Empty SQL/);
+  assert.throws(
+    () => assertValidatorSqlShape('product_identity', 'WITH products AS (SELECT line_title AS base_title, NORMALIZE(base_title,NFKC) normalized_base_title) SELECT * FROM products'),
+    /base_title must be materialized before normalization/
+  );
 });
 
 test('validator SQL covers all required evidence and avoids the reserved window alias', () => {
@@ -108,4 +112,23 @@ test('product validator contrasts old/new models and emits pairwise, option, Squ
   assert.match(queries.pairwise_product_coverage, /sales_coverage/);
   assert.match(queries.unresolved_products, /mapping_reason/);
   assert.match(queries.unresolved_products, /LIMIT 100/);
+});
+
+test('governed product SQL materializes base titles at source-product grain before mapping', () => {
+  const queries = validationQueries('fixture-project');
+  for (const name of ['product_identity', 'woo_product_audit', 'pairwise_product_coverage', 'unresolved_products']) {
+    const query = queries[name];
+    assert.match(query, /base AS \(\s*SELECT platform,store,product_id,[\s\S]*?FROM lines GROUP BY 1,2,3\s*\)/);
+    assert.match(query, /product_base_titles AS \(\s*SELECT b\.\*,t\.line_title AS base_title FROM base b LEFT JOIN chosen_title t USING\(platform,store,product_id\)\s*\)/);
+    assert.match(query, /products AS \(\s*SELECT pbt\.\*,LOWER\(TRIM\([\s\S]*?NORMALIZE\(base_title,NFKC\)/);
+    assert.ok(query.indexOf('AS base_title') < query.indexOf('NORMALIZE(base_title,NFKC)'));
+    assert.doesNotMatch(query, /SELECT b\.\*,t\.line_title AS base_title,[^)]*NORMALIZE\(base_title,NFKC\)/);
+  }
+
+  const productIdentity = queries.product_identity;
+  assert.match(productIdentity, /'woo' platform,'ww' store[\s\S]*CAST\(li\.product_id AS STRING\)/);
+  assert.match(productIdentity, /'woo_usd','woo','usd'[\s\S]*CAST\(li\.product_id AS STRING\)/);
+  assert.match(productIdentity, /'shopify','shopify'[\s\S]*li\.product_id,li\.variant_id,COALESCE\(li\.title,li\.name\)/);
+  assert.match(productIdentity, /'square','square'[\s\S]*COALESCE\(JSON_VALUE\([\s\S]*?'\$\.item_id'\),catalog_object_id\)/);
+  assert.doesNotMatch(productIdentity, /transaction_variation_name|variant_title/);
 });

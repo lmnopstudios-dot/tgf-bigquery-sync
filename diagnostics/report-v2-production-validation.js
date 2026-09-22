@@ -47,6 +47,9 @@ const normalTitleSql = value => `LOWER(TRIM(REGEXP_REPLACE(REGEXP_REPLACE(REGEXP
 function governedProductCtes(project) {
   const p = name => `\`${project}.${name}\``;
   const normalize = normalTitleSql('base_title');
+  // These production line tables expose no catalogue product-title column. The
+  // governed fallback is therefore modal nonblank history, then latest, then
+  // lexical, partitioned by the stable source-product identity below.
   return `lines AS (
     SELECT 'woo_ww' source,'woo' platform,'ww' store,'Online' channel,DATE(o.order_created_at) sale_date,CAST(li.product_id AS STRING) product_id,CAST(li.variation_id AS STRING) variant_id,li.name line_title,li.sku,li.quantity units,li.total sales,li.currency,TO_JSON_STRING(li) line_json FROM ${p('metorik_uk.order_line_items')} li JOIN ${p('metorik_uk.orders')} o USING(order_id)
     UNION ALL SELECT 'woo_usd','woo','usd','Online',DATE(o.order_created_at),CAST(li.product_id AS STRING),CAST(li.variation_id AS STRING),li.name,li.sku,li.quantity,li.total,li.currency,TO_JSON_STRING(li) FROM ${p('metorik_us.order_line_items')} li JOIN ${p('metorik_us.orders')} o USING(order_id)
@@ -54,7 +57,11 @@ function governedProductCtes(project) {
     UNION ALL SELECT 'square_pos','square','square','In-store',order_date,COALESCE(JSON_VALUE(SAFE.PARSE_JSON(transaction_line_item_json),'$.item_id'),catalog_object_id),COALESCE(catalog_variation_id,catalog_object_id),transaction_item_name,transaction_sku,quantity,total_amount,currency,transaction_line_item_json FROM ${p('square_data.retail_order_items')}
   ), title_stats AS (SELECT platform,store,product_id,line_title,COUNT(*) title_lines,MAX(sale_date) latest_title_sale FROM lines WHERE NULLIF(TRIM(line_title),'') IS NOT NULL GROUP BY 1,2,3,4), chosen_title AS (SELECT * FROM title_stats QUALIFY ROW_NUMBER() OVER(PARTITION BY platform,store,product_id ORDER BY title_lines DESC,latest_title_sale DESC,line_title)=1), base AS (
     SELECT platform,store,product_id,ARRAY_AGG(NULLIF(UPPER(TRIM(sku)),'') IGNORE NULLS ORDER BY sale_date DESC LIMIT 1)[SAFE_OFFSET(0)] normalized_sku,COUNT(*) line_items,SUM(sales) sales FROM lines GROUP BY 1,2,3
-  ), products AS (SELECT b.*,t.line_title base_title,${normalize} normalized_base_title,CONCAT(b.platform,':',b.store,':',b.product_id) source_product_ref FROM base b LEFT JOIN chosen_title t USING(platform,store,product_id)), source_rows AS (SELECT DISTINCT source,platform,store,product_id FROM lines), source_products AS (SELECT s.*,p.source_product_ref,p.base_title,p.normalized_base_title,p.normalized_sku,p.line_items,p.sales FROM source_rows s JOIN products p USING(platform,store,product_id))`;
+  ), product_base_titles AS (
+    SELECT b.*,t.line_title AS base_title FROM base b LEFT JOIN chosen_title t USING(platform,store,product_id)
+  ), products AS (
+    SELECT pbt.*,${normalize} normalized_base_title,CONCAT(platform,':',store,':',product_id) source_product_ref FROM product_base_titles pbt
+  ), source_rows AS (SELECT DISTINCT source,platform,store,product_id FROM lines), source_products AS (SELECT s.*,p.source_product_ref,p.base_title,p.normalized_base_title,p.normalized_sku,p.line_items,p.sales FROM source_rows s JOIN products p USING(platform,store,product_id))`;
 }
 
 export function productLevelIdentityQuery(project) {
@@ -112,6 +119,14 @@ export function assertValidatorSqlShape(name, query) {
     [/\bUNION\b(?!\s+ALL\s+SELECT\b)/i, 'malformed UNION branch']
   ];
   for (const [pattern, defect] of malformed) if (pattern.test(query)) throw new Error(`Malformed SQL for validator check ${name}: ${defect}`);
+  const governedProductChecks = new Set(['product_identity', 'woo_product_audit', 'pairwise_product_coverage', 'unresolved_products']);
+  if (governedProductChecks.has(name)) {
+    const materializedAt = query.indexOf('product_base_titles AS');
+    const normalizedAt = query.indexOf('NORMALIZE(base_title,NFKC)');
+    if (materializedAt < 0 || normalizedAt < 0 || materializedAt > normalizedAt) {
+      throw new Error(`Malformed SQL for validator check ${name}: base_title must be materialized before normalization`);
+    }
+  }
   return true;
 }
 
