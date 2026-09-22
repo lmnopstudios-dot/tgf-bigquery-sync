@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import ExcelJS from 'exceljs';
 import { reportPeriod } from '../oracle/report-period.js';
 import { reportCsv, reportPdf, reportWorkbook } from '../oracle/report-export.js';
-import { createEcommerceReportV2, periodAvailability, productRef } from '../oracle/ecommerce-report-v2.js';
+import { createEcommerceReportV2, normalizeProductTitle, periodAvailability, productRef } from '../oracle/ecommerce-report-v2.js';
 import { validationQueries, validate as validateProduction } from '../diagnostics/report-v2-production-validation.js';
 import { reportOracleContext } from '../public/oracle/report-context.js';
 
@@ -25,23 +25,41 @@ test('report finance query is parameterized, bounded, currency-separated and par
   assert.match(result.limitations.join(' '), /never converted/);
 });
 
-test('product section uses persisted source evidence rather than a placeholder', async () => {
-  const bigquery={query:async()=>[[{product_ref:'sku:ABC',mapping_method:'exact_normalized_sku',source_platform:'shopify',units:2}]]};
+test('product section uses governed persisted source evidence rather than a placeholder', async () => {
+  const bigquery={query:async()=>[[{product_ref:'title:ring',mapping_method:'exact_unique_normalized_title',mapping_status:'resolved',source_platform:'shopify',units:2}]]};
   const service=createEcommerceReportV2({bigquery,project:'test',knowledgeService:{}});
   const products=await service('products',{start_date:'2026-01-01',end_date:'2026-01-02'});
-  assert.equal(products.status,'available'); assert.equal(products.rows[0].product_ref,'sku:ABC'); assert.match(products.limitations.join(' '),/titles are never matched/);
+  assert.equal(products.status,'available'); assert.equal(products.rows[0].product_ref,'title:ring'); assert.match(products.limitations.join(' '),/exact unique conservatively-normalized product title/);
 });
 
-test('deterministic product identity maps exact normalized SKU and leaves empty SKU unresolved',()=>{
-  assert.deepEqual(productRef({sku:' ab-1 ',source_platform:'woo',source_product_id:'1'}),{product_ref:'sku:AB-1',mapping_method:'exact_normalized_sku',resolved:true});
-  assert.equal(productRef({sku:'',source_platform:'square',source_product_id:'p1',source_variant_id:'v1'}).resolved,false);
+test('product identity obeys mapping precedence, collisions, title matches and source fallback',()=>{
+  assert.equal(productRef({sku:'x',title:'Ring',source_platform:'woo',source_product_id:'1'},{governedRef:'gold-ring'}).mapping_method,'explicit_governed_mapping');
+  assert.deepEqual(productRef({sku:' ab-1 ',source_platform:'woo',source_product_id:'1'}),{product_ref:'sku:AB-1',mapping_method:'exact_unique_sku',mapping_status:'resolved',resolved:true});
+  assert.equal(productRef({sku:'',title:'Flaming Heart Pendant',source_platform:'shopify',source_product_id:'p1',source_variant_id:'v1'},{titleMatched:true}).mapping_method,'exact_unique_normalized_title');
+  assert.equal(productRef({sku:'',title:'Ring',source_platform:'square',source_product_id:'p1'},{titleMatched:true,titleUnique:false}).mapping_status,'ambiguous');
+  assert.equal(productRef({sku:'',title:'Only here',source_platform:'square',source_product_id:'p1'}).mapping_status,'source_specific');
+});
+
+test('title normalization is conservative and deterministic',()=>{
+  assert.equal(normalizeProductTitle('  FLAMING\u00a0 HEART — PENDANT &apos;A&apos; '),"flaming heart - pendant 'a'");
+  assert.equal(normalizeProductTitle('Flaming Heart Pendant'),'flaming heart pendant');
+  assert.notEqual(normalizeProductTitle('Flaming Heart Pendant'),normalizeProductTitle('Small Flaming Heart Pendant'));
 });
 
 test('production validator is aggregate-only and covers required evidence',async()=>{
-  const queries=validationQueries('test'); assert.deepEqual(Object.keys(queries),['finance','shopify_currency','search_console','customers','products','geography']);
-  assert.match(queries.shopify_currency,/presentment_currency/); assert.match(queries.shopify_currency,/bf_window/); assert.match(queries.products,/square_data\.retail_order_items/); assert.match(queries.products,/retail_location_id/);
+  const queries=validationQueries('test'); assert.deepEqual(Object.keys(queries),Object.keys((await import('../diagnostics/report-v2-production-validation.js')).VALIDATION_OPERATIONS));
+  assert.match(queries.shopify_currency,/presentment_currency/); assert.match(queries.shopify_currency,/campaign_window/); assert.doesNotMatch(queries.shopify_currency,/bf_window|,'november'/); assert.match(queries.products,/square_data\.retail_order_items/); assert.match(queries.products,/retail_location_id/);
   const calls=[];const result=await validateProduction({project:'test',bigquery:{query:async o=>{calls.push(o);return [[]]}}});
-  assert.equal(result.contract.read_only,true);assert.equal(calls.length,6);assert.ok(calls.every(x=>/^\s*(SELECT|WITH)/.test(x.query)));
+  assert.equal(result.contract.read_only,true);assert.equal(calls.length,Object.keys(queries).length);assert.ok(calls.every(x=>/^\s*(SELECT|WITH)/.test(x.query)));
+});
+
+test('finance uses Shopify presentment currency once, excludes Matrixify, and separates POS',async()=>{
+  const calls=[];const service=createEcommerceReportV2({bigquery:{query:async o=>{calls.push(o);return [[]]}},project:'test',knowledgeService:{}});
+  await service('sales',{start_date:'2025-11-01',end_date:'2025-11-30'});
+  const sql=calls[0].query;
+  assert.match(sql,/presentment_currency/);assert.match(sql,/original_total_presentment/);assert.match(sql,/total_refunded_presentment/);
+  assert.match(sql,/source_app_id!=@matrixify_app_id/);assert.match(sql,/retail_location_id IS NULL,'Online','In-store'/);
+  assert.match(sql,/NOT REGEXP_CONTAINS[\s\S]+shopify/);
 });
 
 test('business context retrieves current and comparison independently with bounded nearby look-behind', async () => {

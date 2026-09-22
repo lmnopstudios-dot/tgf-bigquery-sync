@@ -30,16 +30,25 @@ test('SQL-shape checks reject common projection, grouping, and union defects', (
 test('validator SQL covers all required evidence and avoids the reserved window alias', () => {
   const queries = validationQueries('fixture-project');
   assert.match(queries.finance, /accountant_transactions/);
-  assert.match(queries.finance, /bf_window/);
+  assert.match(queries.finance, /full_period/);
+  assert.match(queries.finance, /campaign_window/);
+  assert.match(queries.finance, /outside_campaign_window/);
+  assert.match(queries.finance, /resulting_canonical_online/);
   assert.match(queries.shopify_currency, /presentment_currency/);
-  assert.match(queries.shopify_currency, /bf_window/);
+  assert.doesNotMatch(queries.shopify_currency, /bf_window|,'november'/);
   assert.match(queries.search_console, /2024-11-01/);
   assert.match(queries.customers, /identified_customers/);
   assert.match(queries.products, /shopify_data\.order_line_items/);
   assert.match(queries.products, /retail_location_id/);
   assert.match(queries.products, /square_data\.retail_order_items/);
   assert.match(queries.products, /deterministic_sku_lines/);
+  assert.match(queries.product_identity, /exact_unique_normalized_title/);
+  assert.match(queries.product_identity, /resolved_line_item_percentage/);
+  assert.match(queries.product_identity, /square_pos/);
   assert.match(queries.geography, /commerce\.order_geography/);
+  assert.match(queries.geography, /unavailable_not_persisted/);
+  assert.match(queries.shopify_geography_schema, /INFORMATION_SCHEMA\.COLUMNS/);
+  assert.doesNotMatch(queries.geography, /billing|presentment_currency|shop_currency/i);
   for (const query of Object.values(queries)) {
     assert.doesNotMatch(query, /\)\s+window\b/i);
     assert.doesNotMatch(query, /\bGROUP BY window\b/i);
