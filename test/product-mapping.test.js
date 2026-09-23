@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { approvedMappingEdges, candidateDiagnostics, classifyProduct, generateMappingCandidates, validateGraphApproval } from '../oracle/product-mapping.js';
+import { approvedMappingEdges, candidateDiagnostics, classifyProduct, generateMappingCandidates, resolveMappingDecisions, sanitizeReviewerNote, searchProducts, validateGraphApproval } from '../oracle/product-mapping.js';
 import { buildCanonicalProductGraph, mapProductPair } from '../oracle/product-identity.js';
 
 const p=(ref,title,extra={})=>({source_product_ref:ref,source_platform:ref.split(':')[0],source_store:ref.split(':')[1],source_product_id:ref.split(':')[2],title,...extra});
@@ -81,4 +81,33 @@ test('approved and rejected decisions suppress candidates and diagnostics retain
   const approved={...candidate,status:'approved'};
   assert.equal(candidateDiagnostics(products,[approved]).eligible_products,0);
   assert.equal(candidateDiagnostics(products,[approved]).approved_count,1);
+});
+
+test('current-state resolver follows immutable supersession chains and removes revoked edges',()=>{
+  const approval={decision_id:'a',relationship_id:'pair',left_ref:'woo:ww:1',right_ref:'square:square:2',status:'approved',reviewed_at:'2026-01-01'};
+  const revocation={decision_id:'b',relationship_id:'pair',left_ref:approval.left_ref,right_ref:approval.right_ref,status:'revoked',supersedes_decision_id:'a',reviewed_at:'2026-01-02'};
+  const state=resolveMappingDecisions([revocation,approval]);
+  assert.equal(state.history.length,2); assert.equal(state.activeApproved.length,0); assert.equal(state.revoked.length,1); assert.equal(state.superseded[0].decision_id,'a');
+  assert.equal(approvedMappingEdges([approval,revocation]).length,0);
+});
+
+test('replacement enters canonical graph while replaced approval stays auditable',()=>{
+  const old={decision_id:'a',relationship_id:'old',left_ref:'woo:ww:1',right_ref:'square:square:2',status:'approved',reviewed_at:'2026-01-01'};
+  const supersede={decision_id:'b',relationship_id:'old',left_ref:old.left_ref,right_ref:old.right_ref,status:'superseded',supersedes_decision_id:'a',reviewed_at:'2026-01-02'};
+  const replacement={decision_id:'c',relationship_id:'new',left_ref:'woo:ww:1',right_ref:'shopify:shopify:3',status:'approved',replacement_for_decision_id:'a',reviewed_at:'2026-01-02'};
+  const state=resolveMappingDecisions([old,supersede,replacement]);
+  assert.deepEqual(state.activeApproved.map(x=>x.decision_id),['c']); assert.equal(state.history.length,3);
+  assert.equal(buildCanonicalProductGraph([p(old.left_ref,'A'),p(old.right_ref,'B'),p(replacement.right_ref,'C')],approvedMappingEdges(state.history)).find(x=>x.source_products.includes(old.left_ref)).source_products.includes(replacement.right_ref),true);
+});
+
+test('bounded product search supports source filters, IDs and explicit mapping status without PII',()=>{
+  const products=[p('woo:ww:45','Belcher Chain 45cm',{sku:'BC45',normalized_title:'belcher chain 45cm',line_items:9}),p('square:square:60','Belcher Chain 60cm',{sku:'BC60',line_items:50}),p('shopify:shopify:45','Chain',{sku:'BC45'})];
+  const decisions=[{decision_id:'x',relationship_id:'x',...products[0],left_ref:products[0].source_product_ref,right_ref:products[2].source_product_ref,status:'approved'}];
+  const results=searchProducts(products,{query:'45',sources:['woo'],limit:1,decisions});
+  assert.equal(results.length,1);assert.equal(results[0].source,'woo:ww');assert.equal(results[0].explicit_mapping_status,'approved');assert.equal('customer' in results[0],false);
+});
+
+test('reviewer notes are normalized plain text and bounded',()=>{
+  const note=sanitizeReviewerNote(`  Different\u0000 chain\n lengths ${'x'.repeat(600)} `);
+  assert.equal(note.includes('\u0000'),false);assert.equal(note.includes('\n'),false);assert.equal(note.length,500);
 });
