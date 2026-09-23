@@ -86,13 +86,7 @@ export function mapProductPair(left, right, { normalizeTitle, explicitMappings =
 }
 
 export function buildCanonicalProductGraph(products, edges) {
-  const parent = new Map(products.map(p => [p.source_product_ref, p.source_product_ref]));
-  const find = x => { const p = parent.get(x); if (p !== x) parent.set(x, find(p)); return parent.get(x); };
-  const union = (a, b) => { const ar = find(a), br = find(b); if (ar !== br) parent.set(br, ar < br ? ar : br), parent.set(ar, ar < br ? ar : br); };
-  for (const edge of edges.filter(e => e.mapping_status === 'resolved')) if (parent.has(edge.left_ref) && parent.has(edge.right_ref)) union(edge.left_ref, edge.right_ref);
-  const groups = new Map();
-  for (const product of products) { const root = find(product.source_product_ref); if (!groups.has(root)) groups.set(root, []); groups.get(root).push(product.source_product_ref); }
-  return [...groups.values()].map(members => ({ canonical_product_ref: `canonical:${members.slice().sort()[0]}`, source_products: members.slice().sort(), edges: edges.filter(e => members.includes(e.left_ref) && members.includes(e.right_ref)) }));
+  return inspectProductGraph({products, deterministicEdges:edges}).components;
 }
 
 export function rowsAtGrain(lines, grain = PRODUCT_GRAIN) {
@@ -107,3 +101,4 @@ export function rowsAtGrain(lines, grain = PRODUCT_GRAIN) {
   }
   return [...rows.values()];
 }
+import { inspectProductGraph } from './product-graph-integrity.js';
