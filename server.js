@@ -14,6 +14,7 @@ import { createKnowledgeService, executeKnowledgeToolCall } from './oracle/knowl
 import { createOracleUiRouter } from './oracle/ui-router.js';
 import { createEcommerceReportV2 } from './oracle/ecommerce-report-v2.js';
 import { createProposalGenerator } from './oracle/proposals.js';
+import { createProductMappingService } from './oracle/product-mapping.js';
 import { redactError } from './oracle/ui-security.js';
 import {
   AcquisitionValidationError,
@@ -116,6 +117,8 @@ const knowledgeService = createKnowledgeService({
   onDiagnostic: diagnostic => console.error('Oracle knowledge query failed:', diagnostic)
 });
 const ecommerceReportV2 = createEcommerceReportV2({ bigquery, project: GOOGLE_PROJECT_ID, knowledgeService });
+const productMappingService = createProductMappingService({ bigquery, project: GOOGLE_PROJECT_ID });
+productMappingService.setup().catch(error => console.error('Product mapping storage setup failed:', redactError(error?.message || error)));
 
 /* =========================================================
    SHOPIFY
@@ -9157,6 +9160,7 @@ if (process.env.ORACLE_UI_PASSWORD || process.env.ORACLE_UI_SESSION_SECRET) {
     bigquery,
     project: GOOGLE_PROJECT_ID,
     reportService: ecommerceReportV2,
+    productMappingService,
     env: process.env,
     generateProposals: createProposalGenerator({ openai, model: process.env.ORACLE_PROPOSAL_MODEL || 'gpt-5.6' }),
     chat: async message => {

@@ -112,6 +112,12 @@ test('product validator contrasts old/new models and emits pairwise, option, Squ
   assert.match(queries.pairwise_product_coverage, /sales_coverage/);
   assert.match(queries.unresolved_products, /mapping_reason/);
   assert.match(queries.unresolved_products, /LIMIT 100/);
+  assert.match(queries.shopify_channel_deduplication, /duplicate_source_identities_after_consolidation/);
+  assert.match(queries.shopify_channel_deduplication, /online_only/);
+  assert.match(queries.mapping_improvement, /before_channel_deduplication/);
+  assert.match(queries.mapping_improvement, /after_channel_deduplication/);
+  assert.match(queries.candidate_layer, /approved_mapping_count/);
+  assert.match(queries.candidate_layer, /rejected_mapping_count/);
 });
 
 test('governed product SQL materializes base titles at source-product grain before mapping', () => {

@@ -33,6 +33,8 @@ test('Shopify Online and POS share product namespace and variants remain childre
   assert.equal(sourceProductRef({ source_platform:'shopify', source_store:'online', source_product_id:'456' }), sourceProductRef({ source_platform:'shopify', source_store:'pos', source_product_id:'456' }));
   const [product] = consolidateSourceProducts(['G','H','I','J'].map((size, i) => line({ source_platform:'shopify', source_store:i % 2 ? 'pos':'online', source_product_id:456, source_variant_id:i, variant_title:size })));
   assert.equal(product.source_variants.length, 4);
+  assert.equal(product.source_store, 'shopify');
+  assert.deepEqual(product.channels, ['online','pos']);
 });
 
 test('Square item is one product while variations remain children', () => {
