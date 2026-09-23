@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import {normalizeShopifyProductType} from '../product-classifications/shopify-product-type-mapping.js';
+import {classifyShopifyProductType,normalizeShopifyProductType} from '../product-classifications/shopify-product-type-mapping.js';
 
 export const PRODUCT_CLASSIFICATION_TABLE='product_classifications';
 export const PRODUCT_CLASSIFICATION_TYPES=Object.freeze(['product_group','collaboration_name','product_category','product_type']);
@@ -52,10 +52,11 @@ export function deriveCatalogueClassifications(product,{now=new Date().toISOStri
   const out=[],ref=product.source_product_ref;
   const add=(classification_type,classification_value,field,raw,provenance='catalogue_metadata')=>{const row={subject_ref:ref,canonical_product_ref:product.canonical_product_ref||null,subject_grain:'source_product',classification_type,classification_value:token(classification_value),provenance,origin_subject_ref:ref,source_evidence:{field,raw_value:typeof raw==='object'?raw:String(raw)},authority:'authoritative_catalogue',confidence:'high',status:'active',conflict_reason:null,effective_from:null,effective_to:null,supersedes_classification_id:null,recorded_at:now,recorded_by:'product-classification-sync',reviewed_at:null,reviewed_by:null};row.classification_id=id(row);out.push(row)};
   const metadata=product.metadata||{};
-  if(ref.startsWith('shopify:')&&metadata.product_type!=null&&String(metadata.product_type).trim()){
-    const raw=String(metadata.product_type).trim();
+  const productTypeReadiness=classifyShopifyProductType(metadata.product_type);
+  if(ref.startsWith('shopify:')&&productTypeReadiness.specific_product_type_ready){
+    const raw=productTypeReadiness.normalized_source_value;
     add('product_type',raw,'product_type',raw,'shopify_product_type');
-    const governed=normalizeShopifyProductType(raw);
+    const governed=productTypeReadiness.mapping;
     if(governed)add('product_category',governed.classification_value,'product_type',raw,governed.provenance);
   }
   const categoryFields=ref.startsWith('shopify:')?[]:ref.startsWith('woo:')?['categories','category','taxonomy_product_category']:['catalogue_categories','category'];
