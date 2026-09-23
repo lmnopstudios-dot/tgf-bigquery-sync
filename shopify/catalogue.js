@@ -6,6 +6,15 @@ const COLLECTIONS_QUERY=`query CatalogueCollections($cursor:String){collections(
 const COLLECTION_PRODUCTS_QUERY=`query CatalogueCollectionProducts($id:ID!,$cursor:String){collection(id:$id){products(first:100,after:$cursor){pageInfo{hasNextPage endCursor} nodes{id}}}}`;
 const stableId=value=>String(value||'').split('/').pop();
 
+// BigQuery cannot infer an ARRAY's element type when either @rows or a nested
+// repeated field (notably product tags) is empty. Keep these types alongside
+// the catalogue writes so every nullable/repeated value has a stable schema.
+export const CATALOGUE_QUERY_TYPES={
+  products:{rows:[{product_id:'STRING',title:'STRING',product_type:'STRING',vendor:'STRING',tags:['STRING'],status:'STRING',created_at:'TIMESTAMP',updated_at:'TIMESTAMP'}],now:'TIMESTAMP'},
+  collections:{rows:[{collection_id:'STRING',title:'STRING',handle:'STRING',product_count:'INT64',updated_at:'TIMESTAMP'}],now:'TIMESTAMP'},
+  memberships:{rows:[{product_id:'STRING',collection_id:'STRING'}],now:'TIMESTAMP'}
+};
+
 export function catalogueDdl(project,dataset=SHOPIFY_CATALOGUE_DATASET){return [
   `CREATE SCHEMA IF NOT EXISTS \`${project}.${dataset}\``,
   `CREATE TABLE IF NOT EXISTS \`${project}.${dataset}.products\` (product_id STRING NOT NULL,title STRING,product_type STRING,vendor STRING,tags ARRAY<STRING>,status STRING,created_at TIMESTAMP,updated_at TIMESTAMP,catalogue_synced_at TIMESTAMP NOT NULL) CLUSTER BY product_id,status`,
@@ -22,9 +31,9 @@ export async function fetchShopifyCatalogue(graphql){
 }
 export async function persistShopifyCatalogue(bigquery,project,catalogue,{dataset=SHOPIFY_CATALOGUE_DATASET,now=new Date().toISOString()}={}){
   for(const query of catalogueDdl(project,dataset))await bigquery.query({query});
-  const specs=[['products','product_id',catalogue.products],['collections','collection_id',catalogue.collections]];
-  for(const [table,key,rows] of specs)if(rows.length)await bigquery.query({query:`MERGE \`${project}.${dataset}.${table}\` t USING (SELECT r.*,TIMESTAMP(@now) catalogue_synced_at FROM UNNEST(@rows) r) s ON t.${key}=s.${key} WHEN MATCHED THEN UPDATE SET ${Object.keys(rows[0]).filter(k=>k!==key).map(k=>`${k}=s.${k}`).join(',')},catalogue_synced_at=s.catalogue_synced_at WHEN NOT MATCHED THEN INSERT ROW`,params:{rows,now}});
-  await bigquery.query({query:`CREATE TEMP TABLE current_memberships AS SELECT r.product_id,r.collection_id,TIMESTAMP(@now) catalogue_synced_at FROM UNNEST(@rows) r; MERGE \`${project}.${dataset}.product_collections\` t USING current_memberships s ON t.product_id=s.product_id AND t.collection_id=s.collection_id WHEN MATCHED THEN UPDATE SET catalogue_synced_at=s.catalogue_synced_at WHEN NOT MATCHED THEN INSERT ROW WHEN NOT MATCHED BY SOURCE THEN DELETE`,params:{rows:catalogue.memberships,now}});
+  const specs=[['products','product_id',catalogue.products,CATALOGUE_QUERY_TYPES.products],['collections','collection_id',catalogue.collections,CATALOGUE_QUERY_TYPES.collections]];
+  for(const [table,key,rows,types] of specs)if(rows.length)await bigquery.query({query:`MERGE \`${project}.${dataset}.${table}\` t USING (SELECT r.*,TIMESTAMP(@now) catalogue_synced_at FROM UNNEST(@rows) r) s ON t.${key}=s.${key} WHEN MATCHED THEN UPDATE SET ${Object.keys(rows[0]).filter(k=>k!==key).map(k=>`${k}=s.${k}`).join(',')},catalogue_synced_at=s.catalogue_synced_at WHEN NOT MATCHED THEN INSERT ROW`,params:{rows,now},types});
+  await bigquery.query({query:`CREATE TEMP TABLE current_memberships AS SELECT r.product_id,r.collection_id,TIMESTAMP(@now) catalogue_synced_at FROM UNNEST(@rows) r; MERGE \`${project}.${dataset}.product_collections\` t USING current_memberships s ON t.product_id=s.product_id AND t.collection_id=s.collection_id WHEN MATCHED THEN UPDATE SET catalogue_synced_at=s.catalogue_synced_at WHEN NOT MATCHED THEN INSERT ROW WHEN NOT MATCHED BY SOURCE THEN DELETE`,params:{rows:catalogue.memberships,now},types:CATALOGUE_QUERY_TYPES.memberships});
   return {products:catalogue.products.length,collections:catalogue.collections.length,memberships:catalogue.memberships.length};
 }
 export async function syncShopifyCatalogue({bigquery,project,graphql,dataset}={}){const catalogue=await fetchShopifyCatalogue(graphql);return persistShopifyCatalogue(bigquery,project,catalogue,{dataset});}
