@@ -8,7 +8,7 @@ import { reportCsv, reportPdf, reportWorkbook } from './report-export.js';
 const json = express.json({ limit: '48kb', type: 'application/json' });
 const allowedOrigins = request => new Set([`${request.protocol}://${request.get('host')}`, process.env.ORACLE_UI_ORIGIN].filter(Boolean));
 
-export function createOracleUiRouter({ knowledgeService, bigquery, project, chat, generateProposals, reportService, env = process.env }) {
+export function createOracleUiRouter({ knowledgeService, bigquery, project, chat, generateProposals, reportService, productMappingService, env = process.env }) {
   const router = express.Router();
   const password = env.ORACLE_UI_PASSWORD;
   const sessionSecret = env.ORACLE_UI_SESSION_SECRET;
@@ -88,6 +88,8 @@ export function createOracleUiRouter({ knowledgeService, bigquery, project, chat
   router.get('/knowledge/:id', authenticate, async (req, res) => { try { res.json({ success: true, ...(await knowledgeService.getKnowledgeItem({ knowledge_id: req.params.id })) }); } catch (error) { res.status(400).json({ success: false, error: safeError(error) }); } });
   router.get('/memory', authenticate, async (req, res) => { try { res.json({ success: true, ...(await knowledgeService.searchMemory(queryFilters(req.query, true))) }); } catch (error) { res.status(400).json({ success: false, error: safeError(error) }); } });
   router.get('/memory/:id', authenticate, async (req, res) => { try { res.json({ success: true, ...(await knowledgeService.getMemoryItem({ memory_id: req.params.id })) }); } catch (error) { res.status(400).json({ success: false, error: safeError(error) }); } });
+  router.get('/product-mappings', authenticate, async (req,res) => { try { if(!productMappingService) throw new Error('Product mappings are unavailable'); res.json({success:true,...await productMappingService.list({search:String(req.query.search||'')})}); } catch(error){res.status(503).json({success:false,error:safeError(error)});} });
+  router.post('/product-mappings/review', authenticate, protectWrite, json, async (req,res) => { try { if(!productMappingService) throw new Error('Product mappings are unavailable'); const row=await productMappingService.review(req.body?.candidate,req.body?.status,req.oracleUser.sub,req.body?.note||null); res.status(201).json({success:true,status:row.status,mapping_method:row.mapping_method}); } catch(error){res.status(/invalid|conflict|status/.test(error.message)?409:503).json({success:false,error:safeError(error)});} });
   router.get('/reports/:section', authenticate, async (req, res) => {
     try {
       if (!reportService) throw new Error('Reports are unavailable');

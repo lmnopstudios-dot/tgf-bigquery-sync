@@ -36,13 +36,14 @@ export function consolidateSourceProducts(lines, { catalogueTitles = new Map() }
   const grouped = new Map();
   for (const line of lines) {
     const source_product_ref = sourceProductRef(line);
-    const product = grouped.get(source_product_ref) || { source_product_ref, source_platform: line.source_platform, source_store: line.source_store, source_product_id: String(line.source_product_id ?? 'unknown'), lines: [], variants: new Map(), options: [] };
+    const product = grouped.get(source_product_ref) || { source_product_ref, source_platform: line.source_platform, source_store: line.source_platform === 'shopify' ? 'shopify' : line.source_store, source_product_id: String(line.source_product_id ?? 'unknown'), channels: new Set(), lines: [], variants: new Map(), options: [] };
+    if (line.channel || line.source_store) product.channels.add(line.channel || line.source_store);
     product.lines.push(line);
     if (line.source_variant_id != null) product.variants.set(String(line.source_variant_id), line.variant_title ?? null);
     if (line.option_name || line.option_value) product.options.push({ name: line.option_name ?? null, value: line.option_value ?? null, normalized_ring_size: /(?:ring\s*)?size/i.test(String(line.option_name || '')) ? normalizeRingSize(line.option_value) : null });
     grouped.set(source_product_ref, product);
   }
-  return [...grouped.values()].map(product => ({ ...product, ...selectBaseTitle(product.lines, catalogueTitles.get(product.source_product_ref)), source_variants: [...product.variants].map(([source_variant_id, title]) => ({ source_variant_id, title })) }));
+  return [...grouped.values()].map(product => ({ ...product, channels:[...product.channels].sort(), ...selectBaseTitle(product.lines, catalogueTitles.get(product.source_product_ref)), source_variants: [...product.variants].map(([source_variant_id, title]) => ({ source_variant_id, title })) }));
 }
 
 const uniqueIndex = (products, key) => {

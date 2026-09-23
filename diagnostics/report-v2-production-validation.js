@@ -20,6 +20,9 @@ export const VALIDATION_OPERATIONS = Object.freeze({
   square_product_audit: 'audit_square_item_variation_hierarchy',
   pairwise_product_coverage: 'validate_pairwise_product_coverage',
   unresolved_products: 'diagnose_unresolved_products',
+  shopify_channel_deduplication: 'validate_shopify_channel_deduplication',
+  mapping_improvement: 'validate_mapping_improvement',
+  candidate_layer: 'validate_product_mapping_candidates',
   geography: 'validate_geography',
   shopify_geography_schema: 'audit_shopify_shipping_schema'
 });
@@ -85,6 +88,18 @@ export function unresolvedProductsQuery(project) {
   return `WITH ${governedProductCtes(project)}, counts AS (SELECT *,COUNT(*) OVER(PARTITION BY normalized_base_title) title_count,COUNT(DISTINCT CONCAT(platform,':',store)) OVER(PARTITION BY normalized_base_title) source_count FROM source_products) SELECT source,product_id,base_title,line_items,IF(title_count>source_count,'ambiguous_title_collision','unmatched_no_pairwise_exact_key') mapping_reason FROM counts WHERE source_count=1 OR title_count>source_count ORDER BY line_items DESC LIMIT 100`;
 }
 
+export function shopifyChannelDeduplicationQuery(project) {
+  return `WITH evidence AS (SELECT li.product_id,IF(l.retail_location_id IS NULL,'online','pos') channel FROM \`${project}.shopify_data.order_line_items\` li JOIN \`${project}.shopify_data.order_locations\` l USING(order_id) WHERE li.product_id IS NOT NULL AND (l.source_app_id IS NULL OR l.source_app_id!='gid://shopify/App/1758145')), products AS (SELECT product_id,COUNT(DISTINCT channel) channels,COUNTIF(channel='online') online_lines,COUNTIF(channel='pos') pos_lines FROM evidence GROUP BY product_id) SELECT COUNT(*) shopify_stable_product_ids,COUNTIF(online_lines>0 AND pos_lines=0) online_only,COUNTIF(pos_lines>0 AND online_lines=0) pos_only,COUNTIF(channels=2) both,COUNT(*)-COUNT(DISTINCT CONCAT('shopify:shopify:',product_id)) duplicate_source_identities_after_consolidation FROM products`;
+}
+
+export function mappingImprovementQuery(project) {
+  return `WITH ${governedProductCtes(project)}, pairs AS (SELECT 'woo:ww' left_namespace,'shopify:shopify' right_namespace UNION ALL SELECT 'woo:usd','shopify:shopify' UNION ALL SELECT 'square:square','shopify:shopify'), models AS (SELECT 'before_channel_deduplication' model UNION ALL SELECT 'after_channel_deduplication'), candidate_pairs AS (SELECT models.model,pairs.*,l.source_product_ref left_ref,r.source_product_ref right_ref,l.line_items,l.sales FROM models CROSS JOIN pairs JOIN products l ON CONCAT(l.platform,':',l.store)=left_namespace JOIN products r ON CONCAT(r.platform,':',r.store)=right_namespace WHERE (l.normalized_sku IS NOT NULL AND l.normalized_sku=r.normalized_sku) OR l.normalized_base_title=r.normalized_base_title), qualified AS (SELECT *,COUNT(*) OVER(PARTITION BY model,left_namespace,right_namespace,left_ref) possibilities FROM candidate_pairs) SELECT model,left_namespace,right_namespace,COUNT(DISTINCT IF(possibilities=1,left_ref,NULL)) matched_products,SAFE_DIVIDE(SUM(IF(possibilities=1,line_items,0)),(SELECT SUM(line_items) FROM products p WHERE CONCAT(p.platform,':',p.store)=left_namespace)) line_coverage,SAFE_DIVIDE(SUM(IF(possibilities=1,sales,0)),(SELECT SUM(sales) FROM products p WHERE CONCAT(p.platform,':',p.store)=left_namespace)) sales_coverage FROM qualified GROUP BY 1,2,3 ORDER BY 2,1`;
+}
+
+export function candidateLayerQuery(project) {
+  return `WITH latest AS (SELECT *,ROW_NUMBER() OVER(PARTITION BY candidate_id ORDER BY reviewed_at DESC) rank FROM \`${project}.commerce.product_mapping_decisions\`) SELECT COUNTIF(status='suggested') candidate_count,COUNTIF(status='suggested' AND confidence='high') high_review_priority,COUNTIF(status='suggested' AND confidence='medium') medium_review_priority,COUNTIF(status='suggested' AND confidence='low') low_review_priority,CAST(NULL AS FLOAT64) candidate_line_item_coverage,CAST(NULL AS FLOAT64) candidate_sales_coverage,COUNTIF(status='approved') approved_mapping_count,COUNTIF(status='rejected') rejected_mapping_count FROM latest WHERE rank=1`;
+}
+
 export function validationQueries(project) {
   const p = name => `\`${project}.${name}\``;
   return {
@@ -101,6 +116,9 @@ export function validationQueries(project) {
     square_product_audit: squareProductAuditQuery(project),
     pairwise_product_coverage: pairwiseCoverageQuery(project),
     unresolved_products: unresolvedProductsQuery(project),
+    shopify_channel_deduplication: shopifyChannelDeduplicationQuery(project),
+    mapping_improvement: mappingImprovementQuery(project),
+    candidate_layer: candidateLayerQuery(project),
     geography: `WITH periods AS (SELECT 'comparison' period,DATE '2024-11-01' a,DATE '2024-11-30' b UNION ALL SELECT 'current',DATE '2025-11-01',DATE '2025-11-30'),o AS (SELECT 'woo_ww' source,DATE(order_created_at) date,CAST(order_id AS STRING) id FROM ${p('metorik_uk.orders')} UNION ALL SELECT 'woo_usd',DATE(order_created_at),CAST(order_id AS STRING) FROM ${p('metorik_us.orders')}) SELECT period,source,'direct_shipping_country' geography_semantic,COUNT(*) orders,COUNTIF(g.shipping_country_iso2 IS NOT NULL) observed,COUNT(DISTINCT g.shipping_country_iso2) distinct_countries,SAFE_DIVIDE(COUNTIF(g.shipping_country_iso2 IS NOT NULL),COUNT(*)) coverage FROM periods JOIN o ON date BETWEEN a AND b LEFT JOIN ${p('commerce.order_geography')} g ON g.source_order_id=o.id AND g.source_store=IF(o.source='woo_ww','ww','usd') GROUP BY period,source UNION ALL SELECT period,'shopify','unavailable_not_persisted',COUNT(*),0,0,0 FROM periods JOIN ${p('shopify_data.order_locations')} l ON DATE(l.created_at) BETWEEN a AND b WHERE l.source_app_id IS NULL OR l.source_app_id!='gid://shopify/App/1758145' GROUP BY period ORDER BY period,source`,
     shopify_geography_schema: `SELECT table_name,column_name,data_type,IF(REGEXP_CONTAINS(LOWER(column_name),r'(shipping|destination).*(country)|(country).*(shipping|destination)'),'candidate_direct_shipping_field','not_direct_shipping') semantic_candidate FROM ${p('shopify_data.INFORMATION_SCHEMA.COLUMNS')} WHERE REGEXP_CONTAINS(LOWER(column_name),r'shipping|destination|country|address') ORDER BY table_name,ordinal_position`
   };
