@@ -15,6 +15,8 @@ export const CATALOGUE_QUERY_TYPES={
 };
 
 export const CATALOGUE_TABLE_SCHEMAS={
+  // INFORMATION_SCHEMA reports repeated fields as is_nullable=NO, but BigQuery
+  // does not allow an explicit NOT NULL constraint on ARRAY columns in DDL.
   products:{product_id:['STRING','NO'],title:['STRING','YES'],product_type:['STRING','YES'],vendor:['STRING','YES'],tags:['ARRAY<STRING>','NO'],status:['STRING','YES'],created_at:['TIMESTAMP','YES'],updated_at:['TIMESTAMP','YES'],catalogue_synced_at:['TIMESTAMP','NO']},
   collections:{collection_id:['STRING','NO'],title:['STRING','YES'],handle:['STRING','YES'],product_count:['INT64','YES'],updated_at:['TIMESTAMP','YES'],catalogue_synced_at:['TIMESTAMP','NO']},
   product_collections:{product_id:['STRING','NO'],collection_id:['STRING','NO'],catalogue_synced_at:['TIMESTAMP','NO']}
@@ -22,7 +24,7 @@ export const CATALOGUE_TABLE_SCHEMAS={
 
 export function catalogueDdl(project,dataset=SHOPIFY_CATALOGUE_DATASET){return [
   `CREATE SCHEMA IF NOT EXISTS \`${project}.${dataset}\``,
-  `CREATE TABLE IF NOT EXISTS \`${project}.${dataset}.products\` (product_id STRING NOT NULL,title STRING,product_type STRING,vendor STRING,tags ARRAY<STRING> NOT NULL,status STRING,created_at TIMESTAMP,updated_at TIMESTAMP,catalogue_synced_at TIMESTAMP NOT NULL) CLUSTER BY product_id,status`,
+  `CREATE TABLE IF NOT EXISTS \`${project}.${dataset}.products\` (product_id STRING NOT NULL,title STRING,product_type STRING,vendor STRING,tags ARRAY<STRING>,status STRING,created_at TIMESTAMP,updated_at TIMESTAMP,catalogue_synced_at TIMESTAMP NOT NULL) CLUSTER BY product_id,status`,
   `CREATE TABLE IF NOT EXISTS \`${project}.${dataset}.collections\` (collection_id STRING NOT NULL,title STRING,handle STRING,product_count INT64,updated_at TIMESTAMP,catalogue_synced_at TIMESTAMP NOT NULL) CLUSTER BY collection_id`,
   `CREATE TABLE IF NOT EXISTS \`${project}.${dataset}.product_collections\` (product_id STRING NOT NULL,collection_id STRING NOT NULL,catalogue_synced_at TIMESTAMP NOT NULL) CLUSTER BY product_id,collection_id`
 ]}
