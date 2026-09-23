@@ -2,6 +2,10 @@
 
 ## Canonical finance reconciliation
 
+All finance surfaces now consume `finance/canonical.js`, the single governed query semantic. It retains non-Shopify accountant-ledger rows (including residual Woo refunds after migration), removes legacy Shopify ledger rows, and reconstructs native Shopify evidence. Shopify sales are one row per order at the order creation date in presentment currency. Shopify refunds are one row per persisted `order_refunds.refund_id`, dated by `refund_created_at`, in the refund/order presentment currency and using the authoritative event-level `refund_total_presentment`. Component subtotals are not added to that total, avoiding double counting partial, shipping, line-item, or adjustment refunds.
+
+Canonical refund amounts are negative. A presentation may expose their absolute magnitude only when it labels that convention. “Refund count” means persisted refund events (one Shopify refund ID, or one governed legacy refund ledger row); `distinct_refunded_orders` is separately available, so multiple partial refunds on one order do not silently change the count definition. Currencies remain separated and are never converted.
+
 The root cause of missing Shopify USD was currency selection in the existing canonical finance materialization: Shopify rows were represented in shop currency, although `shop_currency` describes the store and not the customer's transaction currency. Report v2 now replaces the Shopify portion of `finance.accountant_transactions` with one source-native order row in `presentment_currency`, using `original_total_presentment`, plus a negative refund row using `total_refunded_presentment`. It retains non-Shopify canonical rows. It neither converts currency nor emits the order in shop currency as well.
 
 Shopify Online is conservatively `retail_location_id IS NULL`; Shopify POS is `retail_location_id IS NOT NULL`. The deterministic Matrixify app ID remains excluded. Removing the old canonical Shopify component before adding native Shopify evidence prevents intra-Shopify duplication; the Matrixify rule prevents duplication with migrated Woo evidence. Residual Woo remains canonical finance evidence.

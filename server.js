@@ -13,6 +13,7 @@ import { KNOWLEDGE_TOOL_DEFINITIONS } from './oracle/knowledge.js';
 import { createKnowledgeService, executeKnowledgeToolCall } from './oracle/knowledge-bigquery.js';
 import { createOracleUiRouter } from './oracle/ui-router.js';
 import { createEcommerceReportV2 } from './oracle/ecommerce-report-v2.js';
+import { createOracleFinanceService } from './oracle/finance.js';
 import { createProposalGenerator } from './oracle/proposals.js';
 import { createProductMappingService } from './oracle/product-mapping.js';
 import { redactError } from './oracle/ui-security.js';
@@ -117,6 +118,7 @@ const knowledgeService = createKnowledgeService({
   onDiagnostic: diagnostic => console.error('Oracle knowledge query failed:', diagnostic)
 });
 const ecommerceReportV2 = createEcommerceReportV2({ bigquery, project: GOOGLE_PROJECT_ID, knowledgeService });
+const oracleFinance = createOracleFinanceService({ bigquery, project: GOOGLE_PROJECT_ID });
 const productMappingService = createProductMappingService({ bigquery, project: GOOGLE_PROJECT_ID });
 productMappingService.setup().catch(error => console.error('Product mapping storage setup failed:', redactError(error?.message || error)));
 
@@ -4564,93 +4566,7 @@ async function getRefunds({
   source = null,
   group_by = 'summary'
 }) {
-  const filters = [
-    'date >= @start_date',
-    'date <= @end_date',
-    'currency = @currency',
-    "transaction_type = 'refund'"
-  ];
-
-  const params = {
-    start_date,
-    end_date,
-    currency
-  };
-
-  if (location) {
-    filters.push('LOWER(location) = LOWER(@location)');
-    params.location = location;
-  }
-
-  if (channel) {
-    filters.push('LOWER(channel) = LOWER(@channel)');
-    params.channel = channel;
-  }
-
-  if (source) {
-    filters.push('LOWER(source) = LOWER(@source)');
-    params.source = source;
-  }
-
-  let groupExpression = null;
-  let groupAlias = null;
-
-  if (group_by === 'month') {
-    groupExpression = "FORMAT_DATE('%Y-%m', date)";
-    groupAlias = 'month';
-  }
-
-  if (group_by === 'location') {
-    groupExpression = "COALESCE(location, 'Unknown')";
-    groupAlias = 'location';
-  }
-
-  if (group_by === 'channel') {
-    groupExpression = "COALESCE(channel, 'Unknown')";
-    groupAlias = 'channel';
-  }
-
-  if (group_by === 'source') {
-    groupExpression = "COALESCE(source, 'Unknown')";
-    groupAlias = 'source';
-  }
-
-  const query = groupExpression
-    ? `
-      SELECT
-        ${groupExpression} AS ${groupAlias},
-        COUNT(*) AS refund_count,
-        SUM(gross) AS refunds_gross,
-        ABS(SUM(gross)) AS refunded_amount,
-        SUM(tax) AS refunded_tax,
-        SUM(net_ex_tax) AS refunded_net_ex_tax
-
-      FROM \`${GOOGLE_PROJECT_ID}.finance.accountant_transactions\`
-
-      WHERE ${filters.join('\nAND ')}
-
-      GROUP BY ${groupAlias}
-      ORDER BY refunded_amount DESC
-    `
-    : `
-      SELECT
-        COUNT(*) AS refund_count,
-        SUM(gross) AS refunds_gross,
-        ABS(SUM(gross)) AS refunded_amount,
-        SUM(tax) AS refunded_tax,
-        SUM(net_ex_tax) AS refunded_net_ex_tax
-
-      FROM \`${GOOGLE_PROJECT_ID}.finance.accountant_transactions\`
-
-      WHERE ${filters.join('\nAND ')}
-    `;
-
-  const [rows] = await bigquery.query({
-    query,
-    params
-  });
-
-  return groupExpression ? rows : (rows[0] || {});
+  return oracleFinance.getRefunds({start_date,end_date,currency,location,channel,source,group_by});
 }
 
 
@@ -8393,7 +8309,7 @@ app.post(
   type: 'function',
   name: 'get_refunds',
   description:
-    'Analyse TGF refunds for a date range. Can return an overall summary or group refunds by month, location, channel or source.',
+    'Analyse governed canonical refunds for a date range. Refund count means refund events; distinct refunded orders is also returned. Supports monthly rows split by source and Shopify channel. Displayed refunded_amount is a positive magnitude while refunds_gross retains the negative ledger sign.',
   parameters: {
     type: 'object',
     properties: {
@@ -8423,7 +8339,9 @@ app.post(
           'month',
           'location',
           'channel',
-          'source'
+          'source',
+          'month_source',
+          'month_channel_source'
         ]
       }
     },
