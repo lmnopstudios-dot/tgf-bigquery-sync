@@ -37,3 +37,11 @@ test('report controls grow naturally without a nested vertical scroller',async()
   assert.match(css,/\.report-controls\{[^}]*flex:0 0 auto[^}]*height:auto[^}]*max-height:none[^}]*overflow:visible/);
   assert.doesNotMatch(css,/\.report-controls\{[^}]*overflow-y:auto/);
 });
+
+test('Product Mapping has a complete page scroller plus bounded picker results',async()=>{
+  const css=await readFile(new URL('../public/oracle/app.css',import.meta.url),'utf8');
+  assert.match(css,/#product-mappings\{[^}]*overflow-y:auto/);
+  assert.match(css,/#product-mappings #mapping-list,#product-mappings #decision-list\{[^}]*overflow:visible[^}]*max-height:none/);
+  assert.match(css,/#mapping-dialog \.records\{[^}]*max-height:42dvh[^}]*overflow-y:auto/);
+  assert.match(css,/dialog\{[^}]*max-height:85dvh[^}]*overflow:auto/);
+});
