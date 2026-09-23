@@ -30,7 +30,8 @@
     "validate:oracle-conversation-production": "node diagnostics/oracle-conversation-production.js",
     "import:metorik-geography": "node metorik/geography.js",
     "validate:metorik-geography": "node diagnostics/metorik-geography-validation.js",
-    "validate:report-v2-production": "node diagnostics/report-v2-production-validation.js"
+    "validate:report-v2-production": "node diagnostics/report-v2-production-validation.js",
+    "validate:product-mapping-production": "node diagnostics/product-mapping-production-validation.js"
   },
   "engines": {
     "node": ">=20"

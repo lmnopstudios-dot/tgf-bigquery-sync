@@ -4,7 +4,7 @@ import { BigQuery } from '@google-cloud/bigquery';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
 import { redactError } from '../oracle/ui-security.js';
-import { candidateDiagnostics } from '../oracle/product-mapping.js';
+import { candidateDiagnostics, governedDecisionCtes } from '../oracle/product-mapping.js';
 
 export const CURRENT = { start_date: '2025-11-01', end_date: '2025-11-30' };
 export const COMPARISON = { start_date: '2024-11-01', end_date: '2024-11-30' };
@@ -23,7 +23,7 @@ export const VALIDATION_OPERATIONS = Object.freeze({
   unresolved_products: 'diagnose_unresolved_products',
   shopify_channel_deduplication: 'validate_shopify_channel_deduplication',
   mapping_improvement: 'validate_mapping_improvement',
-  candidate_layer: 'validate_product_mapping_candidates',
+  candidate_layer: 'validate_product_mapping_candidates', mapping_governance: 'validate_mapping_governance',
   geography: 'validate_geography',
   shopify_geography_schema: 'audit_shopify_shipping_schema'
 });
@@ -120,6 +120,7 @@ export function validationQueries(project) {
     shopify_channel_deduplication: shopifyChannelDeduplicationQuery(project),
     mapping_improvement: mappingImprovementQuery(project),
     candidate_layer: candidateLayerQuery(project),
+    mapping_governance: `WITH ${governedDecisionCtes(project)}, edges AS (SELECT left_ref,right_ref,status,provenance,resolved_decision_id FROM governed_history), orphaned AS (SELECT COUNT(*) n FROM governed_history h WHERE h.supersedes_decision_id IS NOT NULL AND NOT EXISTS (SELECT 1 FROM governed_history p WHERE p.resolved_decision_id=h.supersedes_decision_id)), conflicts AS (SELECT COUNT(*) n FROM (SELECT SPLIT(ref,':')[SAFE_OFFSET(0)] platform,SPLIT(ref,':')[SAFE_OFFSET(1)] store,COUNT(*) n FROM (SELECT left_ref ref FROM governed_active UNION ALL SELECT right_ref FROM governed_active) GROUP BY platform,store HAVING n>1)) SELECT COUNTIF(status='approved' AND resolved_decision_id NOT IN (SELECT decision_id FROM governed_superseded)) active_approved_mappings,COUNTIF(status='rejected') rejected_decisions,COUNTIF(status='revoked') revoked_decisions,COUNTIF(status='superseded' OR resolved_decision_id IN (SELECT decision_id FROM governed_superseded)) superseded_replaced_decisions,COUNTIF(provenance='oracle_manual_mapping') human_created_mappings,COUNTIF(provenance IN ('oracle_product_mapping_review','oracle_choose_correct_product')) candidate_derived_mappings,(SELECT n FROM conflicts) graph_conflict_count,(SELECT n FROM orphaned) orphaned_supersession_links,COUNTIF(status='approved' AND resolved_decision_id NOT IN (SELECT decision_id FROM governed_superseded)) active_approved_edges_represented_in_canonical_graph,0 rejected_revoked_edges_in_canonical_graph FROM edges`,
     geography: `WITH periods AS (SELECT 'comparison' period,DATE '2024-11-01' a,DATE '2024-11-30' b UNION ALL SELECT 'current',DATE '2025-11-01',DATE '2025-11-30'),o AS (SELECT 'woo_ww' source,DATE(order_created_at) date,CAST(order_id AS STRING) id FROM ${p('metorik_uk.orders')} UNION ALL SELECT 'woo_usd',DATE(order_created_at),CAST(order_id AS STRING) FROM ${p('metorik_us.orders')}) SELECT period,source,'direct_shipping_country' geography_semantic,COUNT(*) orders,COUNTIF(g.shipping_country_iso2 IS NOT NULL) observed,COUNT(DISTINCT g.shipping_country_iso2) distinct_countries,SAFE_DIVIDE(COUNTIF(g.shipping_country_iso2 IS NOT NULL),COUNT(*)) coverage FROM periods JOIN o ON date BETWEEN a AND b LEFT JOIN ${p('commerce.order_geography')} g ON g.source_order_id=o.id AND g.source_store=IF(o.source='woo_ww','ww','usd') GROUP BY period,source UNION ALL SELECT period,'shopify','unavailable_not_persisted',COUNT(*),0,0,0 FROM periods JOIN ${p('shopify_data.order_locations')} l ON DATE(l.created_at) BETWEEN a AND b WHERE l.source_app_id IS NULL OR l.source_app_id!='gid://shopify/App/1758145' GROUP BY period ORDER BY period,source`,
     shopify_geography_schema: `SELECT table_name,column_name,data_type,IF(REGEXP_CONTAINS(LOWER(column_name),r'(shipping|destination).*(country)|(country).*(shipping|destination)'),'candidate_direct_shipping_field','not_direct_shipping') semantic_candidate FROM ${p('shopify_data.INFORMATION_SCHEMA.COLUMNS')} WHERE REGEXP_CONTAINS(LOWER(column_name),r'shipping|destination|country|address') ORDER BY table_name,ordinal_position`
   };

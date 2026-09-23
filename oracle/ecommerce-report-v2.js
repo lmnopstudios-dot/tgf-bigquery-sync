@@ -1,5 +1,6 @@
 import { reportPeriod } from './report-period.js';
 import { sourceProductRef } from './product-identity.js';
+import { governedDecisionCtes } from './product-mapping.js';
 export { buildCanonicalProductGraph, consolidateSourceProducts, mapProductPair, normalizeRingSize, rowsAtGrain, selectBaseTitle, sourceProductRef } from './product-identity.js';
 
 export const REPORT_SECTIONS = Object.freeze(['overview','sales','customers','products','geography','acquisition','organic','context']);
@@ -93,7 +94,7 @@ export function createEcommerceReportV2({bigquery,project,knowledgeService}){
     ARRAY_AGG(NULLIF(UPPER(TRIM(sku)),'') IGNORE NULLS ORDER BY date DESC LIMIT 1)[SAFE_OFFSET(0)] normalized_sku
     FROM ranked GROUP BY 1,2,3,4
   ), base_products AS (SELECT *,LOWER(TRIM(REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(NORMALIZE(base_title,NFKC),r'[‘’ʼ]',"'"),r'[‐‑‒–—―−]','-'),r'\s+',' '))) normalized_base_title FROM raw_products
-  ), governed_history AS (SELECT *,ROW_NUMBER() OVER(PARTITION BY candidate_id ORDER BY reviewed_at DESC) decision_rank FROM \`${project}.commerce.product_mapping_decisions\`), governed AS (SELECT left_ref,right_ref FROM governed_history WHERE decision_rank=1 AND status='approved'), pairs AS (SELECT 'woo_ww' left_ns,'shopify' right_ns UNION ALL SELECT 'woo_usd','shopify' UNION ALL SELECT 'woo_ww','woo_usd' UNION ALL SELECT 'square','shopify'), candidates AS (
+  ), ${governedDecisionCtes(project)}, governed AS (SELECT left_ref,right_ref FROM governed_active), pairs AS (SELECT 'woo_ww' left_ns,'shopify' right_ns UNION ALL SELECT 'woo_usd','shopify' UNION ALL SELECT 'woo_ww','woo_usd' UNION ALL SELECT 'square','shopify'), candidates AS (
     SELECT l.source_namespace left_ns,l.source_product_id left_id,r.source_namespace right_ns,r.source_product_id right_id,
       CASE WHEN l.normalized_sku IS NOT NULL AND l.normalized_sku=r.normalized_sku THEN 'exact_unique_sku' WHEN l.normalized_base_title IS NOT NULL AND l.normalized_base_title=r.normalized_base_title THEN 'exact_unique_normalized_base_title' END mapping_method
     FROM pairs p JOIN base_products l ON l.source_namespace=p.left_ns JOIN base_products r ON r.source_namespace=p.right_ns
