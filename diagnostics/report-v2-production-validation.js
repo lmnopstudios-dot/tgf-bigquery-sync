@@ -4,6 +4,7 @@ import { BigQuery } from '@google-cloud/bigquery';
 import { fileURLToPath } from 'node:url';
 import { resolve } from 'node:path';
 import { redactError } from '../oracle/ui-security.js';
+import { candidateDiagnostics } from '../oracle/product-mapping.js';
 
 export const CURRENT = { start_date: '2025-11-01', end_date: '2025-11-30' };
 export const COMPARISON = { start_date: '2024-11-01', end_date: '2024-11-30' };
@@ -97,7 +98,7 @@ export function mappingImprovementQuery(project) {
 }
 
 export function candidateLayerQuery(project) {
-  return `WITH latest AS (SELECT *,ROW_NUMBER() OVER(PARTITION BY candidate_id ORDER BY reviewed_at DESC) rank FROM \`${project}.commerce.product_mapping_decisions\`) SELECT COUNTIF(status='suggested') candidate_count,COUNTIF(status='suggested' AND confidence='high') high_review_priority,COUNTIF(status='suggested' AND confidence='medium') medium_review_priority,COUNTIF(status='suggested' AND confidence='low') low_review_priority,CAST(NULL AS FLOAT64) candidate_line_item_coverage,CAST(NULL AS FLOAT64) candidate_sales_coverage,COUNTIF(status='approved') approved_mapping_count,COUNTIF(status='rejected') rejected_mapping_count FROM latest WHERE rank=1`;
+  return `WITH ${governedProductCtes(project)}, keys AS (SELECT *,COUNT(*) OVER(PARTITION BY platform,store,normalized_base_title) local_title_count,COUNT(DISTINCT CONCAT(platform,':',store)) OVER(PARTITION BY normalized_base_title) title_sources,COUNT(*) OVER(PARTITION BY platform,store,normalized_sku) local_sku_count,COUNT(DISTINCT CONCAT(platform,':',store)) OVER(PARTITION BY normalized_sku) sku_sources FROM products), classified AS (SELECT *,IF((normalized_sku IS NOT NULL AND local_sku_count=1 AND sku_sources>1) OR (normalized_base_title IS NOT NULL AND local_title_count=1 AND title_sources>1),'resolved','source_specific') mapping_status FROM keys), latest AS (SELECT *,ROW_NUMBER() OVER(PARTITION BY candidate_id ORDER BY reviewed_at DESC) rank FROM \`${project}.commerce.product_mapping_decisions\`) SELECT 'product' row_kind,source_product_ref,platform source_platform,store source_store,product_id source_product_id,base_title title,normalized_sku sku,line_items,sales,mapping_status,CAST(NULL AS STRING) candidate_id,CAST(NULL AS STRING) left_ref,CAST(NULL AS STRING) right_ref,CAST(NULL AS STRING) status FROM classified UNION ALL SELECT 'decision',NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,candidate_id,left_ref,right_ref,status FROM latest WHERE rank=1`;
 }
 
 export function validationQueries(project) {
@@ -179,7 +180,10 @@ export async function validate({ bigquery, project, onProgress = () => {} }) {
     const operation = VALIDATION_OPERATIONS[name];
     try {
       assertValidatorSqlShape(name, query);
-      [output[name]] = await bigquery.query({ query, useLegacySql: false, maximumBytesBilled: '10000000000', labels: { component: 'report_v2_validator', check: name, operation } });
+      let rows; [rows] = await bigquery.query({ query, useLegacySql: false, maximumBytesBilled: '10000000000', labels: { component: 'report_v2_validator', check: name, operation } });
+      output[name] = name === 'candidate_layer'
+        ? [candidateDiagnostics(rows.filter(r=>r.row_kind==='product'),rows.filter(r=>r.row_kind==='decision'))]
+        : rows;
       onProgress({ validator: 'report-v2-production', check_name: name, operation, status: 'PASS' });
     } catch (error) {
       const context = validationFailure(error, name, operation);
