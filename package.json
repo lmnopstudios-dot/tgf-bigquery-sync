@@ -34,7 +34,9 @@
     "validate:canonical-finance-production": "node diagnostics/canonical-finance-production-validation.js",
     "validate:product-mapping-production": "node diagnostics/product-mapping-production-validation.js",
     "validate:customer-journey-production": "node diagnostics/customer-journey-production-validation.js",
-    "sync:product-classifications": "node product-classifications/sync.js"
+    "sync:product-classifications": "node product-classifications/sync.js",
+    "sync:shopify-catalogue": "node shopify/catalogue.js",
+    "validate:catalogue-production": "node diagnostics/catalogue-production-validation.js"
   },
   "engines": {
     "node": ">=20"
