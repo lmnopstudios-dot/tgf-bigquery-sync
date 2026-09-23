@@ -10,9 +10,9 @@ const stableId=value=>String(value||'').split('/').pop();
 // repeated field (notably product tags) is empty. Keep these types alongside
 // the catalogue writes so every nullable/repeated value has a stable schema.
 export const CATALOGUE_QUERY_TYPES={
-  products:{rows:[{product_id:'STRING',title:'STRING',product_type:'STRING',vendor:'STRING',tags:['STRING'],status:'STRING',created_at:'TIMESTAMP',updated_at:'TIMESTAMP',catalogue_synced_at:'TIMESTAMP'}]},
-  collections:{rows:[{collection_id:'STRING',title:'STRING',handle:'STRING',product_count:'INT64',updated_at:'TIMESTAMP',catalogue_synced_at:'TIMESTAMP'}]},
-  memberships:{rows:[{product_id:'STRING',collection_id:'STRING',catalogue_synced_at:'TIMESTAMP'}]}
+  products:{rows:[{product_id:'STRING',title:'STRING',product_type:'STRING',vendor:'STRING',tags:['STRING'],status:'STRING',created_at:'STRING',updated_at:'STRING',catalogue_synced_at:'STRING'}]},
+  collections:{rows:[{collection_id:'STRING',title:'STRING',handle:'STRING',product_count:'INT64',updated_at:'STRING',catalogue_synced_at:'STRING'}]},
+  memberships:{rows:[{product_id:'STRING',collection_id:'STRING',catalogue_synced_at:'STRING'}]}
 };
 
 export const CATALOGUE_TABLE_SCHEMAS={
@@ -44,10 +44,10 @@ export function validateCatalogueRows(catalogue){
     if(kind==='product'&&(!Array.isArray(row.tags)||row.tags.some(tag=>typeof tag!=='string')))throw new Error(`Invalid Shopify catalogue product row: tags must be an array of strings${row.product_id?` (product_id: ${row.product_id})`:''}`);
   }
 }
-const timestamp=value=>value===null||value===undefined?null:BigQuery.timestamp(value);
-function materializeCatalogue(catalogue,catalogueSyncedAt){const syncedAt=timestamp(catalogueSyncedAt);return {
-  products:catalogue.products.map(row=>({...row,created_at:timestamp(row.created_at),updated_at:timestamp(row.updated_at),catalogue_synced_at:syncedAt})),
-  collections:catalogue.collections.map(row=>({...row,updated_at:timestamp(row.updated_at),catalogue_synced_at:syncedAt})),
+const isoTimestamp=value=>{if(value===null||value===undefined||value==='')return null;const parsed=new Date(value);if(Number.isNaN(parsed.valueOf()))throw new Error(`Invalid Shopify catalogue timestamp: ${value}`);return parsed.toISOString()};
+function materializeCatalogue(catalogue,catalogueSyncedAt){const syncedAt=isoTimestamp(catalogueSyncedAt);return {
+  products:catalogue.products.map(row=>({...row,created_at:isoTimestamp(row.created_at),updated_at:isoTimestamp(row.updated_at),catalogue_synced_at:syncedAt})),
+  collections:catalogue.collections.map(row=>({...row,updated_at:isoTimestamp(row.updated_at),catalogue_synced_at:syncedAt})),
   memberships:catalogue.memberships.map(row=>({...row,catalogue_synced_at:syncedAt}))
 }}
 
@@ -71,16 +71,25 @@ export function inspectSerializedRows(rows,types){
 }
 function writeDiagnostic(operation,rows,types,syncTimestamp,requiredFields){
   const first=rows[0];
-  const diagnostic={operation,row_count:rows.length,sync_timestamp:syncTimestamp,required_field_names:requiredFields,null_counts:Object.fromEntries(requiredFields.map(field=>[field,rows.filter(row=>missing(row[field])).length])),parameter_type_names:TYPE_FIELDS(types),first_row_object_keys:first?Object.keys(first):[],first_row_catalogue_synced_at_non_null:first?!missing(first.catalogue_synced_at):null,timestamp_runtime_type:first?.catalogue_synced_at?.constructor?.name||typeof first?.catalogue_synced_at};
+  const diagnostic={operation,row_count:rows.length,sync_timestamp:syncTimestamp,required_field_names:requiredFields,null_counts:Object.fromEntries(requiredFields.map(field=>[field,rows.filter(row=>missing(row[field])).length])),parameter_type_names:TYPE_FIELDS(types),catalogue_synced_at_parameter_type:types.rows[0].catalogue_synced_at,catalogue_synced_at_target_type:'TIMESTAMP',first_row_object_keys:first?Object.keys(first):[],first_row_catalogue_synced_at_non_null:first?!missing(first.catalogue_synced_at):null,timestamp_runtime_type:typeof first?.catalogue_synced_at};
   console.log(JSON.stringify(diagnostic));
   return diagnostic;
 }
 async function runWrite(bigquery,operation,options){try{return await bigquery.query({...options,labels:{component:'shopify_catalogue',operation}})}catch(error){throw new Error(`${operation}: ${error?.message||error}`,{cause:error})}}
 
+export function catalogueSourceProjectionSql(kind,source='UNNEST(@rows)'){
+  const projections={
+    products:'product_id,title,product_type,vendor,tags,status,SAFE_CAST(created_at AS TIMESTAMP) AS created_at,SAFE_CAST(updated_at AS TIMESTAMP) AS updated_at,TIMESTAMP(catalogue_synced_at) AS catalogue_synced_at',
+    collections:'collection_id,title,handle,product_count,SAFE_CAST(updated_at AS TIMESTAMP) AS updated_at,TIMESTAMP(catalogue_synced_at) AS catalogue_synced_at',
+    memberships:'product_id,collection_id,TIMESTAMP(catalogue_synced_at) AS catalogue_synced_at'
+  };
+  if(!projections[kind])throw new Error(`Unknown Shopify catalogue projection: ${kind}`);
+  return `SELECT ${projections[kind]} FROM ${source}`;
+}
 export const catalogueMergeSql={
-  products:(project,dataset)=>`MERGE \`${project}.${dataset}.products\` t USING (SELECT product_id,title,product_type,vendor,tags,status,created_at,updated_at,catalogue_synced_at FROM UNNEST(@rows)) s ON t.product_id=s.product_id WHEN MATCHED THEN UPDATE SET title=s.title,product_type=s.product_type,vendor=s.vendor,tags=s.tags,status=s.status,created_at=s.created_at,updated_at=s.updated_at,catalogue_synced_at=s.catalogue_synced_at WHEN NOT MATCHED THEN INSERT (product_id,title,product_type,vendor,tags,status,created_at,updated_at,catalogue_synced_at) VALUES (s.product_id,s.title,s.product_type,s.vendor,s.tags,s.status,s.created_at,s.updated_at,s.catalogue_synced_at)`,
-  collections:(project,dataset)=>`MERGE \`${project}.${dataset}.collections\` t USING (SELECT collection_id,title,handle,product_count,updated_at,catalogue_synced_at FROM UNNEST(@rows)) s ON t.collection_id=s.collection_id WHEN MATCHED THEN UPDATE SET title=s.title,handle=s.handle,product_count=s.product_count,updated_at=s.updated_at,catalogue_synced_at=s.catalogue_synced_at WHEN NOT MATCHED THEN INSERT (collection_id,title,handle,product_count,updated_at,catalogue_synced_at) VALUES (s.collection_id,s.title,s.handle,s.product_count,s.updated_at,s.catalogue_synced_at)`,
-  memberships:(project,dataset)=>`MERGE \`${project}.${dataset}.product_collections\` t USING (SELECT product_id,collection_id,catalogue_synced_at FROM UNNEST(@rows)) s ON t.product_id=s.product_id AND t.collection_id=s.collection_id WHEN MATCHED THEN UPDATE SET catalogue_synced_at=s.catalogue_synced_at WHEN NOT MATCHED THEN INSERT (product_id,collection_id,catalogue_synced_at) VALUES (s.product_id,s.collection_id,s.catalogue_synced_at) WHEN NOT MATCHED BY SOURCE THEN DELETE`
+  products:(project,dataset)=>`MERGE \`${project}.${dataset}.products\` t USING (${catalogueSourceProjectionSql('products')}) s ON t.product_id=s.product_id WHEN MATCHED THEN UPDATE SET title=s.title,product_type=s.product_type,vendor=s.vendor,tags=s.tags,status=s.status,created_at=s.created_at,updated_at=s.updated_at,catalogue_synced_at=s.catalogue_synced_at WHEN NOT MATCHED THEN INSERT (product_id,title,product_type,vendor,tags,status,created_at,updated_at,catalogue_synced_at) VALUES (s.product_id,s.title,s.product_type,s.vendor,s.tags,s.status,s.created_at,s.updated_at,s.catalogue_synced_at)`,
+  collections:(project,dataset)=>`MERGE \`${project}.${dataset}.collections\` t USING (${catalogueSourceProjectionSql('collections')}) s ON t.collection_id=s.collection_id WHEN MATCHED THEN UPDATE SET title=s.title,handle=s.handle,product_count=s.product_count,updated_at=s.updated_at,catalogue_synced_at=s.catalogue_synced_at WHEN NOT MATCHED THEN INSERT (collection_id,title,handle,product_count,updated_at,catalogue_synced_at) VALUES (s.collection_id,s.title,s.handle,s.product_count,s.updated_at,s.catalogue_synced_at)`,
+  memberships:(project,dataset)=>`MERGE \`${project}.${dataset}.product_collections\` t USING (${catalogueSourceProjectionSql('memberships')}) s ON t.product_id=s.product_id AND t.collection_id=s.collection_id WHEN MATCHED THEN UPDATE SET catalogue_synced_at=s.catalogue_synced_at WHEN NOT MATCHED THEN INSERT (product_id,collection_id,catalogue_synced_at) VALUES (s.product_id,s.collection_id,s.catalogue_synced_at) WHEN NOT MATCHED BY SOURCE THEN DELETE`
 };
 
 export async function persistShopifyCatalogue(bigquery,project,catalogue,{dataset=SHOPIFY_CATALOGUE_DATASET,catalogueSyncedAt,now}={}){
