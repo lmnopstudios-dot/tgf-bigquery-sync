@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { assertProductGraphIntegrity, diagnoseProposedProductEdge, inspectProductGraph } from './product-graph-integrity.js';
+import { assertProductGraphExtensionIntegrity, assertProductGraphIntegrity, diagnoseProposedProductEdge, inspectProductGraph } from './product-graph-integrity.js';
 import { mapProductPair } from './product-identity.js';
 import { atGovernanceStage } from './governance-diagnostics.js';
 
@@ -166,7 +166,7 @@ export function createProductMappingService({ bigquery, project, dataset = PRODU
   const append=async rows=>atGovernanceStage('insert_decision','product_mapping_append',async()=>{const columns=fields.map(x=>x.split(':')[0]);const scalar=columns.filter(x=>x!=='candidate_evidence');const projections=scalar.map(name=>name==='score'?`SAFE_CAST(JSON_VALUE(row,'$.${name}') AS FLOAT64) ${name}`:name==='reviewed_at'?`TIMESTAMP(JSON_VALUE(row,'$.${name}')) ${name}`:`JSON_VALUE(row,'$.${name}') ${name}`);projections.splice(columns.indexOf('candidate_evidence'),0,"SAFE.PARSE_JSON(JSON_QUERY(row,'$.candidate_evidence')) candidate_evidence");await bigquery.query({query:`INSERT INTO \`${table}\` (${columns.join(',')}) SELECT ${projections.join(',')} FROM UNNEST(JSON_QUERY_ARRAY(@payload)) row`,params:{payload:JSON.stringify(rows)},types:{payload:'STRING'},useLegacySql:false});return rows;});
   const assertPair=(a,b)=>{if(!a?.source_product_ref||!b?.source_product_ref)throw new Error('invalid product mapping pair');if(namespace(a)===namespace(b))throw new Error('products must come from different source namespaces');};
   const activeEdges=history=>approvedMappingEdges(history);
-  const validateApproval=async(candidate,edges)=>atGovernanceStage('graph_safety','product_mapping_graph_validation',async()=>{const products=await loadProducts();return assertProductGraphIntegrity({products,explicitEdges:[...edges,{...candidate,mapping_status:'resolved'}],deterministicEdges:deterministicMappingEdges(products)});});
+  const validateApproval=async(candidate,edges)=>atGovernanceStage('graph_safety','product_mapping_graph_validation',async()=>{const products=await loadProducts();return assertProductGraphExtensionIntegrity({products,explicitEdges:edges,deterministicEdges:deterministicMappingEdges(products),candidate});});
   return {
     setup, decisions,
     async inspectCurrentGraph(history=null){

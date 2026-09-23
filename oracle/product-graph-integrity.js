@@ -71,6 +71,32 @@ export function assertProductGraphIntegrity(input) {
   return result;
 }
 
+const conflictPairKeys = graph => new Set(graph.components.flatMap(component => component.duplicate_namespaces.flatMap(duplicate =>
+  duplicate.source_product_refs.flatMap((left,index) => duplicate.source_product_refs.slice(index+1).map(right => [left,right].sort().join('\0')))
+)));
+
+/**
+ * Validate one proposed edge without allowing unrelated, pre-existing bad data to
+ * block all governance writes.  The invariant is still strict: the proposal may
+ * not introduce even one new same-namespace pair.
+ */
+export function assertProductGraphExtensionIntegrity({products=[],explicitEdges=[],deterministicEdges=[],candidate}={}) {
+  if(!candidate?.left_ref||!candidate?.right_ref) throw new Error('candidate endpoints are required');
+  const proposed={...candidate,mapping_status:'resolved'};
+  const before=inspectProductGraph({products,explicitEdges,deterministicEdges});
+  const after=inspectProductGraph({products,explicitEdges:[...explicitEdges,proposed],deterministicEdges});
+  const proposedProblem=after.edge_problems.find(problem=>problem.edge===proposed);
+  if(proposedProblem) throw new Error(`product mapping rejected: ${proposedProblem.reason} (${proposed.left_ref} ↔ ${proposed.right_ref})`);
+  const prior=conflictPairKeys(before);
+  const introduced=[...conflictPairKeys(after)].filter(key=>!prior.has(key));
+  if(introduced.length){
+    const [left,right]=introduced[0].split('\0'),byRef=new Map(products.map(product=>[product.source_product_ref,product]));
+    const label=ref=>`${ref}${byRef.get(ref)?.title?` (${byRef.get(ref).title||byRef.get(ref).base_title})`:''}`;
+    throw new Error(`product mapping would create a canonical graph conflict: ${productNamespace(left)} would contain distinct products; conflicting products: ${label(left)}, ${label(right)}`);
+  }
+  return after;
+}
+
 const diagnosticEdge = (edge, proposed) => ({
   edge_source: edge === proposed ? 'proposed_candidate' : edge.decision_id ? 'governed_approval' : 'deterministic_identity',
   mapping_method: edge.mapping_method || 'unknown', left_ref:edge.left_ref, right_ref:edge.right_ref,
@@ -92,7 +118,7 @@ export function diagnoseProposedProductEdge({products=[],explicitEdges=[],determ
   for(const edge of after.edges){add(edge.left_ref,{ref:edge.right_ref,edge});add(edge.right_ref,{ref:edge.left_ref,edge});}
   const path=(start,end)=>{const queue=[start],seen=new Set([start]),previous=new Map();while(queue.length){const ref=queue.shift();if(ref===end)break;for(const item of adjacency.get(ref)||[]){if(seen.has(item.ref))continue;seen.add(item.ref);previous.set(item.ref,{ref,edge:item.edge});queue.push(item.ref);}}if(!seen.has(end))return null;const edges=[];for(let ref=end;ref!==start;){const item=previous.get(ref);edges.unshift(diagnosticEdge(item.edge,proposed));ref=item.ref;}return edges;};
   const merged=componentFor(after,candidate.left_ref);
-  const beforeConflicts=new Set(before.components.flatMap(c=>c.duplicate_namespaces.flatMap(d=>d.source_product_refs.flatMap((a,i)=>d.source_product_refs.slice(i+1).map(b=>[a,b].sort().join('\0'))))));
+  const beforeConflicts=conflictPairKeys(before);
   const conflict_paths=[];
   for(const duplicate of merged?.duplicate_namespaces||[])for(let i=0;i<duplicate.source_product_refs.length;i++)for(let j=i+1;j<duplicate.source_product_refs.length;j++){
     const refs=[duplicate.source_product_refs[i],duplicate.source_product_refs[j]].sort();

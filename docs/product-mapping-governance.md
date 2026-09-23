@@ -20,7 +20,7 @@ Every event has a stable `decision_id` and `relationship_id`, reviewer, timestam
 * **Revoke mapping** appends a revocation that supersedes the approval; the edge leaves the current canonical graph.
 * **Reconsider** appends a reconsideration (returning the pair to review) or an explicitly confirmed superseding approval.
 
-Before any approval, the complete active graph is checked. A component cannot contain two products from the same source namespace. Validation completes before writes, so a detected conflict cannot partially persist a correction.
+Before any approval, the complete active graph is checked. A component cannot contain two products from the same source namespace. Validation compares the graph immediately before and after the proposed edge: it rejects every newly introduced same-namespace product pair, while a pre-existing conflict in an unrelated component no longer blocks a safe write. Existing conflicts remain reported and unresolved; they are not suppressed, repaired, or treated as valid. Validation completes before writes, so a detected new conflict cannot partially persist a correction.
 
 For candidate `0e0bcd00a8eda894832d7dc6`, run this first from the deployed repository root in a Render Shell:
 
@@ -37,6 +37,14 @@ npm run diagnose:product-mapping-candidate -- '3f4ceb34b70f26d84ed4f605=gid://sh
 This candidate-specific command is read-only: it loads transaction-derived products and immutable mapping history with `SELECT` queries, reconstructs deterministic and governed edges, and does not call schema setup or any review/write method. An optional `candidate_id=selected_product_id` argument reproduces the replacement edge constructed by **Choose correct product**. Its JSON shows both proposed endpoints and their current components, followed by each newly conflicting same-namespace product pair and the complete shortest evidence path between it. Every path edge identifies its source (`deterministic_identity`, `governed_approval`, or `proposed_candidate`), mapping method, endpoint refs, and decision/relationship IDs when present. It also contrasts the former governed-edge-only validator graph with the full write-time graph. A title mismatch is evidence only and is never used to bypass graph safety.
 
 The smallest safe correction is to revoke or change the single erroneous active governed approval identified on the conflict path. If the path instead identifies a deterministic edge, correct the underlying duplicate SKU/title identity evidence; do not approve the candidate or weaken the one-product-per-namespace invariant. When the output cannot isolate an erroneous edge, leave the candidate unapproved and report the shown path as ambiguous.
+
+The incremental check is also required by the historical product grain. Woo Ready To Ship rings were separate source products by size, whereas Shopify represents sizes as variants beneath one product parent. Approving a second Woo size into a Shopify component that already contains another Woo product still creates a new same-namespace pair and is rejected.
+
+### Heart With Love impact and future model
+
+The Heart With Love candidate can safely connect **one** historical Woo size-specific product to the current Shopify parent when that component contains no other product from the same Woo store. That approval does not establish identity for the sibling Woo sizes. A later attempt to connect another Woo size to the same Shopify parent is correctly rejected by the current graph because it would place two distinct `woo:ww` (or two distinct `woo:usd`) product IDs in one identity component. Consequently, parent-level historical reporting remains partial: the approved size can roll into the Shopify product, while its sibling Woo sizes remain separate source products. This is a modelling limitation, not evidence that those source product IDs are identical.
+
+The smallest safe future model is a separate, governed **product-family** relationship at Shopify-parent grain. It would allow multiple source-qualified Woo products to be members of one reporting family, retain each Woo product and Shopify variant as a distinct identity, record the size/variant evidence for every membership, and make family aggregation explicit in reports. The existing canonical identity graph and its one-product-per-source-namespace invariant should remain unchanged until that relationship, persistence contract, diagnostics, and report semantics are implemented together.
 
 ## Reporting and validation
 

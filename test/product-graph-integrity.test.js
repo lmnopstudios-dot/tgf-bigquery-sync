@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { assertProductGraphIntegrity, diagnoseProposedProductEdge, inspectProductGraph, preserveConflictedProductIdentity } from '../oracle/product-graph-integrity.js';
+import { assertProductGraphExtensionIntegrity, assertProductGraphIntegrity, diagnoseProposedProductEdge, inspectProductGraph, preserveConflictedProductIdentity } from '../oracle/product-graph-integrity.js';
 
 const p=(ref,title=ref)=>({source_product_ref:ref,title});
 const e=(left_ref,right_ref,extra={})=>({left_ref,right_ref,mapping_status:'resolved',...extra});
@@ -46,4 +46,19 @@ test('transitive deterministic and explicit conflict has actionable non-PII path
   assert.ok(safe.every(x=>x.mapping_status==='conflicted_unresolved'&&x.canonical_product_ref===null));
   const resolved=inspectProductGraph({products,deterministicEdges,explicitEdges:[]});
   assert.equal(resolved.summary.conflicted_components,0); // revocation removes only the active edge; history is external and retained.
+});
+
+test('an unrelated existing deterministic conflict does not block a safe approval',()=>{
+  const products=[p('woo:ww:brat','Brat Devil Pendant'),p('woo:ww:rascal','Rascal Devil Pendant'),p('shopify:shopify:devil','Devil Pendant'),p('square:square:brat','Brat Devil Pendant'),p('woo:usd:love','Ready To Ship - Love Ring - O'),p('shopify:shopify:love','Love Ring')];
+  const deterministicEdges=[e('woo:ww:brat','shopify:shopify:devil',{mapping_method:'exact_unique_sku'}),e('shopify:shopify:devil','square:square:brat',{mapping_method:'exact_unique_sku'}),e('square:square:brat','woo:ww:rascal',{mapping_method:'exact_unique_normalized_base_title'})];
+  const candidate=e('woo:usd:love','shopify:shopify:love',{mapping_method:'explicit_governed_mapping'});
+  const graph=assertProductGraphExtensionIntegrity({products,deterministicEdges,candidate});
+  assert.equal(graph.summary.conflicted_components,1);
+  assert.ok(graph.edges.some(edge=>edge.left_ref===candidate.left_ref&&edge.right_ref===candidate.right_ref));
+});
+
+test('Woo size products cannot both be merged into one Shopify variant parent',()=>{
+  const products=[p('woo:ww:size-n','Ready To Ship - Love Ring - N'),p('woo:ww:size-o','Ready To Ship - Love Ring - O'),p('shopify:shopify:love','Love Ring')];
+  const deterministicEdges=[e('woo:ww:size-n','shopify:shopify:love',{mapping_method:'exact_unique_sku'})];
+  assert.throws(()=>assertProductGraphExtensionIntegrity({products,deterministicEdges,candidate:e('woo:ww:size-o','shopify:shopify:love')}),/would create.*conflict/);
 });
