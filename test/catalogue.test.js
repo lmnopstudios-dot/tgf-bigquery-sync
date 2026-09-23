@@ -1,9 +1,32 @@
 import test from 'node:test';import assert from 'node:assert/strict';
-import {fetchShopifyCatalogue,persistShopifyCatalogue,catalogueDdl} from '../shopify/catalogue.js';
+import {BigQuery} from '@google-cloud/bigquery';
+import {CATALOGUE_QUERY_TYPES,fetchShopifyCatalogue,persistShopifyCatalogue,catalogueDdl} from '../shopify/catalogue.js';
 import {metadataStructSql,quoteBigQueryIdentifier} from '../product-classifications/sync.js';
 import {validateCollectionDecision} from '../oracle/collection-classification.js';
 
 test('dynamic metadata SQL uses AS, commas, quoting, and supports no fields',()=>{assert.equal(metadataStructSql([]),"'{}'");assert.match(metadataStructSql(['product_type']),/TO_JSON_STRING\(`product_type`\) AS `product_type`/);const sql=metadataStructSql(['product_type','vendor','tags']);assert.match(sql,/`, TO_JSON_STRING/);assert.equal(quoteBigQueryIdentifier('odd`name'),'`odd``name`')});
 test('Shopify catalogue follows product, collection, and membership pagination',async()=>{let products=0,memberships=0;const graphql=async(query,{cursor})=>{if(query.includes('CatalogueProducts')){products++;return {products:{nodes:[{id:`gid://shopify/Product/${products}`,title:'Display only',productType:'Ring',vendor:'TGF',tags:['x'],status:'ACTIVE',createdAt:'2020-01-01',updatedAt:'2020-01-02'}],pageInfo:{hasNextPage:products===1,endCursor:'p2'}}}}if(query.includes('CatalogueCollections'))return {collections:{nodes:[{id:'gid://shopify/Collection/10',title:'Human review',handle:'review',updatedAt:'2020-01-01',productsCount:{count:2}}],pageInfo:{hasNextPage:false}}};memberships++;return {collection:{products:{nodes:[{id:`gid://shopify/Product/${memberships}`}],pageInfo:{hasNextPage:memberships===1,endCursor:'m2'}}}}};const result=await fetchShopifyCatalogue(graphql);assert.equal(result.products.length,2);assert.equal(result.collections.length,1);assert.deepEqual(result.memberships,[{product_id:'1',collection_id:'10'},{product_id:'2',collection_id:'10'}]);assert.equal(result.products[0].status,'active')});
 test('catalogue persistence uses MERGE and authoritative membership replacement',async()=>{const calls=[],bigquery={query:async q=>(calls.push(q),[[]])};await persistShopifyCatalogue(bigquery,'p',{products:[{product_id:'1',title:'x',product_type:'Ring',vendor:'v',tags:[],status:'archived',created_at:null,updated_at:null}],collections:[{collection_id:'2',title:'c',handle:'c',product_count:1,updated_at:null}],memberships:[]},{now:'2026-01-01T00:00:00Z'});assert.ok(calls.some(x=>x.query.includes('MERGE `p.shopify_catalogue.products`')));assert.ok(calls.some(x=>x.query.includes('WHEN NOT MATCHED BY SOURCE THEN DELETE')));assert.equal(catalogueDdl('p').length,4)});
+test('catalogue writes declare types for empty and populated repeated values',async()=>{const calls=[],bigquery={query:async options=>(calls.push(options),[[]])};const catalogue={products:[
+  {product_id:'1',title:'empty',product_type:null,vendor:null,tags:[],status:'active',created_at:null,updated_at:null},
+  {product_id:'2',title:'one',product_type:'Ring',vendor:'TGF',tags:['gold'],status:'active',created_at:'2020-01-01',updated_at:'2020-01-02'},
+  {product_id:'3',title:'many',product_type:'Ring',vendor:'TGF',tags:['gold','gift'],status:'draft',created_at:'2020-01-01',updated_at:'2020-01-02'}
+],collections:[{collection_id:'10',title:'Collection',handle:'collection',product_count:0,updated_at:null}],memberships:[]};
+  await persistShopifyCatalogue(bigquery,'p',catalogue,{now:'2026-01-01T00:00:00Z'});
+  await persistShopifyCatalogue(bigquery,'p',catalogue,{now:'2026-01-01T00:00:00Z'});
+  const parameterized=calls.filter(call=>call.params);
+  assert.equal(parameterized.length,6);
+  for(const call of parameterized)assert.ok(call.types,'every parameterized catalogue query supplies types');
+  const productWrites=parameterized.filter(call=>call.query.includes('.products`'));
+  assert.equal(productWrites.length,2);
+  assert.deepEqual(productWrites[0].params.rows.map(row=>row.tags),[[],['gold'],['gold','gift']]);
+  assert.deepEqual(productWrites[0].types,CATALOGUE_QUERY_TYPES.products);
+  assert.deepEqual(productWrites[0].types.rows[0].tags,['STRING']);
+  const membershipWrites=parameterized.filter(call=>call.query.includes('current_memberships'));
+  assert.equal(membershipWrites.length,2);
+  assert.deepEqual(membershipWrites[0].params.rows,[]);
+  assert.deepEqual(membershipWrites[0].types,CATALOGUE_QUERY_TYPES.memberships);
+  assert.doesNotThrow(()=>BigQuery.valueToQueryParameter_(productWrites[0].params.rows,productWrites[0].types.rows));
+  assert.doesNotThrow(()=>BigQuery.valueToQueryParameter_(membershipWrites[0].params.rows,membershipWrites[0].types.rows));
+});
 test('collection governance is explicit, normalized, auditable and rejects invalid groups',()=>{const row=validateCollectionDecision({platform:'shopify',collection_id:'10',collection_title:'Collab',classification_type:'collaboration_name',classification_value:'Artist Name'},'reviewer','2026-01-01T00:00:00Z');assert.equal(row.classification_value,'artist_name');assert.equal(row.reviewed_by,'reviewer');assert.throws(()=>validateCollectionDecision({platform:'shopify',collection_id:'10',classification_type:'collection_group',classification_value:'maybe'},'r'),/collaboration or other/)});
