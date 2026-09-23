@@ -27,6 +27,7 @@
     "validate:knowledge": "node diagnostics/knowledge-validation.js",
     "validate:knowledge-production": "node diagnostics/knowledge-production-validation.js",
     "validate:oracle-proposals-production": "node diagnostics/oracle-proposals-production.js",
+    "validate:oracle-conversation-production": "node diagnostics/oracle-conversation-production.js",
     "import:metorik-geography": "node metorik/geography.js",
     "validate:metorik-geography": "node diagnostics/metorik-geography-validation.js",
     "validate:report-v2-production": "node diagnostics/report-v2-production-validation.js"

@@ -9163,14 +9163,14 @@ if (process.env.ORACLE_UI_PASSWORD || process.env.ORACLE_UI_SESSION_SECRET) {
     productMappingService,
     env: process.env,
     generateProposals: createProposalGenerator({ openai, model: process.env.ORACLE_PROPOSAL_MODEL || 'gpt-5.6' }),
-    chat: async message => {
+    chat: async (message, conversation = {}) => {
       const response = await fetch(`http://127.0.0.1:${PORT}/agent`, {
         method: 'POST',
         headers: {
           authorization: `Bearer ${SYNC_SECRET}`,
           'content-type': 'application/json'
         },
-        body: JSON.stringify({ message })
+        body: JSON.stringify({ message: conversation.analysisContext ? `Governed session-local analysis context (retain unless this user message explicitly changes it): ${JSON.stringify(conversation.analysisContext)}\n\nCurrent user message: ${message}\n\nUse only relevant context fields for tool calls. State the resolved scope in the answer.` : message })
       });
       const payload = await response.json();
       if (!response.ok || !payload.success) throw new Error('Oracle could not complete the conversation');
