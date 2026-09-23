@@ -1,10 +1,11 @@
 import { reportPeriod } from './report-period.js';
 import { sourceProductRef } from './product-identity.js';
 import { governedDecisionCtes } from './product-mapping.js';
+import { createCanonicalFinanceService, MATRIXIFY_APP_ID } from '../finance/canonical.js';
 export { buildCanonicalProductGraph, consolidateSourceProducts, mapProductPair, normalizeRingSize, rowsAtGrain, selectBaseTitle, sourceProductRef } from './product-identity.js';
 
 export const REPORT_SECTIONS = Object.freeze(['overview','sales','customers','products','geography','acquisition','organic','context']);
-export const MATRIXIFY_APP_ID = 'gid://shopify/App/1758145';
+export { MATRIXIFY_APP_ID } from '../finance/canonical.js';
 export const REPORT_DEFINITIONS = Object.freeze({
   net_gross:'Canonical finance gross sales less accounting refunds, within one currency.',
   orders:'Canonical finance sale transaction count; not a GA4 transaction count.',
@@ -38,20 +39,13 @@ export function productRef(row,{governedRef=null,skuUnique=true,titleUnique=true
 
 export function createEcommerceReportV2({bigquery,project,knowledgeService}){
   const query=async(sql,params)=>(await bigquery.query({query:sql,params,maximumBytesBilled:'5000000000',useLegacySql:false}))[0];
-  const finance=p=>query(`WITH transactions AS (
-    SELECT date,currency,gross,transaction_type,channel,source FROM \`${project}.finance.accountant_transactions\`
-    WHERE date BETWEEN @start_date AND @end_date AND NOT REGEXP_CONTAINS(LOWER(COALESCE(source,'')),r'shopify')
-    UNION ALL SELECT DATE(f.created_at),UPPER(f.presentment_currency),f.original_total_presentment,'sale',IF(l.retail_location_id IS NULL,'Online','In-store'),'Shopify'
-    FROM \`${project}.shopify_data.order_financials\` f JOIN \`${project}.shopify_data.order_locations\` l USING(order_id)
-    WHERE DATE(f.created_at) BETWEEN @start_date AND @end_date AND (l.source_app_id IS NULL OR l.source_app_id!=@matrixify_app_id)
-    UNION ALL SELECT DATE(f.created_at),UPPER(f.presentment_currency),-COALESCE(f.total_refunded_presentment,0),'refund',IF(l.retail_location_id IS NULL,'Online','In-store'),'Shopify'
-    FROM \`${project}.shopify_data.order_financials\` f JOIN \`${project}.shopify_data.order_locations\` l USING(order_id)
-    WHERE DATE(f.created_at) BETWEEN @start_date AND @end_date AND COALESCE(f.total_refunded_presentment,0)>0 AND (l.source_app_id IS NULL OR l.source_app_id!=@matrixify_app_id))
-    SELECT FORMAT_DATE('%Y-%m-%d', date) date, UPPER(currency) currency,
-    SUM(IF(transaction_type='sale',gross,0)) gross_sales, SUM(IF(transaction_type='refund',gross,0)) refunds,
-    SUM(gross) net_gross, COUNTIF(transaction_type='sale') orders, COALESCE(channel,'Unclassified') channel,
-    COALESCE(source,'Unclassified') source
-    FROM transactions GROUP BY date,currency,channel,source ORDER BY date,currency,channel,source`,{...p,matrixify_app_id:MATRIXIFY_APP_ID});
+  const canonicalFinance=createCanonicalFinanceService({bigquery,project});
+  const finance=async p=>{
+    const rows=await canonicalFinance({...p,grain:'day',dimensions:['currency','channel','source','transaction_type']});
+    if(rows.length&&rows.every(r=>r.transaction_type==null))return rows;
+    const out=new Map();
+    for(const r of rows){const k=[r.period,r.currency,r.channel,r.source].join('|'),x=out.get(k)||{date:r.period,currency:r.currency,channel:r.channel,source:r.source,gross_sales:0,refunds:0,net_gross:0,orders:0};const amount=Number(r.amount||0);x.net_gross+=amount;if(r.transaction_type==='sale'){x.gross_sales+=amount;x.orders+=Number(r.transaction_count||0);}else if(r.transaction_type==='refund')x.refunds+=amount;out.set(k,x);}return [...out.values()];
+  };
   const ga4=p=>query(`WITH evidence AS (
     SELECT date,'channel' dimension_type,COALESCE(session_default_channel_group,'Unassigned') dimension,
       session_source source,session_medium medium,sessions,total_users,engaged_sessions

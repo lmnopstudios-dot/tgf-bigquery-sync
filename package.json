@@ -31,6 +31,7 @@
     "import:metorik-geography": "node metorik/geography.js",
     "validate:metorik-geography": "node diagnostics/metorik-geography-validation.js",
     "validate:report-v2-production": "node diagnostics/report-v2-production-validation.js",
+    "validate:canonical-finance-production": "node diagnostics/canonical-finance-production-validation.js",
     "validate:product-mapping-production": "node diagnostics/product-mapping-production-validation.js"
   },
   "engines": {

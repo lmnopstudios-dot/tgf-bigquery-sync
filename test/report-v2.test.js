@@ -57,8 +57,8 @@ test('finance uses Shopify presentment currency once, excludes Matrixify, and se
   const calls=[];const service=createEcommerceReportV2({bigquery:{query:async o=>{calls.push(o);return [[]]}},project:'test',knowledgeService:{}});
   await service('sales',{start_date:'2025-11-01',end_date:'2025-11-30'});
   const sql=calls[0].query;
-  assert.match(sql,/presentment_currency/);assert.match(sql,/original_total_presentment/);assert.match(sql,/total_refunded_presentment/);
-  assert.match(sql,/source_app_id!=@matrixify_app_id/);assert.match(sql,/retail_location_id IS NULL,'Online','In-store'/);
+  assert.match(sql,/presentment_currency/);assert.match(sql,/original_total_presentment/);assert.match(sql,/refund_total_presentment/);
+  assert.match(sql,/refund_created_at/);assert.match(sql,/source_app_id!=@matrixify_app_id/);assert.match(sql,/retail_location_id IS NULL,'Online','POS'/);
   assert.match(sql,/NOT REGEXP_CONTAINS[\s\S]+shopify/);
 });
 
