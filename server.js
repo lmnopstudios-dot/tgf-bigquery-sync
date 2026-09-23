@@ -9,6 +9,7 @@ import { syncGa4, parseArgs as parseGa4SyncArgs } from './ga4/sync.js';
 import { createEcommerceManagementReportService } from './oracle/ecommerce-management-report.js';
 import { createOrderQueryService, executeOrderToolCall, ORDER_TOOL_DEFINITIONS } from './oracle/order-query.js';
 import { createCustomerQueryService, executeCustomerToolCall, CUSTOMER_TOOL_DEFINITIONS } from './oracle/customer-query.js';
+import { createCustomerJourneyService, executeCustomerJourneyToolCall, CUSTOMER_JOURNEY_TOOL_DEFINITION } from './oracle/customer-journey.js';
 import { KNOWLEDGE_TOOL_DEFINITIONS } from './oracle/knowledge.js';
 import { createKnowledgeService, executeKnowledgeToolCall } from './oracle/knowledge-bigquery.js';
 import { createOracleUiRouter } from './oracle/ui-router.js';
@@ -112,6 +113,7 @@ const orderQueryService = createOrderQueryService({
   project: GOOGLE_PROJECT_ID
 });
 const customerQueryService = createCustomerQueryService({ bigquery, project: GOOGLE_PROJECT_ID });
+const customerJourneyService = createCustomerJourneyService({ bigquery, project: GOOGLE_PROJECT_ID });
 const knowledgeService = createKnowledgeService({
   bigquery,
   project: GOOGLE_PROJECT_ID,
@@ -8104,6 +8106,7 @@ app.post(
       const tools = [
         ...ORDER_TOOL_DEFINITIONS,
         ...CUSTOMER_TOOL_DEFINITIONS,
+        CUSTOMER_JOURNEY_TOOL_DEFINITION,
         ...KNOWLEDGE_TOOL_DEFINITIONS,
         {
           type: 'function',
@@ -8858,6 +8861,13 @@ Important rules:
 - When comparing conversion rates, report the percentage-point change as well as the relative percentage change where useful.
 - Clearly state when a reporting period is partial.
 - For cross-period comparisons, report absolute and percentage changes where appropriate and clearly identify partial periods.
+- Distinguish customer population summaries from customer cohort/purchase-journey questions. Questions containing first purchase/order, bought after/next, second or nth order, repeat rate, within N days, acquisition product, or downstream revenue require analyze_customer_journey, not get_customer_metrics.
+- A journey requires an explicit bounded date range. After asking for dates, retain the cohort classification, entry condition, grouping/ranking and sequence/window constraints and execute when dates arrive; do not ask what should be analysed again.
+- In journey language, say “first observed order” and “customers whose first observed order included …”, never imply the qualifying product caused acquisition. The entry order can contain other products and is excluded from downstream results. A returning customer here has a qualifying order after entry, independently of Shopify's new/returning label.
+- For “what/top products customers buy”, rank by distinct returning customers by default and also show orders, units, source-native net sales by currency, and returning-cohort penetration. Never combine currencies.
+- Product classifications must come from governed classification evidence. Never infer collaboration, ring, clothing, jewellery, material, or campaign membership from product names or model intuition. Suggested/fuzzy product mappings cannot propagate classification.
+- If the requested classification is unavailable or insufficient, say exactly: “I can construct the customer journey, but collaboration classification is not sufficiently governed yet.” Then describe the reported coverage/gap; never fall back to a generic customer summary.
+- Journey results are aggregate-only. Never expose customer references, source customer IDs, emails, names, addresses, phone numbers, or individual journeys. Disclose unresolved identities, limited historical Square/POS identity coverage, classification gaps, and the absent Woo-to-Shopify bridge where relevant.
 - Shopify tools represent the current live catalogue and operational state.
 - For questions about current products, prices, variants or stock, use Shopify rather than historical BigQuery.
 - Shopify inventoryQuantity is aggregate inventory across Shopify locations. Never describe it as location-specific stock.
@@ -8920,6 +8930,15 @@ Important rules:
               if (customerCall.handled) {
                 result = customerCall.result;
               } else {
+                const journeyCall = await executeCustomerJourneyToolCall(
+                  customerJourneyService,
+                  item.name,
+                  args,
+                  diagnostic => console.info('Agent customer journey tool call:', diagnostic)
+                );
+                if (journeyCall.handled) {
+                  result = journeyCall.result;
+                } else {
                 const knowledgeCall = await executeKnowledgeToolCall(
                   knowledgeService,
                   item.name,
@@ -9016,6 +9035,7 @@ Important rules:
             };
             }
               }
+            }
             }
           } catch (error) {
             const throttled = error?.code === 'THROTTLED';
