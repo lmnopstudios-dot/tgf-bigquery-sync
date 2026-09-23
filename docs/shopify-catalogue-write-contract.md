@@ -29,6 +29,30 @@ WHEN NOT MATCHED THEN INSERT (product_id,collection_id,catalogue_synced_at)
 VALUES (s.product_id,s.collection_id,s.catalogue_synced_at)
 ```
 
+The next production run passed the schema audit (`differences: []`) and all
+timestamp checks, then failed only `products catalogue binding validation
+failed: empty_tags_survive`. The complete observed path was a normalized
+JavaScript `tags: []`, an `@rows` runtime empty array, and an explicit nested
+`['STRING']` type. BigQuery client 8.1.1 serialized that field as an
+`arrayValues: []` parameter value, but `UNNEST(@rows)` returned the nested field
+as SQL `NULL`, not as an empty array. Thus the value was neither absent from the
+client struct nor malformed JSON: the empty nested array changed to `NULL` at
+the server binding boundary.
+
+Products no longer bind a nested array. After the normalized `string[]` passes
+pre-write validation, the transport layer serializes it with `JSON.stringify`
+to a `tags_json STRING` field. Both the production MERGE and read-only validator
+use the same source projection to reconstruct the governed value:
+
+```sql
+COALESCE(JSON_VALUE_ARRAY(tags_json), ARRAY<STRING>[]) AS tags
+```
+
+This preserves ordered string elements—including commas, quotes, apostrophes,
+Unicode, and ampersands—without delimiter parsing. `COALESCE` also guarantees
+the projection cannot supply SQL `NULL`; normalized empty tags serialize as
+`'[]'` and reconstruct as an empty `ARRAY<STRING>`.
+
 ## Safe production diagnosis
 
 The sync reads `shopify_catalogue.INFORMATION_SCHEMA.COLUMNS` after the
@@ -41,8 +65,8 @@ matches the production table. A tagged product has an array of tag strings and a
 product without tags has `[]`; `NULL` is never a normalized catalogue value.
 Absent or explicit-null Shopify tag values normalize to `[]`, while pre-write
 validation rejects a missing, null, non-array, or non-string normalized value.
-The nested `@rows` parameter continues to declare `tags: ['STRING']`, including
-when the value is an empty array.
+Only after validation does transport serialization replace `tags` with the
+explicitly typed `tags_json: 'STRING'` parameter field.
 
 The target table schemas remain unchanged: all persisted timestamp columns are
 `TIMESTAMP`, and `catalogue_synced_at` remains `NOT NULL`.
@@ -58,8 +82,10 @@ The read-only production validator performs the same schema audit, inspects the
 actual client serialization, and runs only SELECT queries for representative
 product, collection, and membership parameters. These queries use the same
 exported source-projection builder as each production MERGE and assert raw string
-binding, converted type/non-nullability, nullable timestamp behavior, and empty
-product tags.
+binding, converted type/non-nullability, nullable timestamp behavior, and both
+empty and populated product tags. Empty tags are checked with both `tags IS NOT
+NULL` and `ARRAY_LENGTH(tags) = 0`; populated punctuation and Unicode tags are
+checked for cardinality and ordered values.
 
 Run on Render, in this order:
 

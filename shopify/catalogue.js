@@ -6,11 +6,10 @@ const COLLECTIONS_QUERY=`query CatalogueCollections($cursor:String){collections(
 const COLLECTION_PRODUCTS_QUERY=`query CatalogueCollectionProducts($id:ID!,$cursor:String){collection(id:$id){products(first:100,after:$cursor){pageInfo{hasNextPage endCursor} nodes{id}}}}`;
 const stableId=value=>String(value||'').split('/').pop();
 
-// BigQuery cannot infer an ARRAY's element type when either @rows or a nested
-// repeated field (notably product tags) is empty. Keep these types alongside
-// the catalogue writes so every nullable/repeated value has a stable schema.
+// Keep transport types alongside the catalogue writes. Nested timestamps and
+// product tags cross this boundary as strings and are reconstructed in SQL.
 export const CATALOGUE_QUERY_TYPES={
-  products:{rows:[{product_id:'STRING',title:'STRING',product_type:'STRING',vendor:'STRING',tags:['STRING'],status:'STRING',created_at:'STRING',updated_at:'STRING',catalogue_synced_at:'STRING'}]},
+  products:{rows:[{product_id:'STRING',title:'STRING',product_type:'STRING',vendor:'STRING',tags_json:'STRING',status:'STRING',created_at:'STRING',updated_at:'STRING',catalogue_synced_at:'STRING'}]},
   collections:{rows:[{collection_id:'STRING',title:'STRING',handle:'STRING',product_count:'INT64',updated_at:'STRING',catalogue_synced_at:'STRING'}]},
   memberships:{rows:[{product_id:'STRING',collection_id:'STRING',catalogue_synced_at:'STRING'}]}
 };
@@ -51,6 +50,11 @@ function materializeCatalogue(catalogue,catalogueSyncedAt){const syncedAt=isoTim
   memberships:catalogue.memberships.map(row=>({...row,catalogue_synced_at:syncedAt}))
 }}
 
+export function catalogueTransportRows(catalogue){return {
+  ...catalogue,
+  products:catalogue.products.map(({tags,...row})=>({...row,tags_json:JSON.stringify(tags)}))
+}}
+
 export function catalogueSchemaAuditQuery(project,dataset=SHOPIFY_CATALOGUE_DATASET){return `SELECT table_name,column_name,data_type,is_nullable FROM \`${project}.${dataset}.INFORMATION_SCHEMA.COLUMNS\` WHERE table_name IN ('products','collections','product_collections') ORDER BY table_name,ordinal_position`}
 export async function auditCatalogueSchema(bigquery,project,dataset=SHOPIFY_CATALOGUE_DATASET){
   const [columns]=await bigquery.query({query:catalogueSchemaAuditQuery(project,dataset),labels:{component:'shopify_catalogue',operation:'schema_audit'}});
@@ -79,7 +83,7 @@ async function runWrite(bigquery,operation,options){try{return await bigquery.qu
 
 export function catalogueSourceProjectionSql(kind,source='UNNEST(@rows)'){
   const projections={
-    products:'product_id,title,product_type,vendor,tags,status,SAFE_CAST(created_at AS TIMESTAMP) AS created_at,SAFE_CAST(updated_at AS TIMESTAMP) AS updated_at,TIMESTAMP(catalogue_synced_at) AS catalogue_synced_at',
+    products:'product_id,title,product_type,vendor,COALESCE(JSON_VALUE_ARRAY(tags_json),ARRAY<STRING>[]) AS tags,status,SAFE_CAST(created_at AS TIMESTAMP) AS created_at,SAFE_CAST(updated_at AS TIMESTAMP) AS updated_at,TIMESTAMP(catalogue_synced_at) AS catalogue_synced_at',
     collections:'collection_id,title,handle,product_count,SAFE_CAST(updated_at AS TIMESTAMP) AS updated_at,TIMESTAMP(catalogue_synced_at) AS catalogue_synced_at',
     memberships:'product_id,collection_id,TIMESTAMP(catalogue_synced_at) AS catalogue_synced_at'
   };
@@ -96,8 +100,9 @@ export async function persistShopifyCatalogue(bigquery,project,catalogue,{datase
   // `now` remains an option alias for callers deployed with the earlier API.
   const syncTimestamp=catalogueSyncedAt||now||new Date().toISOString();
   if(Number.isNaN(Date.parse(syncTimestamp)))throw new Error('Invalid Shopify catalogue sync timestamp: catalogue_synced_at is required');
-  const rows=materializeCatalogue(catalogue,syncTimestamp);
-  validateCatalogueRows(rows);
+  const normalizedRows=materializeCatalogue(catalogue,syncTimestamp);
+  validateCatalogueRows(normalizedRows);
+  const rows=catalogueTransportRows(normalizedRows);
   for(const query of catalogueDdl(project,dataset))await bigquery.query({query});
   await auditCatalogueSchema(bigquery,project,dataset);
   const specs=[
