@@ -36,6 +36,7 @@
     "validate:customer-journey-production": "node diagnostics/customer-journey-production-validation.js",
     "sync:product-classifications": "node product-classifications/sync.js",
     "sync:shopify-catalogue": "node shopify/catalogue.js",
+    "validate:shopify-catalogue-write-contract-production": "node diagnostics/shopify-catalogue-write-contract-production.js",
     "validate:catalogue-production": "node diagnostics/catalogue-production-validation.js"
   },
   "engines": {
