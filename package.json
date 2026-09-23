@@ -37,7 +37,8 @@
     "sync:product-classifications": "node product-classifications/sync.js",
     "sync:shopify-catalogue": "node shopify/catalogue.js",
     "validate:shopify-catalogue-write-contract-production": "node diagnostics/shopify-catalogue-write-contract-production.js",
-    "validate:catalogue-production": "node diagnostics/catalogue-production-validation.js"
+    "validate:catalogue-production": "node diagnostics/catalogue-production-validation.js",
+    "validate:product-classifications-production": "node diagnostics/product-classification-production-validation.js"
   },
   "engines": {
     "node": ">=20"
