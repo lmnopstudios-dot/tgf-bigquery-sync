@@ -9,7 +9,7 @@ import { analysisScope, clarificationFor, emptyAnalysisContext, transitionAnalys
 const json = express.json({ limit: '48kb', type: 'application/json' });
 const allowedOrigins = request => new Set([`${request.protocol}://${request.get('host')}`, process.env.ORACLE_UI_ORIGIN].filter(Boolean));
 
-export function createOracleUiRouter({ knowledgeService, bigquery, project, chat, generateProposals, reportService, productMappingService, env = process.env }) {
+export function createOracleUiRouter({ knowledgeService, bigquery, project, chat, generateProposals, reportService, productMappingService, collectionClassificationService, env = process.env }) {
   const router = express.Router();
   const password = env.ORACLE_UI_PASSWORD;
   const sessionSecret = env.ORACLE_UI_SESSION_SECRET;
@@ -109,6 +109,9 @@ export function createOracleUiRouter({ knowledgeService, bigquery, project, chat
   router.post('/product-mappings/change',authenticate,protectWrite,json,mappingWrite('changeMapping'));
   router.post('/product-mappings/revoke',authenticate,protectWrite,json,mappingWrite('revokeMapping'));
   router.post('/product-mappings/reconsider',authenticate,protectWrite,json,mappingWrite('reconsider'));
+  router.get('/collection-classifications',authenticate,async(req,res)=>{try{if(!collectionClassificationService)throw new Error('Collection classifications are unavailable');res.json({success:true,...await collectionClassificationService.list()})}catch(error){res.status(503).json({success:false,error:safeError(error)})}});
+  router.post('/collection-classifications/decide',authenticate,protectWrite,json,async(req,res)=>{try{if(!collectionClassificationService)throw new Error('Collection classifications are unavailable');res.status(201).json({success:true,decision:await collectionClassificationService.decide(req.body||{},req.oracleUser.sub)})}catch(error){res.status(/invalid|required|must/i.test(error.message)?400:503).json({success:false,error:safeError(error)})}});
+  router.post('/collection-classifications/revoke',authenticate,protectWrite,json,async(req,res)=>{try{if(!collectionClassificationService)throw new Error('Collection classifications are unavailable');res.json({success:true,...await collectionClassificationService.revoke(req.body||{},req.oracleUser.sub)})}catch(error){res.status(503).json({success:false,error:safeError(error)})}});
   router.get('/reports/:section', authenticate, async (req, res) => {
     try {
       if (!reportService) throw new Error('Reports are unavailable');
