@@ -31,9 +31,34 @@ export const SHOPIFY_PRODUCT_TYPE_MAPPING = Object.freeze(Object.entries(groups)
 
 const byValue = new Map(SHOPIFY_PRODUCT_TYPE_MAPPING.map(row => [row.source_value, row]));
 
-export function normalizeShopifyProductType(value) {
+export function normalizeShopifyProductTypeSourceValue(value) {
   if (value === null || value === undefined || !String(value).trim()) return null;
-  return byValue.get(String(value).trim()) || null;
+  return String(value).trim();
+}
+
+export function normalizeShopifyProductType(value) {
+  const normalized = normalizeShopifyProductTypeSourceValue(value);
+  return normalized === null ? null : byValue.get(normalized) || null;
+}
+
+/** The one readiness decision used by validation and classification derivation. */
+export function classifyShopifyProductType(value) {
+  const normalized_source_value = normalizeShopifyProductTypeSourceValue(value);
+  const mapping = normalizeShopifyProductType(normalized_source_value);
+  return Object.freeze({
+    normalized_source_value,
+    specific_product_type_ready: normalized_source_value !== null,
+    category_ready: mapping !== null,
+    mapping
+  });
+}
+
+/** A bounded BigQuery table expression generated from the governed contract above. */
+export function shopifyProductTypeMappingSql() {
+  const literal = value => `'${String(value).replaceAll('\\', '\\\\').replaceAll("'", "\\'")}'`;
+  return `UNNEST([${SHOPIFY_PRODUCT_TYPE_MAPPING.map(row =>
+    `STRUCT(${literal(row.source_value)} AS source_value,${literal(row.classification_value)} AS classification_value)`
+  ).join(',')}])`;
 }
 
 export function serializeShopifyProductTypeMapping() {
