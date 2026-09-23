@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { assertProductGraphIntegrity, inspectProductGraph } from './product-graph-integrity.js';
+import { assertProductGraphIntegrity, diagnoseExistingProductConflicts, diagnoseProposedProductEdge, inspectProductGraph } from './product-graph-integrity.js';
 import { mapProductPair } from './product-identity.js';
 import { atGovernanceStage } from './governance-diagnostics.js';
 
@@ -91,6 +91,13 @@ export function approvedMappingEdges(decisions) {
   return resolveMappingDecisions(decisions).activeApproved.map(x => ({ left_ref:x.left_ref, right_ref:x.right_ref, decision_id:x.decision_id || x.event_id, mapping_method:'explicit_governed_mapping', mapping_status:'resolved', approved_by:x.reviewed_by, approved_at:x.reviewed_at, provenance:x.provenance, note:x.note || null }));
 }
 
+export function deterministicMappingEdges(products) {
+  const groups=new Map();for(const product of products){const ns=namespace(product);if(!groups.has(ns))groups.set(ns,[]);groups.get(ns).push(product);}
+  const namespaces=[...groups].sort(([a],[b])=>a.localeCompare(b)),edges=[];
+  for(let i=0;i<namespaces.length;i++)for(let j=i+1;j<namespaces.length;j++)edges.push(...mapProductPair(namespaces[i][1],namespaces[j][1]));
+  return edges;
+}
+
 /** The sole in-process current-state resolver. Supersession links win over timestamps. */
 export function resolveMappingDecisions(history = []) {
   const ordered=[...history].sort((a,b)=>String(a.reviewed_at||'').localeCompare(String(b.reviewed_at||''))||String(a.decision_id||a.event_id||'').localeCompare(String(b.decision_id||b.event_id||'')));
@@ -159,10 +166,30 @@ export function createProductMappingService({ bigquery, project, dataset = PRODU
   const append=async rows=>atGovernanceStage('insert_decision','product_mapping_append',async()=>{const columns=fields.map(x=>x.split(':')[0]);const scalar=columns.filter(x=>x!=='candidate_evidence');const projections=scalar.map(name=>name==='score'?`SAFE_CAST(JSON_VALUE(row,'$.${name}') AS FLOAT64) ${name}`:name==='reviewed_at'?`TIMESTAMP(JSON_VALUE(row,'$.${name}')) ${name}`:`JSON_VALUE(row,'$.${name}') ${name}`);projections.splice(columns.indexOf('candidate_evidence'),0,"SAFE.PARSE_JSON(JSON_QUERY(row,'$.candidate_evidence')) candidate_evidence");await bigquery.query({query:`INSERT INTO \`${table}\` (${columns.join(',')}) SELECT ${projections.join(',')} FROM UNNEST(JSON_QUERY_ARRAY(@payload)) row`,params:{payload:JSON.stringify(rows)},types:{payload:'STRING'},useLegacySql:false});return rows;});
   const assertPair=(a,b)=>{if(!a?.source_product_ref||!b?.source_product_ref)throw new Error('invalid product mapping pair');if(namespace(a)===namespace(b))throw new Error('products must come from different source namespaces');};
   const activeEdges=history=>approvedMappingEdges(history);
-  const deterministicEdges=products=>{const groups=new Map();for(const product of products){const ns=namespace(product);if(!groups.has(ns))groups.set(ns,[]);groups.get(ns).push(product);}const namespaces=[...groups].sort(([a],[b])=>a.localeCompare(b));const edges=[];for(let i=0;i<namespaces.length;i++)for(let j=i+1;j<namespaces.length;j++)edges.push(...mapProductPair(namespaces[i][1],namespaces[j][1]));return edges;};
-  const validateApproval=async(candidate,edges)=>atGovernanceStage('graph_safety','product_mapping_graph_validation',async()=>{const products=await loadProducts();return assertProductGraphIntegrity({products,explicitEdges:[...edges,{...candidate,mapping_status:'resolved'}],deterministicEdges:deterministicEdges(products)});});
+  const validateApproval=async(candidate,edges)=>atGovernanceStage('graph_safety','product_mapping_graph_validation',async()=>{const products=await loadProducts();return assertProductGraphIntegrity({products,explicitEdges:[...edges,{...candidate,mapping_status:'resolved'}],deterministicEdges:deterministicMappingEdges(products)});});
   return {
     setup, decisions,
+    async inspectCurrentGraph(history=null){
+      const products=await loadProducts(),resolvedHistory=history||await decisions();
+      return inspectProductGraph({products,explicitEdges:activeEdges(resolvedHistory),deterministicEdges:deterministicMappingEdges(products)});
+    },
+    async diagnoseExistingConflicts(productIds=[]){
+      const [products,history]=await Promise.all([loadProducts(),decisions()]);
+      return diagnoseExistingProductConflicts({products,explicitEdges:activeEdges(history),deterministicEdges:deterministicMappingEdges(products),requiredProductIds:productIds});
+    },
+    async diagnoseCandidate(candidateId,selectedRef=null){
+      const [products,history]=await Promise.all([loadProducts(),decisions()]);
+      let candidate=generateMappingCandidates(products,{decisions:history}).find(item=>item.candidate_id===candidateId)
+        || history.find(item=>item.candidate_id===candidateId);
+      if(!candidate)throw new Error(`candidate not found: ${candidateId}`);
+      if(selectedRef){
+        const normalizedRef=selectedRef.includes(':')&&selectedRef.startsWith('shopify:')?selectedRef:`shopify:shopify:${selectedRef}`;
+        const selected=products.find(product=>product.source_product_ref===normalizedRef||product.source_product_id===selectedRef);
+        if(!selected)throw new Error(`selected product not found: ${selectedRef}`);
+        candidate={...candidate,right_ref:selected.source_product_ref,right_title:selected.title,candidate_method:'human_replacement',diagnostic_scenario:'choose_correct'};
+      }
+      return diagnoseProposedProductEdge({products,explicitEdges:activeEdges(history),deterministicEdges:deterministicMappingEdges(products),candidate});
+    },
     async currentState(){return resolveMappingDecisions(await decisions());},
     async list({ products, search = '' } = {}) { await setup(); const history=await decisions(); const items=generateMappingCandidates(products || await loadProducts(),{decisions:history}).filter(x=>!search || `${x.left_title} ${x.right_title}`.toLowerCase().includes(search.toLowerCase())).slice(0,250); return { items, summary:`I found ${items.filter(x=>x.confidence==='high').length} high-confidence unresolved product mappings that could improve historical product comparison.` }; },
     async search({query='',sources=[],exclude_ref=null,limit=50,products}={}){await setup();const [items,history]=await Promise.all([products?Promise.resolve(products):loadProducts(),decisions()]);return {items:searchProducts(items,{query,sources,excludeRef:exclude_ref,limit,decisions:history}),limit:Math.min(Number(limit)||50,100)};},

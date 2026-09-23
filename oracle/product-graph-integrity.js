@@ -71,6 +71,60 @@ export function assertProductGraphIntegrity(input) {
   return result;
 }
 
+const diagnosticEdge = (edge, proposed) => ({
+  edge_source: edge === proposed ? 'proposed_candidate' : edge.decision_id ? 'governed_approval' : 'deterministic_identity',
+  mapping_method: edge.mapping_method || 'unknown', left_ref:edge.left_ref, right_ref:edge.right_ref,
+  decision_id:edge.decision_id || null, relationship_id:edge.relationship_id || null
+});
+
+const shortestDiagnosticPath = ({edges,productByRef,start,end,proposed=null}) => {
+  const adjacency=new Map(),add=(ref,item)=>{const values=adjacency.get(ref)||[];values.push(item);adjacency.set(ref,values);};
+  for(const edge of edges){add(edge.left_ref,{ref:edge.right_ref,edge});add(edge.right_ref,{ref:edge.left_ref,edge});}
+  const queue=[start],seen=new Set([start]),previous=new Map();
+  while(queue.length){const ref=queue.shift();if(ref===end)break;for(const item of adjacency.get(ref)||[]){if(seen.has(item.ref))continue;seen.add(item.ref);previous.set(item.ref,{ref,edge:item.edge});queue.push(item.ref);}}
+  if(!seen.has(end))return null;
+  const pathEdges=[],refs=[end];for(let ref=end;ref!==start;){const item=previous.get(ref);pathEdges.unshift(diagnosticEdge(item.edge,proposed));ref=item.ref;refs.unshift(ref);}
+  return {nodes:refs.map(source_product_ref=>({source_product_ref,title:productByRef.get(source_product_ref)?.title||null})),edges:pathEdges};
+};
+
+/** Bounded, read-only evidence for already-conflicted components. */
+export function diagnoseExistingProductConflicts({products=[],explicitEdges=[],deterministicEdges=[],requiredProductIds=[],pairLimit=100}={}) {
+  const graph=inspectProductGraph({products,explicitEdges,deterministicEdges,diagnosticLimit:20}),productByRef=new Map(products.map(p=>[p.source_product_ref,p]));
+  const required=requiredProductIds.map(String),matches=(ref,id)=>ref===id||ref.endsWith(`:${id}`)||ref.includes(id);
+  const selected=graph.components.filter(component=>component.integrity_status==='conflicted'&&required.every(id=>component.source_products.some(ref=>matches(ref,id))));
+  const components=[];let emitted=0,total=0;
+  for(const component of selected){const pairs=[];for(const duplicate of component.duplicate_namespaces)for(let i=0;i<duplicate.source_product_refs.length;i++)for(let j=i+1;j<duplicate.source_product_refs.length;j++){
+    total++;if(emitted>=pairLimit)continue;emitted++;
+    const refs=[duplicate.source_product_refs[i],duplicate.source_product_refs[j]].sort(),path=shortestDiagnosticPath({edges:component.edges,productByRef,start:refs[0],end:refs[1]});
+    const sameEdge=(edge,item)=>edge.left_ref===item.left_ref&&edge.right_ref===item.right_ref&&(edge.decision_id||null)===item.decision_id&&(edge.mapping_method||'unknown')===item.mapping_method;
+    const merging_edges=path.edges.filter(item=>!shortestDiagnosticPath({edges:component.edges.filter(edge=>!sameEdge(edge,item)),productByRef,start:refs[0],end:refs[1]}));
+    const correction_candidates=merging_edges.map(edge=>({...edge,smallest_safe_correction:edge.edge_source==='governed_approval'?'if product evidence disproves this identity, supersede or revoke only this decision':'if SKU/title evidence disproves this identity, correct that source identity; do not add a graph exception'}));
+    pairs.push({conflicting_namespace:duplicate.namespace,products:refs.map(source_product_ref=>({source_product_ref,title:productByRef.get(source_product_ref)?.title||null})),path,merging_edges,correction_candidates,ambiguous:merging_edges.length===0});
+  }components.push({canonical_component_ref:component.canonical_product_ref,source_products:component.source_products.map(source_product_ref=>({source_product_ref,title:productByRef.get(source_product_ref)?.title||null})),same_namespace_pairs:pairs});}
+  return {read_only:true,graph_summary:graph.summary,required_product_ids:required,components,total_same_namespace_pairs:total,emitted_same_namespace_pairs:emitted,truncated:total>emitted};
+}
+
+/** Explain only the new conflicts introduced by one proposed edge; never mutates graph state. */
+export function diagnoseProposedProductEdge({products=[],explicitEdges=[],deterministicEdges=[],candidate}={}) {
+  if(!candidate?.left_ref||!candidate?.right_ref) throw new Error('candidate endpoints are required');
+  const proposed={...candidate,mapping_status:'resolved',mapping_method:candidate.mapping_method||'explicit_governed_mapping'};
+  const before=inspectProductGraph({products,explicitEdges,deterministicEdges});
+  const governedOnly=inspectProductGraph({products,explicitEdges});
+  const after=inspectProductGraph({products,explicitEdges:[...explicitEdges,proposed],deterministicEdges});
+  const productByRef=new Map(products.map(p=>[p.source_product_ref,p]));
+  const componentFor=(graph,ref)=>graph.components.find(c=>c.source_products.includes(ref));
+  const endpoints=[candidate.left_ref,candidate.right_ref].map(ref=>{const c=componentFor(before,ref);return {source_product_ref:ref,title:productByRef.get(ref)?.title||null,canonical_component_ref:c?.canonical_product_ref||null,component_products:c?.source_products||[ref]};});
+  const merged=componentFor(after,candidate.left_ref);
+  const beforeConflicts=new Set(before.components.flatMap(c=>c.duplicate_namespaces.flatMap(d=>d.source_product_refs.flatMap((a,i)=>d.source_product_refs.slice(i+1).map(b=>[a,b].sort().join('\0'))))));
+  const conflict_paths=[];
+  for(const duplicate of merged?.duplicate_namespaces||[])for(let i=0;i<duplicate.source_product_refs.length;i++)for(let j=i+1;j<duplicate.source_product_refs.length;j++){
+    const refs=[duplicate.source_product_refs[i],duplicate.source_product_refs[j]].sort();
+    if(beforeConflicts.has(refs.join('\0')))continue;
+    conflict_paths.push({conflicting_namespace:duplicate.namespace,products:refs.map(ref=>({source_product_ref:ref,product_id:ref.split(':').slice(2).join(':'),title:productByRef.get(ref)?.title||null})),edges:shortestDiagnosticPath({edges:after.edges,productByRef,start:refs[0],end:refs[1],proposed}).edges});
+  }
+  return {read_only:true,candidate:{candidate_id:candidate.candidate_id||null,left_ref:candidate.left_ref,right_ref:candidate.right_ref,left_title:candidate.left_title||productByRef.get(candidate.left_ref)?.title||null,right_title:candidate.right_title||productByRef.get(candidate.right_ref)?.title||null},endpoints,graph_comparison:{governed_only_validator_graph:governedOnly.summary,write_time_graph:before.summary,missing_from_governed_only_validator:{products:true,deterministic_edges:deterministicEdges.length}},new_conflicts:conflict_paths,existing_graph_conflicts:before.summary.conflicted_components,proposed_graph_conflicts:after.summary.conflicted_components,diagnosis:conflict_paths.length?'proposed edge joins components containing different products from the same source namespace':before.summary.conflicted_components?'existing graph is already conflicted; candidate-specific cause is ambiguous':'candidate does not reproduce a graph conflict with the supplied graph'};
+}
+
 /** Prevent a conflicted component from becoming a single report aggregate. */
 export function preserveConflictedProductIdentity(rows, graph) {
   const conflictedRefs=new Set(graph.components.filter(c=>c.integrity_status==='conflicted').flatMap(c=>c.source_products));

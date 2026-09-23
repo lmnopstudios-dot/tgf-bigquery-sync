@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { assertProductGraphIntegrity, inspectProductGraph, preserveConflictedProductIdentity } from '../oracle/product-graph-integrity.js';
+import { assertProductGraphIntegrity, diagnoseExistingProductConflicts, diagnoseProposedProductEdge, inspectProductGraph, preserveConflictedProductIdentity } from '../oracle/product-graph-integrity.js';
 
 const p=(ref,title=ref)=>({source_product_ref:ref,title});
 const e=(left_ref,right_ref,extra={})=>({left_ref,right_ref,mapping_status:'resolved',...extra});
@@ -10,6 +10,35 @@ test('valid cross-namespace component and Shopify channel identity satisfy canon
   const graph=inspectProductGraph({products,deterministicEdges:[e('woo:ww:a','square:square:x',{mapping_method:'exact_unique_sku'}),e('square:square:x','shopify:shopify:b',{mapping_method:'exact_unique_normalized_base_title'})]});
   assert.equal(graph.summary.conflicted_components,0);assert.equal(graph.components.length,1);
   assert.equal(inspectProductGraph({products:[p('shopify:shopify:42')]}).nodes.length,1);
+});
+
+test('candidate diagnostic shows endpoint components and the complete conflict path without changing safety',()=>{
+  const products=[p('woo:ww:heart','Heart With Love Banner'),p('shopify:shopify:10434340258119','Brat Devil Pendant'),p('shopify:shopify:10434342093127','Rascal Devil Pendant')];
+  const deterministicEdges=[e('woo:ww:heart','shopify:shopify:10434340258119',{mapping_method:'exact_unique_sku'})];
+  const explicitEdges=[];
+  const candidate={candidate_id:'0e0bcd00a8eda894832d7dc6',left_ref:'woo:ww:heart',right_ref:'shopify:shopify:10434342093127',left_title:products[0].title,right_title:'Ready To Ship - Heart & Banner “Love” Ring - O'};
+  const result=diagnoseProposedProductEdge({products,deterministicEdges,explicitEdges,candidate});
+  assert.equal(result.read_only,true);assert.equal(result.endpoints.length,2);assert.equal(result.new_conflicts.length,1);
+  assert.equal(result.graph_comparison.governed_only_validator_graph.deterministic_edges,0);
+  assert.equal(result.graph_comparison.write_time_graph.deterministic_edges,1);
+  const pendantConflict=result.new_conflicts.find(x=>x.conflicting_namespace==='shopify:shopify');
+  assert.deepEqual(pendantConflict.products.map(x=>x.product_id),['10434340258119','10434342093127']);
+  assert.deepEqual(pendantConflict.edges.map(x=>x.edge_source),['deterministic_identity','proposed_candidate']);
+  assert.equal(pendantConflict.edges[1].decision_id,null);
+  assert.equal(inspectProductGraph({products,deterministicEdges,explicitEdges}).summary.conflicted_components,0);
+});
+
+test('existing-conflict diagnostic emits every pair path and distinguishes governed from deterministic corrections',()=>{
+  const products=[p('shopify:shopify:10434340258119','Brat Devil Pendant'),p('woo:ww:devil','Historical Devil'),p('square:square:devil','Devil'),p('shopify:shopify:10434342093127','Rascal Devil Pendant')];
+  const deterministicEdges=[e('shopify:shopify:10434340258119','woo:ww:devil',{mapping_method:'exact_unique_sku'}),e('square:square:devil','shopify:shopify:10434342093127',{mapping_method:'exact_unique_normalized_base_title'})];
+  const explicitEdges=[e('woo:ww:devil','square:square:devil',{mapping_method:'explicit_governed_mapping',decision_id:'decision-1',relationship_id:'relationship-1'})];
+  const result=diagnoseExistingProductConflicts({products,deterministicEdges,explicitEdges,requiredProductIds:['10434340258119','10434342093127']});
+  assert.equal(result.read_only,true);assert.equal(result.components.length,1);assert.equal(result.total_same_namespace_pairs,1);assert.equal(result.truncated,false);
+  const pair=result.components[0].same_namespace_pairs[0];
+  assert.deepEqual(pair.path.nodes.map(node=>node.title),['Brat Devil Pendant','Historical Devil','Devil','Rascal Devil Pendant']);
+  assert.deepEqual(pair.path.edges.map(edge=>edge.edge_source),['deterministic_identity','governed_approval','deterministic_identity']);
+  assert.equal(pair.path.edges[1].decision_id,'decision-1');assert.equal(pair.path.edges[1].relationship_id,'relationship-1');
+  assert.match(pair.correction_candidates[0].smallest_safe_correction,/SKU\/title/);assert.match(pair.correction_candidates[1].smallest_safe_correction,/decision/);
 });
 
 test('direct same-namespace edge is rejected with edge-level reason',()=>{
