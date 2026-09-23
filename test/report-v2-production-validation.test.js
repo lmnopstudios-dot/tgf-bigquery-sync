@@ -116,8 +116,23 @@ test('product validator contrasts old/new models and emits pairwise, option, Squ
   assert.match(queries.shopify_channel_deduplication, /online_only/);
   assert.match(queries.mapping_improvement, /before_channel_deduplication/);
   assert.match(queries.mapping_improvement, /after_channel_deduplication/);
-  assert.match(queries.candidate_layer, /approved_mapping_count/);
-  assert.match(queries.candidate_layer, /rejected_mapping_count/);
+  assert.match(queries.candidate_layer, /product_mapping_decisions/);
+  assert.match(queries.candidate_layer, /mapping_status/);
+  assert.match(queries.candidate_layer, /row_kind/);
+});
+
+test('candidate validator invokes the shared generator and emits explainable diagnostics', async () => {
+  const rows=[
+    {row_kind:'product',source_product_ref:'woo:ww:1',source_platform:'woo',source_store:'ww',source_product_id:'1',title:'Love and Death Ring',line_items:332,sales:1000,mapping_status:'source_specific'},
+    {row_kind:'product',source_product_ref:'square:square:2',source_platform:'square',source_store:'square',source_product_id:'2',title:'Love & Death Ring',line_items:440,sales:1200,mapping_status:'source_specific'}
+  ];
+  const output=await validate({project:'fixture-project',bigquery:{query:async options=>[options.labels.check==='candidate_layer'?rows:[]]}});
+  const diagnostic=output.candidate_layer[0];
+  assert.equal(diagnostic.candidate_count,1);
+  assert.equal(diagnostic.high_review_priority,1);
+  assert.equal(diagnostic.blocked_candidate_pairs_considered,1);
+  assert.equal(diagnostic.unique_source_products_represented,2);
+  assert.equal(diagnostic.top_candidates.length,1);
 });
 
 test('governed product SQL materializes base titles at source-product grain before mapping', () => {
