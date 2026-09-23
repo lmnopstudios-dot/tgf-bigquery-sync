@@ -1,24 +1,36 @@
 import {BigQuery} from '@google-cloud/bigquery';
-import {auditCatalogueSchema,CATALOGUE_QUERY_TYPES,catalogueMergeSql,inspectSerializedRows} from '../shopify/catalogue.js';
+import {auditCatalogueSchema,CATALOGUE_QUERY_TYPES,catalogueSourceProjectionSql,inspectSerializedRows} from '../shopify/catalogue.js';
 
-export function representativeCatalogueRows(){const syncedAt=BigQuery.timestamp('2026-01-01T00:00:00.000Z');return {
-  products:[{product_id:'contract-product',title:null,product_type:null,vendor:null,tags:[],status:null,created_at:null,updated_at:null,catalogue_synced_at:syncedAt}],
-  collections:[{collection_id:'contract-collection',title:null,handle:null,product_count:0,updated_at:null,catalogue_synced_at:syncedAt}],
-  memberships:[{product_id:'contract-product',collection_id:'contract-collection',catalogue_synced_at:syncedAt}]
+export function representativeCatalogueRows(){const syncedAt='2026-01-01T00:00:00.000Z';return {
+  products:[
+    {product_id:'contract-product-nullable',title:null,product_type:null,vendor:null,tags:[],status:null,created_at:null,updated_at:null,catalogue_synced_at:syncedAt},
+    {product_id:'contract-product-timestamps',title:null,product_type:null,vendor:null,tags:[],status:null,created_at:'2025-01-01T00:00:00.000Z',updated_at:'2025-02-01T00:00:00.000Z',catalogue_synced_at:syncedAt}
+  ],
+  collections:[
+    {collection_id:'contract-collection-nullable',title:null,handle:null,product_count:0,updated_at:null,catalogue_synced_at:syncedAt},
+    {collection_id:'contract-collection-timestamp',title:null,handle:null,product_count:0,updated_at:'2025-03-01T00:00:00.000Z',catalogue_synced_at:syncedAt}
+  ],
+  memberships:[{product_id:'contract-product-nullable',collection_id:'contract-collection-nullable',catalogue_synced_at:syncedAt}]
 }}
+
+function bindingValidationSql(kind){
+  const nullableChecks=kind==='products'?', COUNTIF(created_at IS NULL)=1 AS nullable_created_at_remains_null, COUNTIF(created_at IS NOT NULL)=1 AS present_created_at_converts, COUNTIF(updated_at IS NULL)=1 AS nullable_updated_at_remains_null, COUNTIF(updated_at IS NOT NULL)=1 AS present_updated_at_converts, LOGICAL_AND(tags IS NOT NULL AND ARRAY_LENGTH(tags)=0) AS empty_tags_survive':kind==='collections'?', COUNTIF(updated_at IS NULL)=1 AS nullable_updated_at_remains_null, COUNTIF(updated_at IS NOT NULL)=1 AS present_updated_at_converts':'';
+  return `WITH bound AS (SELECT * FROM UNNEST(@rows)), projected AS (${catalogueSourceProjectionSql(kind,'bound')}) SELECT (SELECT LOGICAL_AND(catalogue_synced_at IS NOT NULL) FROM bound) AND TYPEOF((SELECT catalogue_synced_at FROM bound LIMIT 1))='STRING' AS bound_catalogue_synced_at_string_survives, LOGICAL_AND(catalogue_synced_at IS NOT NULL) AS converted_catalogue_synced_at_non_null, TYPEOF((SELECT catalogue_synced_at FROM projected LIMIT 1))='TIMESTAMP' AS converted_catalogue_synced_at_is_timestamp${nullableChecks} FROM projected`;
+}
 
 export async function validateShopifyCatalogueWriteContract({bigquery,project,dataset='shopify_catalogue'}){
   const schema=await auditCatalogueSchema(bigquery,project,dataset);const rows=representativeCatalogueRows();const binding={};
   for(const kind of ['products','collections','memberships']){
     const serialized=inspectSerializedRows(rows[kind],CATALOGUE_QUERY_TYPES[kind]);
-    const survives=serialized[0]?.catalogue_synced_at?.value!==undefined;
+    const survives=serialized.every(row=>row.catalogue_synced_at?.value!==undefined);
     if(!survives)throw new Error(`${kind} catalogue_synced_at was lost during BigQuery client parameter serialization`);
     if(kind==='products'&&!Array.isArray(serialized[0]?.tags?.arrayValues))throw new Error('products tags were not serialized as a typed ARRAY<STRING>');
-    const projection=catalogueMergeSql[kind](project,dataset).match(/USING \((.*?)\) s/s)?.[1];
-    const tagsCheck=kind==='products'?' AND tags IS NOT NULL':'';
-    const [bound]=await bigquery.query({query:`SELECT catalogue_synced_at IS NOT NULL${tagsCheck} AS survives FROM UNNEST(@rows)`,params:{rows:rows[kind]},types:CATALOGUE_QUERY_TYPES[kind],labels:{component:'shopify_catalogue',operation:`${kind}_binding_validation`}});
-    if(bound.length!==1||bound[0].survives!==true)throw new Error(`${kind} catalogue_synced_at did not survive BigQuery parameter binding`);
-    binding[kind]={client_serialization_survives:true,server_binding_survives:true,source_projection:projection};
+    const projection=catalogueSourceProjectionSql(kind);
+    const [results]=await bigquery.query({query:bindingValidationSql(kind),params:{rows:rows[kind]},types:CATALOGUE_QUERY_TYPES[kind],labels:{component:'shopify_catalogue',operation:`${kind}_binding_validation`}});
+    const assertions=results[0]||{};
+    const failed=Object.entries(assertions).filter(([,passed])=>passed!==true).map(([name])=>name);
+    if(failed.length)throw new Error(`${kind} catalogue binding validation failed: ${failed.join(', ')}`);
+    binding[kind]={status:'PASS',parameter_type:'STRING',target_type:'TIMESTAMP',client_serialization_survives:true,server_binding_survives:true,...assertions,source_projection:projection};
   }
   return {valid:true,read_only:true,schema,binding};
 }

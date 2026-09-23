@@ -12,15 +12,18 @@ BigQuery consequently received SQL `NULL`, even though the JavaScript row passed
 the non-null validation. The earlier regression test called the converter but
 only asserted that it did not throw; it never inspected the converted parameter.
 
-All source timestamps are now represented as `BigQueryTimestamp` instances
-before validation and binding. The product, collection, and membership source
-projections select `catalogue_synced_at` directly from `UNNEST(@rows)`. Their
-matched updates assign the required target column from that source field, and
-their inserts use explicit column and value lists. For example, the membership
-write boundary is:
+The later production validator proved that `BigQueryTimestamp` also does not
+survive the actual nested binding boundary. Catalogue timestamps are therefore
+ISO-8601 strings in every nested `ARRAY<STRUCT>` parameter. The shared product,
+collection, and membership source projections convert those strings to target
+timestamps in BigQuery. Nullable Shopify timestamps use `SAFE_CAST`, while the
+required sync timestamp uses `TIMESTAMP(...)`. For example, the membership write
+boundary is:
 
 ```sql
-USING (SELECT product_id,collection_id,catalogue_synced_at FROM UNNEST(@rows)) s
+USING (SELECT product_id,collection_id,
+       TIMESTAMP(catalogue_synced_at) AS catalogue_synced_at
+       FROM UNNEST(@rows)) s
 WHEN MATCHED THEN UPDATE SET catalogue_synced_at=s.catalogue_synced_at
 WHEN NOT MATCHED THEN INSERT (product_id,collection_id,catalogue_synced_at)
 VALUES (s.product_id,s.collection_id,s.catalogue_synced_at)
@@ -41,15 +44,22 @@ validation rejects a missing, null, non-array, or non-string normalized value.
 The nested `@rows` parameter continues to declare `tags: ['STRING']`, including
 when the value is an empty array.
 
+The target table schemas remain unchanged: all persisted timestamp columns are
+`TIMESTAMP`, and `catalogue_synced_at` remains `NOT NULL`.
+
 Before each executed MERGE, structured diagnostics contain only the operation,
 row count, shared sync timestamp, required field names and null counts, declared
-struct field names, first-row keys, timestamp presence, and timestamp constructor.
+struct field names, first-row keys, timestamp presence, runtime type, and the
+distinct `STRING` parameter / `TIMESTAMP` target types.
 Errors are prefixed with the exact operation name. No catalogue content or
 credentials are logged.
 
 The read-only production validator performs the same schema audit, inspects the
-actual client serialization, and runs only `SELECT ... FROM UNNEST(@rows)` for
-representative product, collection, and membership parameters.
+actual client serialization, and runs only SELECT queries for representative
+product, collection, and membership parameters. These queries use the same
+exported source-projection builder as each production MERGE and assert raw string
+binding, converted type/non-nullability, nullable timestamp behavior, and empty
+product tags.
 
 Run on Render, in this order:
 
