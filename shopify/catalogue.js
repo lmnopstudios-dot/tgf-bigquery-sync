@@ -16,21 +16,21 @@ export const CATALOGUE_QUERY_TYPES={
 };
 
 export const CATALOGUE_TABLE_SCHEMAS={
-  products:{product_id:['STRING','NO'],title:['STRING','YES'],product_type:['STRING','YES'],vendor:['STRING','YES'],tags:['ARRAY<STRING>','YES'],status:['STRING','YES'],created_at:['TIMESTAMP','YES'],updated_at:['TIMESTAMP','YES'],catalogue_synced_at:['TIMESTAMP','NO']},
+  products:{product_id:['STRING','NO'],title:['STRING','YES'],product_type:['STRING','YES'],vendor:['STRING','YES'],tags:['ARRAY<STRING>','NO'],status:['STRING','YES'],created_at:['TIMESTAMP','YES'],updated_at:['TIMESTAMP','YES'],catalogue_synced_at:['TIMESTAMP','NO']},
   collections:{collection_id:['STRING','NO'],title:['STRING','YES'],handle:['STRING','YES'],product_count:['INT64','YES'],updated_at:['TIMESTAMP','YES'],catalogue_synced_at:['TIMESTAMP','NO']},
   product_collections:{product_id:['STRING','NO'],collection_id:['STRING','NO'],catalogue_synced_at:['TIMESTAMP','NO']}
 };
 
 export function catalogueDdl(project,dataset=SHOPIFY_CATALOGUE_DATASET){return [
   `CREATE SCHEMA IF NOT EXISTS \`${project}.${dataset}\``,
-  `CREATE TABLE IF NOT EXISTS \`${project}.${dataset}.products\` (product_id STRING NOT NULL,title STRING,product_type STRING,vendor STRING,tags ARRAY<STRING>,status STRING,created_at TIMESTAMP,updated_at TIMESTAMP,catalogue_synced_at TIMESTAMP NOT NULL) CLUSTER BY product_id,status`,
+  `CREATE TABLE IF NOT EXISTS \`${project}.${dataset}.products\` (product_id STRING NOT NULL,title STRING,product_type STRING,vendor STRING,tags ARRAY<STRING> NOT NULL,status STRING,created_at TIMESTAMP,updated_at TIMESTAMP,catalogue_synced_at TIMESTAMP NOT NULL) CLUSTER BY product_id,status`,
   `CREATE TABLE IF NOT EXISTS \`${project}.${dataset}.collections\` (collection_id STRING NOT NULL,title STRING,handle STRING,product_count INT64,updated_at TIMESTAMP,catalogue_synced_at TIMESTAMP NOT NULL) CLUSTER BY collection_id`,
   `CREATE TABLE IF NOT EXISTS \`${project}.${dataset}.product_collections\` (product_id STRING NOT NULL,collection_id STRING NOT NULL,catalogue_synced_at TIMESTAMP NOT NULL) CLUSTER BY product_id,collection_id`
 ]}
 
 async function page(graphql,query,path,variables={}){const out=[];let cursor=null;do{const data=await graphql(query,{...variables,cursor});const connection=path.reduce((v,k)=>v?.[k],data);if(!connection)throw new Error(`Shopify catalogue response missing ${path.join('.')}`);out.push(...connection.nodes);cursor=connection.pageInfo.hasNextPage?connection.pageInfo.endCursor:null;}while(cursor);return out}
 export async function fetchShopifyCatalogue(graphql){
-  const products=(await page(graphql,PRODUCTS_QUERY,['products'])).map(p=>({product_id:stableId(p.id),title:p.title||null,product_type:p.productType||null,vendor:p.vendor||null,tags:p.tags||[],status:String(p.status||'').toLowerCase()||null,created_at:p.createdAt||null,updated_at:p.updatedAt||null}));
+  const products=(await page(graphql,PRODUCTS_QUERY,['products'])).map(p=>({product_id:stableId(p.id),title:p.title||null,product_type:p.productType||null,vendor:p.vendor||null,tags:p.tags??[],status:String(p.status||'').toLowerCase()||null,created_at:p.createdAt||null,updated_at:p.updatedAt||null}));
   const rawCollections=await page(graphql,COLLECTIONS_QUERY,['collections']);const memberships=[];
   for(const collection of rawCollections){const nodes=await page(graphql,COLLECTION_PRODUCTS_QUERY,['collection','products'],{id:collection.id});for(const product of nodes)memberships.push({product_id:stableId(product.id),collection_id:stableId(collection.id)});}
   return {products,collections:rawCollections.map(c=>({collection_id:stableId(c.id),title:c.title||null,handle:c.handle||null,product_count:Number(c.productsCount?.count||0),updated_at:c.updatedAt||null})),memberships};
@@ -39,7 +39,10 @@ export async function fetchShopifyCatalogue(graphql){
 const REQUIRED_FIELDS={product:['product_id','catalogue_synced_at'],collection:['collection_id','catalogue_synced_at'],membership:['product_id','collection_id','catalogue_synced_at']};
 const missing=value=>value===null||value===undefined||value==='';
 export function validateCatalogueRows(catalogue){
-  for(const [kind,rows] of [['product',catalogue.products],['collection',catalogue.collections],['membership',catalogue.memberships]])for(const row of rows)for(const field of REQUIRED_FIELDS[kind])if(missing(row[field]))throw new Error(`Invalid Shopify catalogue ${kind} row: ${field} is required${row.product_id?` (product_id: ${row.product_id})`:row.collection_id?` (collection_id: ${row.collection_id})`:''}`);
+  for(const [kind,rows] of [['product',catalogue.products],['collection',catalogue.collections],['membership',catalogue.memberships]])for(const row of rows){
+    for(const field of REQUIRED_FIELDS[kind])if(missing(row[field]))throw new Error(`Invalid Shopify catalogue ${kind} row: ${field} is required${row.product_id?` (product_id: ${row.product_id})`:row.collection_id?` (collection_id: ${row.collection_id})`:''}`);
+    if(kind==='product'&&(!Array.isArray(row.tags)||row.tags.some(tag=>typeof tag!=='string')))throw new Error(`Invalid Shopify catalogue product row: tags must be an array of strings${row.product_id?` (product_id: ${row.product_id})`:''}`);
+  }
 }
 const timestamp=value=>value===null||value===undefined?null:BigQuery.timestamp(value);
 function materializeCatalogue(catalogue,catalogueSyncedAt){const syncedAt=timestamp(catalogueSyncedAt);return {
