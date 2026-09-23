@@ -3,21 +3,22 @@ const FIELDS = new Set([
   'comparison_start_date','comparison_end_date','currencies','channel','channel_breakdown','location',
   'platform','geography','customer_segment','product_ref','filters','sort','limit','report_section',
   'output_preference','partial_period','unresolved_required_fields'
+  ,'journey_intent','entry_product_classification','minimum_order_sequence','maximum_order_sequence','within_days','journey_group_by'
 ]);
 const GRAINS = new Set(['day','week','month','quarter','year']);
 const CURRENCIES = new Set(['GBP','USD','JPY','EUR']);
-const METRICS = new Set(['sales','refunds','customers','products','ecommerce_performance']);
+const METRICS = new Set(['sales','refunds','customers','products','ecommerce_performance','customer_journey']);
 const MONTHS = {jan:1,january:1,feb:2,february:2,mar:3,march:3,apr:4,april:4,may:5,jun:6,june:6,jul:7,july:7,aug:8,august:8,sep:9,sept:9,september:9,oct:10,october:10,nov:11,november:11,dec:12,december:12};
 
 export const ANALYSIS_CONTEXT_FIELDS = Object.freeze([...FIELDS]);
-export function emptyAnalysisContext(){return {analysis_type:null,metrics:[],start_date:null,end_date:null,requested_end_period:null,grain:null,comparison_type:null,comparison_start_date:null,comparison_end_date:null,currencies:[],channel:null,channel_breakdown:false,location:null,platform:null,geography:null,customer_segment:null,product_ref:null,filters:[],sort:null,limit:null,report_section:null,output_preference:null,partial_period:false,unresolved_required_fields:[]}}
+export function emptyAnalysisContext(){return {analysis_type:null,metrics:[],start_date:null,end_date:null,requested_end_period:null,grain:null,comparison_type:null,comparison_start_date:null,comparison_end_date:null,currencies:[],channel:null,channel_breakdown:false,location:null,platform:null,geography:null,customer_segment:null,product_ref:null,filters:[],sort:null,limit:null,report_section:null,output_preference:null,partial_period:false,unresolved_required_fields:[],journey_intent:null,entry_product_classification:null,minimum_order_sequence:null,maximum_order_sequence:null,within_days:null,journey_group_by:null}}
 
 const iso = value => /^\d{4}-\d{2}-\d{2}$/.test(String(value||'')) ? value : null;
 export function validateAnalysisContext(value={}){
   if(!value||typeof value!=='object'||Array.isArray(value)) throw new Error('analysis context must be an object');
   for(const key of Object.keys(value)) if(!FIELDS.has(key)) throw new Error(`invalid analysis context field: ${key}`);
   const out={...emptyAnalysisContext()};
-  if(value.analysis_type!=null&&!['finance','customers','products','ecommerce'].includes(value.analysis_type)) throw new Error('invalid analysis_type');
+  if(value.analysis_type!=null&&!['finance','customers','products','ecommerce','customer_journey'].includes(value.analysis_type)) throw new Error('invalid analysis_type');
   out.analysis_type=value.analysis_type??null;
   out.metrics=[...new Set(value.metrics||[])].filter(x=>METRICS.has(x)).slice(0,8);
   for(const key of ['start_date','end_date','comparison_start_date','comparison_end_date']) {if(value[key]!=null&&!iso(value[key])) throw new Error(`invalid ${key}`);out[key]=value[key]??null}
@@ -31,11 +32,18 @@ export function validateAnalysisContext(value={}){
   out.limit=Number.isInteger(value.limit)&&value.limit>0&&value.limit<=100?value.limit:null;
   out.partial_period=Boolean(value.partial_period);
   out.unresolved_required_fields=[...new Set(value.unresolved_required_fields||[])].filter(x=>FIELDS.has(x)).slice(0,8);
+  out.journey_intent=typeof value.journey_intent==='string'?value.journey_intent.slice(0,100):null;
+  out.entry_product_classification=typeof value.entry_product_classification==='string'&&/^[a-z][a-z0-9_]{0,63}$/.test(value.entry_product_classification)?value.entry_product_classification:null;
+  for(const key of ['minimum_order_sequence','maximum_order_sequence'])out[key]=Number.isInteger(value[key])&&value[key]>=2?value[key]:null;
+  out.within_days=Number.isInteger(value.within_days)&&value.within_days>=1&&value.within_days<=3650?value.within_days:null;
+  out.journey_group_by=['downstream_product','entry_product','summary'].includes(value.journey_group_by)?value.journey_group_by:null;
   return out;
 }
 
 function period(text, now){
   const lower=text.toLowerCase(), today=new Date(now), todayIso=today.toISOString().slice(0,10);
+  const numeric=lower.match(/\b(\d{1,2})[\/-](\d{1,2})[\/-](20\d{2})\s*(?:-|–|to)\s*(\d{1,2})[\/-](\d{1,2})[\/-](20\d{2})\b/);
+  if(numeric){const isoDate=(d,m,y)=>`${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`;const start=isoDate(+numeric[1],+numeric[2],numeric[3]),end=isoDate(+numeric[4],+numeric[5],numeric[6]);if(iso(start)&&iso(end)&&start<=end)return {start_date:start,end_date:end,requested_end_period:end,partial_period:false}}
   const found=[...lower.matchAll(/(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+(20\d{2})/g)];
   if(found.length){const first=found[0],last=found.at(-1),sm=MONTHS[first[1]],sy=+first[2],em=MONTHS[last[1]],ey=+last[2],monthEnd=new Date(Date.UTC(ey,em,0)).toISOString().slice(0,10);return {start_date:`${sy}-${String(sm).padStart(2,'0')}-01`,end_date:monthEnd>todayIso?todayIso:monthEnd,requested_end_period:`${ey}-${String(em).padStart(2,'0')}`,partial_period:monthEnd>todayIso}}
   const yearOnly=lower.match(/(?:just |about |from |in |for )?(20\d{2})(?!\s*[-–to]+\s*(?:20)?\d)/);
@@ -53,7 +61,9 @@ export function transitionAnalysisContext(existing, message, {now=Date.now(),rep
   const continuation=!unrelated&&!explicitNew&&(base.metrics.length>0||/\b(refunds?|sales|customers?|products?|ecommerce)\b/i.test(lower));
   if(explicitNew) base=emptyAnalysisContext();
   if(!unrelated){
-    if(/\brefunds?\b/.test(lower)) set.metrics=['refunds'],set.analysis_type='finance';
+    const journey=/\b(?:first (?:observed )?(?:purchase|order)|bought? (?:after|next)|buy (?:after|next)|second (?:purchase|order)|third (?:purchase|order)|nth order|repeat (?:purchase )?rate|within \d+ days?|downstream|acquisition products?|customers? buy (?:after|next))\b/.test(lower);
+    if(journey||base.analysis_type==='customer_journey'&&/^(?:which|what|within|on (?:their )?(?:second|third))\b/.test(lower)){set.metrics=['customer_journey'];set.analysis_type='customer_journey';set.journey_intent='purchase_sequence';if(/collaboration/.test(lower))set.entry_product_classification='collaboration';else if(/\brings?\b/.test(lower))set.entry_product_classification='ring';else if(/\bclothing\b/.test(lower))set.entry_product_classification='clothing';else if(/\bjewellery\b/.test(lower))set.entry_product_classification='jewellery';if(/acquisition products?|which collaboration/.test(lower))set.journey_group_by='entry_product';else if(/what|top|products?/.test(lower))set.journey_group_by='downstream_product';const seq=lower.match(/\b(second|third) (?:purchase|order)\b/);if(seq){const n=seq[1]==='second'?2:3;set.minimum_order_sequence=n;set.maximum_order_sequence=n}const days=lower.match(/\bwithin (30|60|90|365) days?\b/);if(days)set.within_days=+days[1]}
+    else if(/\brefunds?\b/.test(lower)) set.metrics=['refunds'],set.analysis_type='finance';
     else if(/\bsales|revenue\b/.test(lower)) set.metrics=['sales'],set.analysis_type='finance';
     else if(/\bcustomers?\b/.test(lower)) set.metrics=['customers'],set.analysis_type='customers';
     else if(/\bproducts?\b/.test(lower)) set.metrics=['products'],set.analysis_type='products';

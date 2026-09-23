@@ -1,0 +1,118 @@
+import { governedDecisionCtes } from './product-mapping.js';
+
+export const JOURNEY_METRICS = Object.freeze([
+  'cohort_customers','customers_with_subsequent_purchase','repeat_purchase_rate',
+  'downstream_orders','downstream_units','downstream_source_native_net_sales',
+  'average_downstream_order_value','orders_per_returning_customer','days_to_next_purchase',
+  'median_days_to_next_purchase','downstream_product_customer_count',
+  'downstream_product_order_count','downstream_product_units','downstream_product_sales'
+]);
+export const JOURNEY_GROUPS = Object.freeze(['summary','downstream_product','entry_product','currency']);
+const DATE=/^\d{4}-\d{2}-\d{2}$/;
+const CLASS=/^[a-z][a-z0-9_]{0,63}$/;
+const SOURCES=['woo','shopify'];
+const CHANNELS=['Online','In-store'];
+
+function date(value,name){if(typeof value!=='string'||!DATE.test(value)||new Date(`${value}T00:00:00Z`).toISOString().slice(0,10)!==value)throw new Error(`${name} must be a valid YYYY-MM-DD date`)}
+function optionalToken(value,name){if(value!==null&&(typeof value!=='string'||!CLASS.test(value)))throw new Error(`${name} must be null or a governed lowercase token`)}
+function enumOrNull(value,values,name){if(value!==null&&!values.includes(value))throw new Error(`${name} is invalid`)}
+
+/** A bounded, JSON-serializable contract. It contains no SQL or customer-level output controls. */
+export function validateJourneyDefinition(input={}) {
+  const allowed=new Set(['start_date','end_date','cohort','subsequent','metrics','group_by','sort','limit']);
+  for(const key of Object.keys(input))if(!allowed.has(key))throw new Error(`invalid journey field: ${key}`);
+  date(input.start_date,'start_date');date(input.end_date,'end_date');if(input.start_date>input.end_date)throw new Error('start_date must be on or before end_date');
+  const cohort={entity:'customer',entry_event:'purchase',entry_sequence:'first_observed_order',entry_product_classification:null,entry_product_ref:null,entry_channel:null,entry_source:null,require_new_customer:true,...input.cohort};
+  const cAllowed=new Set(['entity','entry_event','entry_sequence','entry_product_classification','entry_product_ref','entry_channel','entry_source','entry_campaign','require_new_customer']);
+  for(const key of Object.keys(cohort))if(!cAllowed.has(key))throw new Error(`invalid cohort field: ${key}`);
+  if(cohort.entity!=='customer'||cohort.entry_event!=='purchase'||cohort.entry_sequence!=='first_observed_order'||cohort.require_new_customer!==true)throw new Error('v1 requires the first observed customer purchase as cohort entry');
+  optionalToken(cohort.entry_product_classification,'entry_product_classification');
+  if(cohort.entry_product_ref!==null&&(typeof cohort.entry_product_ref!=='string'||cohort.entry_product_ref.length>250))throw new Error('invalid entry_product_ref');
+  enumOrNull(cohort.entry_channel,CHANNELS,'entry_channel');enumOrNull(cohort.entry_source,SOURCES,'entry_source');
+  if(cohort.entry_campaign!=null)throw new Error('campaign entry is reserved for a future governed event source');
+  const subsequent={event:'purchase',after_entry:true,minimum_order_sequence:2,maximum_order_sequence:null,within_days:null,product_classification:null,product_ref:null,channel:null,source:null,...input.subsequent};
+  const sAllowed=new Set(['event','after_entry','minimum_order_sequence','maximum_order_sequence','within_days','product_classification','product_ref','channel','source']);
+  for(const key of Object.keys(subsequent))if(!sAllowed.has(key))throw new Error(`invalid subsequent field: ${key}`);
+  if(subsequent.event!=='purchase'||subsequent.after_entry!==true)throw new Error('v1 subsequent event must be a purchase after entry');
+  for(const key of ['minimum_order_sequence','maximum_order_sequence'])if(subsequent[key]!==null&&(!Number.isInteger(subsequent[key])||subsequent[key]<2))throw new Error(`${key} must be null or an integer of at least 2`);
+  if(subsequent.maximum_order_sequence!==null&&subsequent.maximum_order_sequence<subsequent.minimum_order_sequence)throw new Error('maximum_order_sequence must not precede minimum_order_sequence');
+  if(subsequent.within_days!==null&&(!Number.isInteger(subsequent.within_days)||subsequent.within_days<1||subsequent.within_days>3650))throw new Error('within_days must be null or 1..3650');
+  optionalToken(subsequent.product_classification,'product_classification');enumOrNull(subsequent.channel,CHANNELS,'subsequent channel');enumOrNull(subsequent.source,SOURCES,'subsequent source');
+  const metrics=[...new Set(input.metrics||JOURNEY_METRICS)];if(!metrics.length||metrics.some(x=>!JOURNEY_METRICS.includes(x)))throw new Error('unsupported journey metric');
+  const group_by=[...new Set(input.group_by||['downstream_product'])];if(!group_by.length||group_by.some(x=>!JOURNEY_GROUPS.includes(x)))throw new Error('unsupported journey grouping');
+  const sort=input.sort||'returning_customers_desc';if(!['returning_customers_desc','repeat_rate_desc','sales_desc','orders_desc'].includes(sort))throw new Error('unsupported journey sort');
+  const limit=input.limit??20;if(!Number.isInteger(limit)||limit<1||limit>100)throw new Error('limit must be between 1 and 100');
+  return {start_date:input.start_date,end_date:input.end_date,cohort,subsequent,metrics,group_by,sort,limit};
+}
+
+export const JOURNEY_SEMANTICS=Object.freeze({
+  date_window:'The first observed qualifying order must be inside the inclusive selected period. Later qualifying orders are measured only through the selected end date.',
+  first_observed:'First observed means earliest qualifying order in the selected window, not necessarily the customer\'s first purchase ever.',
+  returning_customer:'A governed identified customer with at least one qualifying order strictly after the entry order.',
+  identity:'Source-qualified stable customer IDs are used. No Woo-to-Shopify bridge is asserted because no governed deterministic cross-source key is currently persisted.',
+  classification:'Only active governed product classifications attached directly to a source product or propagated across an active human-approved product mapping qualify. Suggested/fuzzy mappings never qualify.',
+  money:'Source-native refund-adjusted operational line sales are grouped by currency and never converted or represented as canonical company finance.',
+  privacy:'Only aggregates are returned. Customer references, source IDs and all PII remain server-side.'
+});
+
+/** Reference implementation used by fixtures to lock down the SQL contract without customer payloads leaving the server. */
+export function aggregateJourneyEvents(events,{start_date,end_date,entryClassification=null,minimumSequence=2,maximumSequence=null,withinDays=null}={}){
+  const identified=events.filter(e=>e.customer_ref&&e.order_ref&&e.timestamp&&String(e.timestamp).slice(0,10)>=start_date&&String(e.timestamp).slice(0,10)<=end_date);
+  const customers=new Map();for(const e of identified){const a=customers.get(e.customer_ref)||[];a.push(e);customers.set(e.customer_ref,a)}
+  const cohort=[],downstream=[];
+  for(const [customer_ref,lines] of customers){const orders=new Map();for(const line of lines){const a=orders.get(line.order_ref)||[];a.push(line);orders.set(line.order_ref,a)}const ranked=[...orders.entries()].sort((a,b)=>String(a[1][0].timestamp).localeCompare(String(b[1][0].timestamp))||String(a[1][0].source||'').localeCompare(String(b[1][0].source||''))||String(a[0]).localeCompare(String(b[0])));const entry=ranked[0];if(!entry||entryClassification&&!entry[1].some(x=>(x.classifications||[]).includes(entryClassification)))continue;cohort.push(customer_ref);for(let i=1;i<ranked.length;i++){const sequence=i+1,days=Math.floor((new Date(ranked[i][1][0].timestamp)-new Date(entry[1][0].timestamp))/86400000);if(sequence<minimumSequence||maximumSequence!==null&&sequence>maximumSequence||withinDays!==null&&days>withinDays)continue;for(const line of ranked[i][1])downstream.push({...line,customer_ref,order_sequence:sequence,days_after_entry:days})}}
+  const products=new Map();for(const line of downstream){const key=line.product_ref||line.product_title;const p=products.get(key)||{product_ref:key,product:line.product_title,customers:new Set(),orders:new Set(),units:0,sales:new Map()};p.customers.add(line.customer_ref);p.orders.add(line.order_ref);p.units+=Number(line.units||0);p.sales.set(line.currency,(p.sales.get(line.currency)||0)+Number(line.net_sales||0));products.set(key,p)}
+  const returning=new Set(downstream.map(x=>x.customer_ref));return {cohort_customers:cohort.length,returning_customers:returning.size,repeat_rate:cohort.length?returning.size/cohort.length:0,downstream_orders:new Set(downstream.map(x=>x.order_ref)).size,products:[...products.values()].map(p=>({product_ref:p.product_ref,product:p.product,returning_customers:p.customers.size,downstream_orders:p.orders.size,units:p.units,net_sales_by_currency:[...p.sales].sort().map(([currency,net_sales])=>({currency,net_sales}))})).sort((a,b)=>b.returning_customers-a.returning_customers||b.downstream_orders-a.downstream_orders||String(a.product).localeCompare(String(b.product)))};
+}
+
+export function customerJourneySql(project,groupBy='downstream_product') {
+  if(!JOURNEY_GROUPS.includes(groupBy))throw new Error('unsupported journey grouping');
+  const resultSql=groupBy==='entry_product'?`SELECT ROW_NUMBER() OVER(ORDER BY repeat_rate_percentage DESC,cohort_customers DESC,entry_product) rank,* FROM (
+    SELECT em.entry_product_ref,ANY_VALUE(em.entry_product_title) entry_product,COUNT(DISTINCT em.governed_customer_ref) cohort_customers,
+      COUNT(DISTINCT d.governed_customer_ref) returning_customers,ROUND(100*SAFE_DIVIDE(COUNT(DISTINCT d.governed_customer_ref),COUNT(DISTINCT em.governed_customer_ref)),2) repeat_rate_percentage,
+      COUNT(DISTINCT d.order_ref) downstream_orders
+    FROM entry_matches em LEFT JOIN downstream_orders d USING(governed_customer_ref) GROUP BY em.entry_product_ref) ORDER BY repeat_rate_percentage DESC,cohort_customers DESC,entry_product LIMIT @limit`
+    :groupBy==='summary'?`SELECT s.cohort_customers,s.returning_customers,ROUND(100*SAFE_DIVIDE(s.returning_customers,s.cohort_customers),2) repeat_rate_percentage,COUNT(DISTINCT d.order_ref) downstream_orders,COUNT(DISTINCT d.source_product_ref) downstream_products,SUM(d.units) downstream_units,APPROX_QUANTILES(TIMESTAMP_DIFF(o.order_timestamp,c.entry_timestamp,DAY),100)[OFFSET(50)] median_days_to_next_purchase FROM cohort_summary s LEFT JOIN downstream d ON TRUE LEFT JOIN cohort c ON c.governed_customer_ref=d.governed_customer_ref LEFT JOIN downstream_orders o ON o.governed_customer_ref=c.governed_customer_ref AND o.order_sequence=2 GROUP BY s.cohort_customers,s.returning_customers`
+    :`SELECT ROW_NUMBER() OVER(ORDER BY returning_customers DESC,downstream_orders DESC,product,source_product_ref) rank,product,returning_customers,downstream_orders,units,net_sales_by_currency,ROUND(100*SAFE_DIVIDE(returning_customers,s.returning_customers),2) returning_cohort_penetration_percentage,s.cohort_customers,s.returning_customers,ROUND(100*SAFE_DIVIDE(s.returning_customers,s.cohort_customers),2) repeat_rate_percentage FROM products CROSS JOIN cohort_summary s ORDER BY returning_customers DESC,downstream_orders DESC,product LIMIT @limit`;
+  return `WITH ${governedDecisionCtes(project,'map')},
+  orders AS (
+    SELECT 'woo' source_platform,'ww' source_store,'Online' channel,CAST(order_id AS STRING) order_ref,CAST(customer_id AS STRING) source_customer_id,TIMESTAMP(order_created_at) order_timestamp,LOWER(status) status,UPPER(currency) currency,total order_total,ABS(COALESCE(total_refunds,0)) refunds,FALSE migrated FROM \`${project}.metorik_uk.orders\`
+    UNION ALL SELECT 'woo','usd','Online',CAST(order_id AS STRING),CAST(customer_id AS STRING),TIMESTAMP(order_created_at),LOWER(status),UPPER(currency),total,ABS(COALESCE(total_refunds,0)),FALSE FROM \`${project}.metorik_us.orders\`
+    UNION ALL SELECT 'shopify','shopify',IF(l.retail_location_id IS NULL,'Online','In-store'),l.order_id,c.customer_id,TIMESTAMP(l.created_at),LOWER(c.display_financial_status),UPPER(f.presentment_currency),f.original_total_presentment,COALESCE(f.total_refunded_presentment,0),l.source_app_id=@matrixify_app_id FROM \`${project}.shopify_data.order_locations\` l LEFT JOIN \`${project}.shopify_data.order_customers\` c USING(order_id) LEFT JOIN \`${project}.shopify_data.order_financials\` f USING(order_id)
+  ), qualifying_orders AS (
+    SELECT *,CONCAT('c_',TO_HEX(SHA256(CONCAT(source_platform,'|',source_store,'|',source_customer_id)))) governed_customer_ref
+    FROM orders WHERE source_customer_id IS NOT NULL AND source_customer_id NOT IN ('','0') AND NOT migrated
+      AND ((source_platform='woo' AND status IN ('completed','processing')) OR (source_platform='shopify' AND status IN ('paid','partially_paid','partially_refunded')))
+      AND COALESCE(order_total,0)>COALESCE(refunds,0) AND DATE(order_timestamp) BETWEEN @start_date AND @end_date
+  ), lines AS (
+    SELECT 'woo' source_platform,'ww' source_store,CAST(order_id AS STRING) order_ref,CAST(product_id AS STRING) source_product_id,name product_title,quantity units,total line_sales,UPPER(currency) currency FROM \`${project}.metorik_uk.order_line_items\`
+    UNION ALL SELECT 'woo','usd',CAST(order_id AS STRING),CAST(product_id AS STRING),name,quantity,total,UPPER(currency) FROM \`${project}.metorik_us.order_line_items\`
+    UNION ALL SELECT 'shopify','shopify',order_id,product_id,COALESCE(title,name),quantity,discounted_total_presentment,UPPER(presentment_currency) FROM \`${project}.shopify_data.order_line_items\`
+  ), source_lines AS (SELECT *,CONCAT(source_platform,':',source_store,':',source_product_id) source_product_ref FROM lines),
+  approved_links AS (SELECT left_ref,right_ref FROM map_active),
+  classifications AS (SELECT subject_ref,classification_type,classification_value,provenance,status FROM \`${project}.commerce.product_classifications\` WHERE status='active'),
+  classified_lines AS (SELECT l.*,ARRAY_AGG(DISTINCT CONCAT(c.classification_type,'=',c.classification_value) IGNORE NULLS) classifications
+    FROM source_lines l LEFT JOIN approved_links m ON l.source_product_ref IN (m.left_ref,m.right_ref)
+    LEFT JOIN classifications c ON c.subject_ref=l.source_product_ref OR (c.subject_ref=IF(l.source_product_ref=m.left_ref,m.right_ref,m.left_ref)) GROUP BY ALL),
+  ranked_orders AS (SELECT *,ROW_NUMBER() OVER(PARTITION BY governed_customer_ref ORDER BY order_timestamp,source_platform,source_store,order_ref) order_sequence FROM qualifying_orders),
+  entry_orders AS (SELECT * FROM ranked_orders WHERE order_sequence=1 AND (@entry_source IS NULL OR source_platform=@entry_source) AND (@entry_channel IS NULL OR channel=@entry_channel)),
+  entry_matches AS (SELECT DISTINCT e.governed_customer_ref,e.order_ref entry_order_ref,e.order_timestamp entry_timestamp,l.source_product_ref entry_product_ref,l.product_title entry_product_title
+    FROM entry_orders e JOIN classified_lines l USING(source_platform,source_store,order_ref)
+    WHERE (@entry_product_ref IS NULL OR l.source_product_ref=@entry_product_ref) AND (@entry_classification IS NULL OR CONCAT('product_group=',@entry_classification) IN UNNEST(l.classifications) OR CONCAT('product_category=',@entry_classification) IN UNNEST(l.classifications))),
+  cohort AS (SELECT governed_customer_ref,MIN(entry_timestamp) entry_timestamp,MIN(entry_order_ref) entry_order_ref FROM entry_matches GROUP BY governed_customer_ref),
+  downstream_orders AS (SELECT r.*,c.entry_timestamp FROM ranked_orders r JOIN cohort c USING(governed_customer_ref) WHERE r.order_sequence>=@minimum_sequence AND (@maximum_sequence IS NULL OR r.order_sequence<=@maximum_sequence) AND r.order_timestamp>c.entry_timestamp AND (@within_days IS NULL OR TIMESTAMP_DIFF(r.order_timestamp,c.entry_timestamp,DAY)<=@within_days) AND (@subsequent_source IS NULL OR r.source_platform=@subsequent_source) AND (@subsequent_channel IS NULL OR r.channel=@subsequent_channel)),
+  downstream AS (SELECT d.*,l.source_product_ref,l.product_title,l.units,l.line_sales,l.classifications FROM downstream_orders d JOIN classified_lines l USING(source_platform,source_store,order_ref) WHERE (@subsequent_product_ref IS NULL OR l.source_product_ref=@subsequent_product_ref) AND (@subsequent_classification IS NULL OR CONCAT('product_group=',@subsequent_classification) IN UNNEST(l.classifications) OR CONCAT('product_category=',@subsequent_classification) IN UNNEST(l.classifications))),
+  cohort_summary AS (SELECT COUNT(*) cohort_customers,COUNTIF(d.governed_customer_ref IS NOT NULL) returning_customers FROM cohort c LEFT JOIN (SELECT DISTINCT governed_customer_ref FROM downstream_orders) d USING(governed_customer_ref)),
+  product_currency AS (SELECT source_product_ref,ANY_VALUE(product_title) product,currency,COUNT(DISTINCT governed_customer_ref) returning_customers,COUNT(DISTINCT order_ref) downstream_orders,SUM(units) units,SUM(line_sales) net_sales FROM downstream GROUP BY source_product_ref,currency),
+  products AS (SELECT source_product_ref,ANY_VALUE(product) product,MAX(returning_customers) returning_customers,MAX(downstream_orders) downstream_orders,SUM(units) units,ARRAY_AGG(STRUCT(currency,net_sales) ORDER BY currency) net_sales_by_currency FROM product_currency GROUP BY source_product_ref)
+  ${resultSql}`;
+}
+
+export function createCustomerJourneyService({bigquery,project}) {
+  if(!bigquery?.query||!project)throw new Error('bigquery and project are required');
+  return {async analyzeCustomerJourney(input){const definition=validateJourneyDefinition(input);const c=definition.cohort,s=definition.subsequent,group=definition.group_by[0];const params={start_date:definition.start_date,end_date:definition.end_date,entry_source:c.entry_source,entry_channel:c.entry_channel,entry_product_ref:c.entry_product_ref,entry_classification:c.entry_product_classification,minimum_sequence:s.minimum_order_sequence,maximum_sequence:s.maximum_order_sequence,within_days:s.within_days,subsequent_source:s.source,subsequent_channel:s.channel,subsequent_product_ref:s.product_ref,subsequent_classification:s.product_classification,limit:definition.limit,matrixify_app_id:'gid://shopify/App/1758145'};const [rows]=await bigquery.query({query:customerJourneySql(project,group),params,types:{entry_source:'STRING',entry_channel:'STRING',entry_product_ref:'STRING',entry_classification:'STRING',maximum_sequence:'INT64',within_days:'INT64',subsequent_source:'STRING',subsequent_channel:'STRING',subsequent_product_ref:'STRING',subsequent_classification:'STRING'},labels:{component:'customer_journey',operation:'analyze_customer_journey'},maximumBytesBilled:'20000000000'});return {definition,scope:{start_date:definition.start_date,end_date:definition.end_date},cohort:rows[0]?{customers:Number(rows[0].cohort_customers),returning_customers:Number(rows[0].returning_customers),repeat_rate_percentage:Number(rows[0].repeat_rate_percentage)}:{customers:0,returning_customers:0,repeat_rate_percentage:0},results:JSON.parse(JSON.stringify(rows)),...(group==='downstream_product'?{downstream_products:JSON.parse(JSON.stringify(rows))}:{}),semantics:JOURNEY_SEMANTICS,limitations:['Unresolved/guest orders are excluded.','Historical in-store customer journey coverage is limited: anonymous Square sales are not assigned to customers.','Cross-platform Woo to Shopify journeys are not merged without a governed deterministic bridge.']};}};
+}
+
+export const CUSTOMER_JOURNEY_TOOL_DEFINITION={type:'function',name:'analyze_customer_journey',strict:true,description:'Analyze an aggregate, governed first-observed-purchase cohort and its later purchases. Use for buy-next, second/nth-order, repeat-rate, elapsed-time, downstream-product and downstream-value questions; never substitute a generic customer summary.',parameters:{type:'object',additionalProperties:false,properties:{start_date:{type:'string'},end_date:{type:'string'},cohort:{type:'object',additionalProperties:false,properties:{entity:{type:'string',enum:['customer']},entry_event:{type:'string',enum:['purchase']},entry_sequence:{type:'string',enum:['first_observed_order']},entry_product_classification:{type:['string','null']},entry_product_ref:{type:['string','null']},entry_channel:{type:['string','null'],enum:['Online','In-store',null]},entry_source:{type:['string','null'],enum:['woo','shopify',null]},entry_campaign:{type:['string','null']},require_new_customer:{type:'boolean'}},required:['entity','entry_event','entry_sequence','entry_product_classification','entry_product_ref','entry_channel','entry_source','entry_campaign','require_new_customer']},subsequent:{type:'object',additionalProperties:false,properties:{event:{type:'string',enum:['purchase']},after_entry:{type:'boolean'},minimum_order_sequence:{type:'integer',minimum:2},maximum_order_sequence:{type:['integer','null'],minimum:2},within_days:{type:['integer','null'],minimum:1,maximum:3650},product_classification:{type:['string','null']},product_ref:{type:['string','null']},channel:{type:['string','null'],enum:['Online','In-store',null]},source:{type:['string','null'],enum:['woo','shopify',null]}},required:['event','after_entry','minimum_order_sequence','maximum_order_sequence','within_days','product_classification','product_ref','channel','source']},metrics:{type:'array',items:{type:'string',enum:JOURNEY_METRICS}},group_by:{type:'array',items:{type:'string',enum:JOURNEY_GROUPS}},sort:{type:'string',enum:['returning_customers_desc','repeat_rate_desc','sales_desc','orders_desc']},limit:{type:'integer',minimum:1,maximum:100}},required:['start_date','end_date','cohort','subsequent','metrics','group_by','sort','limit']}};
+
+export async function executeCustomerJourneyToolCall(service,name,args,onDiagnostic=()=>{}){if(name!=='analyze_customer_journey')return {handled:false,result:null};onDiagnostic({tool:name,start_date:args.start_date,end_date:args.end_date,group_by:args.group_by,classification:args.cohort?.entry_product_classification||null});return {handled:true,result:await service.analyzeCustomerJourney(args)}}
