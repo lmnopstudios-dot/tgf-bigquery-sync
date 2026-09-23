@@ -32,3 +32,16 @@ After deployment run, in order:
 2. `npm run validate:report-v2-production`
 
 Both validators are read-only and emit aggregate, non-PII evidence. The focused validator checks schema, the shared resolver, bounded-search sources, history, graph constraints, and suppression. The Report v2 validator also reports decision-state/provenance totals and graph evidence.
+
+## Canonical graph integrity
+
+A source product is identified by `platform:store:product-id`; Shopify Online and POS therefore share `shopify:shopify`. Every direct edge must have two well-formed, different product refs from different governed namespaces. A complete connected component may contain at most one product from each of `woo:ww`, `woo:usd`, `shopify:shopify`, and `square:square`. Any business case needing two products from one namespace is a conflict requiring human review, not an exception.
+
+The former Report v2 `graph_conflict_count` was not a component conflict count. Its SQL grouped all endpoints of all active approvals globally by namespace and counted namespaces occurring more than once. Thus the production value `3` meant **three repeated namespaces across the six approvals**, even when those approvals belonged to unrelated valid components. The dedicated validator only checked direct self/same-namespace edges, so both figures were answering different questions. Both validators now use the shared connected-component result.
+
+Conflict diagnostics are bounded and contain component ref, duplicated namespace, source refs/titles, decision and relationship IDs, edge methods/provenance, reviewer and timestamps; they contain no customer or order data. Existing conflicts are never repaired automatically. In Mapping Decisions choose **Conflicts**, inspect the complete component and evidence, and only then use **Change mapping** or **Revoke mapping**. After the deliberate action, rerun both production validators and confirm their conflict counts and component IDs agree.
+
+On first deployment run, in order:
+
+1. `npm run validate:product-mapping-production`
+2. `npm run validate:report-v2-production`
