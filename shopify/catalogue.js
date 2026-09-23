@@ -15,6 +15,12 @@ export const CATALOGUE_QUERY_TYPES={
   memberships:{rows:[{product_id:'STRING',collection_id:'STRING',catalogue_synced_at:'TIMESTAMP'}]}
 };
 
+export const CATALOGUE_TABLE_SCHEMAS={
+  products:{product_id:['STRING','NO'],title:['STRING','YES'],product_type:['STRING','YES'],vendor:['STRING','YES'],tags:['ARRAY<STRING>','YES'],status:['STRING','YES'],created_at:['TIMESTAMP','YES'],updated_at:['TIMESTAMP','YES'],catalogue_synced_at:['TIMESTAMP','NO']},
+  collections:{collection_id:['STRING','NO'],title:['STRING','YES'],handle:['STRING','YES'],product_count:['INT64','YES'],updated_at:['TIMESTAMP','YES'],catalogue_synced_at:['TIMESTAMP','NO']},
+  product_collections:{product_id:['STRING','NO'],collection_id:['STRING','NO'],catalogue_synced_at:['TIMESTAMP','NO']}
+};
+
 export function catalogueDdl(project,dataset=SHOPIFY_CATALOGUE_DATASET){return [
   `CREATE SCHEMA IF NOT EXISTS \`${project}.${dataset}\``,
   `CREATE TABLE IF NOT EXISTS \`${project}.${dataset}.products\` (product_id STRING NOT NULL,title STRING,product_type STRING,vendor STRING,tags ARRAY<STRING>,status STRING,created_at TIMESTAMP,updated_at TIMESTAMP,catalogue_synced_at TIMESTAMP NOT NULL) CLUSTER BY product_id,status`,
@@ -35,11 +41,45 @@ const missing=value=>value===null||value===undefined||value==='';
 export function validateCatalogueRows(catalogue){
   for(const [kind,rows] of [['product',catalogue.products],['collection',catalogue.collections],['membership',catalogue.memberships]])for(const row of rows)for(const field of REQUIRED_FIELDS[kind])if(missing(row[field]))throw new Error(`Invalid Shopify catalogue ${kind} row: ${field} is required${row.product_id?` (product_id: ${row.product_id})`:row.collection_id?` (collection_id: ${row.collection_id})`:''}`);
 }
-function materializeCatalogue(catalogue,catalogueSyncedAt){return {
-  products:catalogue.products.map(row=>({...row,catalogue_synced_at:catalogueSyncedAt})),
-  collections:catalogue.collections.map(row=>({...row,catalogue_synced_at:catalogueSyncedAt})),
-  memberships:catalogue.memberships.map(row=>({...row,catalogue_synced_at:catalogueSyncedAt}))
+const timestamp=value=>value===null||value===undefined?null:BigQuery.timestamp(value);
+function materializeCatalogue(catalogue,catalogueSyncedAt){const syncedAt=timestamp(catalogueSyncedAt);return {
+  products:catalogue.products.map(row=>({...row,created_at:timestamp(row.created_at),updated_at:timestamp(row.updated_at),catalogue_synced_at:syncedAt})),
+  collections:catalogue.collections.map(row=>({...row,updated_at:timestamp(row.updated_at),catalogue_synced_at:syncedAt})),
+  memberships:catalogue.memberships.map(row=>({...row,catalogue_synced_at:syncedAt}))
 }}
+
+export function catalogueSchemaAuditQuery(project,dataset=SHOPIFY_CATALOGUE_DATASET){return `SELECT table_name,column_name,data_type,is_nullable FROM \`${project}.${dataset}.INFORMATION_SCHEMA.COLUMNS\` WHERE table_name IN ('products','collections','product_collections') ORDER BY table_name,ordinal_position`}
+export async function auditCatalogueSchema(bigquery,project,dataset=SHOPIFY_CATALOGUE_DATASET){
+  const [columns]=await bigquery.query({query:catalogueSchemaAuditQuery(project,dataset),labels:{component:'shopify_catalogue',operation:'schema_audit'}});
+  const actual=Object.fromEntries(Object.keys(CATALOGUE_TABLE_SCHEMAS).map(table=>[table,{}]));
+  for(const column of columns)if(actual[column.table_name])actual[column.table_name][column.column_name]=[column.data_type,column.is_nullable];
+  const differences=[];
+  for(const [table,expected] of Object.entries(CATALOGUE_TABLE_SCHEMAS))for(const [column,contract] of Object.entries(expected))if(JSON.stringify(actual[table][column])!==JSON.stringify(contract))differences.push({table,column,expected:{data_type:contract[0],is_nullable:contract[1]},actual:actual[table][column]?{data_type:actual[table][column][0],is_nullable:actual[table][column][1]}:null});
+  const report={operation:'shopify_catalogue_schema_audit',tables:actual,differences};
+  console.log(JSON.stringify(report));
+  if(differences.length)throw new Error(`Shopify catalogue production schema differs from the write contract: ${JSON.stringify(differences)}`);
+  return report;
+}
+
+const TYPE_FIELDS=types=>Object.keys(types.rows[0]);
+export function inspectSerializedRows(rows,types){
+  const converted=BigQuery.valueToQueryParameter_(rows,types.rows);
+  return converted.parameterValue.arrayValues.map(value=>value.structValues);
+}
+function writeDiagnostic(operation,rows,types,syncTimestamp,requiredFields){
+  const first=rows[0];
+  const diagnostic={operation,row_count:rows.length,sync_timestamp:syncTimestamp,required_field_names:requiredFields,null_counts:Object.fromEntries(requiredFields.map(field=>[field,rows.filter(row=>missing(row[field])).length])),parameter_type_names:TYPE_FIELDS(types),first_row_object_keys:first?Object.keys(first):[],first_row_catalogue_synced_at_non_null:first?!missing(first.catalogue_synced_at):null,timestamp_runtime_type:first?.catalogue_synced_at?.constructor?.name||typeof first?.catalogue_synced_at};
+  console.log(JSON.stringify(diagnostic));
+  return diagnostic;
+}
+async function runWrite(bigquery,operation,options){try{return await bigquery.query({...options,labels:{component:'shopify_catalogue',operation}})}catch(error){throw new Error(`${operation}: ${error?.message||error}`,{cause:error})}}
+
+export const catalogueMergeSql={
+  products:(project,dataset)=>`MERGE \`${project}.${dataset}.products\` t USING (SELECT product_id,title,product_type,vendor,tags,status,created_at,updated_at,catalogue_synced_at FROM UNNEST(@rows)) s ON t.product_id=s.product_id WHEN MATCHED THEN UPDATE SET title=s.title,product_type=s.product_type,vendor=s.vendor,tags=s.tags,status=s.status,created_at=s.created_at,updated_at=s.updated_at,catalogue_synced_at=s.catalogue_synced_at WHEN NOT MATCHED THEN INSERT (product_id,title,product_type,vendor,tags,status,created_at,updated_at,catalogue_synced_at) VALUES (s.product_id,s.title,s.product_type,s.vendor,s.tags,s.status,s.created_at,s.updated_at,s.catalogue_synced_at)`,
+  collections:(project,dataset)=>`MERGE \`${project}.${dataset}.collections\` t USING (SELECT collection_id,title,handle,product_count,updated_at,catalogue_synced_at FROM UNNEST(@rows)) s ON t.collection_id=s.collection_id WHEN MATCHED THEN UPDATE SET title=s.title,handle=s.handle,product_count=s.product_count,updated_at=s.updated_at,catalogue_synced_at=s.catalogue_synced_at WHEN NOT MATCHED THEN INSERT (collection_id,title,handle,product_count,updated_at,catalogue_synced_at) VALUES (s.collection_id,s.title,s.handle,s.product_count,s.updated_at,s.catalogue_synced_at)`,
+  memberships:(project,dataset)=>`MERGE \`${project}.${dataset}.product_collections\` t USING (SELECT product_id,collection_id,catalogue_synced_at FROM UNNEST(@rows)) s ON t.product_id=s.product_id AND t.collection_id=s.collection_id WHEN MATCHED THEN UPDATE SET catalogue_synced_at=s.catalogue_synced_at WHEN NOT MATCHED THEN INSERT (product_id,collection_id,catalogue_synced_at) VALUES (s.product_id,s.collection_id,s.catalogue_synced_at) WHEN NOT MATCHED BY SOURCE THEN DELETE`
+};
+
 export async function persistShopifyCatalogue(bigquery,project,catalogue,{dataset=SHOPIFY_CATALOGUE_DATASET,catalogueSyncedAt,now}={}){
   // `now` remains an option alias for callers deployed with the earlier API.
   const syncTimestamp=catalogueSyncedAt||now||new Date().toISOString();
@@ -47,9 +87,14 @@ export async function persistShopifyCatalogue(bigquery,project,catalogue,{datase
   const rows=materializeCatalogue(catalogue,syncTimestamp);
   validateCatalogueRows(rows);
   for(const query of catalogueDdl(project,dataset))await bigquery.query({query});
-  const specs=[['products','product_id',rows.products,CATALOGUE_QUERY_TYPES.products],['collections','collection_id',rows.collections,CATALOGUE_QUERY_TYPES.collections]];
-  for(const [table,key,tableRows,types] of specs)if(tableRows.length){const columns=Object.keys(tableRows[0]);await bigquery.query({query:`MERGE \`${project}.${dataset}.${table}\` t USING UNNEST(@rows) s ON t.${key}=s.${key} WHEN MATCHED THEN UPDATE SET ${columns.filter(column=>column!==key).map(column=>`${column}=s.${column}`).join(',')} WHEN NOT MATCHED THEN INSERT (${columns.join(',')}) VALUES (${columns.map(column=>`s.${column}`).join(',')})`,params:{rows:tableRows},types});}
-  await bigquery.query({query:`CREATE TEMP TABLE current_memberships AS SELECT * FROM UNNEST(@rows); MERGE \`${project}.${dataset}.product_collections\` t USING current_memberships s ON t.product_id=s.product_id AND t.collection_id=s.collection_id WHEN MATCHED THEN UPDATE SET catalogue_synced_at=s.catalogue_synced_at WHEN NOT MATCHED THEN INSERT (product_id,collection_id,catalogue_synced_at) VALUES (s.product_id,s.collection_id,s.catalogue_synced_at) WHEN NOT MATCHED BY SOURCE THEN DELETE`,params:{rows:rows.memberships},types:CATALOGUE_QUERY_TYPES.memberships});
+  await auditCatalogueSchema(bigquery,project,dataset);
+  const specs=[
+    ['shopify_catalogue_products_merge',rows.products,CATALOGUE_QUERY_TYPES.products,REQUIRED_FIELDS.product,catalogueMergeSql.products],
+    ['shopify_catalogue_collections_merge',rows.collections,CATALOGUE_QUERY_TYPES.collections,REQUIRED_FIELDS.collection,catalogueMergeSql.collections]
+  ];
+  for(const [operation,tableRows,types,required,sql] of specs)if(tableRows.length){writeDiagnostic(operation,tableRows,types,syncTimestamp,required);await runWrite(bigquery,operation,{query:sql(project,dataset),params:{rows:tableRows},types});}
+  writeDiagnostic('shopify_catalogue_memberships_merge',rows.memberships,CATALOGUE_QUERY_TYPES.memberships,syncTimestamp,REQUIRED_FIELDS.membership);
+  await runWrite(bigquery,'shopify_catalogue_memberships_merge',{query:catalogueMergeSql.memberships(project,dataset),params:{rows:rows.memberships},types:CATALOGUE_QUERY_TYPES.memberships});
   return {products:rows.products.length,collections:rows.collections.length,memberships:rows.memberships.length};
 }
 export async function syncShopifyCatalogue({bigquery,project,graphql,dataset,now=()=>new Date().toISOString()}={}){const catalogueSyncedAt=now();const catalogue=await fetchShopifyCatalogue(graphql);return persistShopifyCatalogue(bigquery,project,catalogue,{dataset,catalogueSyncedAt});}
