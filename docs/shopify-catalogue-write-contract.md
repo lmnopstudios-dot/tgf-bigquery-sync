@@ -33,6 +33,14 @@ non-destructive `CREATE ... IF NOT EXISTS` statements and before any MERGE. It
 compares names, BigQuery data types, and nullability with the intended contract
 and stops on a difference; it never recreates a table.
 
+The governed product contract defines `tags` as `ARRAY<STRING> NOT NULL`, which
+matches the production table. A tagged product has an array of tag strings and a
+product without tags has `[]`; `NULL` is never a normalized catalogue value.
+Absent or explicit-null Shopify tag values normalize to `[]`, while pre-write
+validation rejects a missing, null, non-array, or non-string normalized value.
+The nested `@rows` parameter continues to declare `tags: ['STRING']`, including
+when the value is an empty array.
+
 Before each executed MERGE, structured diagnostics contain only the operation,
 row count, shared sync timestamp, required field names and null counts, declared
 struct field names, first-row keys, timestamp presence, and timestamp constructor.

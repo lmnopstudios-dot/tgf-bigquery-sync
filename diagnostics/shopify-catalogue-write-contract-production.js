@@ -13,8 +13,10 @@ export async function validateShopifyCatalogueWriteContract({bigquery,project,da
     const serialized=inspectSerializedRows(rows[kind],CATALOGUE_QUERY_TYPES[kind]);
     const survives=serialized[0]?.catalogue_synced_at?.value!==undefined;
     if(!survives)throw new Error(`${kind} catalogue_synced_at was lost during BigQuery client parameter serialization`);
+    if(kind==='products'&&!Array.isArray(serialized[0]?.tags?.arrayValues))throw new Error('products tags were not serialized as a typed ARRAY<STRING>');
     const projection=catalogueMergeSql[kind](project,dataset).match(/USING \((.*?)\) s/s)?.[1];
-    const [bound]=await bigquery.query({query:`SELECT catalogue_synced_at IS NOT NULL AS survives FROM UNNEST(@rows)`,params:{rows:rows[kind]},types:CATALOGUE_QUERY_TYPES[kind],labels:{component:'shopify_catalogue',operation:`${kind}_binding_validation`}});
+    const tagsCheck=kind==='products'?' AND tags IS NOT NULL':'';
+    const [bound]=await bigquery.query({query:`SELECT catalogue_synced_at IS NOT NULL${tagsCheck} AS survives FROM UNNEST(@rows)`,params:{rows:rows[kind]},types:CATALOGUE_QUERY_TYPES[kind],labels:{component:'shopify_catalogue',operation:`${kind}_binding_validation`}});
     if(bound.length!==1||bound[0].survives!==true)throw new Error(`${kind} catalogue_synced_at did not survive BigQuery parameter binding`);
     binding[kind]={client_serialization_survives:true,server_binding_survives:true,source_projection:projection};
   }
