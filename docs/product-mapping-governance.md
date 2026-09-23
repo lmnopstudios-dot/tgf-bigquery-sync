@@ -22,6 +22,22 @@ Every event has a stable `decision_id` and `relationship_id`, reviewer, timestam
 
 Before any approval, the complete active graph is checked. A component cannot contain two products from the same source namespace. Validation completes before writes, so a detected conflict cannot partially persist a correction.
 
+For candidate `0e0bcd00a8eda894832d7dc6`, run this first from the deployed repository root in a Render Shell:
+
+```sh
+npm run diagnose:product-mapping-candidate -- 0e0bcd00a8eda894832d7dc6
+```
+
+To reproduce the separate **Choose correct product** failure without writing, run:
+
+```sh
+npm run diagnose:product-mapping-candidate -- '3f4ceb34b70f26d84ed4f605=gid://shopify/Product/10434349072711'
+```
+
+This candidate-specific command is read-only: it loads transaction-derived products and immutable mapping history with `SELECT` queries, reconstructs deterministic and governed edges, and does not call schema setup or any review/write method. An optional `candidate_id=selected_product_id` argument reproduces the replacement edge constructed by **Choose correct product**. Its JSON shows both proposed endpoints and their current components, followed by each newly conflicting same-namespace product pair and the complete shortest evidence path between it. Every path edge identifies its source (`deterministic_identity`, `governed_approval`, or `proposed_candidate`), mapping method, endpoint refs, and decision/relationship IDs when present. It also contrasts the former governed-edge-only validator graph with the full write-time graph. A title mismatch is evidence only and is never used to bypass graph safety.
+
+The smallest safe correction is to revoke or change the single erroneous active governed approval identified on the conflict path. If the path instead identifies a deterministic edge, correct the underlying duplicate SKU/title identity evidence; do not approve the candidate or weaken the one-product-per-namespace invariant. When the output cannot isolate an erroneous edge, leave the candidate unapproved and report the shown path as ambiguous.
+
 ## Reporting and validation
 
 Report v2 reads only active approvals resolved from immutable history. Rejected, revoked, superseded, reconsidered, and suggested relationships are not canonical edges. Source transactions are not rewritten.
@@ -31,7 +47,7 @@ After deployment run, in order:
 1. `npm run validate:product-mapping-production`
 2. `npm run validate:report-v2-production`
 
-Both validators are read-only and emit aggregate, non-PII evidence. The focused validator checks schema, the shared resolver, bounded-search sources, history, graph constraints, and suppression. The Report v2 validator also reports decision-state/provenance totals and graph evidence.
+Both validators are read-only and emit aggregate, non-PII evidence. The focused validator now reconstructs products, deterministic edges, and governed edges exactly as write-time graph safety does; the former governed-edge-only check could pass while an approval failed. It also checks schema, the shared resolver, bounded-search sources, history, graph constraints, and suppression. The Report v2 validator also reports decision-state/provenance totals and graph evidence.
 
 ## Canonical graph integrity
 

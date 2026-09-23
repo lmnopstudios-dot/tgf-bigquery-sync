@@ -71,6 +71,37 @@ export function assertProductGraphIntegrity(input) {
   return result;
 }
 
+const diagnosticEdge = (edge, proposed) => ({
+  edge_source: edge === proposed ? 'proposed_candidate' : edge.decision_id ? 'governed_approval' : 'deterministic_identity',
+  mapping_method: edge.mapping_method || 'unknown', left_ref:edge.left_ref, right_ref:edge.right_ref,
+  decision_id:edge.decision_id || null, relationship_id:edge.relationship_id || null
+});
+
+/** Explain only the new conflicts introduced by one proposed edge; never mutates graph state. */
+export function diagnoseProposedProductEdge({products=[],explicitEdges=[],deterministicEdges=[],candidate}={}) {
+  if(!candidate?.left_ref||!candidate?.right_ref) throw new Error('candidate endpoints are required');
+  const proposed={...candidate,mapping_status:'resolved',mapping_method:candidate.mapping_method||'explicit_governed_mapping'};
+  const before=inspectProductGraph({products,explicitEdges,deterministicEdges});
+  const governedOnly=inspectProductGraph({products,explicitEdges});
+  const after=inspectProductGraph({products,explicitEdges:[...explicitEdges,proposed],deterministicEdges});
+  const productByRef=new Map(products.map(p=>[p.source_product_ref,p]));
+  const componentFor=(graph,ref)=>graph.components.find(c=>c.source_products.includes(ref));
+  const endpoints=[candidate.left_ref,candidate.right_ref].map(ref=>{const c=componentFor(before,ref);return {source_product_ref:ref,title:productByRef.get(ref)?.title||null,canonical_component_ref:c?.canonical_product_ref||null,component_products:c?.source_products||[ref]};});
+  const adjacency=new Map();
+  const add=(ref,item)=>{const values=adjacency.get(ref)||[];values.push(item);adjacency.set(ref,values);};
+  for(const edge of after.edges){add(edge.left_ref,{ref:edge.right_ref,edge});add(edge.right_ref,{ref:edge.left_ref,edge});}
+  const path=(start,end)=>{const queue=[start],seen=new Set([start]),previous=new Map();while(queue.length){const ref=queue.shift();if(ref===end)break;for(const item of adjacency.get(ref)||[]){if(seen.has(item.ref))continue;seen.add(item.ref);previous.set(item.ref,{ref,edge:item.edge});queue.push(item.ref);}}if(!seen.has(end))return null;const edges=[];for(let ref=end;ref!==start;){const item=previous.get(ref);edges.unshift(diagnosticEdge(item.edge,proposed));ref=item.ref;}return edges;};
+  const merged=componentFor(after,candidate.left_ref);
+  const beforeConflicts=new Set(before.components.flatMap(c=>c.duplicate_namespaces.flatMap(d=>d.source_product_refs.flatMap((a,i)=>d.source_product_refs.slice(i+1).map(b=>[a,b].sort().join('\0'))))));
+  const conflict_paths=[];
+  for(const duplicate of merged?.duplicate_namespaces||[])for(let i=0;i<duplicate.source_product_refs.length;i++)for(let j=i+1;j<duplicate.source_product_refs.length;j++){
+    const refs=[duplicate.source_product_refs[i],duplicate.source_product_refs[j]].sort();
+    if(beforeConflicts.has(refs.join('\0')))continue;
+    conflict_paths.push({conflicting_namespace:duplicate.namespace,products:refs.map(ref=>({source_product_ref:ref,product_id:ref.split(':').slice(2).join(':'),title:productByRef.get(ref)?.title||null})),edges:path(refs[0],refs[1])});
+  }
+  return {read_only:true,candidate:{candidate_id:candidate.candidate_id||null,left_ref:candidate.left_ref,right_ref:candidate.right_ref,left_title:candidate.left_title||productByRef.get(candidate.left_ref)?.title||null,right_title:candidate.right_title||productByRef.get(candidate.right_ref)?.title||null},endpoints,graph_comparison:{governed_only_validator_graph:governedOnly.summary,write_time_graph:before.summary,missing_from_governed_only_validator:{products:true,deterministic_edges:deterministicEdges.length}},new_conflicts:conflict_paths,existing_graph_conflicts:before.summary.conflicted_components,proposed_graph_conflicts:after.summary.conflicted_components,diagnosis:conflict_paths.length?'proposed edge joins components containing different products from the same source namespace':before.summary.conflicted_components?'existing graph is already conflicted; candidate-specific cause is ambiguous':'candidate does not reproduce a graph conflict with the supplied graph'};
+}
+
 /** Prevent a conflicted component from becoming a single report aggregate. */
 export function preserveConflictedProductIdentity(rows, graph) {
   const conflictedRefs=new Set(graph.components.filter(c=>c.integrity_status==='conflicted').flatMap(c=>c.source_products));
