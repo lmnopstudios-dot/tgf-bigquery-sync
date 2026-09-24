@@ -24,6 +24,7 @@ import {
   AcquisitionValidationError,
   syncShopifyAcquisition
 } from './shopify/acquisition.js';
+import { normalizeShippingGeography, persistShippingGeography } from './shopify/order-geography.js';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -1896,6 +1897,11 @@ async function getAllOrders() {
             name
           }
 
+          shippingAddress {
+            countryCodeV2
+            country
+          }
+
           lineItems(first: 250) {
             nodes {
               id
@@ -3544,6 +3550,10 @@ async function syncShopify() {
   const orderRows =
     transformOrders(orders);
 
+  const shippingGeographyRows =
+    orders.filter(order => order.app?.id !== MATRIXIFY_SOURCE_APP_ID)
+      .map(order => normalizeShippingGeography(order));
+
   const lineItemRows =
     transformLineItems(orders);
 
@@ -3592,6 +3602,9 @@ async function syncShopify() {
     refundRows
   );
 
+  await persistShippingGeography({ bigquery, project: GOOGLE_PROJECT_ID,
+    rows: shippingGeographyRows, mode: 'backfill' });
+
   console.log(
     'Shopify sync complete'
   );
@@ -3616,7 +3629,10 @@ async function syncShopify() {
       financialRows.length,
 
     refundsWritten:
-      refundRows.length
+      refundRows.length,
+
+    shippingGeographyRowsWritten:
+      shippingGeographyRows.length
   };
 }
 
