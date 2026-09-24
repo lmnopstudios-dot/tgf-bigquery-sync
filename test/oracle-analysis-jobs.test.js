@@ -13,6 +13,26 @@ const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 async function login(base){const response=await fetch(`${base}/auth/login`,{method:'POST',headers:{origin:new URL(base).origin,'content-type':'application/json'},body:'{"password":"test-password"}'}),data=await response.json();return {cookie:response.headers.getSetCookie().map(x=>x.split(';')[0]).join('; '),csrf:data.csrf};}
 const poll=async(base,id,cookie)=>{for(let i=0;i<10_000;i++){const body=await (await fetch(`${base}/jobs/${id}`,{headers:{cookie}})).json();if(['completed','failed','cancelled'].includes(body.status))return body;await sleep(10)}throw new Error('job did not finish')};
 
+test('jobs endpoint accepts the real UI JSON shape and distinguishes invalid request classes',async t=>{
+  const store=createMemoryAnalysisJobStore();
+  const app=express();app.use('/api/oracle',createOracleUiRouter({knowledgeService:{},bigquery:{},project:'p',chat:async message=>({answer:message,tools:[]}),generateProposals:async()=>[],analysisJobStore:store,env}));
+  const server=await new Promise(resolve=>{const s=app.listen(0,()=>resolve(s))});t.after(()=>server.close());
+  const base=`http://127.0.0.1:${server.address().port}/api/oracle`,origin=new URL(base).origin,auth=await login(base),headers={cookie:auth.cookie,origin,'content-type':'application/json','x-csrf-token':auth.csrf};
+  const submit=body=>fetch(`${base}/jobs`,{method:'POST',headers,body});
+
+  // This is the request construction used by public/oracle/app.js: a JSON
+  // object with the complete textarea value in `message`.
+  for(const message of ['short message',DANIELLE_FULL_EMAIL]){
+    const response=await submit(JSON.stringify({message})),body=await response.json();
+    assert.equal(response.status,202);assert.equal(body.success,true);assert.match(body.job_id,/^[0-9a-f-]{36}$/);assert.equal(store.jobs.get(body.job_id).payload_json.message,message);
+  }
+  let response=await submit('{"message":');assert.equal(response.status,400);assert.deepEqual(await response.json(),{success:false,code:'INVALID_JSON',error:'Invalid JSON request'});
+  response=await submit(JSON.stringify({message:'x'.repeat(50*1024)}));assert.equal(response.status,413);assert.deepEqual(await response.json(),{success:false,code:'REQUEST_TOO_LARGE',error:'Request body exceeds the 48 KB limit'});
+  response=await submit(JSON.stringify({prompt:'old client shape'}));assert.equal(response.status,409);assert.deepEqual(await response.json(),{success:false,code:'ORACLE_CLIENT_UPDATE_REQUIRED',error:'This Oracle client is out of date. Refresh the page and submit again.'});
+  response=await submit(JSON.stringify({message:'   '}));assert.equal(response.status,422);assert.equal((await response.json()).code,'INVALID_MESSAGE');
+  store.create=async()=>{throw new Error('private durable-store detail')};response=await submit(JSON.stringify({message:'valid but queue unavailable'}));assert.equal(response.status,503);const unavailable=await response.json();assert.equal(unavailable.code,'ORACLE_JOB_ENQUEUE_FAILED');assert.doesNotMatch(JSON.stringify(unavailable),/private durable-store detail/);
+});
+
 test('durable Danielle job survives request disconnect/refresh, is private, and returns one complete synthesis',async t=>{
   const store=createMemoryAnalysisJobStore();let executions=0;
   const chat=async(message,{durable,signal})=>{executions++;assert.equal(message,DANIELLE_FULL_EMAIL);assert.equal(durable,true);await sleep(75_100);assert.equal(signal.aborted,false);return {answer:`Complete answer\n${ITEMS.join('\n')}`,tools:['catalogue','inventory','sales']}};
