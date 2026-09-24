@@ -45,7 +45,8 @@
     "validate:shopify-catalogue-write-contract-production": "node diagnostics/shopify-catalogue-write-contract-production.js",
     "validate:catalogue-production": "node diagnostics/catalogue-production-validation.js",
     "validate:product-classifications-production": "node diagnostics/product-classification-production-validation.js",
-    "validate:oracle-tool-schemas": "node diagnostics/oracle-tool-schema-validation.js"
+    "validate:oracle-tool-schemas": "node diagnostics/oracle-tool-schema-validation.js",
+    "validate:shopify-country-products-production": "node diagnostics/shopify-country-products-production.js"
   },
   "engines": {
     "node": ">=20"

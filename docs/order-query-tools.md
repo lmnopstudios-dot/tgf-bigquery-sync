@@ -116,7 +116,7 @@ No deterministic order-level link to `finance.sales_master` is asserted. Canonic
 
 Outputs exclude customer names, email, phone, street/full addresses, postcode, payment credentials, notes, and raw payloads. A safe internal customer ID may filter a search but is not emitted and cannot navigate to PII.
 
-Woo country is returned only from directly observed `commerce.order_geography.shipping_country_iso2`, with Metorik-export provenance and a store-qualified join. Missing means unresolved: billing country and inference are never substituted. Every country-filtered response warns that historical Woo coverage is incomplete. Shopify country is unavailable in the governed persisted order schema and remains null.
+Woo country is returned only from directly observed `commerce.order_geography.shipping_country_iso2`, with Metorik-export provenance and a store-qualified join. Missing means unresolved: billing country and inference are never substituted. Every country-filtered response warns that historical Woo coverage is incomplete. Shopify country comes only from the direct, order-level `shopify_data.order_shipping_geography` relation. `search_orders` preserves bounded examples; `get_shopify_online_country_products` is the governed aggregate path for country and within-country product rankings.
 
 Money fields are named `source_order_total`, `source_discount_total`, and `source_refund_total`. They are source-native operational values in the returned currency, not canonical accounting sales. Canonical finance linkage is null unless a future deterministic bridge is governed.
 
