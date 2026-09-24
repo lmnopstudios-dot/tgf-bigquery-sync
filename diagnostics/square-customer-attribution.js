@@ -30,7 +30,7 @@ export function parseArgs(argv) {
 }
 
 export function metadataQuery(project, dataset = 'square_data') {
-  return `SELECT table_name, table_type, column_name, data_type, ordinal_position
+  return `SELECT table_name, column_name, data_type, ordinal_position
 FROM ${fq(project, dataset, 'INFORMATION_SCHEMA.COLUMNS')}
 WHERE table_name NOT LIKE 'customer_attribution_%'
 ORDER BY table_name, ordinal_position`;
@@ -173,13 +173,19 @@ export function assertReadOnlyAggregate(query) {
 }
 
 export async function runDiagnostic({ bigquery, project, dataset = 'square_data' }) {
-  const [metadata] = await bigquery.query({ query: metadataQuery(project, dataset), useLegacySql: false });
-  const schema = inspectEvidenceSchema(metadata);
-  const query = buildAttributionQuery(project, dataset, metadata);
+  const metadata = await atStage('schema discovery', async () => {
+    const [rows] = await bigquery.query({ query: metadataQuery(project, dataset), useLegacySql: false });
+    return rows;
+  });
+  const schema = await atStage('schema validation', async () => inspectEvidenceSchema(metadata));
+  const query = await atStage('query construction', async () => buildAttributionQuery(project, dataset, metadata));
   assertReadOnlyAggregate(query);
-  const [annualEvidence] = await bigquery.query({ query, useLegacySql: false,
-    labels: { component: 'square_customer_attribution', operation: 'annual_aggregate_audit' },
-    maximumBytesBilled: '20000000000' });
+  const annualEvidence = await atStage('aggregate attribution query', async () => {
+    const [rows] = await bigquery.query({ query, useLegacySql: false,
+      labels: { component: 'square_customer_attribution', operation: 'annual_aggregate_audit' },
+      maximumBytesBilled: '20000000000' });
+    return rows;
+  });
   return {
     safety: { read_only: true, aggregate_only: true, pii_free_output: true, production_writes: false },
     semantics: {
@@ -203,10 +209,45 @@ export async function runDiagnostic({ bigquery, project, dataset = 'square_data'
   };
 }
 
-async function main() {
-  const options = parseArgs(process.argv.slice(2));
-  const credentials = process.env.GOOGLE_SERVICE_ACCOUNT_JSON ? JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON) : undefined;
-  const result = await runDiagnostic({ ...options, bigquery: new BigQuery({ projectId: options.project, credentials }) });
-  process.stdout.write(`${JSON.stringify(result, (_key, value) => typeof value === 'bigint' ? value.toString() : value, 2)}\n`);
+class DiagnosticStageError extends Error {
+  constructor(stage, cause) {
+    super(`Square customer-attribution diagnostic failed during ${stage}`);
+    this.name = 'DiagnosticStageError';
+    this.stage = stage;
+    this.cause = cause;
+  }
 }
-if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href) main().catch(error => { console.error(error); process.exitCode = 1; });
+
+async function atStage(stage, operation) {
+  try { return await operation(); }
+  catch (error) { throw new DiagnosticStageError(stage, error); }
+}
+
+const safeToken = value => /^[A-Za-z0-9_.-]{1,64}$/.test(String(value ?? '')) ? String(value) : null;
+
+/** A deliberately bounded summary: never include API response bodies, SQL, credentials, or row data. */
+export function formatDiagnosticFailure(error, fallbackStage = 'startup') {
+  const stage = error instanceof DiagnosticStageError ? error.stage : fallbackStage;
+  const cause = error instanceof DiagnosticStageError ? error.cause : error;
+  const apiError = Array.isArray(cause?.errors) ? cause.errors[0] : undefined;
+  const reason = safeToken(apiError?.reason ?? cause?.reason);
+  const code = safeToken(cause?.code);
+  const details = [reason && `reason: ${reason}`, code && `code: ${code}`].filter(Boolean);
+  return `Square customer-attribution diagnostic failed during ${stage}${details.length ? ` (${details.join(', ')})` : ''}.`;
+}
+
+async function main() {
+  let stage = 'argument parsing';
+  try {
+    const options = parseArgs(process.argv.slice(2));
+    stage = 'credential configuration';
+    const credentials = process.env.GOOGLE_SERVICE_ACCOUNT_JSON ? JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON) : undefined;
+    stage = 'diagnostic execution';
+    const result = await runDiagnostic({ ...options, bigquery: new BigQuery({ projectId: options.project, credentials }) });
+    process.stdout.write(`${JSON.stringify(result, (_key, value) => typeof value === 'bigint' ? value.toString() : value, 2)}\n`);
+  } catch (error) {
+    process.stderr.write(`${formatDiagnosticFailure(error, stage)}\n`);
+    process.exitCode = 1;
+  }
+}
+if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href) main();
