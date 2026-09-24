@@ -5,6 +5,8 @@ import express from 'express';
 import { SHOPIFY_COUNTRY_PRODUCTS_TOOL_DEFINITION, createShopifyCountryProductsService, shopifyCountryProductsSql, validateCountryProductInput } from '../oracle/shopify-country-products.js';
 import { parseArguments, validateShopifyCountryProducts } from '../diagnostics/shopify-country-products-production.js';
 import { createOracleUiRouter } from '../oracle/ui-router.js';
+import { runWithShopifyThrottle } from '../oracle/shopifyql-throttle.js';
+import { toolCallSignature } from '../oracle/request-tool-budget.js';
 
 const QUESTION = 'Can you give me the top ten locations for online sales this year along with the top 10 products sold to each one?';
 const NOW = Date.parse('2026-09-24T12:00:00Z');
@@ -14,6 +16,16 @@ Any ideas of what we can do? Use data where possible`;
 const DANIELLE_EXACT_FOLLOW_UP = 'What can we do about this? Please include data and sales info where appropriate.';
 const DANIELLE_BRIEF = `Danielle has asked us to look at clearing the following stock online:
 Large Anatomical Heart Ring, Small Anatomical Heart Ring, and Anatomical Heart Pendant.`;
+const DANIELLE_FULL_EMAIL = `Danielle has asked us to look at clearing the following stock online:
+Small Signet; Butterfly, Ankh, Eagle and Pig charms; Sun and Moon, Serpent, Dagger, Snake and Dagger, Magic Mushroom and Enchanted Castle pendants; Reaper and Pentagram; gold and silver bat earrings; Solid Heart and Smallest Evil Skull rings; and all three skull-hoop variations.
+Any ideas of what we can do? Use data where possible.`;
+const DANIELLE_FULL_ITEMS = [
+  'Small Signet','Butterfly charm','Ankh charm','Eagle charm','Pig charm',
+  'Sun and Moon pendant','Serpent pendant','Dagger pendant','Snake and Dagger pendant',
+  'Magic Mushroom pendant','Enchanted Castle pendant','Reaper','Pentagram',
+  'Gold bat earrings','Silver bat earrings','Solid Heart ring','Smallest Evil Skull ring',
+  'Skull hoop variation 1','Skull hoop variation 2','Skull hoop variation 3'
+];
 
 async function oracleConversation({ legacyFirstClarification = false } = {}) {
   const aggregateCalls=[];
@@ -123,6 +135,52 @@ test('Danielle stock-clearance brief gets evidence-aware initial advice without 
   const response=await fetch(`${base}/chat`,{method:'POST',headers:{cookie,origin,'content-type':'application/json','x-csrf-token':auth.csrf},body:JSON.stringify({message:DANIELLE_STOCK_CLEARANCE})}),body=await response.json();
   assert.equal(response.status,200);assert.equal(calls.length,4);assert.equal(proposalCalls,1);assert.deepEqual(body.proposals,[]);
   assert.doesNotMatch(body.answer,/what date range/i);assert.match(body.answer,/online Anatomical Heart edit/);assert.match(body.answer,/need live catalogue evidence/);assert.match(body.answer,/kept currencies separate/);
+});
+
+test('original full Danielle email reaches the UI with per-item evidence status on the observed slow and throttled path',async t=>{
+  const products=DANIELLE_FULL_ITEMS;
+  const query=products.map(title=>`title:"${title}"`).join(' OR ');
+  const unresolvedCatalogue=new Set(['Pentagram','Skull hoop variation 3']);
+  const unresolvedInventory=new Set([...unresolvedCatalogue,'Silver bat earrings']);
+  const unresolvedSales=new Set([...unresolvedInventory,'Reaper']);
+  const rows=(unresolved,field,value)=>products.filter(title=>!unresolved.has(title)).map((title,index)=>({title,[field]:value(index)}));
+  const calls=[],signatures=new Set();
+  let active=0,maxActive=0,throttleAttempts=0;
+  const tracked=async(name,args,ms,value)=>{
+    const signature=toolCallSignature(name,args);
+    assert.equal(signatures.has(signature),false,`duplicate lookup: ${signature}`);
+    signatures.add(signature);calls.push({name,args});active++;maxActive=Math.max(maxActive,active);
+    try{await new Promise(resolve=>setTimeout(resolve,ms));return value}finally{active--}
+  };
+  const chat=async(message,{analysisContext})=>{
+    assert.equal(message,DANIELLE_FULL_EMAIL);
+    assert.equal(analysisContext.request_kind,'advisory');
+    const [catalogue,inventory]=await Promise.all([
+      tracked('search_shopify_products',{query,limit:25},1_200,rows(unresolvedCatalogue,'made_to_order',index=>index%5===0)),
+      tracked('get_shopify_inventory_by_location',{query,location:'Online',limit:25},50_500,rows(unresolvedInventory,'available',index=>24-index))
+    ]);
+    const sales=await runWithShopifyThrottle(async()=>{
+      throttleAttempts++;
+      if(throttleAttempts===1){const error=new Error('throttled');error.errors=[{extensions:{code:'THROTTLED',cost:{requestedQueryCost:42,currentlyAvailable:5,windowResetAt:new Date(Date.now()+2_000).toISOString()}}}];throw error}
+      return tracked('get_shopify_product_performance',{query,start_date:'2026-06-26',end_date:'2026-09-24'},4_500,rows(unresolvedSales,'units_sold',index=>20-index));
+    },{deadlineAt:Date.now()+30_000,maxWaitMs:5_000,responseReserveMs:5_000,bufferMs:100});
+    const efficiency=await tracked('get_shopify_inventory_efficiency',{query,start_date:'2026-06-26',end_date:'2026-09-24'},3_200,rows(unresolvedSales,'sell_through_rate',index=>.4-index*.01));
+    await new Promise(resolve=>setTimeout(resolve,1_500)); // realistic final model synthesis
+    const found=(values,title)=>values.some(row=>row.title===title);
+    const evidence=products.map(title=>`${title}: catalogue=${found(catalogue,title)?'verified':'unresolved'}, inventory=${found(inventory,title)?'verified':'unresolved'}, sales=${found(sales,title)?'verified':'unresolved'}`).join('\n');
+    return {answer:`Complete Danielle stock-clearance analysis.\n${evidence}\nVerified stock and recent sales support a grouped online edit, segmented email, cross-links and measured offer tests. Explicitly unresolved items must be matched manually before publishing.`,tools:calls.map(call=>call.name)};
+  };
+  const env={ORACLE_UI_PASSWORD:'test-password',ORACLE_UI_SESSION_SECRET:'12345678901234567890123456789012'};
+  const app=express();app.use('/api/oracle',createOracleUiRouter({knowledgeService:{},bigquery:{},project:'test',chat,generateProposals:async()=>[],env,now:()=>NOW}));
+  const server=await new Promise(resolve=>{const value=app.listen(0,()=>resolve(value))});t.after(()=>server.close());
+  const base=`http://127.0.0.1:${server.address().port}/api/oracle`,origin=new URL(base).origin;
+  const login=await fetch(`${base}/auth/login`,{method:'POST',headers:{origin,'content-type':'application/json'},body:'{"password":"test-password"}'}),auth=await login.json(),cookie=login.headers.getSetCookie().map(value=>value.split(';')[0]).join('; ');
+  const started=Date.now(),response=await fetch(`${base}/chat`,{method:'POST',headers:{cookie,origin,'content-type':'application/json','x-csrf-token':auth.csrf,'x-request-id':'danielle-full-email-e2e'},body:JSON.stringify({message:DANIELLE_FULL_EMAIL})}),body=await response.json(),elapsedMs=Date.now()-started;
+  assert.equal(response.status,200);assert.equal(body.success,true);assert.equal(body.answer.startsWith('Complete Danielle'),true);
+  for(const product of products)assert.match(body.answer,new RegExp(product));
+  assert.match(body.answer,/catalogue=verified/);assert.match(body.answer,/inventory=verified/);assert.match(body.answer,/sales=verified/);assert.match(body.answer,/unresolved/);
+  assert.equal(signatures.size,4);assert.equal(throttleAttempts,2);assert.equal(maxActive,2);assert.ok(elapsedMs>=60_000&&elapsedMs<80_000);
+  console.info('# Danielle full-email E2E:',JSON.stringify({elapsed_ms:elapsedMs,distinct_requested_items:products.length,catalogue:{verified:products.length-unresolvedCatalogue.size,unresolved:[...unresolvedCatalogue]},inventory:{verified:products.length-unresolvedInventory.size,unresolved:[...unresolvedInventory]},sales:{verified:products.length-unresolvedSales.size,unresolved:[...unresolvedSales]},complete_answer_before_ui_deadline:true,shopify_throttle_attempts:throttleAttempts,max_concurrency:maxActive}));
 });
 
 test('exact Danielle wording in a fresh chat remains useful when optional sales evidence is unavailable',async t=>{

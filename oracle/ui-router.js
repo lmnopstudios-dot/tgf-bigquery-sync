@@ -71,6 +71,9 @@ export function createOracleUiRouter({ knowledgeService, bigquery, project, chat
     const id=requestId(req.get('x-request-id'));
     const requestStarted=Date.now();
     res.setHeader('x-request-id',id);
+    const cancellation = new AbortController();
+    req.once('aborted',()=>cancellation.abort(new Error('UI request aborted')));
+    res.once('close',()=>{ if(!res.writableEnded) cancellation.abort(new Error('UI response closed')); });
     try {
       if (typeof req.body?.message !== 'string' || !req.body.message.trim() || req.body.message.length > 12000) return res.status(400).json({ success: false, error: 'message must be a non-empty string of at most 12000 characters' });
       const previous=sessionContext(req);
@@ -83,7 +86,7 @@ export function createOracleUiRouter({ knowledgeService, bigquery, project, chat
       const chatStarted=Date.now();
       let answer;
       try {
-        answer=clarification?{answer:clarification,tools:[]}:await chat(req.body.message,{analysisContext:result.transition.applies_to_message?result.context:null,transition:result.transition,recentEvidence,requestId:id});
+        answer=clarification?{answer:clarification,tools:[]}:await chat(req.body.message,{analysisContext:result.transition.applies_to_message?result.context:null,transition:result.transition,recentEvidence,requestId:id,signal:cancellation.signal});
         console.info('Oracle UI stage outcome:',stageOutcome({id,stage:'agent_request',startedAt:chatStarted,outcome:'success',extra:{tool_count:(answer.tools||[]).length}}));
       } catch(error) {
         console.error('Oracle UI stage outcome:',stageOutcome({id,stage:'agent_request',startedAt:chatStarted,outcome:'failed',error}));

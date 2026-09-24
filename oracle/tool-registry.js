@@ -630,7 +630,7 @@ export function createOracleToolDefinitions() {
     properties: {
       query: {
         type: 'string',
-        description: 'Shopify product search text, such as a product title.'
+        description: 'Shopify product search text. Multiple named products should be batched with Shopify OR syntax, for example title:"First" OR title:"Second".'
       },
       location: {
         type: ['string', 'null'],
@@ -658,7 +658,7 @@ export function createOracleToolDefinitions() {
       query: {
         type: 'string',
         description:
-          'A Shopify product search query.'
+          'A Shopify product search query. Batch multiple named products with Shopify OR syntax rather than issuing equivalent per-product lookups.'
       },
       limit: {
         type: 'integer',
