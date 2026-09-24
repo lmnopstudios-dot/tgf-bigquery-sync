@@ -1,21 +1,45 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import {
-  assertReadOnlyAggregate, buildAttributionQuery, metadataQuery, parseArgs, runDiagnostic
+  assertReadOnlyAggregate, buildAttributionQuery, formatDiagnosticFailure, metadataQuery, parseArgs, runDiagnostic
 } from '../diagnostics/square-customer-attribution.js';
 
 const metadata = (definitions = {
   orders: [['order_id','STRING'],['created_at','TIMESTAMP'],['updated_at','TIMESTAMP'],['state','STRING'],['total_money_amount','NUMERIC'],['currency','STRING'],['customer_id','STRING'],['email_address','STRING'],['phone_number','STRING'],['receipt_email','STRING']],
   payments: [['payment_id','STRING'],['order_id','STRING'],['customer_id','STRING'],['buyer_email_address','STRING'],['receipt_email_address','STRING'],['receipt_url','STRING']],
   customers: [['customer_id','STRING'],['email_address','STRING'],['phone_number','STRING']]
-}) => Object.entries(definitions).flatMap(([table_name, fields]) => fields.map(([column_name,data_type], i) => ({ table_name, table_type:'BASE TABLE', column_name, data_type, ordinal_position:i+1 })));
+}) => Object.entries(definitions).flatMap(([table_name, fields]) => fields.map(([column_name,data_type], i) => ({ table_name, column_name, data_type, ordinal_position:i+1 })));
 
 test('arguments and metadata discovery reject injection and remain read-only', () => {
   assert.deepEqual(parseArgs(['--project','p','--dataset','square_data']), {project:'p',dataset:'square_data'});
   assert.throws(()=>parseArgs(['--dataset','x`; DROP TABLE people']),/Invalid dataset/);
   const sql=metadataQuery('p');
-  assert.match(sql,/^SELECT/); assert.match(sql,/INFORMATION_SCHEMA\.COLUMNS/);
+  assert.match(sql,/^SELECT table_name, column_name, data_type, ordinal_position/);
+  assert.match(sql,/`p\.square_data\.INFORMATION_SCHEMA\.COLUMNS`/);
+  assert.doesNotMatch(sql,/table_type|INFORMATION_SCHEMA\.TABLES/);
   assert.doesNotMatch(sql,/\b(?:CREATE|INSERT|UPDATE|DELETE|MERGE|DROP|ALTER)\b/i);
+});
+
+test('schema discovery accepts the exact columns metadata shape', async () => {
+  const rows=metadata(); const calls=[];
+  const bq={query:async request=>{calls.push(request);return calls.length===1?[rows]:[[]];}};
+  const result=await runDiagnostic({bigquery:bq,project:'p'});
+  assert.deepEqual(Object.keys(rows[0]),['table_name','column_name','data_type','ordinal_position']);
+  assert.equal(result.persisted_evidence.payments_table,true);
+  assert.equal(result.persisted_evidence.customers_table,true);
+  assert.equal(calls.length,2);
+});
+
+test('missing or unsupported order schemas fail during schema validation before attribution query', async () => {
+  for (const rows of [metadata({customers:[['customer_id','STRING']]}), metadata({orders:[['description','STRING']]})]) {
+    const calls=[];
+    await assert.rejects(
+      runDiagnostic({bigquery:{query:async request=>{calls.push(request);return [rows];}},project:'p'}),
+      error=>error.stage==='schema validation'
+    );
+    assert.equal(calls.length,1);
+  }
 });
 
 test('annual SQL applies governed completion, latest-row dedupe, currency and calendar-year boundaries', () => {
@@ -71,4 +95,24 @@ test('runner emits aggregate PII-free output and submits SELECT/WITH only', asyn
   assert.doesNotMatch(output,/person@example\.test|\+447700900000|sq-order-secret|sq-customer-secret/i);
   assert.doesNotMatch(Object.keys(result.annual_evidence[0]).join(' '),/email_address|phone_number|customer_id|order_id|hash/i);
   assertReadOnlyAggregate(calls[1].query);
+});
+
+test('failures are stage-aware, bounded, and omit unsafe API details', async () => {
+  const unsafe='SELECT secret FROM data -- credential=private '.repeat(1000);
+  const apiError=Object.assign(new Error(unsafe),{code:400,errors:[{reason:'invalidQuery',message:unsafe}],response:{body:unsafe}});
+  await assert.rejects(runDiagnostic({bigquery:{query:async()=>{throw apiError;}},project:'p'}),error=>{
+    const output=formatDiagnosticFailure(error);
+    assert.equal(output,'Square customer-attribution diagnostic failed during schema discovery (reason: invalidQuery, code: 400).');
+    assert.ok(output.length<160);
+    assert.doesNotMatch(output,/SELECT|secret|credential|response/);
+    return true;
+  });
+});
+
+test('CLI failure exits nonzero without a successful JSON artifact or raw error dump', () => {
+  const run=spawnSync(process.execPath,['diagnostics/square-customer-attribution.js','--unknown'],{encoding:'utf8'});
+  assert.notEqual(run.status,0);
+  assert.equal(run.stdout,'');
+  assert.equal(run.stderr,'Square customer-attribution diagnostic failed during argument parsing.\n');
+  assert.ok(run.stderr.length<160);
 });

@@ -15,6 +15,12 @@ person hash. Keep the artifact access-controlled nevertheless. `eligible_sales` 
 operational order evidence, in its original currency; it is not a replacement for governed
 `finance.sales_master`.
 
+On success, stdout is one JSON object with `safety`, `semantics`, `persisted_evidence`,
+`annual_evidence`, and `cross_platform_link_assessment`. Each `annual_evidence` item is an
+aggregate year/currency row of counts and sales, never an order or customer record. On failure the
+process exits nonzero, writes no JSON to stdout (so the redirected artifact is empty rather than a
+plausible success report), and writes one bounded stage/reason/code summary to stderr.
+
 Interpret the resulting `persisted_evidence` booleans before reading coverage. `false` means only
 that the evidence was not found in this BigQuery dataset. It does **not** mean Square never held the
 evidence. Each `annual_evidence` row uses the latest persisted row per order ID and COMPLETE or
