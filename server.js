@@ -28,6 +28,7 @@ import {
 import { normalizeShippingGeography, persistShippingGeography } from './shopify/order-geography.js';
 import { createShopifyCountryProductsService } from './oracle/shopify-country-products.js';
 import { runWithShopifyThrottle, SHOPIFY_RATE_LIMIT_MESSAGE } from './oracle/shopifyql-throttle.js';
+import { buildOracleInlineChart } from './oracle/inline-charts.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
 
 const app = express();
@@ -8092,6 +8093,7 @@ app.post(
       const tools = createOracleToolDefinitions();
 
       const toolsUsed = new Set();
+      let inlineChart = null;
       const toolSignatures = new Set();
       let toolRounds = 0;
       let response = await openai.responses.create({
@@ -8408,6 +8410,7 @@ Important rules:
             call_id: item.call_id,
             output: JSON.stringify(result)
           });
+          inlineChart ||= buildOracleInlineChart(item.name, result);
         }
 
         response = await openai.responses.create({
@@ -8421,7 +8424,8 @@ Important rules:
       res.json({
         success: true,
         answer: response.output_text,
-        tools_used: [...toolsUsed]
+        tools_used: [...toolsUsed],
+        inline_chart: inlineChart
       });
     } catch (error) {
       console.error('Agent error:', redactError(error));
@@ -8466,7 +8470,7 @@ if (process.env.ORACLE_UI_PASSWORD || process.env.ORACLE_UI_SESSION_SECRET) {
       const payload = await response.json();
       if (response.status === 429 && payload.code === 'SHOPIFY_TEMPORARILY_RATE_LIMITED') return { answer: SHOPIFY_RATE_LIMIT_MESSAGE, tools: [] };
       if (!response.ok || !payload.success) throw new Error('Oracle could not complete the conversation');
-      return { answer: payload.answer, tools: payload.tools_used || [] };
+      return { answer: payload.answer, tools: payload.tools_used || [], inline_chart: payload.inline_chart || null };
     }
   }));
   app.use('/oracle', express.static(new URL('./public/oracle', import.meta.url).pathname, { index: 'index.html' }));
