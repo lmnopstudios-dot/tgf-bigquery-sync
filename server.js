@@ -8532,7 +8532,7 @@ if (process.env.ORACLE_UI_PASSWORD || process.env.ORACLE_UI_SESSION_SECRET) {
     reportService: ecommerceReportV2,
     productMappingService,
     collectionClassificationService,
-    analysisJobStore: createBigQueryAnalysisJobStore({bigquery,project:GOOGLE_PROJECT_ID,location:process.env.ORACLE_JOB_DATASET_LOCATION||'EU'}),
+    analysisJobStore: createBigQueryAnalysisJobStore({bigquery,project:GOOGLE_PROJECT_ID,dataset:process.env.ORACLE_JOB_DATASET||'commerce',table:process.env.ORACLE_JOB_TABLE||'oracle_analysis_jobs',location:process.env.ORACLE_JOB_DATASET_LOCATION||'EU'}),
     env: process.env,
     generateProposals: createProposalGenerator({ openai, model: process.env.ORACLE_PROPOSAL_MODEL || 'gpt-5.6' }),
     chat: async (message, conversation = {}) => {
