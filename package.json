@@ -33,6 +33,7 @@
     "validate:report-v2-production": "node diagnostics/report-v2-production-validation.js",
     "validate:canonical-finance-production": "node diagnostics/canonical-finance-production-validation.js",
     "validate:product-mapping-production": "node diagnostics/product-mapping-production-validation.js",
+    "validate:product-mapping-review-queue-production": "node diagnostics/product-mapping-review-queue-production.js",
     "diagnose:product-mapping-candidate": "node diagnostics/product-mapping-candidate.js",
     "validate:collection-governance-production": "node diagnostics/collection-governance-production-validation.js",
     "validate:customer-journey-production": "node diagnostics/customer-journey-production-validation.js",

@@ -17,6 +17,7 @@ export function createOracleUiRouter({ knowledgeService, bigquery, project, chat
   const proposalModel = env.ORACLE_PROPOSAL_MODEL || 'gpt-5.6';
   const analysisSessions = new Map();
   const logProposalError = error => console.error('Oracle UI proposal generation failed:', proposalDiagnostic(error, proposalModel));
+  const mappingReadDiagnostic=(error,context)=>{const value=governanceDiagnostic(error,context);delete value.internal_message;return value};
   if (!password || !sessionSecret || sessionSecret.length < 32) throw new Error('ORACLE_UI_PASSWORD and ORACLE_UI_SESSION_SECRET (32+ characters) are required');
   const authenticate = (req, res, next) => {
     const session = verifySession(parseCookies(req.headers.cookie).oracle_session, sessionSecret);
@@ -100,7 +101,23 @@ export function createOracleUiRouter({ knowledgeService, bigquery, project, chat
   router.get('/knowledge/:id', authenticate, async (req, res) => { try { res.json({ success: true, ...(await knowledgeService.getKnowledgeItem({ knowledge_id: req.params.id })) }); } catch (error) { res.status(400).json({ success: false, error: safeError(error) }); } });
   router.get('/memory', authenticate, async (req, res) => { try { res.json({ success: true, ...(await knowledgeService.searchMemory(queryFilters(req.query, true))) }); } catch (error) { res.status(400).json({ success: false, error: safeError(error) }); } });
   router.get('/memory/:id', authenticate, async (req, res) => { try { res.json({ success: true, ...(await knowledgeService.getMemoryItem({ memory_id: req.params.id })) }); } catch (error) { res.status(400).json({ success: false, error: safeError(error) }); } });
-  router.get('/product-mappings', authenticate, async (req,res) => { try { if(!productMappingService) throw new Error('Product mappings are unavailable'); res.json({success:true,...await productMappingService.list({search:String(req.query.search||'')})}); } catch(error){res.status(503).json({success:false,error:safeError(error)});} });
+  router.get('/product-mappings', authenticate, async (req,res) => {
+    const supplied=String(req.get('x-request-id')||'');
+    const requestId=/^[A-Za-z0-9._-]{1,80}$/.test(supplied)?supplied:crypto.randomUUID();
+    const started=Date.now();
+    try {
+      if(!productMappingService) throw new Error('Product mappings are unavailable');
+      const payload={success:true,...await productMappingService.list({search:String(req.query.search||'')})};
+      // Force serialization inside this stage so serialization failures receive the
+      // same bounded diagnostic as loading and queue construction failures.
+      JSON.stringify(payload);
+      console.info('Oracle product mapping read succeeded:',{request_id:requestId,operation:'list_review_candidates',stage:'response_serialization',item_count:payload.items?.length||0,duration_ms:Date.now()-started});
+      res.setHeader('x-request-id',requestId).json(payload);
+    } catch(error){
+      console.error('Oracle product mapping read failed:',mappingReadDiagnostic(error,{request_id:requestId,operation:'list_review_candidates',duration_ms:Date.now()-started}));
+      res.setHeader('x-request-id',requestId).status(503).json({success:false,error:governancePublicError(error),request_id:requestId});
+    }
+  });
   router.get('/product-mappings/search', authenticate, async (req,res) => { try { if(!productMappingService) throw new Error('Product mappings are unavailable'); res.json({success:true,...await productMappingService.search({query:String(req.query.q||''),sources:String(req.query.sources||'').split(',').filter(Boolean),exclude_ref:req.query.exclude_ref||null,limit:req.query.limit})}); } catch(error){res.status(400).json({success:false,error:safeError(error)});} });
   router.get('/product-mappings/choice-preview',authenticate,async(req,res)=>{try{if(!productMappingService)throw new Error('Product mappings are unavailable');res.json({success:true,...await productMappingService.previewChoice(String(req.query.candidate_id||''),String(req.query.selected_ref||''))})}catch(error){console.error('Oracle product choice preview failed:',governanceDiagnostic(error,{operation:'choice_preview',candidate_id:String(req.query.candidate_id||'unknown').slice(0,128),reviewer:req.oracleUser.sub}));res.status(isGovernanceBusinessError(error)?400:503).json({success:false,error:governancePublicError(error)})}});
   router.get('/product-mappings/decisions', authenticate, async (req,res) => { try { if(!productMappingService) throw new Error('Product mappings are unavailable'); res.json({success:true,...await productMappingService.history({status:req.query.status||null,source:req.query.source||null,search:req.query.search||null,reviewer:req.query.reviewer||null,start_date:req.query.start_date||null,end_date:req.query.end_date||null})}); } catch(error){res.status(503).json({success:false,error:safeError(error)});} });
