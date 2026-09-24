@@ -56,6 +56,14 @@ The geography diagnostic returns monthly/channel coverage statuses, eligible EU/
 
 After refreshing parents, run `npm run diagnose:shopify-shipping-geography` once and review its read-only evidence in this order: (1) `source_scope` confirms the latest eligible parent created timestamp is current (and the orphan assessment is `no_orphans`); (2) `integrity` confirms geography row count equals distinct geography orders and `orphan_rows` is zero; (3) `integrity.matrixify_rows` remains zero; (4) `parent_sales.joined_rows` equals its distinct-order count and `joined_sales` remains equal to `expected_sales`. Stop on any failure: do not delete geography rows, weaken the zero-orphan validity gate, or change finance exclusions.
 
-## Follow-on wiring (out of scope)
+## Oracle analytical path
 
-Oracle order lookup should left join `shopify_data.order_shipping_geography` by exact `order_id`, project only normalized code/name/status/provenance, and enable its existing country predicate for Shopify while retaining Matrixify exclusion. Report v2 geography should add native Shopify orders joined once by `order_id`, use presentment currency and existing Online/POS classification, and join a governed date-ranged EU-membership dimension on country code plus order date. Until that wiring lands, it must continue to report Shopify geography unavailable rather than infer it from billing, currency, market, IP, or POS location.
+Oracle's `get_shopify_online_country_products` tool answers top-country/top-product questions from direct shipping country. It joins the deduplicated geography relation once per stable order, ranks at most ten named countries by order-level operational net sales in each presentment currency, then ranks at most ten stable Shopify parent products within each country from the established line-item grain. Country sales subtract persisted order refunds; product sales retain discounted line value because refunds are not governed at product-allocation grain. Missing and invalid geography remains unknown, is disclosed as order and sales coverage, and is excluded from named rankings. Missing product IDs remain an explicit unresolved product rather than being merged by title.
+
+The exact read-only, aggregate-only, PII-free production validation command in Render Shell is:
+
+```sh
+npm run validate:shopify-country-products-production -- --start=2026-01-01 --end=2026-09-24
+```
+
+Omit `--currency` to receive independent rankings for every source-native presentment currency; currencies are never combined or converted. The existing `search_orders` path remains available for bounded order examples and EU/non-EU inspection.

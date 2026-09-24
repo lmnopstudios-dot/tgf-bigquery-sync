@@ -26,6 +26,7 @@ import {
   syncShopifyAcquisition
 } from './shopify/acquisition.js';
 import { normalizeShippingGeography, persistShippingGeography } from './shopify/order-geography.js';
+import { createShopifyCountryProductsService } from './oracle/shopify-country-products.js';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -130,6 +131,7 @@ const ecommerceReportV2 = createEcommerceReportV2({ bigquery, project: GOOGLE_PR
 const oracleFinance = createOracleFinanceService({ bigquery, project: GOOGLE_PROJECT_ID });
 const productMappingService = createProductMappingService({ bigquery, project: GOOGLE_PROJECT_ID });
 const collectionClassificationService = createCollectionClassificationService({ bigquery, project: GOOGLE_PROJECT_ID });
+const shopifyCountryProductsService = createShopifyCountryProductsService({ bigquery, project: GOOGLE_PROJECT_ID });
 productMappingService.setup().catch(error => console.error('Product mapping storage setup failed:', redactError(error?.message || error)));
 collectionClassificationService.setup().catch(error => console.error('Collection classification storage setup failed:', redactError(error?.message || error)));
 
@@ -8176,7 +8178,7 @@ Important rules:
 - Use search_orders for bounded transaction-level searches, examples underlying an aggregate, order numbers, products/SKUs, refunds, direct shipping country, Shopify Online and POS evidence. Use get_order_details or get_order_line_items only with the exact source_platform + source_order_id identity returned by search; never guess across Woo and Shopify ID namespaces. Use get_order_history_context when explicitly asked whether an exact Shopify identity is native or Matrixify-imported.
 - For a human-facing order reference such as "#33653", "33653", "order #33653", or "order 33653", call search_orders with order_number populated and source_order_id null. Do not strip it into or guess a source_order_id. The tool performs governed exact normalization and can return platform-qualified candidates when namespaces collide.
 - Metorik is the historical Woo order authority. Shopify is current commerce evidence. Matrixify contains only a limited migrated Woo slice and search_orders excludes those Shopify representations to prevent a second sale. If asked whether an excluded Shopify representation is migrated, explain this classification rather than counting it as Shopify-native.
-- For Shopify shipping-geography questions, use search_orders with source_platform=shopify and eu_status=eu or non_eu. EU membership is classified from the valid direct shipping-country code at the order date; UK is non-EU for current Shopify history. Use separate limit=1 calls when one example of each is requested. Never infer missing or invalid geography from billing, currency, market, IP, or POS location.
+- For the exact analytical pattern “top locations/countries for online sales plus top products sold to each”, call get_shopify_online_country_products. It ranks direct shipping countries and products within country without multiplying order sales, discloses unknown geography, and keeps currencies separate. Use search_orders only for bounded order examples (including EU/non-EU examples), not to reconstruct aggregates. Never infer missing or invalid geography from billing, currency, market, IP, or POS location.
 - Historical Woo shipping country is incomplete. Country searches use only directly observed governed Metorik-export geography, never billing country or an inference. Always disclose the geography_warning returned by search_orders and call get_geography_coverage for the requested period when reporting a historical Woo country result or count.
 - Order-tool money is explicitly source-native operational evidence (source_order_total, source_discount_total, source_refund_total), not canonical accounting truth. Continue to use finance tools for totals and trends; never call source-native order value canonical sales.
 - Order tools are strictly read-only and intentionally exclude customer names, email, phone, street/postal addresses, payment credentials and raw payloads. Never request or reconstruct that PII.
@@ -8313,7 +8315,9 @@ Important rules:
                 );
                 if (knowledgeCall.handled) {
                   result = knowledgeCall.result;
-                } else if (item.name === 'get_ecommerce_report_v2_evidence') {
+                } else if (item.name === 'get_shopify_online_country_products') {
+  result = await shopifyCountryProductsService(args);
+} else if (item.name === 'get_ecommerce_report_v2_evidence') {
   result = await ecommerceReportV2(args.section, { start_date: args.current_start, end_date: args.current_end, comparison: 'custom', comparison_start: args.comparison_start, comparison_end: args.comparison_end });
 } else if (item.name === 'get_ecommerce_management_report') {
 

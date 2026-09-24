@@ -20,9 +20,7 @@ The old `november` label meant the **outside-campaign remainder**, not the full 
 
 ## Shopify shipping geography
 
-The persisted Report v2 Shopify order, financial, customer, and line-item models used by this repository have no governed direct shipping-country field. The validator now audits `shopify_data.INFORMATION_SCHEMA.COLUMNS` for shipping/destination/address candidates and reports Shopify period coverage as `unavailable_not_persisted`, alongside valid Woo direct-shipping coverage. It does not substitute billing country, currency, Market, `/us/`, store, location, or IP.
-
-The smallest ingestion addition is `shipping_country_code` (nullable ISO-2) on a governed order-level Shopify table, sourced specifically from `order.shippingAddress.countryCodeV2` (or the current Shopify Admin GraphQL equivalent), plus provenance such as `direct_shopify_order_shipping_address`. It must be joined by order ID, with null retained for POS/no-shipping orders. Until that exists, Report v2 accurately displays Woo geography and the explicit Shopify gap.
+Direct Shopify shipping geography is persisted in `shopify_data.order_shipping_geography`, sourced specifically from `order.shippingAddress.countryCodeV2`, and joined once by stable order ID. Oracle's governed country/product aggregate uses it for Shopify Online Store rankings. Missing or invalid country remains unknown and is disclosed rather than inferred from billing country, currency, Market, `/us/`, store, location, IP, or POS location. Named-country results exclude unknown geography and currencies remain separate.
 
 ## Product identity
 
