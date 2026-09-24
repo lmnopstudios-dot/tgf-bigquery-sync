@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { approvedMappingEdges, candidateDiagnostics, classifyProduct, generateMappingCandidates, resolveMappingDecisions, sanitizeReviewerNote, searchProducts, validateGraphApproval } from '../oracle/product-mapping.js';
+import { applyProductFamilies, approvedMappingEdges, assertFamilyAssignment, candidateDiagnostics, classifyProduct, generateMappingCandidates, resolveFamilyDecisions, resolveMappingDecisions, sanitizeReviewerNote, searchProducts, validateGraphApproval } from '../oracle/product-mapping.js';
 import { buildCanonicalProductGraph, mapProductPair } from '../oracle/product-identity.js';
 
 const p=(ref,title,extra={})=>({source_product_ref:ref,source_platform:ref.split(':')[0],source_store:ref.split(':')[1],source_product_id:ref.split(':')[2],title,...extra});
@@ -110,4 +110,31 @@ test('bounded product search supports source filters, IDs and explicit mapping s
 test('reviewer notes are normalized plain text and bounded',()=>{
   const note=sanitizeReviewerNote(`  Different\u0000 chain\n lengths ${'x'.repeat(600)} `);
   assert.equal(note.includes('\u0000'),false);assert.equal(note.includes('\n'),false);assert.equal(note.length,500);
+});
+
+test('historical Woo Ready To Ship products share a Shopify reporting family without becoming identity edges',()=>{
+  const parent='shopify:shopify:micro-michael',history=[
+    {decision_id:'f1',source_ref:'woo:ww:135969',shopify_parent_ref:parent,shopify_parent_title:'Micro Michael Rodent Pendant',status:'active',reviewed_at:'2026-09-23'},
+    {decision_id:'f2',source_ref:'woo:ww:62682',shopify_parent_ref:parent,shopify_parent_title:'Micro Michael Rodent Pendant',status:'active',reviewed_at:'2026-09-23'}
+  ];
+  assert.equal(resolveFamilyDecisions(history).active.length,2);
+  assert.equal(approvedMappingEdges(history).length,0);
+  const lines=applyProductFamilies([{source_product_ref:'woo:ww:135969',units:1,sales:100},{source_product_ref:'woo:ww:62682',units:2,sales:200},{source_product_ref:parent,units:3,sales:300}],history);
+  assert.equal(new Set(lines.map(x=>x.reporting_product_ref)).size,1);
+  assert.equal(lines.reduce((n,x)=>n+x.units,0),6);assert.equal(lines.reduce((n,x)=>n+x.sales,0),600);assert.equal(lines.length,3);
+});
+
+test('family assignments reject a second Shopify parent and remain append-only through change and revoke',()=>{
+  const active={decision_id:'a',source_ref:'woo:ww:135969',shopify_parent_ref:'shopify:shopify:micro',status:'active',reviewed_at:'2026-09-20'};
+  assert.throws(()=>assertFamilyAssignment(active.source_ref,'shopify:shopify:other',[active]),/conflicting family assignment/);
+  const changed=[active,{decision_id:'b',source_ref:active.source_ref,shopify_parent_ref:active.shopify_parent_ref,status:'superseded',supersedes_decision_id:'a',reviewed_at:'2026-09-21'},{decision_id:'c',source_ref:active.source_ref,shopify_parent_ref:'shopify:shopify:other',status:'active',replacement_for_decision_id:'a',reviewed_at:'2026-09-21'}];
+  assert.deepEqual(resolveFamilyDecisions(changed).active.map(x=>x.decision_id),['c']);assert.equal(resolveFamilyDecisions(changed).history.length,3);
+  const revoked=[...changed,{decision_id:'d',source_ref:active.source_ref,shopify_parent_ref:'shopify:shopify:other',status:'revoked',supersedes_decision_id:'c',reviewed_at:'2026-09-22'}];
+  assert.equal(resolveFamilyDecisions(revoked).active.length,0);assert.equal(resolveFamilyDecisions(revoked).history.length,4);
+});
+
+test('ordinary exact identity remains separate from reporting-family resolution',()=>{
+  const products=[p('woo:ww:1','Exact Pendant',{sku:'EX-1'}),p('shopify:shopify:2','Exact Pendant',{sku:'EX-1'})];
+  assert.equal(mapProductPair([products[0]],[products[1]])[0].mapping_method,'exact_unique_sku');
+  assert.equal(applyProductFamilies(products,[])[0].reporting_product_ref,'source:woo:ww:1');
 });
