@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { diagnosticQueries } from '../diagnostics/shopify-shipping-geography.js';
+import { diagnose, diagnosticQueries } from '../diagnostics/shopify-shipping-geography.js';
 import { fetchShippingGeography, GEOGRAPHY_QUERY, normalizeShippingGeography, persistShippingGeography } from '../shopify/order-geography.js';
 
 const base = { id:'gid://shopify/Order/1', name:'#1', createdAt:'2025-09-21T00:00:00Z', updatedAt:'2025-09-22T00:00:00Z', app:{id:'native'} };
@@ -39,4 +39,23 @@ test('aggregate diagnostic is read-only, date-aware, channelled and validates sa
   assert.doesNotMatch(sql,/\b(?:INSERT|UPDATE|DELETE|MERGE|CREATE|DROP|ALTER|TRUNCATE)\b/i);
   assert.match(queries.coverage,/DATE '2020-02-01'/); assert.match(queries.coverage,/eligible_eu_samples/); assert.match(queries.coverage,/missing_address/); assert.match(queries.coverage,/invalid_code/); assert.match(queries.coverage,/retail_location_id IS NULL/);
   assert.match(queries.parent_sales,/expected_sales/); assert.match(queries.integrity,/MAX\(g\.synced_at\)/);
+});
+
+test('diagnostic emits valid BigQuery named STRUCT fields in every generated query',()=>{
+  const queries=diagnosticQueries('p');
+  assert.deepEqual(Object.keys(queries),['coverage','integrity','parent_sales']);
+  for (const [stage,sql] of Object.entries(queries)) {
+    assert.doesNotMatch(sql,/STRUCT\([^)]*(?:'[^']*'|DATE '[^']*'|\))\s+(?:code|joined|left_on)\b/,
+      `${stage} contains a STRUCT field alias without AS`);
+  }
+  assert.match(queries.coverage,/STRUCT\('AT' AS code,DATE '1995-01-01' AS joined,CAST\(NULL AS DATE\) AS left_on\)/);
+});
+
+test('diagnostic query errors identify the bounded failing stage',async()=>{
+  const bigquery={query:async()=>{throw new Error(`Expected ")" or ","${'x'.repeat(400)}\nunsafe detail`)}};
+  await assert.rejects(diagnose({bigquery,project:'p'}),error=>{
+    assert.match(error.message,/^Shopify shipping geography diagnostic failed during coverage: Expected "\)" or ","/);
+    assert.ok(error.message.length <= 365); assert.doesNotMatch(error.message,/unsafe detail/);
+    return true;
+  });
 });

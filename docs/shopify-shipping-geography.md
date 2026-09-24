@@ -16,6 +16,8 @@ Run this **first**; it is read-only and will establish whether the table exists/
 npm run diagnose:shopify-shipping-geography
 ```
 
+The command executes only aggregate `SELECT` checks. To validate the generated SQL without reading table data, copy each named query from `diagnosticQueries()` into the BigQuery editor and use **More > Query settings > Dry run**, or run `bq query --use_legacy_sql=false --dry_run` with the query and a string `matrixify` parameter. The local test suite guards the named `STRUCT` syntax, but it is not a substitute for BigQuery's production parser when local credentials and the `bq` CLI are unavailable.
+
 Then run the exact historical write (all orders visible to the existing Admin API token, with no date cutoff):
 
 ```sh
