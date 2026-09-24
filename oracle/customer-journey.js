@@ -14,6 +14,16 @@ const CLASS=/^[a-z][a-z0-9_]{0,63}$/;
 const SOURCES=['woo','shopify'];
 const CHANNELS=['Online','In-store'];
 
+/** Shopify order lines sometimes persist a Product GID while the catalogue stores
+ * its stable numeric tail. ProductVariant GIDs are deliberately not accepted. */
+export function normalizeShopifyParentProductId(value){
+  const match=String(value??'').match(/^(?:gid:\/\/shopify\/Product\/)?([0-9]+)$/);
+  return match?.[1]||null;
+}
+export function shopifyParentProductIdSql(expression){
+  return `REGEXP_EXTRACT(CAST(${expression} AS STRING), r'^(?:gid://shopify/Product/)?([0-9]+)$')`;
+}
+
 function date(value,name){if(typeof value!=='string'||!DATE.test(value)||new Date(`${value}T00:00:00Z`).toISOString().slice(0,10)!==value)throw new Error(`${name} must be a valid YYYY-MM-DD date`)}
 function optionalToken(value,name){if(value!==null&&(typeof value!=='string'||!CLASS.test(value)))throw new Error(`${name} must be null or a governed lowercase token`)}
 function enumOrNull(value,values,name){if(value!==null&&!values.includes(value))throw new Error(`${name} is invalid`)}
@@ -92,12 +102,12 @@ export function customerJourneySql(project,groupBy='downstream_product') {
   ), lines AS (
     SELECT 'woo' source_platform,'ww' source_store,CAST(order_id AS STRING) order_ref,CAST(product_id AS STRING) source_product_id,name product_title,quantity units,total line_sales,UPPER(currency) currency FROM \`${project}.metorik_uk.order_line_items\`
     UNION ALL SELECT 'woo','usd',CAST(order_id AS STRING),CAST(product_id AS STRING),name,quantity,total,UPPER(currency) FROM \`${project}.metorik_us.order_line_items\`
-    UNION ALL SELECT 'shopify','shopify',order_id,product_id,COALESCE(title,name),quantity,discounted_total_presentment,UPPER(presentment_currency) FROM \`${project}.shopify_data.order_line_items\`
+    UNION ALL SELECT 'shopify','shopify',order_id,${shopifyParentProductIdSql('product_id')},COALESCE(title,name),quantity,discounted_total_presentment,UPPER(presentment_currency) FROM \`${project}.shopify_data.order_line_items\`
   ), source_lines AS (SELECT *,CONCAT(source_platform,':',source_store,':',source_product_id) source_product_ref FROM lines),
   approved_links AS (SELECT left_ref,right_ref FROM map_active),
-  classifications AS (SELECT subject_ref,classification_type,classification_value,provenance,status FROM \`${project}.commerce.product_classifications\` WHERE status='active'),
-  classified_lines AS (SELECT l.*,ARRAY_AGG(DISTINCT CONCAT(c.classification_type,'=',c.classification_value) IGNORE NULLS) classifications
-    FROM source_lines l LEFT JOIN classifications c ON c.subject_ref=l.source_product_ref GROUP BY ALL),
+  classifications AS (SELECT subject_ref,classification_type,ARRAY_AGG(DISTINCT classification_value ORDER BY classification_value) classification_values FROM \`${project}.commerce.product_classifications\` WHERE status='active' GROUP BY subject_ref,classification_type),
+  classified_lines AS (SELECT l.*,ARRAY_AGG(DISTINCT CONCAT(c.classification_type,'=',classification_value) IGNORE NULLS) classifications
+    FROM source_lines l LEFT JOIN classifications c ON c.subject_ref=l.source_product_ref LEFT JOIN UNNEST(c.classification_values) classification_value GROUP BY ALL),
   ranked_orders AS (SELECT *,ROW_NUMBER() OVER(PARTITION BY governed_customer_ref ORDER BY order_timestamp,source_platform,source_store,order_ref) order_sequence FROM qualifying_orders),
   entry_orders AS (SELECT * FROM ranked_orders WHERE order_sequence=1 AND DATE(order_timestamp) BETWEEN @cohort_entry_start AND @cohort_entry_end AND (@entry_source IS NULL OR source_platform=@entry_source) AND (@entry_channel IS NULL OR channel=@entry_channel)),
   entry_matches AS (SELECT DISTINCT e.governed_customer_ref,e.order_ref entry_order_ref,e.order_timestamp entry_timestamp,l.source_product_ref entry_product_ref,l.product_title entry_product_title,(SELECT REPLACE(x,'collaboration_name=','') FROM UNNEST(l.classifications) x WHERE STARTS_WITH(x,'collaboration_name=') LIMIT 1) collaboration_name

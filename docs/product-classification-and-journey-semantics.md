@@ -48,6 +48,39 @@ Acquisition journeys default to `first_observed_ever`: qualifying orders are loa
 
 The read-only validator audits persisted metadata fields, per-source product and line/sales classification coverage, collaboration-known coverage, names/categories, provenance, conflicts and unknowns. It also reports customers whose global first order predates the entry period, cases where in-period semantics would differ, and the eligible acquisition cohort. Collaboration acceptance remains fail-closed until active collaboration records exist.
 
+Shopify transaction lines may contain either a numeric parent product ID or a
+`gid://shopify/Product/<id>` reference, while the catalogue intentionally stores
+the stable numeric parent ID. The journey normalizes only those two parent forms;
+it rejects ProductVariant GIDs rather than treating a variant as its parent.
+Online and POS lines therefore share the same `shopify:shopify:<parent-id>`
+identity. Classification attachment is de-duplicated by subject and type and
+uses active records only (including records already propagated by the governed
+classification sync); reporting-family membership and candidate mappings are
+not classification evidence.
+
+### Read-only production acceptance
+
+The first Render command after deploying this change is exactly:
+
+```sh
+npm run validate:customer-journey-production
+```
+
+Do not re-run classification sync first. In `evidence.product_join_path`, expect
+the bounded format summary to explain whether transaction IDs are Product GIDs
+or numeric IDs, `catalogue_matched_products` and `actively_classified_products`
+to be non-zero, and `source_units = post_join_units` plus
+`source_sales = post_join_sales`. `null_or_blank_source_product_lines`,
+`unresolved_or_non_parent_product_lines`, and `catalogue_unresolved_products`
+remain explicit rather than being inferred. In `evidence.classification`, expect
+Shopify collaboration products, collaboration names, and categories to be
+non-zero; then `journey_acceptance` must execute instead of returning the
+coverage-gate reason.
+
+After that validation passes, ask Oracle exactly:
+
+> For customers whose first observed purchase was a collaboration product, what did they buy next? Break out Sammi and show downstream orders, units, and source-native sales by currency, while keeping unknown products explicit.
+
 ## Governed Shopify dimensions and collection review
 
 Shopify `product_type` is preserved as its own first-class dimension and mapped to a broad `product_category` only by the centralized exact-value contract in `product-classifications/shopify-product-type-mapping.js`. Blank and new values remain category-unknown and appear in validation. Product titles are never classification inputs. Collection membership is independent of both dimensions and remains queryable even while its optional business classification is unresolved.
