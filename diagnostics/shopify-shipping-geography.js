@@ -13,10 +13,56 @@ export function diagnosticQueries(project) {
   return {
     destination_metadata: `SELECT COUNTIF(table_name='${TABLE}') destination_table_count FROM \`${project}.shopify_data.INFORMATION_SCHEMA.TABLES\``,
     direct_field_evidence: `SELECT table_name,column_name,data_type FROM \`${project}.shopify_data.INFORMATION_SCHEMA.COLUMNS\` WHERE REGEXP_CONTAINS(LOWER(column_name),r'^(shipping|destination)_country(_code|_code_source|_name)?$') ORDER BY table_name,ordinal_position`,
-    source_scope: `SELECT COUNT(*) source_shopify_orders,COUNTIF(source_app_id=@matrixify) matrixify_excluded_orders,COUNTIF(source_app_id IS NULL OR source_app_id!=@matrixify) expected_write_orders,COUNTIF((source_app_id IS NULL OR source_app_id!=@matrixify) AND retail_location_id IS NULL) expected_online_orders,COUNTIF((source_app_id IS NULL OR source_app_id!=@matrixify) AND retail_location_id IS NOT NULL) expected_pos_orders,MIN(IF(source_app_id IS NULL OR source_app_id!=@matrixify,created_at,NULL)) earliest_expected_order,MAX(IF(source_app_id IS NULL OR source_app_id!=@matrixify,created_at,NULL)) latest_expected_order FROM ${o}`,
+    source_scope: `SELECT COUNT(*) source_shopify_orders,COUNTIF(source_app_id=@matrixify) matrixify_excluded_orders,COUNTIF(source_app_id IS NULL OR source_app_id!=@matrixify) expected_write_orders,COUNTIF((source_app_id IS NULL OR source_app_id!=@matrixify) AND retail_location_id IS NULL) expected_online_orders,COUNTIF((source_app_id IS NULL OR source_app_id!=@matrixify) AND retail_location_id IS NOT NULL) expected_pos_orders,MIN(IF(source_app_id IS NULL OR source_app_id!=@matrixify,created_at,NULL)) earliest_expected_order,MAX(IF(source_app_id IS NULL OR source_app_id!=@matrixify,created_at,NULL)) latest_expected_order,MAX(IF(source_app_id IS NULL OR source_app_id!=@matrixify,updated_at,NULL)) latest_expected_order_update FROM ${o}`,
+    orphan_analysis: `WITH parent_bounds AS (
+      SELECT MAX(created_at) latest_parent_created_at,MAX(updated_at) latest_parent_updated_at FROM ${o}
+    ), customer_state AS (
+      SELECT order_id,ANY_VALUE(display_financial_status HAVING MAX synced_at) display_financial_status
+      FROM \`${project}.shopify_data.order_customers\` GROUP BY order_id
+    ), parent_suffix AS (
+      SELECT REGEXP_EXTRACT(order_id,r'([0-9]+)$') numeric_suffix,COUNT(DISTINCT order_id) parent_ids
+      FROM ${o} GROUP BY numeric_suffix
+    ), orphans AS (
+      SELECT DATE(g.order_created_at) order_date,DATE(g.order_updated_at) update_date,
+        COALESCE(c.display_financial_status,'not_in_parent_snapshot') financial_state,
+        g.order_created_at>b.latest_parent_created_at OR g.order_updated_at>b.latest_parent_updated_at missing_recent_parent_evidence,
+        COALESCE(c.display_financial_status IN ('PENDING','AUTHORIZED','VOIDED','EXPIRED'),FALSE) non_financial_state_evidence,
+        COALESCE(s.parent_ids>0,FALSE) alternate_id_suffix_match
+      FROM ${g} g CROSS JOIN parent_bounds b
+      LEFT JOIN ${o} o USING(order_id)
+      LEFT JOIN customer_state c USING(order_id)
+      LEFT JOIN parent_suffix s ON s.numeric_suffix=REGEXP_EXTRACT(g.order_id,r'([0-9]+)$')
+      WHERE o.order_id IS NULL
+    )
+    SELECT order_date,update_date,financial_state,COUNT(*) orphan_rows,
+      COUNTIF(missing_recent_parent_evidence) missing_recent_parent_rows,
+      COUNTIF(non_financial_state_evidence) non_financial_state_rows,
+      COUNTIF(alternate_id_suffix_match) possible_id_join_defect_rows
+    FROM orphans GROUP BY order_date,update_date,financial_state ORDER BY order_date,update_date,financial_state`,
     coverage: `WITH ${eu}, base AS (SELECT DATE_TRUNC(DATE(o.created_at),MONTH) month,IF(o.retail_location_id IS NULL,'Online','POS') channel,g.geography_status,g.shipping_country_code,DATE(o.created_at) order_date FROM ${o} o LEFT JOIN ${g} g USING(order_id) WHERE o.source_app_id IS NULL OR o.source_app_id!=@matrixify) SELECT month,channel,COUNT(*) orders,COUNTIF(geography_status='valid') valid_direct_country,COUNTIF(geography_status='missing_address') missing_address,COUNTIF(geography_status='missing_code') missing_code,COUNTIF(geography_status='invalid_code') invalid_code,COUNTIF(order_date>DATE '2025-09-20' AND geography_status='valid' AND EXISTS(SELECT 1 FROM EU WHERE code=shipping_country_code AND order_date>=joined AND (left_on IS NULL OR order_date<left_on))) eligible_eu_samples,COUNTIF(order_date>DATE '2025-09-20' AND geography_status='valid' AND NOT EXISTS(SELECT 1 FROM EU WHERE code=shipping_country_code AND order_date>=joined AND (left_on IS NULL OR order_date<left_on))) eligible_non_eu_samples FROM base GROUP BY month,channel ORDER BY month,channel`,
     integrity: `SELECT COUNT(*) geography_rows,COUNT(DISTINCT g.order_id) distinct_geography_orders,COUNTIF(o.order_id IS NULL) orphan_rows,COUNTIF(o.source_app_id=@matrixify) matrixify_rows,MAX(g.synced_at) latest_sync,MAX(g.order_updated_at) latest_order_update FROM ${g} g LEFT JOIN ${o} o USING(order_id)`,
     parent_sales: `SELECT COUNT(*) joined_rows,COUNT(DISTINCT o.order_id) distinct_orders,COUNT(DISTINCT f.order_id) financial_orders,SUM(f.original_total_presentment) joined_sales,(SELECT SUM(original_total_presentment) FROM ${f} f2 JOIN ${o} o2 USING(order_id) WHERE o2.source_app_id IS NULL OR o2.source_app_id!=@matrixify) expected_sales FROM ${o} o JOIN ${g} g USING(order_id) LEFT JOIN ${f} f USING(order_id) WHERE o.source_app_id IS NULL OR o.source_app_id!=@matrixify`
+  };
+}
+
+export function assessOrphans(rows) {
+  const totals = rows.reduce((out, row) => {
+    out.orphan_rows += Number(row.orphan_rows || 0);
+    out.missing_recent_parent_rows += Number(row.missing_recent_parent_rows || 0);
+    out.non_financial_state_rows += Number(row.non_financial_state_rows || 0);
+    out.possible_id_join_defect_rows += Number(row.possible_id_join_defect_rows || 0);
+    return out;
+  }, { orphan_rows:0, missing_recent_parent_rows:0, non_financial_state_rows:0, possible_id_join_defect_rows:0 });
+  const unexplained = totals.orphan_rows - totals.missing_recent_parent_rows;
+  const conclusion = totals.orphan_rows === 0 ? 'no_orphans'
+    : totals.possible_id_join_defect_rows > 0 ? 'possible_id_or_join_defect'
+      : unexplained > 0 ? 'parent_gap_requires_investigation'
+        : 'source_staleness';
+  return {
+    ...totals,
+    rows_not_explained_by_parent_freshness: unexplained,
+    conclusion,
+    explanation: 'Financial state is aggregate supporting evidence only: /sync-shopify ingests orders without a financial-status filter, so a non-financial state does not justify a missing parent row.'
   };
 }
 
@@ -54,9 +100,10 @@ export async function diagnose({ bigquery, project }) {
     };
   }
 
-  for (const name of ['coverage', 'integrity', 'parent_sales']) {
+  for (const name of ['orphan_analysis', 'coverage', 'integrity', 'parent_sales']) {
     evidence[name] = await runStage(bigquery, name, queries[name]);
   }
+  evidence.orphan_assessment = assessOrphans(evidence.orphan_analysis);
   const integrity = evidence.integrity[0] || {}, sales = evidence.parent_sales[0] || {};
   const valid = Number(integrity.geography_rows) === Number(integrity.distinct_geography_orders) && Number(integrity.orphan_rows) === 0 &&
     Number(integrity.matrixify_rows) === 0 && Number(sales.joined_rows) === Number(sales.distinct_orders) && Number(sales.joined_sales) === Number(sales.expected_sales);
