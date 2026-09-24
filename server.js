@@ -9,7 +9,7 @@ import { syncGa4, parseArgs as parseGa4SyncArgs } from './ga4/sync.js';
 import { createEcommerceManagementReportService } from './oracle/ecommerce-management-report.js';
 import { createOrderQueryService, executeOrderToolCall } from './oracle/order-query.js';
 import { createCustomerQueryService, executeCustomerToolCall } from './oracle/customer-query.js';
-import { createCustomerJourneyService, executeCustomerJourneyToolCall } from './oracle/customer-journey.js';
+import { applyJourneyAnalysisContext, createCustomerJourneyService, executeCustomerJourneyToolCall } from './oracle/customer-journey.js';
 import { createOracleToolDefinitions } from './oracle/tool-registry.js';
 import { applyOrderDateScope } from './oracle/order-date-scope.js';
 import { assertOracleToolSchemas } from './oracle/tool-schema-validator.js';
@@ -8231,9 +8231,11 @@ Important rules:
 - For cross-period comparisons, report absolute and percentage changes where appropriate and clearly identify partial periods.
 - Distinguish customer population summaries from customer cohort/purchase-journey questions. Questions containing first purchase/order, bought after/next, second or nth order, repeat rate, within N days, acquisition product, or downstream revenue require analyze_customer_journey, not get_customer_metrics.
 - A journey requires an explicit bounded date range. After asking for dates, retain the cohort classification, entry condition, grouping/ranking and sequence/window constraints and execute when dates arrive; do not ask what should be analysed again.
+- For journey follow-ups, the governed session context is authoritative: retain cohort_entry_start, cohort_entry_end, observation_end, first_order_semantic, exact order sequence and cohort-year grouping unless the current user explicitly changes that field. Never reinterpret a retained multi-year range as a month merely because its start date is 1 January. An explicitly requested narrower follow-up period does replace all three journey date bounds.
 - In journey language, say “first observed order” and “customers whose first observed order included …”, never imply the qualifying product caused acquisition. The entry order can contain other products and is excluded from downstream results. A returning customer here has a qualifying order after entry, independently of Shopify's new/returning label.
 - For “what/top products customers buy”, rank by distinct returning customers by default and also show orders, units, source-native net sales by currency, and returning-cohort penetration. Never combine currencies.
 - Product classifications must come from governed classification evidence. Never infer collaboration, ring, clothing, jewellery, material, or campaign membership from product names or model intuition. Suggested/fuzzy product mappings cannot propagate classification.
+- A follow-up asking for jewellery items filters downstream products, not the first-order cohort. Apply explicit product exclusions in the journey tool. Report governed classification coverage and label unclassified historical products explicitly; never silently treat an unclassified product as non-jewellery.
 - If the requested classification is unavailable or insufficient, say exactly: “I can construct the customer journey, but collaboration classification is not sufficiently governed yet.” Then describe the reported coverage/gap; never fall back to a generic customer summary.
 - Journey results are aggregate-only. Never expose customer references, source customer IDs, emails, names, addresses, phone numbers, or individual journeys. Disclose unresolved identities, limited historical Square/POS identity coverage, classification gaps, and the absent Woo-to-Shopify bridge where relevant.
 - Shopify tools represent the current live catalogue and operational state.
@@ -8278,7 +8280,9 @@ Important rules:
 
           try {
             const parsedArgs = JSON.parse(item.arguments || '{}');
-            const args = applyOrderDateScope(message, item.name, parsedArgs);
+            const args = item.name==='analyze_customer_journey'
+              ? applyJourneyAnalysisContext(parsedArgs,req.body?.analysis_context)
+              : applyOrderDateScope(message, item.name, parsedArgs);
 
             const orderCall = await executeOrderToolCall(
               orderQueryService,
@@ -8480,7 +8484,7 @@ if (process.env.ORACLE_UI_PASSWORD || process.env.ORACLE_UI_SESSION_SECRET) {
           authorization: `Bearer ${SYNC_SECRET}`,
           'content-type': 'application/json'
         },
-        body: JSON.stringify({ message: conversation.analysisContext ? `Governed session-local analysis context (retain unless this user message explicitly changes it): ${JSON.stringify(conversation.analysisContext)}\n\nCurrent user message: ${message}\n\nUse only relevant context fields for tool calls. State the resolved scope in the answer.` : message })
+        body: JSON.stringify({ message: conversation.analysisContext ? `Governed session-local analysis context (retain unless this user message explicitly changes it): ${JSON.stringify(conversation.analysisContext)}\n\nCurrent user message: ${message}\n\nUse only relevant context fields for tool calls. State the resolved scope in the answer, including cohort years, exact order sequence, observation end, exclusions, classification coverage and unclassified products.` : message, analysis_context:conversation.analysisContext||null })
       });
       const payload = await response.json();
       if (!response.ok || !payload.success) throw new Error('Oracle could not complete the conversation');
