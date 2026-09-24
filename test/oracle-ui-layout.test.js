@@ -31,6 +31,13 @@ test('Oracle layout makes the thread the vertical scroller and lets messages and
   assert.match(css, /@media\(max-width:700px\)/);
 });
 
+test('inline charts remain responsive when inserted between answer sections',async()=>{
+  const css=await readFile(new URL('../public/oracle/app.css',import.meta.url),'utf8');
+  assert.match(css,/\.oracle-section-marker\{display:none\}/);
+  assert.match(css,/@media\(max-width:700px\)\{\.inline-chart\{[^}]*padding:/);
+  assert.match(css,/\.inline-bars li\{[^}]*grid-template-columns:minmax\(0,1fr\) max-content/);
+});
+
 
 test('report controls grow naturally without a nested vertical scroller',async()=>{
   const css = await readFile(new URL('../public/oracle/app.css', import.meta.url), 'utf8');

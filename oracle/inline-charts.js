@@ -27,7 +27,7 @@ function countries(result){
   if(!groups.length)return null;
   // Unknown geography remains coverage, not a fabricated ranked country.
   const coverage=groups.map(group=>{const row=result.rows.find(x=>String(x?.currency).toUpperCase()===group.currency),orders=number(row?.unknown_country_orders),sales=number(row?.unknown_country_sales);return orders===null||sales===null?null:{currency:group.currency,unknown_country_orders:orders,unknown_country_sales:sales}}).filter(Boolean);
-  return {version:1,kind:'horizontal_bar',id:'shopify-online-shipping-countries',title:'Top Shopify Online Store shipping countries',period:`${result.period.start_date} to ${result.period.end_date}`,metric:'Operational net sales',source:'Shopify · direct shipping country',groups:groups.slice(0,MAX_GROUPS),coverage};
+  return {version:1,kind:'horizontal_bar',id:'shopify-online-shipping-countries',title:'Top Shopify Online Store shipping countries',period:`${result.period.start_date} to ${result.period.end_date}`,metric:'Operational net sales',source:'Shopify · direct shipping country',placement:{section_id:'country-overview-end'},groups:groups.slice(0,MAX_GROUPS),coverage};
 }
 
 function secondOrders(result){
@@ -41,5 +41,5 @@ function secondOrders(result){
   }
   const groups=[...years].sort(([a],[b])=>a-b).slice(0,MAX_GROUPS).map(([year,items])=>({label:`First-order cohort ${year}`,cohort_year:year,items:[...items.values()].sort((a,b)=>a.rank-b.rank)})).filter(x=>x.items.length);
   if(!groups.length)return null;
-  return {version:1,kind:'horizontal_bar',id:'second-order-products-by-cohort-year',title:'Second-order product rankings by first-order cohort year',period:`${scope.cohort_entry_start} to ${scope.cohort_entry_end}; observed through ${scope.observation_end}`,metric:'Distinct customers',source:'Governed customer journey · exact second order',groups,coverage:[]};
+  return {version:1,kind:'horizontal_bar',id:'second-order-products-by-cohort-year',title:'Second-order product rankings by first-order cohort year',period:`${scope.cohort_entry_start} to ${scope.cohort_entry_end}; observed through ${scope.observation_end}`,metric:'Distinct customers',source:'Governed customer journey · exact second order',placement:{section_id:'cohort-overview-end'},groups,coverage:[]};
 }
