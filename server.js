@@ -8532,7 +8532,9 @@ if (process.env.ORACLE_UI_PASSWORD || process.env.ORACLE_UI_SESSION_SECRET) {
     reportService: ecommerceReportV2,
     productMappingService,
     collectionClassificationService,
-    analysisJobStore: createBigQueryAnalysisJobStore({bigquery,project:GOOGLE_PROJECT_ID,dataset:process.env.ORACLE_JOB_DATASET||ORACLE_JOB_DEFAULTS.dataset,table:process.env.ORACLE_JOB_TABLE||ORACLE_JOB_DEFAULTS.table,location:process.env.ORACLE_JOB_DATASET_LOCATION||ORACLE_JOB_DEFAULTS.location}),
+    analysisJobStore: process.env.ORACLE_ANALYSIS_JOBS_ENABLED === 'true'
+      ? createBigQueryAnalysisJobStore({bigquery,project:GOOGLE_PROJECT_ID,dataset:process.env.ORACLE_JOB_DATASET||ORACLE_JOB_DEFAULTS.dataset,table:process.env.ORACLE_JOB_TABLE||ORACLE_JOB_DEFAULTS.table,location:process.env.ORACLE_JOB_DATASET_LOCATION||ORACLE_JOB_DEFAULTS.location})
+      : null,
     env: process.env,
     generateProposals: createProposalGenerator({ openai, model: process.env.ORACLE_PROPOSAL_MODEL || 'gpt-5.6' }),
     chat: async (message, conversation = {}) => {

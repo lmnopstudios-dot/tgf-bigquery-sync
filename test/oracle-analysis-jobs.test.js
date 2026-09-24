@@ -2,9 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
 import { createOracleUiRouter } from '../oracle/ui-router.js';
-import { createMemoryAnalysisJobStore } from '../oracle/analysis-jobs.js';
+import { createAnalysisJobWorker, createBigQueryAnalysisJobStore, createMemoryAnalysisJobStore, streamingInsertDiagnostic } from '../oracle/analysis-jobs.js';
 
-const env={ORACLE_UI_PASSWORD:'test-password',ORACLE_UI_SESSION_SECRET:'12345678901234567890123456789012',ORACLE_JOB_RUNTIME_MS:'120000'};
+const env={ORACLE_UI_PASSWORD:'test-password',ORACLE_UI_SESSION_SECRET:'12345678901234567890123456789012',ORACLE_JOB_RUNTIME_MS:'120000',ORACLE_ANALYSIS_JOBS_ENABLED:'true'};
 const DANIELLE_FULL_EMAIL=`Danielle has asked us to look at clearing the following stock online:
 Small Signet; Butterfly, Ankh, Eagle and Pig charms; Sun and Moon, Serpent, Dagger, Snake and Dagger, Magic Mushroom and Enchanted Castle pendants; Reaper and Pentagram; gold and silver bat earrings; Solid Heart and Smallest Evil Skull rings; and all three skull-hoop variations.
 Any ideas of what we can do? Use data where possible.`;
@@ -51,3 +51,32 @@ test('Cancel aborts running work and stale leases are safely failed rather than 
 });
 
 test('durable transport budget exceeds the former 74-second synthesis edge',async()=>{const source=await import('node:fs/promises').then(fs=>fs.readFile(new URL('../server.js',import.meta.url),'utf8'));assert.match(source,/durable\?7\*60_000\+5_000:74_000/);assert.match(source,/durable_job:durable/);});
+
+test('disabled queue cannot take down ordinary interactive chat',async t=>{
+  const store={setup:async()=>{throw new Error('queue setup secret')},create:async()=>{throw new Error('queue insert secret')}};
+  const disabledEnv={...env,ORACLE_ANALYSIS_JOBS_ENABLED:'false'};
+  const app=express();app.use('/api/oracle',createOracleUiRouter({knowledgeService:{},bigquery:{},project:'p',chat:async message=>({answer:`interactive:${message}`,tools:[]}),generateProposals:async()=>[],analysisJobStore:store,env:disabledEnv}));
+  const server=await new Promise(resolve=>{const s=app.listen(0,()=>resolve(s))});t.after(()=>server.close());const base=`http://127.0.0.1:${server.address().port}/api/oracle`,origin=new URL(base).origin,auth=await login(base),headers={cookie:auth.cookie,origin,'content-type':'application/json','x-csrf-token':auth.csrf};
+  const response=await fetch(`${base}/chat`,{method:'POST',headers,body:'{"message":"dafuk"}'}),body=await response.json();
+  assert.equal(response.status,200);assert.equal(body.answer,'interactive:dafuk');assert.equal((await fetch(`${base}/jobs`,{method:'POST',headers,body:'{"message":"not enabled"}'})).status,404);
+});
+
+test('BigQuery enqueue serializes JSON columns and PartialFailure diagnostics never include rejected rows',async()=>{
+  let inserted;const table={insert:async rows=>{inserted=rows}};const dataset={table:()=>table};
+  const store=createBigQueryAnalysisJobStore({bigquery:{dataset:()=>dataset},project:'p'});
+  await store.create({owner_key:'owner',request_id:'request',payload_json:{message:'customer secret',sql_parameters:['secret']}});
+  assert.equal(typeof inserted[0].payload_json,'string');assert.deepEqual(JSON.parse(inserted[0].payload_json),{message:'customer secret',sql_parameters:['secret']});
+  const rejected={name:'PartialFailureError',errors:[{row:inserted[0],errors:[{reason:'invalid',code:'400',message:'Invalid value for field payload_json: customer secret'}]}]};
+  const diagnostic=streamingInsertDiagnostic(rejected);assert.deepEqual(diagnostic,{error_class:'PartialFailureError',reason:'invalid',code:'400',field:'payload_json'});assert.doesNotMatch(JSON.stringify(diagnostic),/customer secret|sql_parameters|owner|request/);
+});
+
+test('worker infrastructure failures use bounded exponential backoff and safe stage logs',async()=>{
+  let claims=0;const logs=[];const worker=createAnalysisJobWorker({store:{claim:async()=>{claims++;const error=new Error('prompt and credential secret');error.code='private secret';throw error}},run:async()=>{},pollMs:5,maxBackoffMs:20,logger:{error:(message,detail)=>logs.push({message,detail})}});
+  worker.start();await sleep(38);worker.stop();
+  assert.ok(claims>=2&&claims<=3,`expected 2-3 bounded claims, received ${claims}`);assert.equal(worker.backoffMs,20);assert.ok(logs.every(log=>log.detail.stage==='claim'));assert.doesNotMatch(JSON.stringify(logs),/prompt|credential|private secret/);
+});
+
+test('browser submits interactive chat by default and contains no job submission or polling path',async()=>{
+  const source=await import('node:fs/promises').then(fs=>fs.readFile(new URL('../public/oracle/app.js',import.meta.url),'utf8'));
+  assert.match(source,/api\('\/chat',\{method:'POST'/);assert.doesNotMatch(source,/api\('\/jobs/);assert.doesNotMatch(source,/followJob|recoverJob/);
+});

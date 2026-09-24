@@ -22,6 +22,21 @@ const normalizedType = type => {
 };
 const signature = field => `${normalizedType(field.type)}:${String(field.mode||'NULLABLE').toUpperCase()}`;
 
+const safeToken=(value,fallback='unknown')=>/^[A-Za-z0-9_.-]{1,80}$/.test(String(value||''))?String(value):fallback;
+/** BigQuery PartialFailureError contains the rejected row. Never return or log it. */
+export function streamingInsertDiagnostic(error) {
+  const failure=Array.isArray(error?.errors)?error.errors[0]:null;
+  const detail=Array.isArray(failure?.errors)?failure.errors[0]:failure;
+  const message=String(detail?.message||'');
+  const knownField=JOB_SCHEMA.map(field=>field.name).find(name=>new RegExp(`(?:field|column|name)[^A-Za-z0-9_]+${name}(?:[^A-Za-z0-9_]|$)`,'i').test(message));
+  return {
+    error_class:error?.name==='PartialFailureError'?'PartialFailureError':safeToken(error?.name,'Error'),
+    reason:safeToken(detail?.reason||error?.reason),
+    code:safeToken(detail?.code||error?.code),
+    field:knownField||'unknown'
+  };
+}
+
 /** Compares metadata only. The returned, bounded diagnostic can never contain row values. */
 export function inspectJobTableSchema(fields=[],expected=JOB_SCHEMA,limit=SCHEMA_DIFF_LIMIT) {
   const actualByName=new Map(fields.map(field=>[field.name,field]));
@@ -46,7 +61,7 @@ export function createBigQueryAnalysisJobStore({bigquery,project,dataset=ORACLE_
   const query=async(sql,params={})=>(await bigquery.query({query:sql,params,location:await resolveDatasetLocation(bigquery.dataset(dataset))}))[0];
   return {
     async setup(){const ds=bigquery.dataset(dataset);const [exists]=await ds.exists();if(!exists)await ds.create({location});await resolveDatasetLocation(ds);const t=ds.table(table);const [present]=await t.exists();if(!present){await t.create({schema:JOB_SCHEMA});return;}const [metadata]=await t.getMetadata();const inspection=inspectJobTableSchema(metadata.schema?.fields||[]);if(!inspection.matches)throw Object.assign(new Error(`Oracle job table schema mismatch: ${table}`),{code:'SCHEMA_MISMATCH',schema_diff:inspection});},
-    async create({owner_key,request_id,payload_json}){const job_id=crypto.randomUUID(),now=new Date().toISOString();await bigquery.dataset(dataset).table(table).insert([{job_id,owner_key,request_id,status:'queued',payload_json,result_json:null,error_code:null,created_at:now,updated_at:now,lease_until:null,attempts:0,cancel_requested:false}]);return {job_id,status:'queued',created_at:now};},
+    async create({owner_key,request_id,payload_json}){const job_id=crypto.randomUUID(),now=new Date().toISOString();await bigquery.dataset(dataset).table(table).insert([{job_id,owner_key,request_id,status:'queued',payload_json:JSON.stringify(payload_json),result_json:null,error_code:null,created_at:now,updated_at:now,lease_until:null,attempts:0,cancel_requested:false}]);return {job_id,status:'queued',created_at:now};},
     async get(job_id,owner_key){return normalize((await query(`SELECT * FROM ${fq} WHERE job_id=@job_id AND owner_key=@owner_key LIMIT 1`,{job_id,owner_key}))[0]);},
     async claim({worker_id,leaseMs,now=Date.now()}){const lease=new Date(now+leaseMs).toISOString();const rows=await query(`BEGIN TRANSACTION; UPDATE ${fq} SET status='failed',error_code='WORKER_RESTARTED',updated_at=CURRENT_TIMESTAMP(),lease_until=NULL WHERE status='running' AND lease_until<CURRENT_TIMESTAMP(); UPDATE ${fq} SET status='running',attempts=attempts+1,updated_at=CURRENT_TIMESTAMP(),lease_until=@lease WHERE job_id=(SELECT job_id FROM ${fq} WHERE status='queued' AND cancel_requested=FALSE ORDER BY created_at LIMIT 1) AND status='queued'; SELECT * FROM ${fq} WHERE status='running' AND lease_until=@lease LIMIT 1; COMMIT TRANSACTION;`,{lease});return normalize(rows[0]);},
     async finish(job_id,result_json){await query(`UPDATE ${fq} SET status=IF(cancel_requested,'cancelled','completed'),result_json=IF(cancel_requested,NULL,PARSE_JSON(@result)),updated_at=CURRENT_TIMESTAMP(),lease_until=NULL WHERE job_id=@job_id AND status='running'`,{job_id,result:JSON.stringify(result_json)});},
@@ -56,10 +71,12 @@ export function createBigQueryAnalysisJobStore({bigquery,project,dataset=ORACLE_
   };
 }
 
-export function createAnalysisJobWorker({store,run,pollMs=1000,leaseMs=9*60_000,runtimeMs=8*60_000}) {
-  let timer=null,running=false,controller=null,current=null;
-  const tick=async()=>{if(running)return;running=true;try{const job=await store.claim({worker_id:process.pid,leaseMs});if(!job)return;current=job.job_id;controller=new AbortController();const cancelPoll=setInterval(async()=>{if(await store.isCancelled(job.job_id))controller.abort(new Error('cancelled'));},Math.min(pollMs,1000));let runtimeTimer;try{const timeout=new Promise((_,reject)=>{runtimeTimer=setTimeout(()=>{controller.abort(new Error('runtime'));reject(Object.assign(new Error('runtime'),{code:'JOB_RUNTIME_EXCEEDED'}));},runtimeMs)});const result=await Promise.race([run(job,controller.signal),timeout]);await store.finish(job.job_id,result);}catch(error){await store.fail(job.job_id,error?.code==='JOB_RUNTIME_EXCEEDED'?'JOB_RUNTIME_EXCEEDED':'ANALYSIS_FAILED');}finally{clearTimeout(runtimeTimer);clearInterval(cancelPoll);controller=null;current=null;}}finally{running=false;}};
-  return {start(){if(timer)return;timer=setInterval(()=>tick().catch(error=>console.error('Oracle job worker failed:',{error_class:error?.name||'Error'})),pollMs);timer.unref?.();tick().catch(()=>{});},stop(){clearInterval(timer);timer=null;controller?.abort(new Error('worker stopped'));},tick};
+export function createAnalysisJobWorker({store,run,pollMs=1000,leaseMs=9*60_000,runtimeMs=8*60_000,maxBackoffMs=60_000,logger=console}) {
+  let timer=null,running=false,controller=null,stopped=true,failures=0,stage='claim';
+  const diagnostic=error=>({stage,error_class:safeToken(error?.name,'Error'),code:safeToken(error?.code)});
+  const tick=async()=>{if(running)return;running=true;try{stage='claim';const job=await store.claim({worker_id:process.pid,leaseMs});if(!job)return;controller=new AbortController();const cancelPoll=setInterval(async()=>{try{stage='cancel_check';if(await store.isCancelled(job.job_id))controller.abort(new Error('cancelled'));}catch(error){logger.error('Oracle job worker stage failed:',diagnostic(error));}},Math.min(pollMs,1000));let runtimeTimer;try{const timeout=new Promise((_,reject)=>{runtimeTimer=setTimeout(()=>{controller.abort(new Error('runtime'));reject(Object.assign(new Error('runtime'),{code:'JOB_RUNTIME_EXCEEDED'}));},runtimeMs)});stage='analysis';const result=await Promise.race([run(job,controller.signal),timeout]);stage='finish';await store.finish(job.job_id,result);}catch(error){try{stage='fail';await store.fail(job.job_id,error?.code==='JOB_RUNTIME_EXCEEDED'?'JOB_RUNTIME_EXCEEDED':'ANALYSIS_FAILED');}catch(failError){logger.error('Oracle job worker stage failed:',diagnostic(failError));throw failError;}}finally{clearTimeout(runtimeTimer);clearInterval(cancelPoll);controller=null;}}finally{running=false;}};
+  const schedule=delay=>{if(stopped)return;timer=setTimeout(async()=>{try{await tick();failures=0;}catch(error){failures++;logger.error('Oracle job worker failed:',diagnostic(error));}schedule(failures?Math.min(maxBackoffMs,pollMs*2**Math.min(failures,10)):pollMs);},delay);timer.unref?.();};
+  return {start(){if(!stopped)return;stopped=false;schedule(0);},stop(){stopped=true;clearTimeout(timer);timer=null;controller?.abort(new Error('worker stopped'));},tick,get backoffMs(){return failures?Math.min(maxBackoffMs,pollMs*2**Math.min(failures,10)):pollMs;}};
 }
 
 export function createMemoryAnalysisJobStore(seed=[]) {
