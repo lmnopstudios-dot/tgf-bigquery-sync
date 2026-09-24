@@ -8,11 +8,12 @@ import { analysisScope, clarificationFor, emptyAnalysisContext, transitionAnalys
 import { governanceDiagnostic, governancePublicError, isGovernanceBusinessError } from './governance-diagnostics.js';
 import { SHOPIFY_RATE_LIMIT_MESSAGE } from './shopifyql-throttle.js';
 import { requestId, stageOutcome, terminalMessage } from './request-observability.js';
+import { createAnalysisJobWorker, ownerKey } from './analysis-jobs.js';
 
 const json = express.json({ limit: '48kb', type: 'application/json' });
 const allowedOrigins = request => new Set([`${request.protocol}://${request.get('host')}`, process.env.ORACLE_UI_ORIGIN].filter(Boolean));
 
-export function createOracleUiRouter({ knowledgeService, bigquery, project, chat, generateProposals, reportService, productMappingService, collectionClassificationService, env = process.env, now = () => Date.now() }) {
+export function createOracleUiRouter({ knowledgeService, bigquery, project, chat, generateProposals, reportService, productMappingService, collectionClassificationService, analysisJobStore, env = process.env, now = () => Date.now() }) {
   const router = express.Router();
   const password = env.ORACLE_UI_PASSWORD;
   const sessionSecret = env.ORACLE_UI_SESSION_SECRET;
@@ -67,6 +68,30 @@ export function createOracleUiRouter({ knowledgeService, bigquery, project, chat
   router.post('/auth/logout', authenticate, protectWrite, (req, res) => { const key=sessionKey(req);analysisSessions.delete(key);recentChatEvidence.delete(key);res.setHeader('Set-Cookie', ['oracle_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0', 'oracle_csrf=; Path=/; SameSite=Strict; Max-Age=0']); res.json({ success: true }); });
   router.get('/session', authenticate, (req, res) => res.json({ success: true, user: req.oracleUser.sub, role: req.oracleUser.role, analysis_scope:analysisScope(sessionContext(req)) }));
   router.post('/analysis/clear',authenticate,protectWrite,json,(req,res)=>{analysisSessions.delete(sessionKey(req));res.json({success:true,analysis_scope:null})});
+  if (analysisJobStore) {
+    const worker=createAnalysisJobWorker({store:analysisJobStore,runtimeMs:Number(env.ORACLE_JOB_RUNTIME_MS)||8*60_000,run:async(job,signal)=>{
+      const input=job.payload_json;
+      const answer=await chat(input.message,{analysisContext:input.analysis_context,transition:input.transition,recentEvidence:input.recent_evidence,requestId:job.request_id,signal,durable:true});
+      let proposals=[],proposal_error=null;
+      try { proposals=await proposalsFor(input.message,input.created_by); } catch(error) { logProposalError(error);proposal_error='Knowledge proposal could not be generated.'; }
+      return {success:true,answer:answer.answer,inline_chart:answer.inline_chart||null,proposals,proposal_error,analysis_scope:analysisScope(input.analysis_context),tools:(answer.tools||[]).slice(0,20)};
+    }});
+    const jobStoreReady=analysisJobStore.setup();
+    jobStoreReady.then(()=>worker.start()).catch(error=>console.error('Oracle job storage setup failed:',{error_class:error?.name||'Error'}));
+    const owned=(req,id)=>analysisJobStore.get(id,ownerKey(parseCookies(req.headers.cookie).oracle_session,sessionSecret));
+    router.post('/jobs',authenticate,protectWrite,json,async(req,res)=>{
+      try { await jobStoreReady; } catch { return res.status(503).json({success:false,error:'Analysis jobs are temporarily unavailable'}); }
+      if(typeof req.body?.message!=='string'||!req.body.message.trim()||req.body.message.length>12000)return res.status(400).json({success:false,error:'message must be a non-empty string of at most 12000 characters'});
+      const previous=sessionContext(req),result=transitionAnalysisContext(previous,req.body.message,{now:now(),reportContext:req.body.report_context||null});
+      if(result.transition.applies_to_message)saveSessionContext(req,result.context);
+      const cached=recentChatEvidence.get(sessionKey(req)),recent=cached&&cached.expires_at>now()?cached.value:null;
+      const id=requestId(req.get('x-request-id'));
+      const job=await analysisJobStore.create({owner_key:ownerKey(parseCookies(req.headers.cookie).oracle_session,sessionSecret),request_id:id,payload_json:{message:req.body.message,analysis_context:result.transition.applies_to_message?result.context:null,transition:result.transition,recent_evidence:recent,created_by:req.oracleUser.sub}});
+      res.setHeader('x-request-id',id).status(202).json({success:true,job_id:job.job_id,status:'queued'});
+    });
+    router.get('/jobs/:id',authenticate,async(req,res)=>{const job=await owned(req,req.params.id);if(!job)return res.status(404).json({success:false,error:'Analysis job not found'});const publicJob={success:true,job_id:job.job_id,status:job.status,progress:job.status==='queued'?'Analysis queued':job.status==='running'?'Running governed analysis':job.status==='completed'?'Analysis complete':job.status==='cancelled'?'Analysis cancelled':'Analysis failed'};if(job.status==='completed'){const {tools=[], ...result}=job.result_json;Object.assign(publicJob,result);recentChatEvidence.set(sessionKey(req),{expires_at:now()+15*60*1000,value:{as_of:job.updated_at,answer:String(result.answer||'').slice(0,6000),tools}});}if(job.status==='failed')publicJob.error=job.error_code==='WORKER_RESTARTED'?'The worker restarted during analysis; no partial answer was returned. Please retry.':'The analysis could not be completed; no partial answer was returned.';res.json(publicJob);});
+    router.post('/jobs/:id/cancel',authenticate,protectWrite,json,async(req,res)=>{const job=await owned(req,req.params.id);if(!job)return res.status(404).json({success:false,error:'Analysis job not found'});await analysisJobStore.cancel(job.job_id,ownerKey(parseCookies(req.headers.cookie).oracle_session,sessionSecret));res.json({success:true,job_id:job.job_id,status:['completed','failed'].includes(job.status)?job.status:'cancelled'});});
+  }
   router.post('/chat', authenticate, protectWrite, json, async (req, res) => {
     const id=requestId(req.get('x-request-id'));
     const requestStarted=Date.now();

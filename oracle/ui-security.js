@@ -11,7 +11,7 @@ function signature(value, secret) {
 }
 
 export function createSession(identity, secret, now = Date.now()) {
-  const payload = base64url(JSON.stringify({ sub: identity, role: 'admin', exp: Math.floor(now / 1000) + TOKEN_LIFETIME_SECONDS }));
+  const payload = base64url(JSON.stringify({ sub: identity, role: 'admin', exp: Math.floor(now / 1000) + TOKEN_LIFETIME_SECONDS, jti: crypto.randomUUID() }));
   return `${payload}.${signature(payload, secret)}`;
 }
 

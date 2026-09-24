@@ -54,5 +54,5 @@ test('agent enforces request-wide deadline/budget and remaining failure is actio
   assert.match(server,/new RequestToolBudget\(\{deadlineAt,signal:cancellation\.signal\}\)/);
   assert.match(server,/toolAdmissionStopped[\s\S]*partialAnswer/);
   assert.match(server,/remainingQueryBytes[\s\S]*request-wide BigQuery budget exceeded/);
-  assert.match(server,/Date\.now\(\) \+ 72_000/);
+  assert.match(server,/req\.body\?\.durable_job === true \? 7 \* 60_000 : 72_000/);
 });

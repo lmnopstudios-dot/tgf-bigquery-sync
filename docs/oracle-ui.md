@@ -13,7 +13,8 @@ This is deliberately a single shared internal administrator login, not a user-ma
 All routes below use the `/api/oracle` prefix. Reads require a valid session; mutations additionally require CSRF and origin validation.
 
 * `POST /auth/login` accepts `{password}`; `POST /auth/logout` expires the session; `GET /session` checks it.
-* `POST /chat` accepts `{message}` and returns `{answer, proposals, proposal_error}`. The normal answer comes from the existing protected `/agent`; a failure in the secondary proposal call does not discard it.
+* `POST /jobs` accepts `{message, report_context?}` and promptly returns `202` with a job ID. `GET /jobs/:id` is the refresh-safe status/result read and `POST /jobs/:id/cancel` explicitly cancels queued or running work. Ownership is bound to the signed browser session, not a caller-supplied user field. The legacy `POST /chat` remains for compatible fast integrations.
+* The UI stores only the active opaque job ID in browser storage, polls for safe states (`queued`, `running`, `completed`, `failed`, `cancelled`), and restores polling after refresh. Prompts, SQL, parameters, model output, customer data, and raw tool results are never progress events.
 * `POST /propose` creates zero or more validated, non-persistent knowledge/memory candidates from a natural-language message.
 * `POST /knowledge/approve` and `POST /memory/approve` accept only `{kind, proposal, proposal_id?}`. They revalidate against the existing governed schemas and call the existing administrative writer. There is no table, SQL, dataset or generic write parameter.
 * `GET /knowledge` and `GET /memory` support `text`, `status`, date and tag filters plus `kind` or `memory_type`. `GET /knowledge/:id` and `GET /memory/:id` return exact records.
@@ -35,6 +36,12 @@ npm start
 ```
 
 Open `https://<existing-render-service>/oracle/`. Existing production knowledge—including Black Friday records—is queried from BigQuery and is not copied or seeded by this feature.
+
+## Durable worker deployment
+
+The existing Render web service is also the queue worker; no ephemeral disk or additional Redis service is used. At startup it creates `commerce.oracle_analysis_jobs` in the existing BigQuery project, so the Render service account needs BigQuery dataset/table create, row insert, query and update permissions. Keep one Render instance unless/until the queue claim transaction has been production-validated for multi-instance deployment. Set `ORACLE_JOB_RUNTIME_MS` only to lower the default eight-minute overall bound; production should leave it unset. Individual model and tool calls inherit the job abort signal and the seven-minute agent deadline, leaving a minute for terminal persistence.
+
+Queued jobs survive a Render restart in BigQuery and are claimed when the new worker starts. A process can die after a non-transactional external call, so an expired `running` lease is deliberately marked `failed` with the safe `WORKER_RESTARTED` reason rather than replayed and risking duplicate execution. The user can retry explicitly. Completed answers remain durable and may be read after refresh; polling never executes a job. Cancel sets durable cancellation state and aborts the local running controller.
 
 Errors returned to browsers are allow-listed validation messages or generic failures. Raw BigQuery errors and stack traces are not serialized. Logging passes errors through central credential redaction, including Google `Authorization: Bearer` values, token fields, client secrets and private keys.
 
