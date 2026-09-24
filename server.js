@@ -34,7 +34,7 @@ import { createOnlineCountrySalesService, ONLINE_COUNTRY_MAX_BYTES } from './ora
 import { runWithShopifyThrottle, SHOPIFY_RATE_LIMIT_MESSAGE } from './oracle/shopifyql-throttle.js';
 import { buildOracleInlineChart } from './oracle/inline-charts.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { createBigQueryAnalysisJobStore } from './oracle/analysis-jobs.js';
+import { createBigQueryAnalysisJobStore, ORACLE_JOB_DEFAULTS } from './oracle/analysis-jobs.js';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -8532,7 +8532,7 @@ if (process.env.ORACLE_UI_PASSWORD || process.env.ORACLE_UI_SESSION_SECRET) {
     reportService: ecommerceReportV2,
     productMappingService,
     collectionClassificationService,
-    analysisJobStore: createBigQueryAnalysisJobStore({bigquery,project:GOOGLE_PROJECT_ID,dataset:process.env.ORACLE_JOB_DATASET||'commerce',table:process.env.ORACLE_JOB_TABLE||'oracle_analysis_jobs',location:process.env.ORACLE_JOB_DATASET_LOCATION||'EU'}),
+    analysisJobStore: createBigQueryAnalysisJobStore({bigquery,project:GOOGLE_PROJECT_ID,dataset:process.env.ORACLE_JOB_DATASET||ORACLE_JOB_DEFAULTS.dataset,table:process.env.ORACLE_JOB_TABLE||ORACLE_JOB_DEFAULTS.table,location:process.env.ORACLE_JOB_DATASET_LOCATION||ORACLE_JOB_DEFAULTS.location}),
     env: process.env,
     generateProposals: createProposalGenerator({ openai, model: process.env.ORACLE_PROPOSAL_MODEL || 'gpt-5.6' }),
     chat: async (message, conversation = {}) => {
