@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { applyProductFamilies, approvedMappingEdges, assertFamilyAssignment, buildHistoricalReviewQueue, buildProductChoicePreview, candidateDiagnostics, classifyProduct, generateMappingCandidates, isShopifyParentProduct, productSourceLabel, resolveFamilyDecisions, resolveMappingDecisions, sanitizeReviewerNote, searchProducts, validateGraphApproval } from '../oracle/product-mapping.js';
+import { applyProductFamilies, approvedMappingEdges, assertFamilyAssignment, buildHistoricalReviewQueue, buildProductChoicePreview, candidateDiagnostics, classifyProduct, createProductMappingService, generateMappingCandidates, isShopifyParentProduct, productSourceLabel, resolveFamilyDecisions, resolveMappingDecisions, sanitizeReviewerNote, searchProducts, validateGraphApproval } from '../oracle/product-mapping.js';
 import { buildCanonicalProductGraph, mapProductPair } from '../oracle/product-identity.js';
 
 const p=(ref,title,extra={})=>({source_product_ref:ref,source_platform:ref.split(':')[0],source_store:ref.split(':')[1],source_product_id:ref.split(':')[2],title,...extra});
@@ -184,4 +184,14 @@ test('queue resolution state distinguishes active identity and active reporting 
   const queue=buildHistoricalReviewQueue(products,evidence,{mappingDecisions:[{decision_id:'i',left_ref:products[0].source_product_ref,right_ref:products[2].source_product_ref,status:'approved'}],familyDecisions:[{decision_id:'f',source_ref:products[1].source_product_ref,shopify_parent_ref:products[2].source_product_ref,status:'active'}]});
   assert.equal(queue.find(x=>x.historical_product.source_product_ref===products[0].source_product_ref).resolution_status,'active_identity');
   assert.equal(queue.find(x=>x.historical_product.source_product_ref===products[1].source_product_ref).resolution_status,'active_reporting_family');
+});
+
+test('review list tolerates unstable source rows and preserves empty and non-empty search',async()=>{
+  const products=[p('woo:ww:1','Moon Skull Ring'),p('shopify:shopify:2','Moon Skull Ring'),{source_product_ref:null,source_platform:'shopify',source_store:'shopify',source_product_id:null,title:'Custom item'}];
+  const table={exists:async()=>[true],getMetadata:async()=>[{schema:{fields:[]}}],setMetadata:async()=>{}};
+  const bigquery={dataset:()=>({exists:async()=>[true],table:()=>table}),query:async()=>[[]]};
+  const service=createProductMappingService({bigquery,project:'demo'});
+  const empty=await service.list({products,search:''}),found=await service.list({products,search:'moon'}),missing=await service.list({products,search:'not present'});
+  assert.equal(empty.items.length,1);assert.equal(found.items.length,1);assert.equal(missing.items.length,0);
+  assert.doesNotThrow(()=>JSON.stringify(empty));
 });
