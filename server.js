@@ -34,6 +34,7 @@ import { createOnlineCountrySalesService, ONLINE_COUNTRY_MAX_BYTES } from './ora
 import { runWithShopifyThrottle, SHOPIFY_RATE_LIMIT_MESSAGE } from './oracle/shopifyql-throttle.js';
 import { buildOracleInlineChart } from './oracle/inline-charts.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { createBigQueryAnalysisJobStore } from './oracle/analysis-jobs.js';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -8093,9 +8094,10 @@ app.post(
     req.once('aborted',()=>cancellation.abort(new Error('Agent request aborted')));
     res.once('close',()=>{ if(!res.writableEnded) cancellation.abort(new Error('Agent response closed')); });
     const suppliedDeadline = Number(req.body?.deadline_at);
+    const maximumRuntime = req.body?.durable_job === true ? 7 * 60_000 : 72_000;
     const deadlineAt = Math.min(
       Number.isFinite(suppliedDeadline) ? suppliedDeadline : Date.now() + 90_000,
-      Date.now() + 72_000
+      Date.now() + maximumRuntime
     );
     return requestBudget.run({ deadlineAt, requestId:id, signal:cancellation.signal }, async () => {
     let stage='validation';
@@ -8530,11 +8532,13 @@ if (process.env.ORACLE_UI_PASSWORD || process.env.ORACLE_UI_SESSION_SECRET) {
     reportService: ecommerceReportV2,
     productMappingService,
     collectionClassificationService,
+    analysisJobStore: createBigQueryAnalysisJobStore({bigquery,project:GOOGLE_PROJECT_ID}),
     env: process.env,
     generateProposals: createProposalGenerator({ openai, model: process.env.ORACLE_PROPOSAL_MODEL || 'gpt-5.6' }),
     chat: async (message, conversation = {}) => {
       // Leave headroom for the UI route to serialize a bounded terminal response.
-      const deadlineAt = Date.now() + 70_000;
+      const durable=conversation.durable===true;
+      const deadlineAt = Date.now() + (durable?7*60_000:70_000);
       const recentEvidence = conversation.recentEvidence
         ? `Recent governed Oracle evidence (reuse when relevant; disclose this as-of time and do not treat the prior interpretation as new raw data): ${JSON.stringify(conversation.recentEvidence)}\n\n`
         : '';
@@ -8545,8 +8549,8 @@ if (process.env.ORACLE_UI_PASSWORD || process.env.ORACLE_UI_SESSION_SECRET) {
           'content-type': 'application/json'
           ,'x-request-id': conversation.requestId
         },
-        body: JSON.stringify({ message: `${recentEvidence}${conversation.analysisContext ? `Governed session-local analysis context (retain unless this user message explicitly changes it): ${JSON.stringify(conversation.analysisContext)}\n\nCurrent user message: ${message}\n\nUse only relevant context fields for tool calls. State the resolved scope in the answer, including cohort years, exact order sequence, observation end, exclusions, classification coverage and unclassified products.` : message}`, analysis_context:conversation.analysisContext||null, deadline_at:deadlineAt,request_id:conversation.requestId }),
-        signal: conversation.signal ? AbortSignal.any([conversation.signal,AbortSignal.timeout(74_000)]) : AbortSignal.timeout(74_000)
+        body: JSON.stringify({ message: `${recentEvidence}${conversation.analysisContext ? `Governed session-local analysis context (retain unless this user message explicitly changes it): ${JSON.stringify(conversation.analysisContext)}\n\nCurrent user message: ${message}\n\nUse only relevant context fields for tool calls. State the resolved scope in the answer, including cohort years, exact order sequence, observation end, exclusions, classification coverage and unclassified products.` : message}`, analysis_context:conversation.analysisContext||null, deadline_at:deadlineAt,request_id:conversation.requestId,durable_job:durable }),
+        signal: conversation.signal ? AbortSignal.any([conversation.signal,AbortSignal.timeout(durable?7*60_000+5_000:74_000)]) : AbortSignal.timeout(durable?7*60_000+5_000:74_000)
       });
       const payload = await response.json();
       if (response.status === 429 && payload.code === 'SHOPIFY_TEMPORARILY_RATE_LIMITED') return { answer: SHOPIFY_RATE_LIMIT_MESSAGE, tools: [] };
