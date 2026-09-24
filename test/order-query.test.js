@@ -21,6 +21,30 @@ test('search validates dates, values, enums, and hard result limit', () => {
   assert.throws(() => validateSearchFilters({ start_date: '2025-02-30' }), /valid YYYY-MM-DD/);
   assert.throws(() => validateSearchFilters({ source_platform: 'matrixify' }), /woo, or shopify/);
   assert.throws(() => validateSearchFilters({ minimum_order_value: 3, maximum_order_value: 2 }), /must not exceed/);
+  assert.throws(() => validateSearchFilters({ eu_status: 'maybe' }), /null, eu, or non_eu/);
+});
+
+test('“Give me one Shopify order shipped to the EU and one shipped outside the EU after 20 September 2025” uses direct valid geography once and governed finance', async () => {
+  const eu = { source_platform:'shopify', source_order_id:'gid://shopify/Order/1', order_date:'2025-09-21',
+    channel:'online', shipping_country:'DE', shipping_country_name:'Germany', shipping_geography_status:'valid',
+    eu_status:'eu', currency:'GBP', source_order_total:100, matching_order_count:1 };
+  const uk = { ...eu, source_order_id:'gid://shopify/Order/2', shipping_country:'GB',
+    shipping_country_name:'United Kingdom', eu_status:'non_eu' };
+  const bq = fakeBigQuery([[eu], [uk]]);
+  const service = createOrderQueryService({ bigquery:bq, project:'p' });
+  const first = await service.searchOrders({ start_date:'2025-09-21', source_platform:'shopify', eu_status:'eu', limit:1 });
+  const second = await service.searchOrders({ start_date:'2025-09-21', source_platform:'shopify', eu_status:'non_eu', limit:1 });
+  assert.equal(first.orders[0].eu_status,'eu'); assert.equal(second.orders[0].shipping_country,'GB');
+  const sql=bq.calls[0].query;
+  assert.match(sql,/shopify_data\.order_shipping_geography/);
+  assert.match(sql,/PARTITION BY order_id ORDER BY synced_at DESC/);
+  assert.match(sql,/shipping_geography_status = 'valid'/);
+  assert.match(sql,/DATE '2020-02-01'/);
+  assert.match(sql,/g\.shipping_country_code/);
+  assert.doesNotMatch(sql,/billing|currency.*shipping|market|ip_address/i);
+  assert.match(sql,/source_app_id != @matrixify_app_id/);
+  assert.equal(bq.calls[0].params.eu_status,'eu'); assert.equal(bq.calls[0].params.limit,1);
+  assert.match(first.geography_warning,/Missing or invalid geography remains unknown/);
 });
 
 test('search is parameterized, deterministic, collision-safe, direct-country-only, and excludes Matrixify', async () => {
