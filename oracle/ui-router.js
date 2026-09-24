@@ -39,8 +39,8 @@ export function createOracleUiRouter({ knowledgeService, bigquery, project, chat
     let existing = [];
     try {
       const [knowledge, memory] = await Promise.all([
-        knowledgeService.searchKnowledge({ text: message.slice(0, 1000), knowledge_type: null, start_date: null, end_date: null, status: null, tags: [], limit: 20 }),
-        knowledgeService.searchMemory({ text: message.slice(0, 1000), start_date: null, end_date: null, status: null, memory_type: null, tags: [], limit: 10 })
+        knowledgeService.searchKnowledge({ text: null, knowledge_type: null, start_date: null, end_date: null, status: null, tags: [], limit: 50 }),
+        knowledgeService.searchMemory({ text: null, start_date: null, end_date: null, status: null, memory_type: null, tags: [], limit: 50 })
       ]);
       existing = [...(knowledge.items || []), ...(memory.items || [])];
     } catch (error) { console.error('Oracle UI proposal context lookup failed:', safeError(error)); }
@@ -48,7 +48,7 @@ export function createOracleUiRouter({ knowledgeService, bigquery, project, chat
     return candidates.slice(0, 12).map(candidate => {
       try { return normalizeModelProposal(candidate, { createdBy, existing }); }
       catch (error) { error.phase = 'proposal_validation'; logProposalError(error); return invalidProposal(candidate); }
-    });
+    }).filter(proposal => proposal.validity !== 'already_known');
   };
   router.post('/auth/login', json, (req, res) => {
     if (!allowedOrigins(req).has(req.get('origin'))) return res.status(403).json({ success: false, error: 'Invalid request origin' });

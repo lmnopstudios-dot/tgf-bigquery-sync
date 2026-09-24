@@ -1,9 +1,11 @@
+import { isStockClearanceAdvisory } from './advisory-intent.js';
+
 const FIELDS = new Set([
   'analysis_type','metrics','start_date','end_date','requested_end_period','grain','comparison_type',
   'comparison_start_date','comparison_end_date','currencies','channel','channel_breakdown','location',
   'platform','geography','customer_segment','product_ref','filters','sort','limit','report_section',
   'output_preference','partial_period','unresolved_required_fields'
-  ,'tool_route','request_kind'
+  ,'tool_route','request_kind','advisory_topic'
   ,'journey_intent','entry_product_classification','subsequent_product_classification','excluded_product_titles','include_unclassified_products','first_order_semantic','cohort_entry_start','cohort_entry_end','observation_end','minimum_order_sequence','maximum_order_sequence','within_days','journey_group_by'
 ]);
 const GRAINS = new Set(['day','week','month','quarter','year']);
@@ -12,7 +14,7 @@ const METRICS = new Set(['sales','refunds','customers','products','ecommerce_per
 const MONTHS = {jan:1,january:1,feb:2,february:2,mar:3,march:3,apr:4,april:4,may:5,jun:6,june:6,jul:7,july:7,aug:8,august:8,sep:9,sept:9,september:9,oct:10,october:10,nov:11,november:11,dec:12,december:12};
 
 export const ANALYSIS_CONTEXT_FIELDS = Object.freeze([...FIELDS]);
-export function emptyAnalysisContext(){return {analysis_type:null,metrics:[],start_date:null,end_date:null,requested_end_period:null,grain:null,comparison_type:null,comparison_start_date:null,comparison_end_date:null,currencies:[],channel:null,channel_breakdown:false,location:null,platform:null,geography:null,customer_segment:null,product_ref:null,filters:[],sort:null,limit:null,report_section:null,output_preference:null,partial_period:false,unresolved_required_fields:[],tool_route:null,request_kind:null,journey_intent:null,entry_product_classification:null,subsequent_product_classification:null,excluded_product_titles:[],include_unclassified_products:false,first_order_semantic:null,cohort_entry_start:null,cohort_entry_end:null,observation_end:null,minimum_order_sequence:null,maximum_order_sequence:null,within_days:null,journey_group_by:null}}
+export function emptyAnalysisContext(){return {analysis_type:null,metrics:[],start_date:null,end_date:null,requested_end_period:null,grain:null,comparison_type:null,comparison_start_date:null,comparison_end_date:null,currencies:[],channel:null,channel_breakdown:false,location:null,platform:null,geography:null,customer_segment:null,product_ref:null,filters:[],sort:null,limit:null,report_section:null,output_preference:null,partial_period:false,unresolved_required_fields:[],tool_route:null,request_kind:null,advisory_topic:null,journey_intent:null,entry_product_classification:null,subsequent_product_classification:null,excluded_product_titles:[],include_unclassified_products:false,first_order_semantic:null,cohort_entry_start:null,cohort_entry_end:null,observation_end:null,minimum_order_sequence:null,maximum_order_sequence:null,within_days:null,journey_group_by:null}}
 
 const iso = value => /^\d{4}-\d{2}-\d{2}$/.test(String(value||'')) ? value : null;
 export function validateAnalysisContext(value={}){
@@ -37,6 +39,8 @@ export function validateAnalysisContext(value={}){
   out.tool_route=value.tool_route??null;
   if(value.request_kind!=null&&value.request_kind!=='advisory') throw new Error('invalid request_kind');
   out.request_kind=value.request_kind??null;
+  if(value.advisory_topic!=null&&value.advisory_topic!=='stock_clearance') throw new Error('invalid advisory_topic');
+  out.advisory_topic=value.advisory_topic??null;
   out.journey_intent=typeof value.journey_intent==='string'?value.journey_intent.slice(0,100):null;
   out.entry_product_classification=typeof value.entry_product_classification==='string'&&/^[a-z][a-z0-9_]{0,63}$/.test(value.entry_product_classification)?value.entry_product_classification:null;
   out.subsequent_product_classification=typeof value.subsequent_product_classification==='string'&&/^[a-z][a-z0-9_]{0,63}$/.test(value.subsequent_product_classification)?value.subsequent_product_classification:null;
@@ -75,8 +79,8 @@ export function transitionAnalysisContext(existing, message, {now=Date.now(),rep
   const continuation=!unrelated&&!explicitNew&&(base.metrics.length>0||/\b(refunds?|sales|customers?|products?|ecommerce)\b/i.test(lower));
   if(explicitNew) base=emptyAnalysisContext();
   if(!unrelated){
-    const advisory=/\bany ideas (?:of|on|for) what we can do\b[\s\S]*\buse data where possible\b/i.test(text);
-    if(advisory) set.request_kind='advisory';
+    const advisory=isStockClearanceAdvisory(text,base);
+    if(advisory){set.request_kind='advisory';set.advisory_topic='stock_clearance';}
     const countryProducts=/\b(?:top\s+(?:ten|10)\s+)?(?:locations?|countries)\b[\s\S]*\bonline sales\b[\s\S]*\b(?:top\s+(?:ten|10)\s+)?products?\b|\bonline sales\b[\s\S]*\b(?:locations?|countries)\b[\s\S]*\bproducts?\b/i.test(text);
     if(countryProducts){set.tool_route='get_shopify_online_country_products';set.geography='direct_shipping_country';set.channel='online';}
     if(/\b(?:include|add).*woocommerce|\bwoocommerce\b.*\b(?:all )?online sales\b/i.test(text) && base.geography){set.tool_route='get_online_country_sales';set.platform='woo+shopify';set.channel='online';}

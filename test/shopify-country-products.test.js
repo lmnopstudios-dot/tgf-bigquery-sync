@@ -11,6 +11,9 @@ const NOW = Date.parse('2026-09-24T12:00:00Z');
 const DANIELLE_STOCK_CLEARANCE = `Danielle has asked us to look at clearing the following stock online:
 Large Anatomical Heart Ring, Small Anatomical Heart Ring, and Anatomical Heart Pendant.
 Any ideas of what we can do? Use data where possible`;
+const DANIELLE_EXACT_FOLLOW_UP = 'What can we do about this? Please include data and sales info where appropriate.';
+const DANIELLE_BRIEF = `Danielle has asked us to look at clearing the following stock online:
+Large Anatomical Heart Ring, Small Anatomical Heart Ring, and Anatomical Heart Pendant.`;
 
 async function oracleConversation({ legacyFirstClarification = false } = {}) {
   const aggregateCalls=[];
@@ -97,7 +100,7 @@ test('exact production follow-up resolves retained country-product intent instea
   assert.doesNotMatch(second.answer,/what date range|unless you specify/i);
 });
 
-test('Danielle stock-clearance brief gets evidence-aware initial advice without a date clarification or knowledge proposal',async t=>{
+test('Danielle stock-clearance brief gets evidence-aware initial advice without a date clarification',async t=>{
   const calls=[];
   const chat=async(_message,{analysisContext})=>{
     assert.equal(analysisContext.request_kind,'advisory');assert.deepEqual(analysisContext.currencies,[]);
@@ -118,8 +121,32 @@ test('Danielle stock-clearance brief gets evidence-aware initial advice without 
   const login=await fetch(`${base}/auth/login`,{method:'POST',headers:{origin,'content-type':'application/json'},body:'{"password":"test-password"}'}),auth=await login.json();
   const cookie=login.headers.getSetCookie().map(value=>value.split(';')[0]).join('; ');
   const response=await fetch(`${base}/chat`,{method:'POST',headers:{cookie,origin,'content-type':'application/json','x-csrf-token':auth.csrf},body:JSON.stringify({message:DANIELLE_STOCK_CLEARANCE})}),body=await response.json();
-  assert.equal(response.status,200);assert.equal(calls.length,4);assert.equal(proposalCalls,0);assert.deepEqual(body.proposals,[]);
+  assert.equal(response.status,200);assert.equal(calls.length,4);assert.equal(proposalCalls,1);assert.deepEqual(body.proposals,[]);
   assert.doesNotMatch(body.answer,/what date range/i);assert.match(body.answer,/online Anatomical Heart edit/);assert.match(body.answer,/need live catalogue evidence/);assert.match(body.answer,/kept currencies separate/);
+});
+
+test('exact Danielle wording in a fresh chat remains useful when optional sales evidence is unavailable',async t=>{
+  const messages=[];
+  const chat=async(message,{analysisContext})=>{messages.push(message);assert.equal(analysisContext.request_kind,'advisory');assert.deepEqual(analysisContext.currencies,[]);return {answer:'Proposed tactics: create a focused online edit, cross-link the products, and test segmented email. Verified evidence: the catalogue should be checked live; optional recent sales evidence was unavailable. Comparison period selected: the most recent 90 days. Currency results will remain separate.',tools:['search_shopify_products']}};
+  const env={ORACLE_UI_PASSWORD:'test-password',ORACLE_UI_SESSION_SECRET:'12345678901234567890123456789012'};
+  let proposalCalls=0;const app=express();app.use('/api/oracle',createOracleUiRouter({knowledgeService:{},bigquery:{},project:'test',chat,generateProposals:async()=>{proposalCalls++;return[]},env,now:()=>NOW}));
+  const server=await new Promise(resolve=>{const value=app.listen(0,()=>resolve(value))});t.after(()=>server.close());
+  const base=`http://127.0.0.1:${server.address().port}/api/oracle`,origin=new URL(base).origin,login=await fetch(`${base}/auth/login`,{method:'POST',headers:{origin,'content-type':'application/json'},body:'{"password":"test-password"}'}),auth=await login.json(),cookie=login.headers.getSetCookie().map(value=>value.split(';')[0]).join('; '),headers={cookie,origin,'content-type':'application/json','x-csrf-token':auth.csrf};
+  const response=await fetch(`${base}/chat`,{method:'POST',headers,body:JSON.stringify({message:`${DANIELLE_BRIEF}\n${DANIELLE_EXACT_FOLLOW_UP}`})}),body=await response.json();
+  assert.equal(response.status,200);assert.equal(messages.length,1);assert.equal(proposalCalls,1);assert.deepEqual(body.proposals,[]);
+  assert.doesNotMatch(body.answer,/what date range|GBP unless|specify another currency/i);assert.match(body.answer,/Proposed tactics/);assert.match(body.answer,/most recent 90 days/);assert.match(body.answer,/unavailable/);
+});
+
+test('exact Danielle follow-up reuses stock-clearance context in an existing chat',async t=>{
+  const contexts=[];
+  const chat=async(message,{analysisContext})=>{contexts.push({message,analysisContext});return {answer:contexts.length===1?'I have the temporary stock-clearance brief.':'Initial recommendations: build an online edit and test audience segments. Verified sales evidence is optional and currently unavailable. I selected the most recent 90 days and will keep currencies separate.',tools:[]}};
+  const env={ORACLE_UI_PASSWORD:'test-password',ORACLE_UI_SESSION_SECRET:'12345678901234567890123456789012'};
+  let proposalCalls=0;const app=express();app.use('/api/oracle',createOracleUiRouter({knowledgeService:{},bigquery:{},project:'test',chat,generateProposals:async()=>{proposalCalls++;return[]},env,now:()=>NOW}));
+  const server=await new Promise(resolve=>{const value=app.listen(0,()=>resolve(value))});t.after(()=>server.close());
+  const base=`http://127.0.0.1:${server.address().port}/api/oracle`,origin=new URL(base).origin,login=await fetch(`${base}/auth/login`,{method:'POST',headers:{origin,'content-type':'application/json'},body:'{"password":"test-password"}'}),auth=await login.json(),cookie=login.headers.getSetCookie().map(value=>value.split(';')[0]).join('; '),headers={cookie,origin,'content-type':'application/json','x-csrf-token':auth.csrf},send=message=>fetch(`${base}/chat`,{method:'POST',headers,body:JSON.stringify({message})});
+  assert.equal((await send(DANIELLE_BRIEF)).status,200);const response=await send(DANIELLE_EXACT_FOLLOW_UP),body=await response.json();
+  assert.equal(response.status,200);assert.equal(contexts[1].analysisContext.request_kind,'advisory');assert.deepEqual(contexts[1].analysisContext.currencies,[]);assert.equal(proposalCalls,2);
+  assert.doesNotMatch(body.answer,/what date range|GBP unless|specify another currency/i);assert.match(body.answer,/Initial recommendations/);assert.match(body.answer,/most recent 90 days/);
 });
 
 test('production validator is bounded, aggregate-only and reports unknown coverage', async () => {
