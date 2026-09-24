@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { checkOracleJobReadiness, loadOracleJobReadinessConfig } from '../diagnostics/oracle-job-readiness.js';
-import { createBigQueryAnalysisJobStore, JOB_SCHEMA } from '../oracle/analysis-jobs.js';
+import { createBigQueryAnalysisJobStore, inspectJobTableSchema, JOB_SCHEMA } from '../oracle/analysis-jobs.js';
 
 const fakeBigQuery=({location='EU',fields=JOB_SCHEMA,permissions=['bigquery.tables.get','bigquery.tables.getData','bigquery.tables.updateData'],queryError=null}={})=>{
   const calls=[];
@@ -41,13 +41,24 @@ test('Oracle job readiness configuration does not expose credential contents',()
   assert.throws(()=>loadOracleJobReadinessConfig({GOOGLE_SERVICE_ACCOUNT_JSON:'private malformed value'}),error=>{assert.deepEqual(error.readiness,{success:false,failed_stage:'configuration',error_code:'CREDENTIALS_INVALID'});assert.doesNotMatch(JSON.stringify(error.readiness),/private/);return true});
 });
 
-test('startup and readiness share the Oracle table schema and use the actual US dataset location',async()=>{
-  const calls=[],table={exists:async()=>[true],getMetadata:async()=>[{schema:{fields:JOB_SCHEMA}}],testIamPermissions:async permissions=>[{permissions}],insert:async()=>{}};
+test('startup and readiness share the Oracle table schema, accept BigQuery aliases and use the actual US dataset location',async()=>{
+  const aliasedSchema=JOB_SCHEMA.map(field=>field.name==='attempts'?{...field,type:'INTEGER'}:field.name==='cancel_requested'?{...field,type:'BOOLEAN'}:field);
+  const calls=[],table={exists:async()=>[true],getMetadata:async()=>[{schema:{fields:aliasedSchema}}],testIamPermissions:async permissions=>[{permissions}],insert:async()=>{}};
   const dataset={exists:async()=>[true],create:async()=>{},getMetadata:async()=>[{location:'US'}],table:()=>table};
   const bigquery={dataset:()=>dataset,query:async options=>{calls.push(options);return [[]]},createQueryJob:async options=>{calls.push(options);return [{}]}};
   const store=createBigQueryAnalysisJobStore({bigquery,project:'p',location:'EU'});await store.setup();await store.get('job','owner');
   const readiness=await checkOracleJobReadiness({bigquery,project:'p',expectedLocation:'EU'});
   assert.equal(readiness.actual_location,'US');assert.equal(readiness.table,'oracle_analysis_jobs_v1');assert.ok(calls.every(call=>call.location==='US'));
+});
+
+test('Oracle job schema comparison still rejects incompatible types and modes',()=>{
+  const fields=JOB_SCHEMA.map(field=>field.name==='attempts'?{...field,type:'FLOAT64'}:field.name==='cancel_requested'?{...field,mode:'NULLABLE'}:field);
+  const inspection=inspectJobTableSchema(fields);
+  assert.equal(inspection.matches,false);
+  assert.deepEqual(inspection.incompatible_columns,[
+    {name:'attempts',expected_type:'INT64',expected_mode:'REQUIRED',actual_type:'FLOAT64',actual_mode:'REQUIRED'},
+    {name:'cancel_requested',expected_type:'BOOL',expected_mode:'REQUIRED',actual_type:'BOOL',actual_mode:'NULLABLE'}
+  ]);
 });
 
 test('BigQuery job store retains an existing dataset and runs queue queries in its actual location',async()=>{
