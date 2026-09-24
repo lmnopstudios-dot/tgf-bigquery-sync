@@ -60,8 +60,9 @@ export function assertStrictToolSchema(schema = PROPOSE_GOVERNED_RECORDS_TOOL.pa
 
 assertStrictToolSchema();
 
-export const PROPOSAL_INSTRUCTIONS = `You structure durable business assertions into a small, useful set of governed record proposals. You never save or write anything.
+export const PROPOSAL_INSTRUCTIONS = `You structure durable business assertions into a small, useful set of governed record proposals. You never save or write anything. An explicit request to save is not required: an ordinary brief may contain durable assertions worth proposing for human review.
 Return an empty proposals list for questions, comparisons, analytical requests, casual conversation, or text without new durable assertions. A persistence request strengthens intent but never authorizes a write. For mixed input, propose only assertions.
+Compare every candidate with the supplied existing governed records. Omit an equivalent existing claim. When the same subject or titled event has materially changed, propose the changed claim and set supersedes to the exact existing record ID so the UI presents a linked update.
 Preserve material dates, times, offers, exclusions, qualifications, and provenance. Prefer a campaign record plus channel/store/cutoff records when that aids future retrieval; do not make dozens of micro-records. DATE fields are YYYY-MM-DD; retain time-of-day in descriptions.
 Use business_document only when the user clearly identifies pasted email/document content, with a concise non-fabricated reference; otherwise human_entered. Never invent metadata.
 Uncertain assertions must be working hypotheses (memory kind, memory_type hypothesis) or omitted, never confirmed. Confirmed memories require governed evidence references; user attestation alone supports only working memory. Do not include chain-of-thought or raw tool output.
@@ -72,10 +73,6 @@ export function needsProposalGeneration(message) {
   const text = String(message || '').trim();
   if (!text) return false;
   if (/\b(?:save|remember|record|store|add)\b/i.test(text)) return true;
-  // A pasted campaign brief followed by a request for recommendations is
-  // working context, not an instruction to turn mentioned products into
-  // durable governed knowledge.
-  if (/\bany ideas (?:of|on|for) what we can do\b[\s\S]*\buse data where possible\b/i.test(text)) return false;
   // This deliberately recognizes only obvious, wholly non-assertive requests. It
   // does not attempt extraction; everything ambiguous is left to the model.
   const sentences = text.split(/(?<=[?.!])\s+/).filter(Boolean);
@@ -157,7 +154,7 @@ export function normalizeModelProposal(candidate, { createdBy = 'oracle-ui', exi
   const proposal = kind === 'memory' ? validateMemory({ ...fields, created_by: createdBy }) : validateKnowledgeItem(kind, { ...fields, created_by: createdBy });
   const wrapper = { proposal_id: crypto.randomUUID(), kind, proposal, uncertain: proposal.status === 'working', persisted: false, approval_required: true, validity: 'valid' };
   if (isDuplicateProposal(wrapper, existing)) return { ...wrapper, validity: 'already_known', saveable: false };
-  const sameTitle = existing.find(item => comparable(item.title || item.term || item.subject) === comparable(proposal.title || proposal.term || proposal.subject));
+  const sameTitle = existing.find(item => item.kind === kind && ['confirmed','working',undefined].includes(item.status) && comparable(item.title || item.term || item.subject) === comparable(proposal.title || proposal.term || proposal.subject));
   if (!proposal.supersedes && sameTitle && /^(?:kn|ev|df|mem)_[0-9a-f-]{16,}$/.test(sameTitle.id || '')) proposal.supersedes = sameTitle.id;
   return { ...wrapper, saveable: true };
 }

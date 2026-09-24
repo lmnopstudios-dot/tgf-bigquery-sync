@@ -43,6 +43,23 @@ test('stock-clearance ideas are advisory and are not blocked by a missing date o
   assert.equal(clarificationFor(result.context),null);
 });
 
+test('stock-clearance meaning survives alternate evidence wording and a separate follow-up',()=>{
+  const brief='Danielle has asked us to look at clearing the following stock online: Large Anatomical Heart Ring, Small Anatomical Heart Ring, and Anatomical Heart Pendant.';
+  let result=apply(emptyAnalysisContext(),brief);
+  assert.equal(result.context.request_kind,'advisory');assert.equal(result.context.advisory_topic,'stock_clearance');
+  assert.equal(clarificationFor(result.context),null);
+  result=apply(result.context,'What can we do about this? Please include data and sales info where appropriate.');
+  assert.equal(result.context.request_kind,'advisory');assert.deepEqual(result.context.metrics,['sales']);
+  assert.deepEqual(result.context.currencies,[]);assert.deepEqual(result.context.unresolved_required_fields,[]);
+  assert.equal(clarificationFor(result.context),null);
+});
+
+test('explicit dates and currency are preserved for stock-clearance advice',()=>{
+  const result=apply(emptyAnalysisContext(),'How can we clear this excess stock? Include sales data for Jan 2026 to Sep 2026 in USD.');
+  assert.equal(result.context.request_kind,'advisory');assert.deepEqual(result.context.currencies,['USD']);
+  assert.equal(result.context.start_date,'2026-01-01');assert.equal(result.context.end_date,'2026-09-22');
+});
+
 test('channel split and filter clearing retain the established analysis',()=>{
   let context=apply(emptyAnalysisContext(),'monthly refunds Jan 2023 to Sep 2026').context;
   context=apply(context,'exclude POS').context;assert.deepEqual(context.filters,['exclude_pos']);
