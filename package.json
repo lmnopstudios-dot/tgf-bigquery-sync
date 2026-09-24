@@ -46,7 +46,8 @@
     "validate:catalogue-production": "node diagnostics/catalogue-production-validation.js",
     "validate:product-classifications-production": "node diagnostics/product-classification-production-validation.js",
     "validate:oracle-tool-schemas": "node diagnostics/oracle-tool-schema-validation.js",
-    "validate:shopify-country-products-production": "node diagnostics/shopify-country-products-production.js"
+    "validate:shopify-country-products-production": "node diagnostics/shopify-country-products-production.js",
+    "validate:online-country-sales-production": "node diagnostics/online-country-sales-production.js --start=2022-09-24 --end=2026-09-24"
   },
   "engines": {
     "node": ">=20"

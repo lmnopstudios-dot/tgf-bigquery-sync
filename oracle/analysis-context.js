@@ -33,7 +33,7 @@ export function validateAnalysisContext(value={}){
   out.limit=Number.isInteger(value.limit)&&value.limit>0&&value.limit<=100?value.limit:null;
   out.partial_period=Boolean(value.partial_period);
   out.unresolved_required_fields=[...new Set(value.unresolved_required_fields||[])].filter(x=>FIELDS.has(x)).slice(0,8);
-  if(value.tool_route!=null&&!['get_shopify_online_country_products','get_average_customer_order_interval'].includes(value.tool_route)) throw new Error('invalid tool_route');
+  if(value.tool_route!=null&&!['get_shopify_online_country_products','get_online_country_sales','get_average_customer_order_interval'].includes(value.tool_route)) throw new Error('invalid tool_route');
   out.tool_route=value.tool_route??null;
   if(value.request_kind!=null&&value.request_kind!=='advisory') throw new Error('invalid request_kind');
   out.request_kind=value.request_kind??null;
@@ -78,7 +78,8 @@ export function transitionAnalysisContext(existing, message, {now=Date.now(),rep
     const advisory=/\bany ideas (?:of|on|for) what we can do\b[\s\S]*\buse data where possible\b/i.test(text);
     if(advisory) set.request_kind='advisory';
     const countryProducts=/\b(?:top\s+(?:ten|10)\s+)?(?:locations?|countries)\b[\s\S]*\bonline sales\b[\s\S]*\b(?:top\s+(?:ten|10)\s+)?products?\b|\bonline sales\b[\s\S]*\b(?:locations?|countries)\b[\s\S]*\bproducts?\b/i.test(text);
-    if(countryProducts) set.tool_route='get_shopify_online_country_products';
+    if(countryProducts){set.tool_route='get_shopify_online_country_products';set.geography='direct_shipping_country';set.channel='online';}
+    if(/\b(?:include|add).*woocommerce|\bwoocommerce\b.*\b(?:all )?online sales\b/i.test(text) && base.geography){set.tool_route='get_online_country_sales';set.platform='woo+shopify';set.channel='online';}
     const customerOrderInterval=/\b(?:average|mean|median)\b[\s\S]*\b(?:time|days?)\b[\s\S]*\bbetween\b[\s\S]*\b(?:online )?orders?\b[\s\S]*\b(?:same|each|per)\b[\s\S]*\bcustomer\b|\b(?:time|days?)\b[\s\S]*\bbetween consecutive (?:online )?orders?\b/i.test(text);
     if(customerOrderInterval){set.tool_route='get_average_customer_order_interval';set.metrics=['customer_order_interval'];set.analysis_type='customers';set.channel='online';}
     const journey=/\b(?:first (?:observed )?(?:purchase|order)|bought? (?:after|next)|buy (?:after|next)|second (?:purchase|order)|third (?:purchase|order)|nth order|repeat (?:purchase )?rate|within \d+ days?|downstream|acquisition products?|customers? buy (?:after|next))\b/.test(lower);
@@ -100,7 +101,7 @@ export function transitionAnalysisContext(existing, message, {now=Date.now(),rep
     if(/exclude pos/i.test(lower)) set.filters=[...base.filters.filter(x=>x!=='exclude_pos'),'exclude_pos'];
     if(/include pos|clear (?:the )?filters?/i.test(lower)) clear.push('filters');
     Object.assign(set,period(text,now)||{});
-    if(!base.currencies.length&&!set.currencies&&set.analysis_type==='finance'&&(set.tool_route||base.tool_route)!=='get_shopify_online_country_products'&&!advisory) set.currencies=['GBP'];
+    if(!base.currencies.length&&!set.currencies&&set.analysis_type==='finance'&&!['get_shopify_online_country_products','get_online_country_sales'].includes(set.tool_route||base.tool_route)&&!advisory) set.currencies=['GBP'];
   }
   const next={...base,...set};if(next.analysis_type==='customer_journey'){next.first_order_semantic=next.first_order_semantic||'first_observed_ever';if(next.start_date){next.cohort_entry_start=next.start_date;next.cohort_entry_end=next.end_date;next.observation_end=next.end_date;}}for(const key of clear) next[key]=emptyAnalysisContext()[key];
   const missing=[];if(next.metrics.length&&!next.start_date&&next.request_kind!=='advisory') missing.push('start_date','end_date');
