@@ -16,9 +16,11 @@ const normalize = row => row && ({...row,payload_json:typeof row.payload_json===
  * failed rather than replayed because model/tool calls are not transactional. */
 export function createBigQueryAnalysisJobStore({bigquery,project,dataset='commerce',table='oracle_analysis_jobs',location='EU'}) {
   const fq=`\`${project}.${dataset}.${table}\``;
-  const query=async(sql,params={})=>(await bigquery.query({query:sql,params}))[0];
+  let datasetLocation;
+  const resolveDatasetLocation=async ds=>{if(datasetLocation)return datasetLocation;const [metadata]=await ds.getMetadata();datasetLocation=metadata.location;return datasetLocation;};
+  const query=async(sql,params={})=>(await bigquery.query({query:sql,params,location:await resolveDatasetLocation(bigquery.dataset(dataset))}))[0];
   return {
-    async setup(){const ds=bigquery.dataset(dataset);const [exists]=await ds.exists();if(!exists)await ds.create({location});const t=ds.table(table);const [present]=await t.exists();if(!present)await t.create({schema:JOB_SCHEMA});},
+    async setup(){const ds=bigquery.dataset(dataset);const [exists]=await ds.exists();if(!exists)await ds.create({location});await resolveDatasetLocation(ds);const t=ds.table(table);const [present]=await t.exists();if(!present)await t.create({schema:JOB_SCHEMA});},
     async create({owner_key,request_id,payload_json}){const job_id=crypto.randomUUID(),now=new Date().toISOString();await bigquery.dataset(dataset).table(table).insert([{job_id,owner_key,request_id,status:'queued',payload_json,result_json:null,error_code:null,created_at:now,updated_at:now,lease_until:null,attempts:0,cancel_requested:false}]);return {job_id,status:'queued',created_at:now};},
     async get(job_id,owner_key){return normalize((await query(`SELECT * FROM ${fq} WHERE job_id=@job_id AND owner_key=@owner_key LIMIT 1`,{job_id,owner_key}))[0]);},
     async claim({worker_id,leaseMs,now=Date.now()}){const lease=new Date(now+leaseMs).toISOString();const rows=await query(`BEGIN TRANSACTION; UPDATE ${fq} SET status='failed',error_code='WORKER_RESTARTED',updated_at=CURRENT_TIMESTAMP(),lease_until=NULL WHERE status='running' AND lease_until<CURRENT_TIMESTAMP(); UPDATE ${fq} SET status='running',attempts=attempts+1,updated_at=CURRENT_TIMESTAMP(),lease_until=@lease WHERE job_id=(SELECT job_id FROM ${fq} WHERE status='queued' AND cancel_requested=FALSE ORDER BY created_at LIMIT 1) AND status='queued'; SELECT * FROM ${fq} WHERE status='running' AND lease_until=@lease LIMIT 1; COMMIT TRANSACTION;`,{lease});return normalize(rows[0]);},
