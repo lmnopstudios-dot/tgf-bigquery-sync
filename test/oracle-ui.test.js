@@ -6,6 +6,7 @@ import { createOracleUiRouter } from '../oracle/ui-router.js';
 import { assertStrictToolSchema, createProposalGenerator, needsProposalGeneration, normalizeModelProposal, proposalDiagnostic, PROPOSAL_INSTRUCTIONS, PROPOSE_GOVERNED_RECORDS_TOOL } from '../oracle/proposals.js';
 import { redactError } from '../oracle/ui-security.js';
 import { ShopifyThrottleError, SHOPIFY_RATE_LIMIT_MESSAGE } from '../oracle/shopifyql-throttle.js';
+import { affinityJustified, partialAnswer, requestId, terminalMessage } from '../oracle/request-observability.js';
 
 const env={ORACLE_UI_PASSWORD:'test-password',ORACLE_UI_SESSION_SECRET:'12345678901234567890123456789012',ORACLE_UI_ADMIN_NAME:'test-admin'};
 async function fixture(generateProposals=async()=>[]){
@@ -67,6 +68,20 @@ test('ordinary stock-clearance briefs are eligible for proactive review proposal
   ]) assert.equal(needsProposalGeneration(message),true,message);
 });
 
+test('product affinity requires explicit overlap or cross-sell intent',()=>{
+  const danielle='Danielle has asked us to clear Large Anatomical Heart Ring, Small Anatomical Heart Ring, and Anatomical Heart Pendant online. Any ideas? Use data where possible.';
+  assert.equal(affinityJustified(danielle),false);
+  assert.equal(affinityJustified('What did customers also buy with the Chunky Hoop Earring?'),true);
+  assert.equal(affinityJustified('Recommend cross-sell products using customer overlap'),true);
+});
+
+test('request IDs and terminal messages are bounded and safe',()=>{
+  assert.equal(requestId('danielle-123'),'danielle-123');
+  assert.match(requestId('customer name=Danielle / SQL'),/^[0-9a-f-]{36}$/);
+  assert.match(terminalMessage('response_generation'),/final answer could not be generated/);
+  assert.doesNotMatch(terminalMessage('response_generation'),/SQL|customer/i);
+});
+
 test('safe proposal diagnostics distinguish API failures without secrets or payloads',async()=>{
   const generate=createProposalGenerator({openai:{responses:{create:async()=>{const error=new Error('invalid schema sk-secret payload={"user_message":"private document"}');error.status=400;error.code='invalid_function_parameters';error.type='invalid_request_error';throw error;}}}});
   let caught;try{await generate({message:'Our campaign happened.'})}catch(error){caught=error}
@@ -109,6 +124,35 @@ test('repeated briefs suppress duplicate cards while changed claims become linke
 });
 
 test('proposal failure does not discard the normal chat answer or expose errors',async t=>{const f=await fixture(async()=>{throw new Error('secret upstream failure')});t.after(()=>f.server.close());const auth=await login(f.request,f.base);const headers={cookie:auth.cookie,origin:new URL(f.base).origin,'content-type':'application/json','x-csrf-token':auth.csrf};const response=await f.request('/chat',{method:'POST',headers,body:'{"message":"Our store opened."}'});const body=await response.json();assert.equal(response.status,200);assert.equal(body.answer,'answer:Our store opened.');assert.equal(body.proposal_error,'Knowledge proposal could not be generated.');assert.doesNotMatch(JSON.stringify(body),/secret upstream/) });
+
+test('Danielle request preserves completed affinity evidence when a later synthesis fails and suppresses duplicate proposals',async t=>{
+  const danielle='Danielle has asked us to look at clearing the following stock online: Large Anatomical Heart Ring, Small Anatomical Heart Ring, and Anatomical Heart Pendant. Any ideas of what we can do? Use data where possible.';
+  const queryEvents=[];
+  const bigquery={query:async({label})=>{queryEvents.push(label);return [[]]}};
+  const chat=async message=>{
+    await Promise.all([bigquery.query({label:'product_affinity_primary'}),bigquery.query({label:'product_affinity_guest'})]);
+    const laterError=new Error('secret provider failure after completed queries');
+    assert.equal(laterError.constructor.name,'Error');
+    return {answer:partialAnswer(message,['get_shopify_customer_product_behavior'],['final_synthesis']),tools:['get_shopify_customer_product_behavior'],partial:true};
+  };
+  const existing={id:'kn_1234567890abcdef',kind:'fact',title:'Danielle stock-clearance brief',content:'Danielle asked us to clear the three Anatomical Heart products online.',status:'confirmed'};
+  let proposalCalls=0;
+  const knowledgeService={searchKnowledge:async()=>({items:[existing]}),searchMemory:async()=>({items:[]})};
+  const generateProposals=async()=>{proposalCalls++;return [fact('Danielle stock-clearance brief',existing.content)]};
+  const app=express();app.use('/api/oracle',createOracleUiRouter({knowledgeService,bigquery,project:'test',chat,generateProposals,env}));
+  const server=await new Promise(resolve=>{const value=app.listen(0,()=>resolve(value))});t.after(()=>server.close());
+  const base=`http://127.0.0.1:${server.address().port}/api/oracle`,request=(path,options={})=>fetch(base+path,options),auth=await login(request,base);
+  const response=await request('/chat',{method:'POST',headers:{cookie:auth.cookie,origin:new URL(base).origin,'content-type':'application/json','x-csrf-token':auth.csrf,'x-request-id':'danielle-e2e'},body:JSON.stringify({message:danielle})});
+  const body=await response.json();
+  assert.equal(response.status,200);assert.equal(response.headers.get('x-request-id'),'danielle-e2e');
+  assert.deepEqual(queryEvents,['product_affinity_primary','product_affinity_guest']);
+  assert.match(body.answer,/Governed evidence completed/);assert.match(body.answer,/time-boxed/);assert.doesNotMatch(body.answer,/secret provider|customer_name|SELECT/i);
+  assert.deepEqual(body.proposals,[]);assert.equal(proposalCalls,1);
+});
+
+test('agent transport failure terminates with a specific bounded error',async t=>{const app=express();app.use('/api/oracle',createOracleUiRouter({knowledgeService:{},bigquery:{},project:'test',chat:async()=>{const error=new Error('socket secret');error.name='TimeoutError';throw error},env}));const server=await new Promise(resolve=>{const value=app.listen(0,()=>resolve(value))});t.after(()=>server.close());const base=`http://127.0.0.1:${server.address().port}/api/oracle`,request=(path,options={})=>fetch(base+path,options),auth=await login(request,base);const response=await request('/chat',{method:'POST',headers:{cookie:auth.cookie,origin:new URL(base).origin,'content-type':'application/json','x-csrf-token':auth.csrf},body:'{"message":"Danielle stock clearance"}'}),body=await response.json();assert.equal(response.status,504);assert.equal(body.code,'ORACLE_AGENT_DEADLINE');assert.match(body.error,/did not return before the request deadline/);assert.doesNotMatch(JSON.stringify(body),/socket secret/)});
+
+test('production customer behavior diagnostics never log SQL or parameter payloads',async()=>{const source=await readFile(new URL('../server.js',import.meta.url),'utf8');const block=source.slice(source.indexOf("Shopify customer/product behavior query planned"),source.indexOf('const runBigQuery',source.indexOf("Shopify customer/product behavior query planned")));assert.doesNotMatch(block,/\bsql\s*[,}:]/i);assert.doesNotMatch(block,/\bparams\s*[,}:]/i);assert.match(block,/parameter_names/)});
 test('redacts Google bearer tokens and credential-shaped fields',()=>{const output=redactError({headers:{authorization:'Bearer ya29.secret-token'},private_key:'abc'});assert.doesNotMatch(output,/ya29|abc/);assert.match(output,/REDACTED/)});
 test('UI APIs require a session, CSRF and same origin while chat reuses injected agent',async t=>{const f=await fixture();t.after(()=>f.server.close());assert.equal((await f.request('/knowledge')).status,401);assert.equal((await f.request('/auth/login',{method:'POST',headers:{'content-type':'application/json'},body:'{"password":"test-password"}'})).status,403);const auth=await login(f.request,f.base);const headers={cookie:auth.cookie,origin:new URL(f.base).origin,'content-type':'application/json','x-csrf-token':auth.csrf};assert.equal((await f.request('/chat',{method:'POST',headers:{...headers,'x-csrf-token':'bad'},body:'{"message":"hello"}'})).status,403);const response=await f.request('/chat',{method:'POST',headers,body:'{"message":"hello"}'});assert.equal(response.status,200);assert.equal((await response.json()).answer,'answer:hello');assert.equal(f.writes.length,0)});
 test('choice preview is authenticated, read-only, bounded and safely reports failures',async t=>{const calls=[];const service={previewChoice:async(candidate,selected)=>{calls.push([candidate,selected]);if(selected==='fail')throw new Error('secret warehouse detail');return{read_only:true,selected_product:{source_product_ref:selected}}}};const app=express();app.use('/api/oracle',createOracleUiRouter({knowledgeService:{},bigquery:{},project:'test',chat:async()=>({answer:''}),productMappingService:service,env}));const server=await new Promise(resolve=>{const value=app.listen(0,()=>resolve(value))});t.after(()=>server.close());const base=`http://127.0.0.1:${server.address().port}/api/oracle`,request=(path,options={})=>fetch(base+path,options);assert.equal((await request('/product-mappings/choice-preview?candidate_id=x&selected_ref=y')).status,401);const auth=await login(request,base),headers={cookie:auth.cookie};const good=await request('/product-mappings/choice-preview?candidate_id=aaaaaaaaaaaaaaaaaaaaaaaa&selected_ref=shopify%3Ashopify%3A1',{headers});assert.equal(good.status,200);assert.deepEqual(calls[0],['aaaaaaaaaaaaaaaaaaaaaaaa','shopify:shopify:1']);const failed=await request('/product-mappings/choice-preview?candidate_id=aaaaaaaaaaaaaaaaaaaaaaaa&selected_ref=fail',{headers}),body=await failed.json();assert.equal(failed.status,503);assert.doesNotMatch(JSON.stringify(body),/secret warehouse detail/)});

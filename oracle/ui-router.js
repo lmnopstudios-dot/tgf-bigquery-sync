@@ -7,6 +7,7 @@ import { reportCsv, reportPdf, reportWorkbook } from './report-export.js';
 import { analysisScope, clarificationFor, emptyAnalysisContext, transitionAnalysisContext } from './analysis-context.js';
 import { governanceDiagnostic, governancePublicError, isGovernanceBusinessError } from './governance-diagnostics.js';
 import { SHOPIFY_RATE_LIMIT_MESSAGE } from './shopifyql-throttle.js';
+import { requestId, stageOutcome, terminalMessage } from './request-observability.js';
 
 const json = express.json({ limit: '48kb', type: 'application/json' });
 const allowedOrigins = request => new Set([`${request.protocol}://${request.get('host')}`, process.env.ORACLE_UI_ORIGIN].filter(Boolean));
@@ -67,6 +68,9 @@ export function createOracleUiRouter({ knowledgeService, bigquery, project, chat
   router.get('/session', authenticate, (req, res) => res.json({ success: true, user: req.oracleUser.sub, role: req.oracleUser.role, analysis_scope:analysisScope(sessionContext(req)) }));
   router.post('/analysis/clear',authenticate,protectWrite,json,(req,res)=>{analysisSessions.delete(sessionKey(req));res.json({success:true,analysis_scope:null})});
   router.post('/chat', authenticate, protectWrite, json, async (req, res) => {
+    const id=requestId(req.get('x-request-id'));
+    const requestStarted=Date.now();
+    res.setHeader('x-request-id',id);
     try {
       if (typeof req.body?.message !== 'string' || !req.body.message.trim() || req.body.message.length > 12000) return res.status(400).json({ success: false, error: 'message must be a non-empty string of at most 12000 characters' });
       const previous=sessionContext(req);
@@ -76,15 +80,26 @@ export function createOracleUiRouter({ knowledgeService, bigquery, project, chat
       const clarification=result.transition.applies_to_message?clarificationFor(result.context):null;
       const key=sessionKey(req),cached=recentChatEvidence.get(key);
       const recentEvidence=cached&&cached.expires_at>now()?cached.value:null;
-      const answer=clarification?{answer:clarification,tools:[]}:await chat(req.body.message,{analysisContext:result.transition.applies_to_message?result.context:null,transition:result.transition,recentEvidence});
+      const chatStarted=Date.now();
+      let answer;
+      try {
+        answer=clarification?{answer:clarification,tools:[]}:await chat(req.body.message,{analysisContext:result.transition.applies_to_message?result.context:null,transition:result.transition,recentEvidence,requestId:id});
+        console.info('Oracle UI stage outcome:',stageOutcome({id,stage:'agent_request',startedAt:chatStarted,outcome:'success',extra:{tool_count:(answer.tools||[]).length}}));
+      } catch(error) {
+        console.error('Oracle UI stage outcome:',stageOutcome({id,stage:'agent_request',startedAt:chatStarted,outcome:'failed',error}));
+        if(error?.code==='THROTTLED') return res.status(429).json({success:false,code:'SHOPIFY_TEMPORARILY_RATE_LIMITED',error:SHOPIFY_RATE_LIMIT_MESSAGE,request_id:id});
+        return res.status(504).json({success:false,code:'ORACLE_AGENT_DEADLINE',error:terminalMessage('agent_request'),request_id:id});
+      }
       recentChatEvidence.set(key,{expires_at:now()+15*60*1000,value:{as_of:new Date(now()).toISOString(),answer:String(answer.answer||'').slice(0,6000),tools:(answer.tools||[]).slice(0,20)}});
       let proposals = [], proposal_error = null;
-      try { proposals = await proposalsFor(req.body.message, req.oracleUser.sub); }
-      catch (error) { logProposalError(error); proposal_error = 'Knowledge proposal could not be generated.'; }
+      const proposalStarted=Date.now();
+      try { proposals = await proposalsFor(req.body.message, req.oracleUser.sub); console.info('Oracle UI stage outcome:',stageOutcome({id,stage:'knowledge_proposals',startedAt:proposalStarted,outcome:'success',extra:{proposal_count:proposals.length}})); }
+      catch (error) { logProposalError(error); console.error('Oracle UI stage outcome:',stageOutcome({id,stage:'knowledge_proposals',startedAt:proposalStarted,outcome:'failed',error})); proposal_error = 'Knowledge proposal could not be generated.'; }
+      console.info('Oracle UI stage outcome:',stageOutcome({id,stage:'ui_response',startedAt:requestStarted,outcome:'success'}));
       res.json({ success: true, answer: answer.answer, inline_chart:answer.inline_chart||null, proposals, proposal_error, analysis_scope:analysisScope(sessionContext(req)) });
     } catch (error) {
       if (error?.code === 'THROTTLED') return res.status(429).json({ success: false, code: 'SHOPIFY_TEMPORARILY_RATE_LIMITED', error: SHOPIFY_RATE_LIMIT_MESSAGE });
-      console.error('Oracle UI chat failed:', safeError(error)); res.status(500).json({ success: false, error: safeError(error) });
+      console.error('Oracle UI stage outcome:',stageOutcome({id,stage:'ui_response',startedAt:requestStarted,outcome:'failed',error})); res.status(500).json({ success: false, code:'ORACLE_UI_RESPONSE_FAILED',error:'The response could not be prepared. No figures were returned; please retry.',request_id:id });
     }
   });
   router.post('/propose', authenticate, protectWrite, json, async (req, res) => {
