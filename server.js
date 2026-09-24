@@ -21,6 +21,7 @@ import { createProposalGenerator } from './oracle/proposals.js';
 import { createProductMappingService } from './oracle/product-mapping.js';
 import { createCollectionClassificationService } from './oracle/collection-classification.js';
 import { redactError } from './oracle/ui-security.js';
+import { affinityJustified, partialAnswer, requestId, stageOutcome, terminalMessage } from './oracle/request-observability.js';
 import {
   AcquisitionValidationError,
   syncShopifyAcquisition
@@ -1218,26 +1219,20 @@ async function getShopifyCustomerProductBehavior({
   const parametersUsedBy = query => Object.fromEntries(
     Object.entries(params).filter(([name]) => query.includes(`@${name}`))
   );
-  const diagnosticParams = query => Object.fromEntries(
-    Object.entries(parametersUsedBy(query)).map(([name, value]) => [
-      name,
-      name === 'customer_query' ? '[supplied]' : value
-    ])
-  );
-
-  console.log('Shopify customer/product behavior BigQuery diagnostic', {
+  // Production diagnostics deliberately contain neither SQL nor parameter values.
+  console.info('Shopify customer/product behavior query planned', {
+    request_id: requestBudget.getStore()?.requestId || 'unavailable',
     analysis,
-    sql,
-    params: diagnosticParams(sql),
-    guest_sql: guestSql,
-    guest_params: diagnosticParams(guestSql)
+    primary_parameter_names: Object.keys(parametersUsedBy(sql)),
+    guest_parameter_names: Object.keys(parametersUsedBy(guestSql))
   });
 
   const runBigQuery = async (label, query) => {
     const startedAt = Date.now();
 
     console.log(
-      `[customer-behavior:${analysis}] ${label} BigQuery starting`
+      `[customer-behavior:${analysis}] ${label} BigQuery starting`,
+      { request_id: requestBudget.getStore()?.requestId || 'unavailable' }
     );
 
     try {
@@ -1248,7 +1243,8 @@ async function getShopifyCustomerProductBehavior({
 
       console.log(
         `[customer-behavior:${analysis}] ${label} BigQuery completed ` +
-        `(${Date.now() - startedAt}ms, ${result[0].length} rows)`
+        `(${Date.now() - startedAt}ms, ${result[0].length} rows)`,
+        { request_id: requestBudget.getStore()?.requestId || 'unavailable' }
       );
 
       return result;
@@ -1256,7 +1252,7 @@ async function getShopifyCustomerProductBehavior({
       console.error(
         `[customer-behavior:${analysis}] ${label} BigQuery failed ` +
         `(${Date.now() - startedAt}ms)`,
-        error instanceof Error ? error.message : String(error)
+        { request_id: requestBudget.getStore()?.requestId || 'unavailable', error_class: error?.constructor?.name || 'Error' }
       );
 
       throw error;
@@ -8074,12 +8070,16 @@ app.post(
   requireSyncSecret,
   express.json(),
   async (req, res) => {
+    const id=requestId(req.get('x-request-id')||req.body?.request_id);
+    const requestStarted=Date.now();
+    res.setHeader('x-request-id',id);
     const suppliedDeadline = Number(req.body?.deadline_at);
     const deadlineAt = Math.min(
       Number.isFinite(suppliedDeadline) ? suppliedDeadline : Date.now() + 90_000,
       Date.now() + 90_000
     );
-    return requestBudget.run({ deadlineAt }, async () => {
+    return requestBudget.run({ deadlineAt, requestId:id }, async () => {
+    let stage='validation';
     try {
       const message = req.body?.message;
 
@@ -8101,6 +8101,12 @@ app.post(
       let inlineChart = null;
       const toolSignatures = new Set();
       let toolRounds = 0;
+      let evidenceCalls = 0;
+      let affinityCalls = 0;
+      const successfulTools=[];
+      const failedTools=[];
+      stage='initial_model';
+      console.info('Agent stage outcome:',stageOutcome({id,stage:'request_received',startedAt:requestStarted,outcome:'success'}));
       let response = await openai.responses.create({
         model: 'gpt-5.6',
         instructions: `
@@ -8175,7 +8181,7 @@ Important rules:
 - Use get_shopify_customer_lifetime_metrics for lifetime customer value, lifetime order frequency, acquisition and recency.
 - Use get_shopify_customer_product_behavior for Shopify-native customer/product behavioural analysis. Matrixify WooCommerce imports are excluded by source_app_id by default; synchronized Shopify-native history begins 16 Nov 2025, so call its metrics available-history rather than true lifetime when earlier customer history may exist.
 - In get_shopify_customer_product_behavior, customer IDs are identities and names are display attributes only. Never merge people by name or synthesize guest identities. Operational purchased-line value uses discounted line value, may not reflect later refunds, and is not settled/accounting revenue; BigQuery finance remains financial truth.
-- Describe product affinity as observed customer/product overlap, never causation. Describe products as associated with repeat customers, never as causing retention. Do not automatically recommend discounts for lapsed customers.
+- Describe product affinity as observed customer/product overlap, never causation. Use product affinity only when the user explicitly asks for customer overlap/also-bought/cross-sell evidence, or when a specific recommendation clearly requires overlap evidence. A general stock-clearance or merchandising brief does not justify it. Make at most one product-affinity call per request. Describe products as associated with repeat customers, never as causing retention. Do not automatically recommend discounts for lapsed customers.
 - A broad product query can match multiple product IDs. product_customers returns customer × matched-product rows, so the same customer may appear more than once; product_affinity reports a separate cohort for each seed_product_id and must never be described as one combined seed cohort.
 - Combine get_shopify_customer_product_behavior with get_shopify_customer_lifetime_metrics for Shopify customer lifetime/cohort reporting; get_shopify_product_performance for operational product sales/returns; BigQuery finance tools for accounting sales/refunds; and current Shopify catalogue/inventory tools for present catalogue and availability.
 - Use get_shopify_customer_kpis for period-based new-vs-returning behaviour.
@@ -8250,6 +8256,7 @@ Important rules:
           }
 
           toolsUsed.add(item.name);
+          stage=`tool:${item.name}`;
 
           let result;
 
@@ -8259,6 +8266,11 @@ Important rules:
             if (queryCharge > remainingQueryBytes) throw new Error('Oracle request-wide BigQuery budget exceeded');
             remainingQueryBytes -= queryCharge;
             const parsedArgs = JSON.parse(item.arguments || '{}');
+            if (++evidenceCalls > 6) throw Object.assign(new Error('Agent evidence call limit exceeded'),{code:'EVIDENCE_LIMIT'});
+            if (item.name==='get_shopify_customer_product_behavior'&&parsedArgs.analysis==='product_affinity') {
+              if (!affinityJustified(message)) throw Object.assign(new Error('Product affinity is not justified by this request'),{code:'AFFINITY_NOT_JUSTIFIED'});
+              if (++affinityCalls > 1) throw Object.assign(new Error('Product affinity call limit exceeded'),{code:'AFFINITY_LIMIT'});
+            }
             const signature = `${item.name}:${JSON.stringify(parsedArgs)}`;
             if (toolSignatures.has(signature)) {
               result = { success: false, tool: item.name, code: 'DUPLICATE_TOOL_CALL', retryable: false, error: 'An unchanged tool query was already attempted in this request' };
@@ -8408,7 +8420,8 @@ Important rules:
               console.info('Agent ShopifyQL tool throttled:', { operation: item.name, elapsed_ms: 90_000 - Math.max(0, deadlineAt - Date.now()), retry_count: error.metadata?.retry_count ?? 0, requested_query_cost: error.metadata?.requested_query_cost ?? null, currently_available: error.metadata?.currently_available ?? null, reset_at: error.metadata?.reset_at ?? null });
               return res.status(429).json({ success: false, code: 'SHOPIFY_TEMPORARILY_RATE_LIMITED', error: SHOPIFY_RATE_LIMIT_MESSAGE });
             }
-            console.error(`Agent tool ${item.name} failed:`, redactError(error));
+            console.error('Agent stage outcome:',stageOutcome({id,stage:`tool:${item.name}`,startedAt:requestStarted,outcome:'failed',error}));
+            failedTools.push(item.name);
 
             result = {
               success: false,
@@ -8428,16 +8441,27 @@ Important rules:
             output: JSON.stringify(result)
           });
           inlineChart ||= buildOracleInlineChart(item.name, result);
+          if (result?.success !== false && !result?.error) successfulTools.push(item.name);
         }
 
-        response = await openai.responses.create({
-          model: 'gpt-5.6',
-          previous_response_id: response.id,
-          input: outputs,
-          tools
-        }, { timeout: Math.max(1, deadlineAt - Date.now()) });
+        stage='response_generation';
+        const synthesisStarted=Date.now();
+        try {
+          response = await openai.responses.create({
+            model: 'gpt-5.6',
+            previous_response_id: response.id,
+            input: outputs,
+            tools
+          }, { timeout: Math.max(1, deadlineAt - Date.now()) });
+          console.info('Agent stage outcome:',stageOutcome({id,stage,startedAt:synthesisStarted,outcome:'success',extra:{round:toolRounds}}));
+        } catch(error) {
+          console.error('Agent stage outcome:',stageOutcome({id,stage,startedAt:synthesisStarted,outcome:'failed',error,extra:{round:toolRounds}}));
+          if(successfulTools.length||failedTools.length) return res.status(206).json({success:true,partial:true,answer:partialAnswer(message,successfulTools,failedTools),tools_used:[...toolsUsed],inline_chart:inlineChart,request_id:id});
+          throw error;
+        }
       }
 
+      console.info('Agent stage outcome:',stageOutcome({id,stage:'agent_response',startedAt:requestStarted,outcome:'success',extra:{tool_count:toolsUsed.size,tool_rounds:toolRounds}}));
       res.json({
         success: true,
         answer: response.output_text,
@@ -8445,11 +8469,13 @@ Important rules:
         inline_chart: inlineChart
       });
     } catch (error) {
-      console.error('Agent error:', redactError(error));
+      console.error('Agent stage outcome:',stageOutcome({id,stage,startedAt:requestStarted,outcome:'failed',error}));
 
       res.status(500).json({
         success: false,
-        error: 'I could not complete the governed BigQuery analysis within this request’s deadline and query budget. No sales figures were returned; retry the same date range, or narrow it if the problem persists.'
+        code:'ORACLE_AGENT_TERMINAL_FAILURE',
+        error: terminalMessage(stage),
+        request_id:id
       });
     }
     });
@@ -8471,7 +8497,8 @@ if (process.env.ORACLE_UI_PASSWORD || process.env.ORACLE_UI_SESSION_SECRET) {
     env: process.env,
     generateProposals: createProposalGenerator({ openai, model: process.env.ORACLE_PROPOSAL_MODEL || 'gpt-5.6' }),
     chat: async (message, conversation = {}) => {
-      const deadlineAt = Date.now() + 90_000;
+      // Leave headroom for the UI route to serialize a bounded terminal response.
+      const deadlineAt = Date.now() + 75_000;
       const recentEvidence = conversation.recentEvidence
         ? `Recent governed Oracle evidence (reuse when relevant; disclose this as-of time and do not treat the prior interpretation as new raw data): ${JSON.stringify(conversation.recentEvidence)}\n\n`
         : '';
@@ -8480,9 +8507,10 @@ if (process.env.ORACLE_UI_PASSWORD || process.env.ORACLE_UI_SESSION_SECRET) {
         headers: {
           authorization: `Bearer ${SYNC_SECRET}`,
           'content-type': 'application/json'
+          ,'x-request-id': conversation.requestId
         },
-        body: JSON.stringify({ message: `${recentEvidence}${conversation.analysisContext ? `Governed session-local analysis context (retain unless this user message explicitly changes it): ${JSON.stringify(conversation.analysisContext)}\n\nCurrent user message: ${message}\n\nUse only relevant context fields for tool calls. State the resolved scope in the answer, including cohort years, exact order sequence, observation end, exclusions, classification coverage and unclassified products.` : message}`, analysis_context:conversation.analysisContext||null, deadline_at:deadlineAt }),
-        signal: AbortSignal.timeout(90_000)
+        body: JSON.stringify({ message: `${recentEvidence}${conversation.analysisContext ? `Governed session-local analysis context (retain unless this user message explicitly changes it): ${JSON.stringify(conversation.analysisContext)}\n\nCurrent user message: ${message}\n\nUse only relevant context fields for tool calls. State the resolved scope in the answer, including cohort years, exact order sequence, observation end, exclusions, classification coverage and unclassified products.` : message}`, analysis_context:conversation.analysisContext||null, deadline_at:deadlineAt,request_id:conversation.requestId }),
+        signal: AbortSignal.timeout(80_000)
       });
       const payload = await response.json();
       if (response.status === 429 && payload.code === 'SHOPIFY_TEMPORARILY_RATE_LIMITED') return { answer: SHOPIFY_RATE_LIMIT_MESSAGE, tools: [] };
