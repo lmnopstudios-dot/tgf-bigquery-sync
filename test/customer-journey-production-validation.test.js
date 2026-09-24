@@ -26,7 +26,7 @@ test('acceptance uses normalized Shopify coverage rather than another source row
     switch(options.labels.operation){
       case 'classification_table': return [[{table_count:1}]];
       case 'classification': return [[{source:'woo_ww',collaboration_products:0},{source:'shopify',collaboration_products:21}]];
-      case 'analyze_customer_journey': return [[{product:'Normal Ring',cohort_customers:2,returning_customers:1,repeat_rate_percentage:50}]];
+      case 'analyze_customer_journey': return [[{product:'Normal Ring',cohort_customers:2,cohort_returning_customers:1,product_returning_customers:1,repeat_rate_percentage:50,returning_cohort_penetration_percentage:100}]];
       default:return [[]];
     }
   }};
