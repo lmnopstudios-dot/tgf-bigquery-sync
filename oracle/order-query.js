@@ -460,7 +460,8 @@ export const ORDER_TOOL_DEFINITIONS = [
     parameters: {
       type: 'object', additionalProperties: false,
       properties: {
-        start_date: { type: ['string', 'null'] }, end_date: { type: ['string', 'null'] },
+        start_date: { type: ['string', 'null'], description: 'Inclusive lower bound. For “after <date>”, use the following calendar day.' },
+        end_date: { type: ['string', 'null'], description: 'Inclusive upper bound, or null when the user supplied no upper bound. Never cap an unqualified “after <date>” at month- or year-end.' },
         source_platform: { type: ['string', 'null'], enum: ['woo', 'shopify', null] },
         source_store: { type: ['string', 'null'], enum: ['ww', 'usd', 'shopify', null] },
         channel: { type: ['string', 'null'], enum: ['online', 'pos', null] },

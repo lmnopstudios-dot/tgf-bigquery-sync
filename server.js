@@ -11,6 +11,7 @@ import { createOrderQueryService, executeOrderToolCall } from './oracle/order-qu
 import { createCustomerQueryService, executeCustomerToolCall } from './oracle/customer-query.js';
 import { createCustomerJourneyService, executeCustomerJourneyToolCall } from './oracle/customer-journey.js';
 import { createOracleToolDefinitions } from './oracle/tool-registry.js';
+import { applyOrderDateScope } from './oracle/order-date-scope.js';
 import { assertOracleToolSchemas } from './oracle/tool-schema-validator.js';
 import { createKnowledgeService, executeKnowledgeToolCall } from './oracle/knowledge-bigquery.js';
 import { createOracleUiRouter } from './oracle/ui-router.js';
@@ -8148,6 +8149,7 @@ Important rules:
 - "Today" means today's date; "yesterday" means yesterday's date.
 - "Last month" means the complete previous calendar month; "last year" means the complete previous calendar year.
 - For a named complete past year such as 2025, use January 1 through December 31 of that year.
+- An unqualified “after <date>” is an exclusive lower bound with no user-specified upper bound: set start_date to the following calendar day and end_date to null. Never cap it at the end of that date's month or year. Preserve an upper bound only when the user explicitly supplies one (for example “after 20 September 2025 and before 1 October 2025”). This differs from “in September 2025”, which is the complete named month.
 - Only ask the user to clarify dates when the requested period is genuinely ambiguous. Do not ask for an as-of date merely because a historical Shopify tool requires explicit start_date and end_date; derive those arguments from the user's natural-language period.
 - When reporting results, state the actual resolved date range used. When today's date creates a partial month, quarter or year, clearly identify it as a partial or year-to-date period where relevant.
 - Never add GBP, USD and JPY together.
@@ -8272,7 +8274,8 @@ Important rules:
           let result;
 
           try {
-            const args = JSON.parse(item.arguments || '{}');
+            const parsedArgs = JSON.parse(item.arguments || '{}');
+            const args = applyOrderDateScope(message, item.name, parsedArgs);
 
             const orderCall = await executeOrderToolCall(
               orderQueryService,
