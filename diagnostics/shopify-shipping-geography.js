@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/** Read-only, aggregate-only and PII-free production acceptance diagnostic. */
+/** Read-only and PII-free production acceptance diagnostic. */
 import { BigQuery } from '@google-cloud/bigquery';
 import { MATRIXIFY_APP_ID, TABLE } from '../shopify/order-geography.js';
 
@@ -42,6 +42,19 @@ export function diagnosticQueries(project) {
     coverage: `WITH ${eu}, base AS (SELECT DATE_TRUNC(DATE(o.created_at),MONTH) month,IF(o.retail_location_id IS NULL,'Online','POS') channel,g.geography_status,g.shipping_country_code,DATE(o.created_at) order_date FROM ${o} o LEFT JOIN ${g} g USING(order_id) WHERE o.source_app_id IS NULL OR o.source_app_id!=@matrixify) SELECT month,channel,COUNT(*) orders,COUNTIF(geography_status='valid') valid_direct_country,COUNTIF(geography_status='missing_address') missing_address,COUNTIF(geography_status='missing_code') missing_code,COUNTIF(geography_status='invalid_code') invalid_code,COUNTIF(order_date>DATE '2025-09-20' AND geography_status='valid' AND EXISTS(SELECT 1 FROM EU WHERE code=shipping_country_code AND order_date>=joined AND (left_on IS NULL OR order_date<left_on))) eligible_eu_samples,COUNTIF(order_date>DATE '2025-09-20' AND geography_status='valid' AND NOT EXISTS(SELECT 1 FROM EU WHERE code=shipping_country_code AND order_date>=joined AND (left_on IS NULL OR order_date<left_on))) eligible_non_eu_samples FROM base GROUP BY month,channel ORDER BY month,channel`,
     integrity: `SELECT COUNT(*) geography_rows,COUNT(DISTINCT g.order_id) distinct_geography_orders,COUNTIF(o.order_id IS NULL) orphan_rows,COUNTIF(o.source_app_id=@matrixify) matrixify_rows,MAX(g.synced_at) latest_sync,MAX(g.order_updated_at) latest_order_update FROM ${g} g LEFT JOIN ${o} o USING(order_id)`,
     parent_sales: `SELECT COUNT(*) joined_rows,COUNT(DISTINCT o.order_id) distinct_orders,COUNT(DISTINCT f.order_id) financial_orders,SUM(f.original_total_presentment) joined_sales,(SELECT SUM(original_total_presentment) FROM ${f} f2 JOIN ${o} o2 USING(order_id) WHERE o2.source_app_id IS NULL OR o2.source_app_id!=@matrixify) expected_sales FROM ${o} o JOIN ${g} g USING(order_id) LEFT JOIN ${f} f USING(order_id) WHERE o.source_app_id IS NULL OR o.source_app_id!=@matrixify`
+    ,example_query: `WITH ${eu}, candidates AS (
+      SELECT o.order_id,o.order_name,DATE(o.created_at) order_date,
+        IF(o.retail_location_id IS NULL,'online','pos') channel,
+        g.shipping_country_name,g.shipping_country_code,
+        IF(EXISTS(SELECT 1 FROM EU WHERE code=g.shipping_country_code AND DATE(o.created_at)>=joined AND (left_on IS NULL OR DATE(o.created_at)<left_on)),'eu','non_eu') eu_status,
+        f.shop_currency currency,f.original_total_shop source_order_total,
+        f.original_discounts_shop source_discount_total,COALESCE(f.total_refunded_shop,0) source_refund_total
+      FROM ${o} o JOIN ${g} g USING(order_id) LEFT JOIN ${f} f USING(order_id)
+      WHERE DATE(o.created_at)>DATE '2025-09-20' AND g.geography_status='valid'
+        AND g.shipping_country_code IS NOT NULL
+        AND (o.source_app_id IS NULL OR o.source_app_id!=@matrixify)
+      QUALIFY ROW_NUMBER() OVER (PARTITION BY IF(EXISTS(SELECT 1 FROM EU WHERE code=g.shipping_country_code AND DATE(o.created_at)>=joined AND (left_on IS NULL OR DATE(o.created_at)<left_on)),'eu','non_eu') ORDER BY o.created_at DESC,o.order_id)=1
+    ) SELECT * FROM candidates ORDER BY eu_status`
   };
 }
 
@@ -95,19 +108,20 @@ export async function diagnose({ bigquery, project }) {
       valid: true,
       phase: 'pre_backfill',
       destination_present: false,
-      contract: { read_only:true, aggregate_only:true, pii_free:true, eu_membership:'date-aware diagnostic rule; not persisted on orders' },
+      contract: { read_only:true, pii_free:true, example_query:'not yet measurable', eu_membership:'date-aware diagnostic rule; not persisted on orders' },
       evidence
     };
   }
 
-  for (const name of ['orphan_analysis', 'coverage', 'integrity', 'parent_sales']) {
+  for (const name of ['orphan_analysis', 'coverage', 'integrity', 'parent_sales', 'example_query']) {
     evidence[name] = await runStage(bigquery, name, queries[name]);
   }
   evidence.orphan_assessment = assessOrphans(evidence.orphan_analysis);
   const integrity = evidence.integrity[0] || {}, sales = evidence.parent_sales[0] || {};
+  const exampleStatuses = new Set(evidence.example_query.map(row => row.eu_status));
   const valid = Number(integrity.geography_rows) === Number(integrity.distinct_geography_orders) && Number(integrity.orphan_rows) === 0 &&
     Number(integrity.matrixify_rows) === 0 && Number(sales.joined_rows) === Number(sales.distinct_orders) && Number(sales.joined_sales) === Number(sales.expected_sales);
-  return { valid, phase: 'post_backfill', destination_present: true, contract: { read_only:true, aggregate_only:true, pii_free:true, eu_membership:'date-aware diagnostic rule; not persisted on orders' }, evidence };
+  return { valid: valid && exampleStatuses.has('eu') && exampleStatuses.has('non_eu'), phase: 'post_backfill', destination_present: true, contract: { read_only:true, pii_free:true, example_query:'one bounded order per EU status; authorized order reference and source-native finance fields only', eu_membership:'date-aware diagnostic rule; not persisted on orders' }, evidence };
 }
 
 async function main() { const project=process.env.GOOGLE_PROJECT_ID||'gf-full-data'; const credentials=JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON||'null'); if(!credentials) throw new Error('Missing GOOGLE_SERVICE_ACCOUNT_JSON'); const result=await diagnose({bigquery:new BigQuery({projectId:project,credentials}),project}); console.log(JSON.stringify(result,null,2)); if(!result.valid) process.exitCode=1; }

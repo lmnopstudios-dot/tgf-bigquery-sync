@@ -7,9 +7,10 @@ const DATE = /^\d{4}-\d{2}-\d{2}$/;
 const SOURCES = ['woo', 'shopify'];
 const STORES = ['ww', 'usd', 'shopify'];
 const CHANNELS = ['online', 'pos'];
+const EU_STATUSES = ['eu', 'non_eu'];
 const SEARCH_FILTER_FIELDS = [
   'start_date', 'end_date', 'source_platform', 'source_store', 'channel', 'order_number', 'source_order_id',
-  'status', 'currency', 'minimum_order_value', 'maximum_order_value', 'shipping_country',
+  'status', 'currency', 'minimum_order_value', 'maximum_order_value', 'shipping_country', 'eu_status',
   'product_id', 'product_title', 'sku', 'location', 'refund_status', 'customer_id'
 ];
 
@@ -63,6 +64,7 @@ export function validateSearchFilters(input = {}) {
     start_date: null, end_date: null, source_platform: null, source_store: null, channel: null,
     order_number: null, source_order_id: null, status: null, currency: null,
     minimum_order_value: null, maximum_order_value: null, shipping_country: null,
+    eu_status: null,
     product_id: null, product_title: null, sku: null, location: null,
     refund_status: null, customer_id: null, limit: ORDER_SEARCH_DEFAULT_LIMIT,
   };
@@ -93,6 +95,9 @@ export function validateSearchFilters(input = {}) {
   }
   if (filters.shipping_country !== null && !/^[A-Za-z]{2}$/.test(filters.shipping_country)) {
     throw new Error('shipping_country must be a two-letter country code');
+  }
+  if (filters.eu_status !== null && !EU_STATUSES.includes(filters.eu_status)) {
+    throw new Error('eu_status must be null, eu, or non_eu');
   }
   if (![null, 'any', 'refunded', 'none', 'partial', 'full'].includes(filters.refund_status)) {
     throw new Error('refund_status must be null, any, refunded, none, partial, or full');
@@ -147,6 +152,7 @@ function searchSql(project, filters) {
     filters.minimum_order_value !== null && 'source_order_total >= @minimum_order_value',
     filters.maximum_order_value !== null && 'source_order_total <= @maximum_order_value',
     filters.shipping_country && 'shipping_country = UPPER(@shipping_country)',
+    filters.eu_status && 'source_platform = \'shopify\' AND shipping_geography_status = \'valid\' AND eu_status = @eu_status',
     filters.location && 'LOWER(COALESCE(location, \'\')) = LOWER(@location)',
     filters.refund_status === 'refunded' && 'source_refund_total > 0',
     filters.refund_status === 'none' && 'source_refund_total = 0',
@@ -163,7 +169,26 @@ function searchSql(project, filters) {
     )`
   ].filter(Boolean);
   return `
-    WITH orders AS (
+    WITH eu_membership AS (
+      SELECT code, joined, left_on FROM UNNEST([
+        STRUCT('AT' AS code, DATE '1995-01-01' AS joined, CAST(NULL AS DATE) AS left_on),
+        ('BE',DATE '1958-01-01',NULL),('BG',DATE '2007-01-01',NULL),('HR',DATE '2013-07-01',NULL),
+        ('CY',DATE '2004-05-01',NULL),('CZ',DATE '2004-05-01',NULL),('DK',DATE '1973-01-01',NULL),
+        ('EE',DATE '2004-05-01',NULL),('FI',DATE '1995-01-01',NULL),('FR',DATE '1958-01-01',NULL),
+        ('DE',DATE '1958-01-01',NULL),('GR',DATE '1981-01-01',NULL),('HU',DATE '2004-05-01',NULL),
+        ('IE',DATE '1973-01-01',NULL),('IT',DATE '1958-01-01',NULL),('LV',DATE '2004-05-01',NULL),
+        ('LT',DATE '2004-05-01',NULL),('LU',DATE '1958-01-01',NULL),('MT',DATE '2004-05-01',NULL),
+        ('NL',DATE '1958-01-01',NULL),('PL',DATE '2004-05-01',NULL),('PT',DATE '1986-01-01',NULL),
+        ('RO',DATE '2007-01-01',NULL),('SK',DATE '2004-05-01',NULL),('SI',DATE '2004-05-01',NULL),
+        ('ES',DATE '1986-01-01',NULL),('SE',DATE '1995-01-01',NULL),
+        ('GB',DATE '1973-01-01',DATE '2020-02-01')
+      ])
+    ), shopify_geography AS (
+      SELECT order_id, shipping_country_code, shipping_country_name, geography_status,
+        geography_provenance
+      FROM \`${project}.shopify_data.order_shipping_geography\`
+      QUALIFY ROW_NUMBER() OVER (PARTITION BY order_id ORDER BY synced_at DESC) = 1
+    ), orders AS (
       SELECT 'woo' source_platform, 'ww' source_store, 'metorik_uk.orders' source_dataset,
         CAST(order_id AS STRING) source_order_id, order_number source_order_number,
         order_name source_order_name, DATE(order_created_at) order_date, status,
@@ -172,7 +197,9 @@ function searchSql(project, filters) {
         ABS(COALESCE(total_refunds, 0)) source_refund_total,
         COALESCE(payment_method_title, payment_method) payment_method,
         shipping_method_title shipping_method,
-        g.shipping_country_iso2 shipping_country, g.geography_provenance shipping_country_provenance,
+        g.shipping_country_iso2 shipping_country, CAST(NULL AS STRING) shipping_country_name,
+        IF(g.geography_status = 'observed', 'valid', 'missing') shipping_geography_status,
+        g.geography_provenance shipping_country_provenance, CAST(NULL AS STRING) eu_status,
         CAST(customer_id AS STRING) customer_id, FALSE is_migrated_order,
         CAST(NULL AS STRING) migration_source
       FROM \`${project}.metorik_uk.orders\` o
@@ -183,7 +210,8 @@ function searchSql(project, filters) {
         o.order_name, DATE(o.order_created_at), o.status, 'online', CAST(NULL AS STRING), o.currency,
         o.total, o.total_discount, ABS(COALESCE(o.total_refunds, 0)),
         COALESCE(o.payment_method_title, o.payment_method), o.shipping_method_title,
-        g.shipping_country_iso2, g.geography_provenance, CAST(o.customer_id AS STRING), FALSE, CAST(NULL AS STRING)
+        g.shipping_country_iso2, CAST(NULL AS STRING), IF(g.geography_status = 'observed', 'valid', 'missing'),
+        g.geography_provenance, CAST(NULL AS STRING), CAST(o.customer_id AS STRING), FALSE, CAST(NULL AS STRING)
       FROM \`${project}.metorik_us.orders\` o
       LEFT JOIN \`${project}.commerce.order_geography\` g
         ON g.source_store = 'usd' AND g.source_order_id = CAST(o.order_id AS STRING)
@@ -194,11 +222,18 @@ function searchSql(project, filters) {
         f.shop_currency, f.original_total_shop, f.original_discounts_shop,
         COALESCE(f.total_refunded_shop, 0),
         JSON_VALUE(f.payment_gateway_names_json, '$[0]'), CAST(NULL AS STRING),
-        CAST(NULL AS STRING), CAST(NULL AS STRING),
+        IF(g.geography_status = 'valid', g.shipping_country_code, NULL),
+        IF(g.geography_status = 'valid', g.shipping_country_name, NULL),
+        COALESCE(g.geography_status, 'missing_geography_row'), g.geography_provenance,
+        CASE WHEN g.geography_status != 'valid' OR g.shipping_country_code IS NULL THEN 'unknown'
+          WHEN EXISTS (SELECT 1 FROM eu_membership eu WHERE eu.code = g.shipping_country_code
+            AND DATE(l.created_at) >= eu.joined AND (eu.left_on IS NULL OR DATE(l.created_at) < eu.left_on)) THEN 'eu'
+          ELSE 'non_eu' END,
         c.customer_id, l.source_app_id = @matrixify_app_id, IF(l.source_app_id = @matrixify_app_id, 'Matrixify/WooCommerce', NULL)
       FROM \`${project}.shopify_data.order_locations\` l
       LEFT JOIN \`${project}.shopify_data.order_financials\` f USING (order_id)
       LEFT JOIN \`${project}.shopify_data.order_customers\` c USING (order_id)
+      LEFT JOIN shopify_geography g USING (order_id)
       WHERE (l.source_app_id IS NULL OR l.source_app_id != @matrixify_app_id)
     ), line_items AS (
       SELECT 'woo' source_platform, 'ww' source_store, CAST(order_id AS STRING) source_order_id,
@@ -214,7 +249,8 @@ function searchSql(project, filters) {
       SELECT source_platform, source_store, source_dataset, source_order_id, source_order_number,
         source_order_name, order_date, status, channel, location, currency,
         source_order_total, source_discount_total, source_refund_total,
-        payment_method, shipping_method, shipping_country, shipping_country_provenance,
+        payment_method, shipping_method, shipping_country, shipping_country_name,
+        shipping_geography_status, shipping_country_provenance, eu_status,
         is_migrated_order, migration_source
       FROM orders WHERE ${clauses.length ? clauses.join('\n AND ') : 'TRUE'}
     )
@@ -222,7 +258,8 @@ function searchSql(project, filters) {
       source_order_name, order_date, status, channel, location, currency,
       source_order_total, source_discount_total, source_refund_total,
       payment_method, shipping_method,
-      shipping_country, shipping_country_provenance, is_migrated_order,
+      shipping_country, shipping_country_name, shipping_geography_status,
+      shipping_country_provenance, eu_status, is_migrated_order,
       migration_source, COUNT(*) OVER() matching_order_count,
       COUNTIF(source_platform = 'woo') OVER() woo_result_count,
       COUNTIF(source_platform = 'shopify') OVER() shopify_result_count
@@ -286,8 +323,8 @@ export function createOrderQueryService({ bigquery, project }) {
         prefixed: normalizedNumber.prefixed
       } : null,
       monetary_semantics: 'Filters and returned values use source_order_total in source currency; canonical finance remains authoritative for business reporting.',
-      geography_warning: filters.shipping_country
-        ? 'Country matches use directly observed shipping-country evidence only. Historical Woo shipping geography is incomplete, so this is not complete country coverage.'
+      geography_warning: filters.shipping_country || filters.eu_status
+        ? 'Country and EU matches use valid directly observed shipping-country codes only. Missing or invalid geography remains unknown and is never inferred. Historical Woo shipping geography is incomplete.'
         : null,
       migration_semantics: 'Matrixify-imported Woo orders are excluded from Shopify results to prevent duplicate sales.'
     };
@@ -419,7 +456,7 @@ export async function executeOrderToolCall(service, name, args, onDiagnostic = (
 export const ORDER_TOOL_DEFINITIONS = [
   {
     type: 'function', name: 'search_orders', strict: true,
-    description: 'Search bounded Woo and Shopify order evidence. Uses source-native money, direct-only country evidence, and excludes Matrixify imports from Shopify.',
+    description: 'Search bounded Woo and Shopify order evidence. Use source_platform=shopify plus eu_status=eu or non_eu for Shopify shipping-geography examples; results classify the valid direct shipping-country code at the order date (UK is non-EU after Brexit). Uses source-native money, never infers geography, and excludes Matrixify imports.',
     parameters: {
       type: 'object', additionalProperties: false,
       properties: {
@@ -431,14 +468,16 @@ export const ORDER_TOOL_DEFINITIONS = [
         source_order_id: { type: ['string', 'null'], description: 'Internal source identity only (for example Woo Metorik order_id 169587), not the human-facing order number.' },
         status: { type: ['string', 'null'] }, currency: { type: ['string', 'null'] },
         minimum_order_value: { type: ['number', 'null'], minimum: 0 }, maximum_order_value: { type: ['number', 'null'], minimum: 0 },
-        shipping_country: { type: ['string', 'null'] }, product_id: { type: ['string', 'null'] },
+        shipping_country: { type: ['string', 'null'], description: 'Exact ISO-2 direct shipping-country code.' },
+        eu_status: { type: ['string', 'null'], enum: ['eu', 'non_eu', null], description: 'Shopify-only direct shipping-country membership at the order date. Use separate bounded calls for one EU and one non-EU example.' },
+        product_id: { type: ['string', 'null'] },
         product_title: { type: ['string', 'null'] }, sku: { type: ['string', 'null'] },
         location: { type: ['string', 'null'] },
         refund_status: { type: ['string', 'null'], enum: ['any', 'refunded', 'none', 'partial', 'full', null], description: 'Refund filter. Use any or null when no refund constraint was requested; refunded means any positive refund, while any adds no SQL predicate.' },
         customer_id: { type: ['string', 'null'] }, limit: { type: 'integer', minimum: 1, maximum: 100 }
       },
       required: ['start_date', 'end_date', 'source_platform', 'source_store', 'channel', 'order_number', 'source_order_id',
-        'status', 'currency', 'minimum_order_value', 'maximum_order_value', 'shipping_country', 'product_id',
+        'status', 'currency', 'minimum_order_value', 'maximum_order_value', 'shipping_country', 'eu_status', 'product_id',
         'product_title', 'sku', 'location', 'refund_status', 'customer_id', 'limit']
     }
   },

@@ -1,5 +1,26 @@
 # Governed Order Query Tools
 
+## Shopify direct shipping geography
+
+`search_orders` joins `shopify_data.order_shipping_geography` to the stable Shopify
+`order_id` and defensively selects one geography row per order. For an EU example,
+call it with `source_platform: "shopify"`, `eu_status: "eu"`, the requested date
+bounds, and `limit: 1`; repeat with `eu_status: "non_eu"`. Membership is evaluated
+from the validated direct shipping ISO-2 code at the order date, so the UK is
+non-EU during the Shopify period. Missing and invalid evidence is returned as an
+explicit status for unfiltered lookups but cannot satisfy a country or EU filter.
+Billing address, currency, market, IP, and POS location are never substitutes.
+
+The first read-only Render validation command is:
+
+```sh
+npm run diagnose:shopify-shipping-geography
+```
+
+It checks exact-ID join coverage, one-row-per-order cardinality, Matrixify leakage,
+sales preservation, and executes a bounded one-EU/one-non-EU example without
+customer or address PII.
+
 ## Governed Metorik shipping geography
 
 Historical Woo shipping geography is loaded from one-row-per-order Metorik CSV

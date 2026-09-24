@@ -34,7 +34,7 @@ test('persistence backfill and updates merge once by stable order ID',async()=>{
   assert.match(queries.at(-1),/TRUNCATE TABLE/); assert.match(queries.at(-1),/MERGE/); assert.match(queries.at(-1),/T\.order_id=S\.order_id/); assert.equal(deleted.length,1);
 });
 
-test('aggregate diagnostic is read-only, date-aware, channelled and validates sales/cardinality',()=>{
+test('production diagnostic is read-only, PII-free, date-aware and validates example sales/cardinality',()=>{
   const queries=diagnosticQueries('p'); const sql=Object.values(queries).join('\n');
   assert.doesNotMatch(sql,/\b(?:INSERT|UPDATE|DELETE|MERGE|CREATE|DROP|ALTER|TRUNCATE)\b/i);
   assert.match(queries.coverage,/DATE '2020-02-01'/); assert.match(queries.coverage,/eligible_eu_samples/); assert.match(queries.coverage,/missing_address/); assert.match(queries.coverage,/invalid_code/); assert.match(queries.coverage,/retail_location_id IS NULL/);
@@ -44,12 +44,17 @@ test('aggregate diagnostic is read-only, date-aware, channelled and validates sa
   assert.match(queries.source_scope,/matrixify_excluded_orders/);
   assert.match(queries.orphan_analysis,/GROUP BY order_date,update_date,financial_state/);
   assert.match(queries.orphan_analysis,/possible_id_join_defect_rows/);
+  assert.match(queries.example_query,/DATE '2025-09-20'/);
+  assert.match(queries.example_query,/geography_status='valid'/);
+  assert.match(queries.example_query,/ROW_NUMBER\(\) OVER \(PARTITION BY/);
+  assert.match(queries.example_query,/original_total_shop/);
+  assert.doesNotMatch(queries.example_query,/customer|email|phone|street|postcode/);
   assert.doesNotMatch(queries.orphan_analysis,/order_name|customer_name|shipping_country/);
 });
 
 test('diagnostic emits valid BigQuery named STRUCT fields in every generated query',()=>{
   const queries=diagnosticQueries('p');
-  assert.deepEqual(Object.keys(queries),['destination_metadata','direct_field_evidence','source_scope','orphan_analysis','coverage','integrity','parent_sales']);
+  assert.deepEqual(Object.keys(queries),['destination_metadata','direct_field_evidence','source_scope','orphan_analysis','coverage','integrity','parent_sales','example_query']);
   for (const [stage,sql] of Object.entries(queries)) {
     assert.doesNotMatch(sql,/STRUCT\([^)]*(?:'[^']*'|DATE '[^']*'|\))\s+(?:code|joined|left_on)\b/,
       `${stage} contains a STRUCT field alias without AS`);
@@ -102,11 +107,12 @@ test('present destination runs and validates the full coverage and integrity pat
     if(options.query.includes('possible_id_join_defect_rows')) return [[]];
     if(options.query.includes('geography_rows')) return [[{geography_rows:9,distinct_geography_orders:9,orphan_rows:0,matrixify_rows:0}]];
     if(options.query.includes('joined_rows')) return [[{joined_rows:9,distinct_orders:9,joined_sales:100,expected_sales:100}]];
+    if(options.query.includes('SELECT * FROM candidates')) return [[{order_name:'#1',eu_status:'eu'},{order_name:'#2',eu_status:'non_eu'}]];
     return [[{month:'2026-01-01',channel:'Online',orders:9,valid_direct_country:8}]];
   }};
   const report=await diagnose({bigquery,project:'p'});
   assert.equal(report.valid,true); assert.equal(report.phase,'post_backfill'); assert.equal(report.destination_present,true);
-  assert.ok(Array.isArray(report.evidence.coverage)); assert.equal(report.evidence.orphan_assessment.conclusion,'no_orphans'); assert.equal(calls.length,7);
+  assert.ok(Array.isArray(report.evidence.coverage)); assert.equal(report.evidence.example_query.length,2); assert.equal(report.evidence.orphan_assessment.conclusion,'no_orphans'); assert.equal(calls.length,8);
 });
 
 test('post-metadata stage errors remain bounded and name the safe stage',async()=>{
