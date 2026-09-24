@@ -10,7 +10,7 @@ import { governanceDiagnostic, governancePublicError, isGovernanceBusinessError 
 const json = express.json({ limit: '48kb', type: 'application/json' });
 const allowedOrigins = request => new Set([`${request.protocol}://${request.get('host')}`, process.env.ORACLE_UI_ORIGIN].filter(Boolean));
 
-export function createOracleUiRouter({ knowledgeService, bigquery, project, chat, generateProposals, reportService, productMappingService, collectionClassificationService, env = process.env }) {
+export function createOracleUiRouter({ knowledgeService, bigquery, project, chat, generateProposals, reportService, productMappingService, collectionClassificationService, env = process.env, now = () => Date.now() }) {
   const router = express.Router();
   const password = env.ORACLE_UI_PASSWORD;
   const sessionSecret = env.ORACLE_UI_SESSION_SECRET;
@@ -68,7 +68,7 @@ export function createOracleUiRouter({ knowledgeService, bigquery, project, chat
     try {
       if (typeof req.body?.message !== 'string' || !req.body.message.trim() || req.body.message.length > 12000) return res.status(400).json({ success: false, error: 'message must be a non-empty string of at most 12000 characters' });
       const previous=sessionContext(req);
-      const result=transitionAnalysisContext(previous,req.body.message,{reportContext:req.body.report_context||null});
+      const result=transitionAnalysisContext(previous,req.body.message,{now:now(),reportContext:req.body.report_context||null});
       if(result.transition.applies_to_message) saveSessionContext(req,result.context);
       console.info('Oracle analysis context transition:',{continuation:result.transition.continuation,changed_fields:result.transition.set,cleared_fields:result.transition.clear,retained_field_names:result.transition.retain,missing_required_field_names:result.transition.missing_required_fields,ready_to_execute:result.transition.ready_to_execute});
       const clarification=result.transition.applies_to_message?clarificationFor(result.context):null;

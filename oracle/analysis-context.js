@@ -3,6 +3,7 @@ const FIELDS = new Set([
   'comparison_start_date','comparison_end_date','currencies','channel','channel_breakdown','location',
   'platform','geography','customer_segment','product_ref','filters','sort','limit','report_section',
   'output_preference','partial_period','unresolved_required_fields'
+  ,'tool_route','request_kind'
   ,'journey_intent','entry_product_classification','first_order_semantic','cohort_entry_start','cohort_entry_end','observation_end','minimum_order_sequence','maximum_order_sequence','within_days','journey_group_by'
 ]);
 const GRAINS = new Set(['day','week','month','quarter','year']);
@@ -11,7 +12,7 @@ const METRICS = new Set(['sales','refunds','customers','products','ecommerce_per
 const MONTHS = {jan:1,january:1,feb:2,february:2,mar:3,march:3,apr:4,april:4,may:5,jun:6,june:6,jul:7,july:7,aug:8,august:8,sep:9,sept:9,september:9,oct:10,october:10,nov:11,november:11,dec:12,december:12};
 
 export const ANALYSIS_CONTEXT_FIELDS = Object.freeze([...FIELDS]);
-export function emptyAnalysisContext(){return {analysis_type:null,metrics:[],start_date:null,end_date:null,requested_end_period:null,grain:null,comparison_type:null,comparison_start_date:null,comparison_end_date:null,currencies:[],channel:null,channel_breakdown:false,location:null,platform:null,geography:null,customer_segment:null,product_ref:null,filters:[],sort:null,limit:null,report_section:null,output_preference:null,partial_period:false,unresolved_required_fields:[],journey_intent:null,entry_product_classification:null,first_order_semantic:null,cohort_entry_start:null,cohort_entry_end:null,observation_end:null,minimum_order_sequence:null,maximum_order_sequence:null,within_days:null,journey_group_by:null}}
+export function emptyAnalysisContext(){return {analysis_type:null,metrics:[],start_date:null,end_date:null,requested_end_period:null,grain:null,comparison_type:null,comparison_start_date:null,comparison_end_date:null,currencies:[],channel:null,channel_breakdown:false,location:null,platform:null,geography:null,customer_segment:null,product_ref:null,filters:[],sort:null,limit:null,report_section:null,output_preference:null,partial_period:false,unresolved_required_fields:[],tool_route:null,request_kind:null,journey_intent:null,entry_product_classification:null,first_order_semantic:null,cohort_entry_start:null,cohort_entry_end:null,observation_end:null,minimum_order_sequence:null,maximum_order_sequence:null,within_days:null,journey_group_by:null}}
 
 const iso = value => /^\d{4}-\d{2}-\d{2}$/.test(String(value||'')) ? value : null;
 export function validateAnalysisContext(value={}){
@@ -32,6 +33,10 @@ export function validateAnalysisContext(value={}){
   out.limit=Number.isInteger(value.limit)&&value.limit>0&&value.limit<=100?value.limit:null;
   out.partial_period=Boolean(value.partial_period);
   out.unresolved_required_fields=[...new Set(value.unresolved_required_fields||[])].filter(x=>FIELDS.has(x)).slice(0,8);
+  if(value.tool_route!=null&&value.tool_route!=='get_shopify_online_country_products') throw new Error('invalid tool_route');
+  out.tool_route=value.tool_route??null;
+  if(value.request_kind!=null&&value.request_kind!=='advisory') throw new Error('invalid request_kind');
+  out.request_kind=value.request_kind??null;
   out.journey_intent=typeof value.journey_intent==='string'?value.journey_intent.slice(0,100):null;
   out.entry_product_classification=typeof value.entry_product_classification==='string'&&/^[a-z][a-z0-9_]{0,63}$/.test(value.entry_product_classification)?value.entry_product_classification:null;
   out.first_order_semantic=['first_observed_ever','first_observed_in_period'].includes(value.first_order_semantic)?value.first_order_semantic:null;
@@ -50,6 +55,7 @@ function period(text, now){
   const yearOnly=lower.match(/(?:just |about |from |in |for )?(20\d{2})(?!\s*[-–to]+\s*(?:20)?\d)/);
   if(yearOnly){const y=+yearOnly[1], end=`${y}-12-31`;return {start_date:`${y}-01-01`,end_date:end>todayIso&&y===today.getUTCFullYear()?todayIso:end,requested_end_period:String(y),partial_period:end>todayIso}}
   if(/last year/.test(lower)){const y=today.getUTCFullYear()-1;return {start_date:`${y}-01-01`,end_date:`${y}-12-31`,requested_end_period:String(y),partial_period:false}}
+  if(/\b(?:this year|year to date|ytd)\b/.test(lower)){const y=today.getUTCFullYear();return {start_date:`${y}-01-01`,end_date:todayIso,requested_end_period:String(y),partial_period:true}}
   return null;
 }
 
@@ -62,6 +68,10 @@ export function transitionAnalysisContext(existing, message, {now=Date.now(),rep
   const continuation=!unrelated&&!explicitNew&&(base.metrics.length>0||/\b(refunds?|sales|customers?|products?|ecommerce)\b/i.test(lower));
   if(explicitNew) base=emptyAnalysisContext();
   if(!unrelated){
+    const advisory=/\bany ideas (?:of|on|for) what we can do\b[\s\S]*\buse data where possible\b/i.test(text);
+    if(advisory) set.request_kind='advisory';
+    const countryProducts=/\b(?:top\s+(?:ten|10)\s+)?(?:locations?|countries)\b[\s\S]*\bonline sales\b[\s\S]*\b(?:top\s+(?:ten|10)\s+)?products?\b|\bonline sales\b[\s\S]*\b(?:locations?|countries)\b[\s\S]*\bproducts?\b/i.test(text);
+    if(countryProducts) set.tool_route='get_shopify_online_country_products';
     const journey=/\b(?:first (?:observed )?(?:purchase|order)|bought? (?:after|next)|buy (?:after|next)|second (?:purchase|order)|third (?:purchase|order)|nth order|repeat (?:purchase )?rate|within \d+ days?|downstream|acquisition products?|customers? buy (?:after|next))\b/.test(lower);
     if(journey||base.analysis_type==='customer_journey'&&/^(?:which|what|within|on (?:their )?(?:second|third))\b/.test(lower)){set.metrics=['customer_journey'];set.analysis_type='customer_journey';set.journey_intent='purchase_sequence';if(/collaboration/.test(lower))set.entry_product_classification='collaboration';else if(/\brings?\b/.test(lower))set.entry_product_classification='ring';else if(/\bclothing\b/.test(lower))set.entry_product_classification='clothing';else if(/\bjewellery\b/.test(lower))set.entry_product_classification='jewellery';if(/which collaboration/.test(lower))set.journey_group_by='collaboration_name';else if(/acquisition products?/.test(lower))set.journey_group_by='entry_product';else if(/what|top|products?/.test(lower))set.journey_group_by='downstream_product';const seq=lower.match(/\b(second|third) (?:purchase|order)\b/);if(seq){const n=seq[1]==='second'?2:3;set.minimum_order_sequence=n;set.maximum_order_sequence=n}const days=lower.match(/\bwithin (30|60|90|365) days?\b/);if(days)set.within_days=+days[1]}
     else if(/\brefunds?\b/.test(lower)) set.metrics=['refunds'],set.analysis_type='finance';
@@ -80,10 +90,10 @@ export function transitionAnalysisContext(existing, message, {now=Date.now(),rep
     if(/exclude pos/i.test(lower)) set.filters=[...base.filters.filter(x=>x!=='exclude_pos'),'exclude_pos'];
     if(/include pos|clear (?:the )?filters?/i.test(lower)) clear.push('filters');
     Object.assign(set,period(text,now)||{});
-    if(!base.currencies.length&&!set.currencies&&set.analysis_type==='finance') set.currencies=['GBP'];
+    if(!base.currencies.length&&!set.currencies&&set.analysis_type==='finance'&&(set.tool_route||base.tool_route)!=='get_shopify_online_country_products'&&!advisory) set.currencies=['GBP'];
   }
   const next={...base,...set};if(next.analysis_type==='customer_journey'){next.first_order_semantic=next.first_order_semantic||'first_observed_ever';if(next.start_date){next.cohort_entry_start=next.start_date;next.cohort_entry_end=next.end_date;next.observation_end=next.end_date;}}for(const key of clear) next[key]=emptyAnalysisContext()[key];
-  const missing=[];if(next.metrics.length&&!next.start_date) missing.push('start_date','end_date');
+  const missing=[];if(next.metrics.length&&!next.start_date&&next.request_kind!=='advisory') missing.push('start_date','end_date');
   next.unresolved_required_fields=[...new Set(missing)];
   const ready=next.metrics.length>0&&Boolean(next.start_date&&next.end_date);
   const changed=Object.keys(set).filter(k=>JSON.stringify(base[k])!==JSON.stringify(next[k]));
@@ -96,4 +106,4 @@ export function initializeFromReportContext(existing, report={}){
   return validateAnalysisContext(allowed);
 }
 export function analysisScope(context){const c=validateAnalysisContext(context);if(!c.metrics.length)return null;return [c.metrics.join('/'),c.grain,c.start_date&&`${c.start_date}–${c.end_date}`,c.currencies.join('/'),c.channel_breakdown?'online vs instore':c.channel||'all channels'].filter(Boolean).join(' · ')}
-export function clarificationFor(context){const c=validateAnalysisContext(context);if(c.unresolved_required_fields.includes('start_date'))return `What date range would you like? I’ll use ${c.currencies[0]||'GBP'} unless you specify another currency.`;return null}
+export function clarificationFor(context){const c=validateAnalysisContext(context);if(c.unresolved_required_fields.includes('start_date'))return c.tool_route==='get_shopify_online_country_products'?'What date range would you like? I’ll keep each currency in a separate ranking unless you specify one.':`What date range would you like? I’ll use ${c.currencies[0]||'GBP'} unless you specify another currency.`;return null}
