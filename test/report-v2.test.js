@@ -26,10 +26,11 @@ test('report finance query is parameterized, bounded, currency-separated and par
 });
 
 test('product section uses governed persisted source evidence rather than a placeholder', async () => {
-  const bigquery={query:async()=>[[{product_ref:'title:ring',mapping_method:'exact_unique_normalized_title',mapping_status:'resolved',source_platform:'shopify',units:2}]]};
+  const calls=[];const bigquery={query:async options=>{calls.push(options);return [[{product_ref:'title:ring',mapping_method:'exact_unique_normalized_title',mapping_status:'resolved',source_platform:'shopify',units:2}]]}};
   const service=createEcommerceReportV2({bigquery,project:'test',knowledgeService:{}});
   const products=await service('products',{start_date:'2026-01-01',end_date:'2026-01-02'});
   assert.equal(products.status,'available'); assert.equal(products.rows[0].product_ref,'title:ring'); assert.match(products.limitations.join(' '),/exact unique conservatively-normalized product title/);
+  assert.match(calls[0].query,/product_family_decisions/);assert.match(calls[0].query,/family_members AS/);assert.match(calls[0].query,/GROUP BY shopify_parent_ref/);assert.match(products.limitations.join(' '),/Each source line contributes once/);
 });
 
 test('product identity obeys mapping precedence, collisions, title matches and source fallback',()=>{

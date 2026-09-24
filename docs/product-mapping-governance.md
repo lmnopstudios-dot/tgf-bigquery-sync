@@ -38,13 +38,25 @@ This candidate-specific command is read-only: it loads transaction-derived produ
 
 The smallest safe correction is to revoke or change the single erroneous active governed approval identified on the conflict path. If the path instead identifies a deterministic edge, correct the underlying duplicate SKU/title identity evidence; do not approve the candidate or weaken the one-product-per-namespace invariant. When the output cannot isolate an erroneous edge, leave the candidate unapproved and report the shown path as ambiguous.
 
-The incremental check is also required by the historical product grain. Woo Ready To Ship rings were separate source products by size, whereas Shopify represents sizes as variants beneath one product parent. Approving a second Woo size into a Shopify component that already contains another Woo product still creates a new same-namespace pair and is rejected.
+The incremental check is also required by the historical product grain. Woo Ready To Ship products were separate source products by size or stock item, whereas Shopify represents them as variants beneath one product parent. Approving a second Woo product into a Shopify identity component that already contains another Woo product still creates a new same-namespace pair and is rejected.
 
-### Heart With Love impact and future model
+### Governed Shopify-parent reporting families
 
-The Heart With Love candidate can safely connect **one** historical Woo size-specific product to the current Shopify parent when that component contains no other product from the same Woo store. That approval does not establish identity for the sibling Woo sizes. A later attempt to connect another Woo size to the same Shopify parent is correctly rejected by the current graph because it would place two distinct `woo:ww` (or two distinct `woo:usd`) product IDs in one identity component. Consequently, parent-level historical reporting remains partial: the approved size can roll into the Shopify product, while its sibling Woo sizes remain separate source products. This is a modelling limitation, not evidence that those source product IDs are identical.
+`commerce.product_family_decisions` is a separate append-only decision log. Each membership has a stable decision and membership ID, source and Shopify-parent refs/titles, reviewer, timestamp, provenance, note, and supersession/replacement links. One source product can have only one active Shopify parent; a reviewer must explicitly **Change family** before choosing another parent. Multiple products from the same Woo store may be active members of the same parent. **Revoke family** appends a revocation. No family row is ever passed to `approvedMappingEdges`, deterministic identity, or graph safety.
 
-The smallest safe future model is a separate, governed **product-family** relationship at Shopify-parent grain. It would allow multiple source-qualified Woo products to be members of one reporting family, retain each Woo product and Shopify variant as a distinct identity, record the size/variant evidence for every membership, and make family aggregation explicit in reports. The existing canonical identity graph and its one-product-per-source-namespace invariant should remain unchanged until that relationship, persistence contract, diagnostics, and report semantics are implemented together.
+In **Choose correct product**, the reviewer now has two deliberately different confirmations. **Confirm identity mapping** retains the existing graph-safety path. **Assign to Shopify reporting family** is enabled only when the selected result is a Shopify parent and states that source identity is preserved. A graph rejection never automatically becomes a family assignment.
+
+Report v2 resolves an active family membership to `family:shopify:shopify:<parent-id>` before choosing the display grouping. It also assigns the Shopify parent's own lines to that reporting ref. The query remains at stable source-product/channel/currency grain and retains source product ID, child variant IDs, options embodied by source lines, units, sales, and line count. A unique active membership is joined once to each input line, so memberships regroup rather than duplicate transactions. Unresolved products retain their `source:` rows. Finance, currency, refunds, and the identity graph are unchanged.
+
+On rollout, application startup invokes the additive schema setup and creates `commerce.product_family_decisions`; no backfill or automatic title-based assignment occurs. Existing identity decisions need no migration. A reviewer then assigns `woo:ww:135969` and `woo:ww:62682` independently to the Shopify **Micro Michael Rodent Pendant** parent.
+
+The exact first Render Shell command is read-only and previews both the current identity conflict and the non-identity family resolution (including whether the family table exists):
+
+```sh
+npm run diagnose:product-mapping-candidate -- 82a4a562756f935c97ba559e
+```
+
+After deployment: open **Product Mapping**, find the candidate, choose **Choose correct product**, search Shopify for **Micro Michael Rodent Pendant**, select the parent, and verify that **Confirm identity mapping** and **Assign to Shopify reporting family** are visibly distinct. Choose the family action and confirm its warning. Open **Reporting Families** and verify the active row, source ref `woo:ww:135969`, parent ref/title, reviewer, time, provenance, and note. Repeat for `woo:ww:62682`; both rows must remain active. Check Report v2 Products for one family reporting ref with separate source-product rows and unchanged totals. Finally exercise **Change family** and **Revoke family** on a non-production test membership (or inspect their controls without confirming in production), and rerun both read-only validators.
 
 ## Reporting and validation
 
@@ -65,7 +77,7 @@ The former Report v2 `graph_conflict_count` was not a component conflict count. 
 
 Conflict diagnostics are bounded and contain component ref, duplicated namespace, source refs/titles, decision and relationship IDs, edge methods/provenance, reviewer and timestamps; they contain no customer or order data. Existing conflicts are never repaired automatically. In Mapping Decisions choose **Conflicts**, inspect the complete component and evidence, and only then use **Change mapping** or **Revoke mapping**. After the deliberate action, rerun both production validators and confirm their conflict counts and component IDs agree.
 
-On first deployment run, in order:
+After the candidate preview and UI acceptance, run in order:
 
 1. `npm run validate:product-mapping-production`
 2. `npm run validate:report-v2-production`
