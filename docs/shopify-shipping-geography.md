@@ -10,13 +10,17 @@ The normal `/sync-shopify` full refresh backfills this table alongside its exist
 
 ## Production runbook (Render Shell)
 
-Run this **first**; it is read-only and will establish whether the table exists/has prior coverage after deployment:
+Run this **first** (the exact first Render Shell command); it is read-only and establishes through BigQuery metadata whether the destination exists:
 
 ```sh
 npm run diagnose:shopify-shipping-geography
 ```
 
-The command executes only aggregate `SELECT` checks. To validate the generated SQL without reading table data, copy each named query from `diagnosticQueries()` into the BigQuery editor and use **More > Query settings > Dry run**, or run `bq query --use_legacy_sql=false --dry_run` with the query and a string `matrixify` parameter. The local test suite guards the named `STRUCT` syntax, but it is not a substitute for BigQuery's production parser when local credentials and the `bq` CLI are unavailable.
+The command executes only aggregate or `INFORMATION_SCHEMA` `SELECT` checks and never creates the destination. If the destination is absent, it exits successfully with `phase: "pre_backfill"` and `destination_present: false`. That report includes source order totals, the Matrixify exclusion, Online/POS expected-write counts and any direct shipping-country columns found in persisted schema metadata. Coverage, integrity and parent/sales comparisons are explicitly `not_yet_measurable`; those values are not zero and are not passed checks. If the destination exists, the command retains the full monthly coverage, cardinality, Matrixify-leakage and sales-integrity checks.
+
+Proceed to the backfill only when the first command succeeds, its contract remains `read_only`, `aggregate_only` and `pii_free`, its source scope reconciles (`expected_write_orders = source_shopify_orders - matrixify_excluded_orders` and Online plus POS equals expected writes), and either (a) it reports the expected pre-backfill state (`phase: "pre_backfill"`, `destination_present: false`, and all three destination checks `not_yet_measurable`) or (b) an existing destination's full report is understood and a deliberate replacement backfill is intended. Stop rather than backfill if the diagnostic errors, scope does not reconcile, Matrixify is not separately excluded, or unexpected persisted direct-field evidence needs investigation.
+
+To validate the generated SQL without reading table data, copy each named query from `diagnosticQueries()` into the BigQuery editor and use **More > Query settings > Dry run**, or run `bq query --use_legacy_sql=false --dry_run` with the query and a string `matrixify` parameter. The local test suite guards the named `STRUCT` syntax, but it is not a substitute for BigQuery's production parser when local credentials and the `bq` CLI are unavailable.
 
 Then run the exact historical write (all orders visible to the existing Admin API token, with no date cutoff):
 
