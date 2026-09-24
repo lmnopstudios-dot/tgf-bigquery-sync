@@ -51,7 +51,8 @@ test('production validator is read-only and catches duplicate joins while reconc
 
 test('agent enforces request-wide deadline/budget and remaining failure is actionable',()=>{
   const server=fs.readFileSync(new URL('../server.js',import.meta.url),'utf8');
-  assert.match(server,/Date\.now\(\) >= deadlineAt[\s\S]*request-wide deadline exceeded/);
+  assert.match(server,/new RequestToolBudget\(\{deadlineAt,signal:cancellation\.signal\}\)/);
+  assert.match(server,/toolAdmissionStopped[\s\S]*partialAnswer/);
   assert.match(server,/remainingQueryBytes[\s\S]*request-wide BigQuery budget exceeded/);
-  assert.match(server,/No sales figures were returned; retry the same date range/);
+  assert.match(server,/Date\.now\(\) \+ 72_000/);
 });

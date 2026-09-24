@@ -22,6 +22,7 @@ import { createProductMappingService } from './oracle/product-mapping.js';
 import { createCollectionClassificationService } from './oracle/collection-classification.js';
 import { redactError } from './oracle/ui-security.js';
 import { affinityJustified, partialAnswer, requestId, stageOutcome, terminalMessage } from './oracle/request-observability.js';
+import { RequestToolBudget, boundedToolFailure, toolCallSignature } from './oracle/request-tool-budget.js';
 import {
   AcquisitionValidationError,
   syncShopifyAcquisition
@@ -230,7 +231,8 @@ async function shopifyGraphQL(
       body: JSON.stringify({
         query,
         variables
-      })
+      }),
+      signal: requestBudget.getStore()?.signal
     }
   );
 
@@ -1561,6 +1563,19 @@ const SHOPIFY_INVENTORY_DISCOVERY_VARIANT_PAGE_SIZE = 20;
 const SHOPIFY_INVENTORY_VARIANT_PAGE_SIZE = 50;
 const SHOPIFY_INVENTORY_LEVEL_PAGE_SIZE = 50;
 
+async function mapWithConcurrency(values, concurrency, mapper) {
+  const results = new Array(values.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(concurrency, values.length) }, async () => {
+    while (next < values.length) {
+      const index = next++;
+      results[index] = await mapper(values[index], index);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
 const SHOPIFY_INVENTORY_BY_LOCATION_PRODUCTS_QUERY = `
   query InventoryProductsByLocation(
     $query: String!
@@ -1759,9 +1774,10 @@ async function getShopifyInventoryByLocation({
       pageInfo = page.product.variants.pageInfo;
     }
 
-    const normalizedVariants = [];
-
-    for (const variant of variants) {
+    // Inventory-level lookup was formerly serial at variant grain. A product
+    // with many sizes therefore consumed most of an interactive request. Two
+    // workers retain Shopify cost headroom while removing that waterfall.
+    const normalizedVariants = await mapWithConcurrency(variants, 2, async variant => {
       const levels = await collectInventoryLevels(variant.inventoryItem);
       const activeLevels = levels.filter(level => level.location.isActive);
 
@@ -1769,7 +1785,7 @@ async function getShopifyInventoryByLocation({
         activeLocationNames.add(level.location.name.toLocaleLowerCase());
       }
 
-      normalizedVariants.push({
+      return {
         id: variant.id,
         title: variant.title,
         sku: variant.sku,
@@ -1785,8 +1801,8 @@ async function getShopifyInventoryByLocation({
               quantity => quantity.name === 'available'
             )?.quantity ?? null
           }))
-      });
-    }
+      };
+    });
 
     products.push({
       id: product.id,
@@ -8073,12 +8089,15 @@ app.post(
     const id=requestId(req.get('x-request-id')||req.body?.request_id);
     const requestStarted=Date.now();
     res.setHeader('x-request-id',id);
+    const cancellation = new AbortController();
+    req.once('aborted',()=>cancellation.abort(new Error('Agent request aborted')));
+    res.once('close',()=>{ if(!res.writableEnded) cancellation.abort(new Error('Agent response closed')); });
     const suppliedDeadline = Number(req.body?.deadline_at);
     const deadlineAt = Math.min(
       Number.isFinite(suppliedDeadline) ? suppliedDeadline : Date.now() + 90_000,
-      Date.now() + 90_000
+      Date.now() + 72_000
     );
-    return requestBudget.run({ deadlineAt, requestId:id }, async () => {
+    return requestBudget.run({ deadlineAt, requestId:id, signal:cancellation.signal }, async () => {
     let stage='validation';
     try {
       const message = req.body?.message;
@@ -8101,10 +8120,11 @@ app.post(
       let inlineChart = null;
       const toolSignatures = new Set();
       let toolRounds = 0;
-      let evidenceCalls = 0;
+      const callBudget = new RequestToolBudget({deadlineAt,signal:cancellation.signal});
       let affinityCalls = 0;
       const successfulTools=[];
       const failedTools=[];
+      let toolAdmissionStopped=false;
       stage='initial_model';
       console.info('Agent stage outcome:',stageOutcome({id,stage:'request_received',startedAt:requestStarted,outcome:'success'}));
       let response = await openai.responses.create({
@@ -8156,6 +8176,7 @@ Important rules:
 - For a historical cross-platform online-sales country ranking, including any follow-up that adds WooCommerce, call get_online_country_sales with the retained period and currency:null. Never invoke ShopifyQL for this task. Preserve direct shipping country, source labels, source-native currencies, unknown-country/source coverage and Matrixify exclusion. State that native Shopify history begins 16 November 2025 rather than implying four-year Shopify coverage. Explain that differing Woo/Shopify operational status and refund capture make the combined ranking directional rather than canonical accounting revenue.
 - For the exact analytical pattern “top locations/countries for online sales plus top products sold to each”, call get_shopify_online_country_products. It ranks direct shipping countries and products within country without multiplying order sales, discloses unknown geography, and keeps currencies separate. When the user has not explicitly requested a currency, pass currency: null (do not apply the general GBP default), so GBP and USD receive separate rankings. Use search_orders only for bounded order examples (including EU/non-EU examples), not to reconstruct aggregates. Never infer missing or invalid geography from billing, currency, market, IP, or POS location.
 - Treat stock-clearance briefs and action-oriented follow-ups as advisory requests based on their meaning and conversation context, regardless of whether they say “any ideas”, “what can we do”, “use data”, or “include data and sales info”. A request for supporting sales evidence does not turn campaign advice into a date-range-dependent report. Give useful initial online merchandising, audience, offer and measurement recommendations before asking any follow-up. Use the governed current catalogue, exact-location inventory and recent sales tools where they can support the advice, but continue with clearly labelled proposed tactics if optional evidence is unavailable. Distinguish verified catalogue, stock and sales observations from proposed tactics. A missing date must not block the response: choose and state a reasonable recent comparison window for historical evidence. Keep currencies separate unless one is explicitly requested; preserve explicit date and currency requests. Product names in a temporary brief are query terms, not permanent governed product facts or classifications.
+- For stock-clearance advice, cover every product named in the brief. Where Shopify search syntax permits, combine exact title terms with OR into one catalogue request and one inventory request per relevant location; never truncate the product list merely to reduce call count. Use recent aggregate product sales/velocity evidence as well. If an inventory batch fails, do not compensate with equivalent individual product searches; preserve completed evidence, label inventory unavailable, and give useful advice.
 - For a stock-clearance follow-up, reuse recent governed evidence supplied in the conversation and disclose its as-of date instead of repeating the same expensive ShopifyQL call. Narrow product filters and date windows before querying. Query live inventory by the relevant exact location; never collapse Soho, East and Los Angeles stock into company-wide inventory. A Rolling Stones collaboration may have contractual restrictions: do not automatically recommend promotion, discounting or scrapping without human contract review.
 - Historical Woo shipping country is incomplete. Country searches use only directly observed governed Metorik-export geography, never billing country or an inference. Always disclose the geography_warning returned by search_orders and call get_geography_coverage for the requested period when reporting a historical Woo country result or count.
 - Order-tool money is explicitly source-native operational evidence (source_order_total, source_discount_total, source_refund_total), not canonical accounting truth. Continue to use finance tools for totals and trends; never call source-native order value canonical sales.
@@ -8239,14 +8260,14 @@ Important rules:
         `,
         input: message,
         tools
-      }, { timeout: Math.max(1, deadlineAt - Date.now()) });
+      }, { timeout: Math.max(1, deadlineAt - Date.now() - callBudget.synthesisReserveMs), signal:cancellation.signal });
 
       while (
         response.output?.some(
           item => item.type === 'function_call'
         )
       ) {
-        if (Date.now() >= deadlineAt) throw new Error('Oracle request-wide deadline exceeded before tool execution');
+        if (!callBudget.canContinueModel()) throw new Error('Oracle request cancelled or deadline exceeded before tool execution');
         if (++toolRounds > 8) throw new Error('Agent tool round limit exceeded');
         const outputs = [];
 
@@ -8261,23 +8282,30 @@ Important rules:
           let result;
 
           try {
-            if (Date.now() >= deadlineAt) throw new Error('Oracle request-wide deadline exceeded');
-            const queryCharge = item.name === 'get_online_country_sales' ? ONLINE_COUNTRY_MAX_BYTES : 0;
-            if (queryCharge > remainingQueryBytes) throw new Error('Oracle request-wide BigQuery budget exceeded');
-            remainingQueryBytes -= queryCharge;
             const parsedArgs = JSON.parse(item.arguments || '{}');
-            if (++evidenceCalls > 6) throw Object.assign(new Error('Agent evidence call limit exceeded'),{code:'EVIDENCE_LIMIT'});
             if (item.name==='get_shopify_customer_product_behavior'&&parsedArgs.analysis==='product_affinity') {
               if (!affinityJustified(message)) throw Object.assign(new Error('Product affinity is not justified by this request'),{code:'AFFINITY_NOT_JUSTIFIED'});
               if (++affinityCalls > 1) throw Object.assign(new Error('Product affinity call limit exceeded'),{code:'AFFINITY_LIMIT'});
             }
-            const signature = `${item.name}:${JSON.stringify(parsedArgs)}`;
+            const signature = toolCallSignature(item.name,parsedArgs);
             if (toolSignatures.has(signature)) {
               result = { success: false, tool: item.name, code: 'DUPLICATE_TOOL_CALL', retryable: false, error: 'An unchanged tool query was already attempted in this request' };
               outputs.push({ type: 'function_call_output', call_id: item.call_id, output: JSON.stringify(result) });
               continue;
             }
             toolSignatures.add(signature);
+            const admission=callBudget.admit();
+            if(!admission.admitted) {
+              result=boundedToolFailure(item.name,admission.code);
+              failedTools.push(item.name);
+              toolAdmissionStopped=true;
+              outputs.push({type:'function_call_output',call_id:item.call_id,output:JSON.stringify(result)});
+              continue;
+            }
+            if (cancellation.signal.aborted) throw cancellation.signal.reason;
+            const queryCharge = item.name === 'get_online_country_sales' ? ONLINE_COUNTRY_MAX_BYTES : 0;
+            if (queryCharge > remainingQueryBytes) throw new Error('Oracle request-wide BigQuery budget exceeded');
+            remainingQueryBytes -= queryCharge;
             const args = item.name==='analyze_customer_journey'
               ? applyJourneyAnalysisContext(parsedArgs,req.body?.analysis_context)
               : applyOrderDateScope(message, item.name, parsedArgs);
@@ -8434,6 +8462,8 @@ Important rules:
                 : 'TOOL_EXECUTION_FAILED',
               retryable: throttled && error.retryable === true
             };
+          } finally {
+            callBudget.complete();
           }
           outputs.push({
             type: 'function_call_output',
@@ -8445,14 +8475,20 @@ Important rules:
         }
 
         stage='response_generation';
+        if(toolAdmissionStopped) {
+          console.info('Agent stage outcome:',stageOutcome({id,stage:'tool_admission_stopped',startedAt:requestStarted,outcome:'bounded',extra:{proposed_call_count:callBudget.proposed,dispatched_call_count:callBudget.dispatched}}));
+          if(!res.writableEnded&&!cancellation.signal.aborted) return res.status(206).json({success:true,partial:true,answer:partialAnswer(message,successfulTools,failedTools),tools_used:[...toolsUsed],inline_chart:inlineChart,request_id:id});
+          return;
+        }
         const synthesisStarted=Date.now();
         try {
+          if(!callBudget.canContinueModel()) throw new Error('Oracle request cancelled or deadline exceeded before synthesis');
           response = await openai.responses.create({
             model: 'gpt-5.6',
             previous_response_id: response.id,
             input: outputs,
             tools
-          }, { timeout: Math.max(1, deadlineAt - Date.now()) });
+          }, { timeout: Math.max(1, deadlineAt - Date.now()), signal:cancellation.signal });
           console.info('Agent stage outcome:',stageOutcome({id,stage,startedAt:synthesisStarted,outcome:'success',extra:{round:toolRounds}}));
         } catch(error) {
           console.error('Agent stage outcome:',stageOutcome({id,stage,startedAt:synthesisStarted,outcome:'failed',error,extra:{round:toolRounds}}));
@@ -8461,7 +8497,7 @@ Important rules:
         }
       }
 
-      console.info('Agent stage outcome:',stageOutcome({id,stage:'agent_response',startedAt:requestStarted,outcome:'success',extra:{tool_count:toolsUsed.size,tool_rounds:toolRounds}}));
+      console.info('Agent stage outcome:',stageOutcome({id,stage:'agent_response',startedAt:requestStarted,outcome:'success',extra:{proposed_call_count:callBudget.proposed,dispatched_call_count:callBudget.dispatched,tool_rounds:toolRounds}}));
       res.json({
         success: true,
         answer: response.output_text,
@@ -8498,7 +8534,7 @@ if (process.env.ORACLE_UI_PASSWORD || process.env.ORACLE_UI_SESSION_SECRET) {
     generateProposals: createProposalGenerator({ openai, model: process.env.ORACLE_PROPOSAL_MODEL || 'gpt-5.6' }),
     chat: async (message, conversation = {}) => {
       // Leave headroom for the UI route to serialize a bounded terminal response.
-      const deadlineAt = Date.now() + 75_000;
+      const deadlineAt = Date.now() + 70_000;
       const recentEvidence = conversation.recentEvidence
         ? `Recent governed Oracle evidence (reuse when relevant; disclose this as-of time and do not treat the prior interpretation as new raw data): ${JSON.stringify(conversation.recentEvidence)}\n\n`
         : '';
@@ -8510,7 +8546,7 @@ if (process.env.ORACLE_UI_PASSWORD || process.env.ORACLE_UI_SESSION_SECRET) {
           ,'x-request-id': conversation.requestId
         },
         body: JSON.stringify({ message: `${recentEvidence}${conversation.analysisContext ? `Governed session-local analysis context (retain unless this user message explicitly changes it): ${JSON.stringify(conversation.analysisContext)}\n\nCurrent user message: ${message}\n\nUse only relevant context fields for tool calls. State the resolved scope in the answer, including cohort years, exact order sequence, observation end, exclusions, classification coverage and unclassified products.` : message}`, analysis_context:conversation.analysisContext||null, deadline_at:deadlineAt,request_id:conversation.requestId }),
-        signal: AbortSignal.timeout(80_000)
+        signal: conversation.signal ? AbortSignal.any([conversation.signal,AbortSignal.timeout(74_000)]) : AbortSignal.timeout(74_000)
       });
       const payload = await response.json();
       if (response.status === 429 && payload.code === 'SHOPIFY_TEMPORARILY_RATE_LIMITED') return { answer: SHOPIFY_RATE_LIMIT_MESSAGE, tools: [] };
