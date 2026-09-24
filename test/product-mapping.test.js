@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { applyProductFamilies, approvedMappingEdges, assertFamilyAssignment, buildProductChoicePreview, candidateDiagnostics, classifyProduct, generateMappingCandidates, resolveFamilyDecisions, resolveMappingDecisions, sanitizeReviewerNote, searchProducts, validateGraphApproval } from '../oracle/product-mapping.js';
+import { applyProductFamilies, approvedMappingEdges, assertFamilyAssignment, buildHistoricalReviewQueue, buildProductChoicePreview, candidateDiagnostics, classifyProduct, generateMappingCandidates, isShopifyParentProduct, productSourceLabel, resolveFamilyDecisions, resolveMappingDecisions, sanitizeReviewerNote, searchProducts, validateGraphApproval } from '../oracle/product-mapping.js';
 import { buildCanonicalProductGraph, mapProductPair } from '../oracle/product-identity.js';
 
 const p=(ref,title,extra={})=>({source_product_ref:ref,source_platform:ref.split(':')[0],source_store:ref.split(':')[1],source_product_id:ref.split(':')[2],title,...extra});
@@ -155,4 +155,33 @@ test('choice preview allows a genuinely valid identity and separately exposes a 
   const valid=buildProductChoicePreview({products,candidate,selectedRef:shopify});assert.equal(valid.identity_preview.allowed,true);assert.equal(valid.family_preview.allowed,true);
   const conflict=buildProductChoicePreview({products,candidate,selectedRef:shopify,familyDecisions:[{decision_id:'f1',source_ref:source,shopify_parent_ref:'shopify:shopify:other',status:'active',reviewed_at:'2026-09-20'}]});
   assert.equal(conflict.family_preview.allowed,false);assert.match(conflict.family_preview.reason,/already assigned.*other/);
+});
+
+test('historical review labels Woo WW, Woo US and Square explicitly',()=>{
+  assert.equal(productSourceLabel('woo:ww'),'WooCommerce WW');
+  assert.equal(productSourceLabel('woo:usd'),'WooCommerce US');
+  assert.equal(productSourceLabel('square:square'),'Square');
+});
+
+test('historical review queue leads with each source and keeps cross-source pairs as evidence',()=>{
+  const products=[p('woo:ww:135969','Ready To Ship - Micro Michael Rodent Pendant'),p('square:square:michael','Michael Rodent')];
+  const [candidate]=generateMappingCandidates(products,{minimumScore:.2});
+  const queue=buildHistoricalReviewQueue(products,[candidate]);
+  assert.deepEqual(queue.map(x=>x.historical_product.source_label).sort(),['Square','WooCommerce WW']);
+  assert.equal(queue.find(x=>x.historical_product.source_product_id==='135969').evidence[0].right_source,'square:square');
+  assert.ok(queue.every(x=>x.resolution_status==='needs_review'));
+});
+
+test('Shopify parent selection excludes variant identifiers',()=>{
+  assert.equal(isShopifyParentProduct(p('shopify:shopify:gid://shopify/Product/10434341601607','Micro Michael')),true);
+  assert.equal(isShopifyParentProduct(p('shopify:shopify:gid://shopify/ProductVariant/1','Micro Michael size 8')),false);
+  assert.equal(isShopifyParentProduct(p('woo:ww:1','Historical')),false);
+});
+
+test('queue resolution state distinguishes active identity and active reporting family',()=>{
+  const products=[p('woo:usd:1','US Skull'),p('square:square:2','Square Skull'),p('shopify:shopify:3','Shopify Skull')];
+  const evidence=[{candidate_id:'a'.repeat(24),left_ref:products[0].source_product_ref,right_ref:products[1].source_product_ref,left_title:products[0].title,right_title:products[1].title,left_source:'woo:usd',right_source:'square:square',score:.8}];
+  const queue=buildHistoricalReviewQueue(products,evidence,{mappingDecisions:[{decision_id:'i',left_ref:products[0].source_product_ref,right_ref:products[2].source_product_ref,status:'approved'}],familyDecisions:[{decision_id:'f',source_ref:products[1].source_product_ref,shopify_parent_ref:products[2].source_product_ref,status:'active'}]});
+  assert.equal(queue.find(x=>x.historical_product.source_product_ref===products[0].source_product_ref).resolution_status,'active_identity');
+  assert.equal(queue.find(x=>x.historical_product.source_product_ref===products[1].source_product_ref).resolution_status,'active_reporting_family');
 });
