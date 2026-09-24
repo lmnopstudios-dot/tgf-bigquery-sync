@@ -4,7 +4,7 @@ const FIELDS = new Set([
   'platform','geography','customer_segment','product_ref','filters','sort','limit','report_section',
   'output_preference','partial_period','unresolved_required_fields'
   ,'tool_route','request_kind'
-  ,'journey_intent','entry_product_classification','first_order_semantic','cohort_entry_start','cohort_entry_end','observation_end','minimum_order_sequence','maximum_order_sequence','within_days','journey_group_by'
+  ,'journey_intent','entry_product_classification','subsequent_product_classification','excluded_product_titles','include_unclassified_products','first_order_semantic','cohort_entry_start','cohort_entry_end','observation_end','minimum_order_sequence','maximum_order_sequence','within_days','journey_group_by'
 ]);
 const GRAINS = new Set(['day','week','month','quarter','year']);
 const CURRENCIES = new Set(['GBP','USD','JPY','EUR']);
@@ -12,7 +12,7 @@ const METRICS = new Set(['sales','refunds','customers','products','ecommerce_per
 const MONTHS = {jan:1,january:1,feb:2,february:2,mar:3,march:3,apr:4,april:4,may:5,jun:6,june:6,jul:7,july:7,aug:8,august:8,sep:9,sept:9,september:9,oct:10,october:10,nov:11,november:11,dec:12,december:12};
 
 export const ANALYSIS_CONTEXT_FIELDS = Object.freeze([...FIELDS]);
-export function emptyAnalysisContext(){return {analysis_type:null,metrics:[],start_date:null,end_date:null,requested_end_period:null,grain:null,comparison_type:null,comparison_start_date:null,comparison_end_date:null,currencies:[],channel:null,channel_breakdown:false,location:null,platform:null,geography:null,customer_segment:null,product_ref:null,filters:[],sort:null,limit:null,report_section:null,output_preference:null,partial_period:false,unresolved_required_fields:[],tool_route:null,request_kind:null,journey_intent:null,entry_product_classification:null,first_order_semantic:null,cohort_entry_start:null,cohort_entry_end:null,observation_end:null,minimum_order_sequence:null,maximum_order_sequence:null,within_days:null,journey_group_by:null}}
+export function emptyAnalysisContext(){return {analysis_type:null,metrics:[],start_date:null,end_date:null,requested_end_period:null,grain:null,comparison_type:null,comparison_start_date:null,comparison_end_date:null,currencies:[],channel:null,channel_breakdown:false,location:null,platform:null,geography:null,customer_segment:null,product_ref:null,filters:[],sort:null,limit:null,report_section:null,output_preference:null,partial_period:false,unresolved_required_fields:[],tool_route:null,request_kind:null,journey_intent:null,entry_product_classification:null,subsequent_product_classification:null,excluded_product_titles:[],include_unclassified_products:false,first_order_semantic:null,cohort_entry_start:null,cohort_entry_end:null,observation_end:null,minimum_order_sequence:null,maximum_order_sequence:null,within_days:null,journey_group_by:null}}
 
 const iso = value => /^\d{4}-\d{2}-\d{2}$/.test(String(value||'')) ? value : null;
 export function validateAnalysisContext(value={}){
@@ -39,15 +39,20 @@ export function validateAnalysisContext(value={}){
   out.request_kind=value.request_kind??null;
   out.journey_intent=typeof value.journey_intent==='string'?value.journey_intent.slice(0,100):null;
   out.entry_product_classification=typeof value.entry_product_classification==='string'&&/^[a-z][a-z0-9_]{0,63}$/.test(value.entry_product_classification)?value.entry_product_classification:null;
+  out.subsequent_product_classification=typeof value.subsequent_product_classification==='string'&&/^[a-z][a-z0-9_]{0,63}$/.test(value.subsequent_product_classification)?value.subsequent_product_classification:null;
+  out.excluded_product_titles=Array.isArray(value.excluded_product_titles)?[...new Set(value.excluded_product_titles.filter(x=>typeof x==='string'&&x.length<=100&&!/@|phone|email/i.test(x)))].slice(0,12):[];
+  out.include_unclassified_products=Boolean(value.include_unclassified_products);
   out.first_order_semantic=['first_observed_ever','first_observed_in_period'].includes(value.first_order_semantic)?value.first_order_semantic:null;
   for(const key of ['minimum_order_sequence','maximum_order_sequence'])out[key]=Number.isInteger(value[key])&&value[key]>=2?value[key]:null;
   out.within_days=Number.isInteger(value.within_days)&&value.within_days>=1&&value.within_days<=3650?value.within_days:null;
-  out.journey_group_by=['downstream_product','entry_product','collaboration_name','summary'].includes(value.journey_group_by)?value.journey_group_by:null;
+  out.journey_group_by=['downstream_product','cohort_year_downstream_product','entry_product','collaboration_name','summary'].includes(value.journey_group_by)?value.journey_group_by:null;
   return out;
 }
 
 function period(text, now){
   const lower=text.toLowerCase(), today=new Date(now), todayIso=today.toISOString().slice(0,10);
+  const fromNamedToNow=lower.match(/\bfrom\s+(\d{1,2})\s+(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+(20\d{2})\s+to\s+(?:now|today)\b/);
+  if(fromNamedToNow){const start=`${fromNamedToNow[3]}-${String(MONTHS[fromNamedToNow[2]]).padStart(2,'0')}-${String(+fromNamedToNow[1]).padStart(2,'0')}`;return {start_date:start,end_date:todayIso,requested_end_period:'now',partial_period:true}}
   const numeric=lower.match(/\b(\d{1,2})[\/-](\d{1,2})[\/-](20\d{2})\s*(?:-|–|to)\s*(\d{1,2})[\/-](\d{1,2})[\/-](20\d{2})\b/);
   if(numeric){const isoDate=(d,m,y)=>`${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`;const start=isoDate(+numeric[1],+numeric[2],numeric[3]),end=isoDate(+numeric[4],+numeric[5],numeric[6]);if(iso(start)&&iso(end)&&start<=end)return {start_date:start,end_date:end,requested_end_period:end,partial_period:false}}
   const found=[...lower.matchAll(/(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+(20\d{2})/g)];
@@ -73,12 +78,13 @@ export function transitionAnalysisContext(existing, message, {now=Date.now(),rep
     const countryProducts=/\b(?:top\s+(?:ten|10)\s+)?(?:locations?|countries)\b[\s\S]*\bonline sales\b[\s\S]*\b(?:top\s+(?:ten|10)\s+)?products?\b|\bonline sales\b[\s\S]*\b(?:locations?|countries)\b[\s\S]*\bproducts?\b/i.test(text);
     if(countryProducts) set.tool_route='get_shopify_online_country_products';
     const journey=/\b(?:first (?:observed )?(?:purchase|order)|bought? (?:after|next)|buy (?:after|next)|second (?:purchase|order)|third (?:purchase|order)|nth order|repeat (?:purchase )?rate|within \d+ days?|downstream|acquisition products?|customers? buy (?:after|next))\b/.test(lower);
-    if(journey||base.analysis_type==='customer_journey'&&/^(?:which|what|within|on (?:their )?(?:second|third))\b/.test(lower)){set.metrics=['customer_journey'];set.analysis_type='customer_journey';set.journey_intent='purchase_sequence';if(/collaboration/.test(lower))set.entry_product_classification='collaboration';else if(/\brings?\b/.test(lower))set.entry_product_classification='ring';else if(/\bclothing\b/.test(lower))set.entry_product_classification='clothing';else if(/\bjewellery\b/.test(lower))set.entry_product_classification='jewellery';if(/which collaboration/.test(lower))set.journey_group_by='collaboration_name';else if(/acquisition products?/.test(lower))set.journey_group_by='entry_product';else if(/what|top|products?/.test(lower))set.journey_group_by='downstream_product';const seq=lower.match(/\b(second|third) (?:purchase|order)\b/);if(seq){const n=seq[1]==='second'?2:3;set.minimum_order_sequence=n;set.maximum_order_sequence=n}const days=lower.match(/\bwithin (30|60|90|365) days?\b/);if(days)set.within_days=+days[1]}
+    if(journey||base.analysis_type==='customer_journey'&&/^(?:okay[, ]+)?(?:which|what|within|on|exclude)\b/.test(lower)){set.metrics=['customer_journey'];set.analysis_type='customer_journey';set.journey_intent='purchase_sequence';const isFollowUp=base.analysis_type==='customer_journey';if(/collaboration/.test(lower)&&!isFollowUp)set.entry_product_classification='collaboration';else if(/\brings?\b/.test(lower)&&!isFollowUp)set.entry_product_classification='ring';else if(/\bclothing\b/.test(lower)&&!isFollowUp)set.entry_product_classification='clothing';if(/\bjewellery\b/.test(lower)){set.subsequent_product_classification='jewellery';set.include_unclassified_products=true}const excluded=[...lower.matchAll(/\bexclude\s+([^,.?]+?)(?=\s+(?:and|but|from|what|which)\b|[,.?]|$)/g)].map(m=>m[1].trim()).filter(Boolean);if(excluded.length)set.excluded_product_titles=[...base.excluded_product_titles,...excluded.map(x=>x.replace(/\b\w/g,c=>c.toUpperCase()))];if(/which collaboration/.test(lower))set.journey_group_by='collaboration_name';else if(/acquisition products?/.test(lower))set.journey_group_by='entry_product';else if(/each year separately|by (?:cohort )?year|annual cohorts?/.test(lower))set.journey_group_by='cohort_year_downstream_product';else if(/what|top|products?|items?/.test(lower))set.journey_group_by=base.journey_group_by==='cohort_year_downstream_product'?'cohort_year_downstream_product':'downstream_product';const seq=lower.match(/\b(second|third) (?:purchase|order)\b/);if(seq){const n=seq[1]==='second'?2:3;set.minimum_order_sequence=n;set.maximum_order_sequence=n}const days=lower.match(/\bwithin (30|60|90|365) days?\b/);if(days)set.within_days=+days[1]}
     else if(/\brefunds?\b/.test(lower)) set.metrics=['refunds'],set.analysis_type='finance';
     else if(/\bsales|revenue\b/.test(lower)) set.metrics=['sales'],set.analysis_type='finance';
     else if(/\bcustomers?\b/.test(lower)) set.metrics=['customers'],set.analysis_type='customers';
     else if(/\bproducts?\b/.test(lower)) set.metrics=['products'],set.analysis_type='products';
     for(const [pattern,grain] of [[/\bdaily\b/,'day'],[/\bweekly\b/,'week'],[/\bmonthly\b/,'month'],[/\bquarterly\b/,'quarter'],[/\byearly|annually\b/,'year']]) if(pattern.test(lower)) set.grain=grain;
+    if(/each year separately|by (?:cohort )?year|annual cohorts?/.test(lower))set.grain='year';
     for(const currency of CURRENCIES) if(new RegExp(`\\b${currency}\\b`,'i').test(text)) set.currencies=[currency];
     if(/all currencies/i.test(text)) clear.push('currencies');
     if(/all channels/i.test(text)){clear.push('channel');set.channel_breakdown=false}
