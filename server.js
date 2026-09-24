@@ -27,6 +27,8 @@ import {
 } from './shopify/acquisition.js';
 import { normalizeShippingGeography, persistShippingGeography } from './shopify/order-geography.js';
 import { createShopifyCountryProductsService } from './oracle/shopify-country-products.js';
+import { runWithShopifyThrottle, SHOPIFY_RATE_LIMIT_MESSAGE } from './oracle/shopifyql-throttle.js';
+import { AsyncLocalStorage } from 'node:async_hooks';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -68,8 +70,7 @@ const MATRIXIFY_SOURCE_APP_ID = 'gid://shopify/App/1758145';
 const SHOPIFY_NATIVE_HISTORY_START = '2025-11-16';
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-const SHOPIFYQL_MAX_THROTTLE_WAIT_MS = 30000;
-const SHOPIFYQL_THROTTLE_BUFFER_MS = 350;
+const requestBudget = new AsyncLocalStorage();
 
 const openai = new OpenAI({
   apiKey: OPENAI_API_KEY
@@ -485,61 +486,14 @@ async function runShopifyqlReport(
         }
       }
     `;
-  let data;
-
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      data = await shopifyGraphQL(
+  const data = await runWithShopifyThrottle(
+    () => shopifyGraphQL(
         token,
         query,
         { query: shopifyql }
-      );
-      break;
-    } catch (error) {
-      const throttledError = error.errors?.find(
-        item => item?.extensions?.code === 'THROTTLED'
-      );
-
-      if (!throttledError) {
-        throw error;
-      }
-
-      const throttleError = new Error(
-        attempt === 1
-          ? 'ShopifyQL rate limit exceeded after one retry'
-          : 'ShopifyQL rate limit exceeded'
-      );
-      throttleError.code = 'THROTTLED';
-      throttleError.retryable = true;
-
-      if (attempt === 1) {
-        throw throttleError;
-      }
-
-      const resetAt =
-        throttledError.extensions?.cost?.windowResetAt;
-      const resetTime = Date.parse(resetAt);
-
-      if (!resetAt || Number.isNaN(resetTime)) {
-        throttleError.message +=
-          ': no valid throttle reset time was provided';
-        throw throttleError;
-      }
-
-      const waitMs = Math.max(
-        0,
-        resetTime - Date.now()
-      ) + SHOPIFYQL_THROTTLE_BUFFER_MS;
-
-      if (waitMs > SHOPIFYQL_MAX_THROTTLE_WAIT_MS) {
-        throttleError.message +=
-          ': throttle reset wait exceeds the maximum allowed';
-        throw throttleError;
-      }
-
-      await sleep(waitMs);
-    }
-  }
+      ),
+    { deadlineAt: requestBudget.getStore()?.deadlineAt, log: diagnostic => console.info('ShopifyQL operation:', diagnostic) }
+  );
 
   const response = data.shopifyqlQuery;
 
@@ -8115,6 +8069,12 @@ app.post(
   requireSyncSecret,
   express.json(),
   async (req, res) => {
+    const suppliedDeadline = Number(req.body?.deadline_at);
+    const deadlineAt = Math.min(
+      Number.isFinite(suppliedDeadline) ? suppliedDeadline : Date.now() + 90_000,
+      Date.now() + 90_000
+    );
+    return requestBudget.run({ deadlineAt }, async () => {
     try {
       const message = req.body?.message;
 
@@ -8132,6 +8092,8 @@ app.post(
       const tools = createOracleToolDefinitions();
 
       const toolsUsed = new Set();
+      const toolSignatures = new Set();
+      let toolRounds = 0;
       let response = await openai.responses.create({
         model: 'gpt-5.6',
         instructions: `
@@ -8180,6 +8142,7 @@ Important rules:
 - Metorik is the historical Woo order authority. Shopify is current commerce evidence. Matrixify contains only a limited migrated Woo slice and search_orders excludes those Shopify representations to prevent a second sale. If asked whether an excluded Shopify representation is migrated, explain this classification rather than counting it as Shopify-native.
 - For the exact analytical pattern “top locations/countries for online sales plus top products sold to each”, call get_shopify_online_country_products. It ranks direct shipping countries and products within country without multiplying order sales, discloses unknown geography, and keeps currencies separate. When the user has not explicitly requested a currency, pass currency: null (do not apply the general GBP default), so GBP and USD receive separate rankings. Use search_orders only for bounded order examples (including EU/non-EU examples), not to reconstruct aggregates. Never infer missing or invalid geography from billing, currency, market, IP, or POS location.
 - Treat stock-clearance briefs asking “any ideas of/on what we can do” and “use data where possible” as advisory requests, not date-range-dependent reports. Give useful initial online merchandising, audience, offer and measurement ideas before asking any follow-up. Identify which claims require current stock, product or historical sales evidence and use the relevant governed Shopify tools where available. A missing date must not block the response: if historical analysis would help, choose and clearly state a reasonable recent comparison window, or ask one targeted date question after the initial advice. Keep currencies separate unless one is explicitly requested. Product names in a temporary brief are query terms, not permanent governed product facts or classifications.
+- For a stock-clearance follow-up, reuse recent governed evidence supplied in the conversation and disclose its as-of date instead of repeating the same expensive ShopifyQL call. Narrow product filters and date windows before querying. Query live inventory by the relevant exact location; never collapse Soho, East and Los Angeles stock into company-wide inventory. A Rolling Stones collaboration may have contractual restrictions: do not automatically recommend promotion, discounting or scrapping without human contract review.
 - Historical Woo shipping country is incomplete. Country searches use only directly observed governed Metorik-export geography, never billing country or an inference. Always disclose the geography_warning returned by search_orders and call get_geography_coverage for the requested period when reporting a historical Woo country result or count.
 - Order-tool money is explicitly source-native operational evidence (source_order_total, source_discount_total, source_refund_total), not canonical accounting truth. Continue to use finance tools for totals and trends; never call source-native order value canonical sales.
 - Order tools are strictly read-only and intentionally exclude customer names, email, phone, street/postal addresses, payment credentials and raw payloads. Never request or reconstruct that PII.
@@ -8267,6 +8230,7 @@ Important rules:
           item => item.type === 'function_call'
         )
       ) {
+        if (++toolRounds > 8) throw new Error('Agent tool round limit exceeded');
         const outputs = [];
 
         for (const item of response.output) {
@@ -8280,6 +8244,13 @@ Important rules:
 
           try {
             const parsedArgs = JSON.parse(item.arguments || '{}');
+            const signature = `${item.name}:${JSON.stringify(parsedArgs)}`;
+            if (toolSignatures.has(signature)) {
+              result = { success: false, tool: item.name, code: 'DUPLICATE_TOOL_CALL', retryable: false, error: 'An unchanged tool query was already attempted in this request' };
+              outputs.push({ type: 'function_call_output', call_id: item.call_id, output: JSON.stringify(result) });
+              continue;
+            }
+            toolSignatures.add(signature);
             const args = item.name==='analyze_customer_journey'
               ? applyJourneyAnalysisContext(parsedArgs,req.body?.analysis_context)
               : applyOrderDateScope(message, item.name, parsedArgs);
@@ -8414,11 +8385,11 @@ Important rules:
             }
           } catch (error) {
             const throttled = error?.code === 'THROTTLED';
-
-            console.error(
-              `Agent tool ${item.name} failed:`,
-              error
-            );
+            if (throttled) {
+              console.info('Agent ShopifyQL tool throttled:', { operation: item.name, elapsed_ms: 90_000 - Math.max(0, deadlineAt - Date.now()), retry_count: error.metadata?.retry_count ?? 0, requested_query_cost: error.metadata?.requested_query_cost ?? null, currently_available: error.metadata?.currently_available ?? null, reset_at: error.metadata?.reset_at ?? null });
+              return res.status(429).json({ success: false, code: 'SHOPIFY_TEMPORARILY_RATE_LIMITED', error: SHOPIFY_RATE_LIMIT_MESSAGE });
+            }
+            console.error(`Agent tool ${item.name} failed:`, redactError(error));
 
             result = {
               success: false,
@@ -8460,6 +8431,7 @@ Important rules:
         error: 'Oracle could not complete the request'
       });
     }
+    });
   }
 );
 
@@ -8478,15 +8450,21 @@ if (process.env.ORACLE_UI_PASSWORD || process.env.ORACLE_UI_SESSION_SECRET) {
     env: process.env,
     generateProposals: createProposalGenerator({ openai, model: process.env.ORACLE_PROPOSAL_MODEL || 'gpt-5.6' }),
     chat: async (message, conversation = {}) => {
+      const deadlineAt = Date.now() + 90_000;
+      const recentEvidence = conversation.recentEvidence
+        ? `Recent governed Oracle evidence (reuse when relevant; disclose this as-of time and do not treat the prior interpretation as new raw data): ${JSON.stringify(conversation.recentEvidence)}\n\n`
+        : '';
       const response = await fetch(`http://127.0.0.1:${PORT}/agent`, {
         method: 'POST',
         headers: {
           authorization: `Bearer ${SYNC_SECRET}`,
           'content-type': 'application/json'
         },
-        body: JSON.stringify({ message: conversation.analysisContext ? `Governed session-local analysis context (retain unless this user message explicitly changes it): ${JSON.stringify(conversation.analysisContext)}\n\nCurrent user message: ${message}\n\nUse only relevant context fields for tool calls. State the resolved scope in the answer, including cohort years, exact order sequence, observation end, exclusions, classification coverage and unclassified products.` : message, analysis_context:conversation.analysisContext||null })
+        body: JSON.stringify({ message: `${recentEvidence}${conversation.analysisContext ? `Governed session-local analysis context (retain unless this user message explicitly changes it): ${JSON.stringify(conversation.analysisContext)}\n\nCurrent user message: ${message}\n\nUse only relevant context fields for tool calls. State the resolved scope in the answer, including cohort years, exact order sequence, observation end, exclusions, classification coverage and unclassified products.` : message}`, analysis_context:conversation.analysisContext||null, deadline_at:deadlineAt }),
+        signal: AbortSignal.timeout(90_000)
       });
       const payload = await response.json();
+      if (response.status === 429 && payload.code === 'SHOPIFY_TEMPORARILY_RATE_LIMITED') return { answer: SHOPIFY_RATE_LIMIT_MESSAGE, tools: [] };
       if (!response.ok || !payload.success) throw new Error('Oracle could not complete the conversation');
       return { answer: payload.answer, tools: payload.tools_used || [] };
     }
