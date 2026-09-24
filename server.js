@@ -28,6 +28,7 @@ import {
 import { normalizeShippingGeography, persistShippingGeography } from './shopify/order-geography.js';
 import { createShopifyCountryProductsService } from './oracle/shopify-country-products.js';
 import { createCustomerOrderIntervalService } from './oracle/customer-order-interval.js';
+import { createOnlineCountrySalesService, ONLINE_COUNTRY_MAX_BYTES } from './oracle/online-country-sales.js';
 import { runWithShopifyThrottle, SHOPIFY_RATE_LIMIT_MESSAGE } from './oracle/shopifyql-throttle.js';
 import { buildOracleInlineChart } from './oracle/inline-charts.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
@@ -136,6 +137,7 @@ const productMappingService = createProductMappingService({ bigquery, project: G
 const collectionClassificationService = createCollectionClassificationService({ bigquery, project: GOOGLE_PROJECT_ID });
 const shopifyCountryProductsService = createShopifyCountryProductsService({ bigquery, project: GOOGLE_PROJECT_ID });
 const customerOrderIntervalService = createCustomerOrderIntervalService({ bigquery, project: GOOGLE_PROJECT_ID });
+const onlineCountrySalesService = createOnlineCountrySalesService({ bigquery, project: GOOGLE_PROJECT_ID });
 productMappingService.setup().catch(error => console.error('Product mapping storage setup failed:', redactError(error?.message || error)));
 collectionClassificationService.setup().catch(error => console.error('Collection classification storage setup failed:', redactError(error?.message || error)));
 
@@ -8095,6 +8097,7 @@ app.post(
       const tools = createOracleToolDefinitions();
 
       const toolsUsed = new Set();
+      let remainingQueryBytes = 20_000_000_000;
       let inlineChart = null;
       const toolSignatures = new Set();
       let toolRounds = 0;
@@ -8144,6 +8147,7 @@ Important rules:
 - Use search_orders for bounded transaction-level searches, examples underlying an aggregate, order numbers, products/SKUs, refunds, direct shipping country, Shopify Online and POS evidence. Use get_order_details or get_order_line_items only with the exact source_platform + source_order_id identity returned by search; never guess across Woo and Shopify ID namespaces. Use get_order_history_context when explicitly asked whether an exact Shopify identity is native or Matrixify-imported.
 - For a human-facing order reference such as "#33653", "33653", "order #33653", or "order 33653", call search_orders with order_number populated and source_order_id null. Do not strip it into or guess a source_order_id. The tool performs governed exact normalization and can return platform-qualified candidates when namespaces collide.
 - Metorik is the historical Woo order authority. Shopify is current commerce evidence. Matrixify contains only a limited migrated Woo slice and search_orders excludes those Shopify representations to prevent a second sale. If asked whether an excluded Shopify representation is migrated, explain this classification rather than counting it as Shopify-native.
+- For a historical cross-platform online-sales country ranking, including any follow-up that adds WooCommerce, call get_online_country_sales with the retained period and currency:null. Never invoke ShopifyQL for this task. Preserve direct shipping country, source labels, source-native currencies, unknown-country/source coverage and Matrixify exclusion. State that native Shopify history begins 16 November 2025 rather than implying four-year Shopify coverage. Explain that differing Woo/Shopify operational status and refund capture make the combined ranking directional rather than canonical accounting revenue.
 - For the exact analytical pattern “top locations/countries for online sales plus top products sold to each”, call get_shopify_online_country_products. It ranks direct shipping countries and products within country without multiplying order sales, discloses unknown geography, and keeps currencies separate. When the user has not explicitly requested a currency, pass currency: null (do not apply the general GBP default), so GBP and USD receive separate rankings. Use search_orders only for bounded order examples (including EU/non-EU examples), not to reconstruct aggregates. Never infer missing or invalid geography from billing, currency, market, IP, or POS location.
 - Treat stock-clearance briefs asking “any ideas of/on what we can do” and “use data where possible” as advisory requests, not date-range-dependent reports. Give useful initial online merchandising, audience, offer and measurement ideas before asking any follow-up. Identify which claims require current stock, product or historical sales evidence and use the relevant governed Shopify tools where available. A missing date must not block the response: if historical analysis would help, choose and clearly state a reasonable recent comparison window, or ask one targeted date question after the initial advice. Keep currencies separate unless one is explicitly requested. Product names in a temporary brief are query terms, not permanent governed product facts or classifications.
 - For a stock-clearance follow-up, reuse recent governed evidence supplied in the conversation and disclose its as-of date instead of repeating the same expensive ShopifyQL call. Narrow product filters and date windows before querying. Query live inventory by the relevant exact location; never collapse Soho, East and Los Angeles stock into company-wide inventory. A Rolling Stones collaboration may have contractual restrictions: do not automatically recommend promotion, discounting or scrapping without human contract review.
@@ -8229,13 +8233,14 @@ Important rules:
         `,
         input: message,
         tools
-      });
+      }, { timeout: Math.max(1, deadlineAt - Date.now()) });
 
       while (
         response.output?.some(
           item => item.type === 'function_call'
         )
       ) {
+        if (Date.now() >= deadlineAt) throw new Error('Oracle request-wide deadline exceeded before tool execution');
         if (++toolRounds > 8) throw new Error('Agent tool round limit exceeded');
         const outputs = [];
 
@@ -8249,6 +8254,10 @@ Important rules:
           let result;
 
           try {
+            if (Date.now() >= deadlineAt) throw new Error('Oracle request-wide deadline exceeded');
+            const queryCharge = item.name === 'get_online_country_sales' ? ONLINE_COUNTRY_MAX_BYTES : 0;
+            if (queryCharge > remainingQueryBytes) throw new Error('Oracle request-wide BigQuery budget exceeded');
+            remainingQueryBytes -= queryCharge;
             const parsedArgs = JSON.parse(item.arguments || '{}');
             const signature = `${item.name}:${JSON.stringify(parsedArgs)}`;
             if (toolSignatures.has(signature)) {
@@ -8301,6 +8310,8 @@ Important rules:
   result = await customerOrderIntervalService(args);
 } else if (item.name === 'get_shopify_online_country_products') {
   result = await shopifyCountryProductsService(args);
+} else if (item.name === 'get_online_country_sales') {
+  result = await onlineCountrySalesService(args);
 } else if (item.name === 'get_ecommerce_report_v2_evidence') {
   result = await ecommerceReportV2(args.section, { start_date: args.current_start, end_date: args.current_end, comparison: 'custom', comparison_start: args.comparison_start, comparison_end: args.comparison_end });
 } else if (item.name === 'get_ecommerce_management_report') {
@@ -8424,7 +8435,7 @@ Important rules:
           previous_response_id: response.id,
           input: outputs,
           tools
-        });
+        }, { timeout: Math.max(1, deadlineAt - Date.now()) });
       }
 
       res.json({
@@ -8438,7 +8449,7 @@ Important rules:
 
       res.status(500).json({
         success: false,
-        error: 'Oracle could not complete the request'
+        error: 'I could not complete the governed BigQuery analysis within this request’s deadline and query budget. No sales figures were returned; retry the same date range, or narrow it if the problem persists.'
       });
     }
     });
@@ -8475,7 +8486,7 @@ if (process.env.ORACLE_UI_PASSWORD || process.env.ORACLE_UI_SESSION_SECRET) {
       });
       const payload = await response.json();
       if (response.status === 429 && payload.code === 'SHOPIFY_TEMPORARILY_RATE_LIMITED') return { answer: SHOPIFY_RATE_LIMIT_MESSAGE, tools: [] };
-      if (!response.ok || !payload.success) throw new Error('Oracle could not complete the conversation');
+      if (!response.ok || !payload.success) return { answer: payload.error || 'The governed analysis could not be completed; no figures were returned.', tools: [] };
       return { answer: payload.answer, tools: payload.tools_used || [], inline_chart: payload.inline_chart || null };
     }
   }));
