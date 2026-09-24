@@ -72,6 +72,10 @@ export function needsProposalGeneration(message) {
   const text = String(message || '').trim();
   if (!text) return false;
   if (/\b(?:save|remember|record|store|add)\b/i.test(text)) return true;
+  // A pasted campaign brief followed by a request for recommendations is
+  // working context, not an instruction to turn mentioned products into
+  // durable governed knowledge.
+  if (/\bany ideas (?:of|on|for) what we can do\b[\s\S]*\buse data where possible\b/i.test(text)) return false;
   // This deliberately recognizes only obvious, wholly non-assertive requests. It
   // does not attempt extraction; everything ambiguous is left to the model.
   const sentences = text.split(/(?<=[?.!])\s+/).filter(Boolean);

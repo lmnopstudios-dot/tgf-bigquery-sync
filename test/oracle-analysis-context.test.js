@@ -21,6 +21,28 @@ test('dates survive a metric clarification and current-message changes win',()=>
   result=apply(result.context,'weekly instead');assert.equal(result.context.grain,'week');assert.deepEqual(result.context.currencies,['USD']);
 });
 
+test('country-product route resolves this year, survives clarification, and keeps currencies separate',()=>{
+  const question='Can you give me the top ten locations for online sales this year along with the top 10 products sold to each one?';
+  let result=apply(emptyAnalysisContext(),question);
+  assert.equal(result.context.tool_route,'get_shopify_online_country_products');
+  assert.equal(result.context.start_date,'2026-01-01');assert.equal(result.context.end_date,'2026-09-22');
+  assert.deepEqual(result.context.currencies,[]);assert.equal(clarificationFor(result.context),null);
+  result=apply({...result.context,start_date:null,end_date:null,unresolved_required_fields:['start_date','end_date']},'this year');
+  assert.equal(result.context.tool_route,'get_shopify_online_country_products');assert.deepEqual(result.context.currencies,[]);
+  assert.equal(result.transition.ready_to_execute,true);assert.equal(clarificationFor(result.context),null);
+  const usd=apply(emptyAnalysisContext(),`${question} in USD`);
+  assert.deepEqual(usd.context.currencies,['USD']);
+});
+
+test('stock-clearance ideas are advisory and are not blocked by a missing date or GBP default',()=>{
+  const result=apply(emptyAnalysisContext(),'Danielle has asked us to clear stock on the listed products. Any ideas of what we can do? Use data where possible');
+  assert.equal(result.context.request_kind,'advisory');
+  assert.deepEqual(result.context.currencies,[]);
+  assert.deepEqual(result.context.unresolved_required_fields,[]);
+  assert.equal(result.transition.ready_to_execute,false);
+  assert.equal(clarificationFor(result.context),null);
+});
+
 test('channel split and filter clearing retain the established analysis',()=>{
   let context=apply(emptyAnalysisContext(),'monthly refunds Jan 2023 to Sep 2026').context;
   context=apply(context,'exclude POS').context;assert.deepEqual(context.filters,['exclude_pos']);

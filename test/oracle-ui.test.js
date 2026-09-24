@@ -58,6 +58,11 @@ test('preflight avoids the OpenAI call and an empty structured response is succe
   assert.deepEqual(await generate({message:'Our test campaign happened.'}),[]);assert.equal(calls,1);
 });
 
+test('temporary stock-clearance briefs are advisory context, not governed product proposals',()=>{
+  const message='Danielle has asked us to clear stock on the listed products. Any ideas of what we can do? Use data where possible';
+  assert.equal(needsProposalGeneration(message),false);
+});
+
 test('safe proposal diagnostics distinguish API failures without secrets or payloads',async()=>{
   const generate=createProposalGenerator({openai:{responses:{create:async()=>{const error=new Error('invalid schema sk-secret payload={"user_message":"private document"}');error.status=400;error.code='invalid_function_parameters';error.type='invalid_request_error';throw error;}}}});
   let caught;try{await generate({message:'Our campaign happened.'})}catch(error){caught=error}
