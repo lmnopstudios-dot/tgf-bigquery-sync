@@ -81,7 +81,7 @@ export function createOracleUiRouter({ knowledgeService, bigquery, project, chat
       let proposals = [], proposal_error = null;
       try { proposals = await proposalsFor(req.body.message, req.oracleUser.sub); }
       catch (error) { logProposalError(error); proposal_error = 'Knowledge proposal could not be generated.'; }
-      res.json({ success: true, answer: answer.answer, proposals, proposal_error, analysis_scope:analysisScope(sessionContext(req)) });
+      res.json({ success: true, answer: answer.answer, inline_chart:answer.inline_chart||null, proposals, proposal_error, analysis_scope:analysisScope(sessionContext(req)) });
     } catch (error) {
       if (error?.code === 'THROTTLED') return res.status(429).json({ success: false, code: 'SHOPIFY_TEMPORARILY_RATE_LIMITED', error: SHOPIFY_RATE_LIMIT_MESSAGE });
       console.error('Oracle UI chat failed:', safeError(error)); res.status(500).json({ success: false, error: safeError(error) });
