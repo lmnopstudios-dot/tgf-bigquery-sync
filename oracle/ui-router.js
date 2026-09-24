@@ -8,7 +8,7 @@ import { analysisScope, clarificationFor, emptyAnalysisContext, transitionAnalys
 import { governanceDiagnostic, governancePublicError, isGovernanceBusinessError } from './governance-diagnostics.js';
 import { SHOPIFY_RATE_LIMIT_MESSAGE } from './shopifyql-throttle.js';
 import { requestId, stageOutcome, terminalMessage } from './request-observability.js';
-import { createAnalysisJobWorker, ownerKey } from './analysis-jobs.js';
+import { createAnalysisJobWorker, ownerKey, streamingInsertDiagnostic } from './analysis-jobs.js';
 
 const json = express.json({ limit: '48kb', type: 'application/json' });
 const messageError = body => {
@@ -73,7 +73,9 @@ export function createOracleUiRouter({ knowledgeService, bigquery, project, chat
   router.post('/auth/logout', authenticate, protectWrite, (req, res) => { const key=sessionKey(req);analysisSessions.delete(key);recentChatEvidence.delete(key);res.setHeader('Set-Cookie', ['oracle_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0', 'oracle_csrf=; Path=/; SameSite=Strict; Max-Age=0']); res.json({ success: true }); });
   router.get('/session', authenticate, (req, res) => res.json({ success: true, user: req.oracleUser.sub, role: req.oracleUser.role, analysis_scope:analysisScope(sessionContext(req)) }));
   router.post('/analysis/clear',authenticate,protectWrite,json,(req,res)=>{analysisSessions.delete(sessionKey(req));res.json({success:true,analysis_scope:null})});
-  if (analysisJobStore) {
+  // Durable jobs remain opt-in until the production-shaped enqueue/claim/finish/poll
+  // diagnostic has passed. Interactive chat must never depend on queue health.
+  if (analysisJobStore && env.ORACLE_ANALYSIS_JOBS_ENABLED === 'true') {
     const worker=createAnalysisJobWorker({store:analysisJobStore,runtimeMs:Number(env.ORACLE_JOB_RUNTIME_MS)||8*60_000,run:async(job,signal)=>{
       const input=job.payload_json;
       const answer=await chat(input.message,{analysisContext:input.analysis_context,transition:input.transition,recentEvidence:input.recent_evidence,requestId:job.request_id,signal,durable:true});
@@ -91,7 +93,7 @@ export function createOracleUiRouter({ knowledgeService, bigquery, project, chat
       if(result.transition.applies_to_message)saveSessionContext(req,result.context);
       const cached=recentChatEvidence.get(sessionKey(req)),recent=cached&&cached.expires_at>now()?cached.value:null;
       const id=requestId(req.get('x-request-id'));
-      let job;try{job=await analysisJobStore.create({owner_key:ownerKey(parseCookies(req.headers.cookie).oracle_session,sessionSecret),request_id:id,payload_json:{message:req.body.message,analysis_context:result.transition.applies_to_message?result.context:null,transition:result.transition,recent_evidence:recent,created_by:req.oracleUser.sub}});}catch(error){console.error('Oracle job enqueue failed:',{request_id:id,error_class:error?.name||'Error'});return res.status(503).json({success:false,code:'ORACLE_JOB_ENQUEUE_FAILED',error:'The analysis could not be queued. Please retry.',request_id:id});}
+      let job;try{job=await analysisJobStore.create({owner_key:ownerKey(parseCookies(req.headers.cookie).oracle_session,sessionSecret),request_id:id,payload_json:{message:req.body.message,analysis_context:result.transition.applies_to_message?result.context:null,transition:result.transition,recent_evidence:recent,created_by:req.oracleUser.sub}});}catch(error){console.error('Oracle job enqueue failed:',{request_id:id,...streamingInsertDiagnostic(error)});return res.status(503).json({success:false,code:'ORACLE_JOB_ENQUEUE_FAILED',error:'The analysis could not be queued. Please retry.',request_id:id});}
       res.setHeader('x-request-id',id).status(202).json({success:true,job_id:job.job_id,status:'queued'});
     });
     router.get('/jobs/:id',authenticate,async(req,res)=>{const job=await owned(req,req.params.id);if(!job)return res.status(404).json({success:false,error:'Analysis job not found'});const publicJob={success:true,job_id:job.job_id,status:job.status,progress:job.status==='queued'?'Analysis queued':job.status==='running'?'Running governed analysis':job.status==='completed'?'Analysis complete':job.status==='cancelled'?'Analysis cancelled':'Analysis failed'};if(job.status==='completed'){const {tools=[], ...result}=job.result_json;Object.assign(publicJob,result);recentChatEvidence.set(sessionKey(req),{expires_at:now()+15*60*1000,value:{as_of:job.updated_at,answer:String(result.answer||'').slice(0,6000),tools}});}if(job.status==='failed')publicJob.error=job.error_code==='WORKER_RESTARTED'?'The worker restarted during analysis; no partial answer was returned. Please retry.':'The analysis could not be completed; no partial answer was returned.';res.json(publicJob);});
