@@ -27,6 +27,7 @@ import {
 } from './shopify/acquisition.js';
 import { normalizeShippingGeography, persistShippingGeography } from './shopify/order-geography.js';
 import { createShopifyCountryProductsService } from './oracle/shopify-country-products.js';
+import { createCustomerOrderIntervalService } from './oracle/customer-order-interval.js';
 import { runWithShopifyThrottle, SHOPIFY_RATE_LIMIT_MESSAGE } from './oracle/shopifyql-throttle.js';
 import { buildOracleInlineChart } from './oracle/inline-charts.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
@@ -134,6 +135,7 @@ const oracleFinance = createOracleFinanceService({ bigquery, project: GOOGLE_PRO
 const productMappingService = createProductMappingService({ bigquery, project: GOOGLE_PROJECT_ID });
 const collectionClassificationService = createCollectionClassificationService({ bigquery, project: GOOGLE_PROJECT_ID });
 const shopifyCountryProductsService = createShopifyCountryProductsService({ bigquery, project: GOOGLE_PROJECT_ID });
+const customerOrderIntervalService = createCustomerOrderIntervalService({ bigquery, project: GOOGLE_PROJECT_ID });
 productMappingService.setup().catch(error => console.error('Product mapping storage setup failed:', redactError(error?.message || error)));
 collectionClassificationService.setup().catch(error => console.error('Collection classification storage setup failed:', redactError(error?.message || error)));
 
@@ -8195,6 +8197,7 @@ Important rules:
 - Clearly state when a reporting period is partial.
 - For cross-period comparisons, report absolute and percentage changes where appropriate and clearly identify partial periods.
 - Distinguish customer population summaries from customer cohort/purchase-journey questions. Questions containing first purchase/order, bought after/next, second or nth order, repeat rate, within N days, acquisition product, or downstream revenue require analyze_customer_journey, not get_customer_metrics.
+- Questions asking for average/median time between consecutive online orders for the same identified customer require get_average_customer_order_interval. This is a non-monetary metric: do not ask for, apply, or mention a currency. Report its customer_count and order_pair_count with the average and median, and disclose its boundary, guest, cancellation, Matrixify, and separate source-identity semantics.
 - A journey requires an explicit bounded date range. After asking for dates, retain the cohort classification, entry condition, grouping/ranking and sequence/window constraints and execute when dates arrive; do not ask what should be analysed again.
 - For journey follow-ups, the governed session context is authoritative: retain cohort_entry_start, cohort_entry_end, observation_end, first_order_semantic, exact order sequence and cohort-year grouping unless the current user explicitly changes that field. Never reinterpret a retained multi-year range as a month merely because its start date is 1 January. An explicitly requested narrower follow-up period does replace all three journey date bounds.
 - In journey language, say “first observed order” and “customers whose first observed order included …”, never imply the qualifying product caused acquisition. The entry order can contain other products and is excluded from downstream results. A returning customer here has a qualifying order after entry, independently of Shopify's new/returning label.
@@ -8293,7 +8296,9 @@ Important rules:
                 );
                 if (knowledgeCall.handled) {
                   result = knowledgeCall.result;
-                } else if (item.name === 'get_shopify_online_country_products') {
+                } else if (item.name === 'get_average_customer_order_interval') {
+  result = await customerOrderIntervalService(args);
+} else if (item.name === 'get_shopify_online_country_products') {
   result = await shopifyCountryProductsService(args);
 } else if (item.name === 'get_ecommerce_report_v2_evidence') {
   result = await ecommerceReportV2(args.section, { start_date: args.current_start, end_date: args.current_end, comparison: 'custom', comparison_start: args.comparison_start, comparison_end: args.comparison_end });

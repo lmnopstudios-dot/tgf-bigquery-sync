@@ -8,7 +8,7 @@ const FIELDS = new Set([
 ]);
 const GRAINS = new Set(['day','week','month','quarter','year']);
 const CURRENCIES = new Set(['GBP','USD','JPY','EUR']);
-const METRICS = new Set(['sales','refunds','customers','products','ecommerce_performance','customer_journey']);
+const METRICS = new Set(['sales','refunds','customers','products','ecommerce_performance','customer_journey','customer_order_interval']);
 const MONTHS = {jan:1,january:1,feb:2,february:2,mar:3,march:3,apr:4,april:4,may:5,jun:6,june:6,jul:7,july:7,aug:8,august:8,sep:9,sept:9,september:9,oct:10,october:10,nov:11,november:11,dec:12,december:12};
 
 export const ANALYSIS_CONTEXT_FIELDS = Object.freeze([...FIELDS]);
@@ -33,7 +33,7 @@ export function validateAnalysisContext(value={}){
   out.limit=Number.isInteger(value.limit)&&value.limit>0&&value.limit<=100?value.limit:null;
   out.partial_period=Boolean(value.partial_period);
   out.unresolved_required_fields=[...new Set(value.unresolved_required_fields||[])].filter(x=>FIELDS.has(x)).slice(0,8);
-  if(value.tool_route!=null&&value.tool_route!=='get_shopify_online_country_products') throw new Error('invalid tool_route');
+  if(value.tool_route!=null&&!['get_shopify_online_country_products','get_average_customer_order_interval'].includes(value.tool_route)) throw new Error('invalid tool_route');
   out.tool_route=value.tool_route??null;
   if(value.request_kind!=null&&value.request_kind!=='advisory') throw new Error('invalid request_kind');
   out.request_kind=value.request_kind??null;
@@ -61,6 +61,8 @@ function period(text, now){
   if(yearOnly){const y=+yearOnly[1], end=`${y}-12-31`;return {start_date:`${y}-01-01`,end_date:end>todayIso&&y===today.getUTCFullYear()?todayIso:end,requested_end_period:String(y),partial_period:end>todayIso}}
   if(/last year/.test(lower)){const y=today.getUTCFullYear()-1;return {start_date:`${y}-01-01`,end_date:`${y}-12-31`,requested_end_period:String(y),partial_period:false}}
   if(/\b(?:this year|year to date|ytd)\b/.test(lower)){const y=today.getUTCFullYear();return {start_date:`${y}-01-01`,end_date:todayIso,requested_end_period:String(y),partial_period:true}}
+  const rollingYears=lower.match(/\blast\s+(\d{1,2})\s+years?\b/);
+  if(rollingYears){const start=new Date(Date.UTC(today.getUTCFullYear()-Number(rollingYears[1]),today.getUTCMonth(),today.getUTCDate()));return {start_date:start.toISOString().slice(0,10),end_date:todayIso,requested_end_period:'now',partial_period:true}}
   return null;
 }
 
@@ -77,6 +79,8 @@ export function transitionAnalysisContext(existing, message, {now=Date.now(),rep
     if(advisory) set.request_kind='advisory';
     const countryProducts=/\b(?:top\s+(?:ten|10)\s+)?(?:locations?|countries)\b[\s\S]*\bonline sales\b[\s\S]*\b(?:top\s+(?:ten|10)\s+)?products?\b|\bonline sales\b[\s\S]*\b(?:locations?|countries)\b[\s\S]*\bproducts?\b/i.test(text);
     if(countryProducts) set.tool_route='get_shopify_online_country_products';
+    const customerOrderInterval=/\b(?:average|mean|median)\b[\s\S]*\b(?:time|days?)\b[\s\S]*\bbetween\b[\s\S]*\b(?:online )?orders?\b[\s\S]*\b(?:same|each|per)\b[\s\S]*\bcustomer\b|\b(?:time|days?)\b[\s\S]*\bbetween consecutive (?:online )?orders?\b/i.test(text);
+    if(customerOrderInterval){set.tool_route='get_average_customer_order_interval';set.metrics=['customer_order_interval'];set.analysis_type='customers';set.channel='online';}
     const journey=/\b(?:first (?:observed )?(?:purchase|order)|bought? (?:after|next)|buy (?:after|next)|second (?:purchase|order)|third (?:purchase|order)|nth order|repeat (?:purchase )?rate|within \d+ days?|downstream|acquisition products?|customers? buy (?:after|next))\b/.test(lower);
     if(journey||base.analysis_type==='customer_journey'&&/^(?:okay[, ]+)?(?:which|what|within|on|exclude)\b/.test(lower)){set.metrics=['customer_journey'];set.analysis_type='customer_journey';set.journey_intent='purchase_sequence';const isFollowUp=base.analysis_type==='customer_journey';if(/collaboration/.test(lower)&&!isFollowUp)set.entry_product_classification='collaboration';else if(/\brings?\b/.test(lower)&&!isFollowUp)set.entry_product_classification='ring';else if(/\bclothing\b/.test(lower)&&!isFollowUp)set.entry_product_classification='clothing';if(/\bjewellery\b/.test(lower)){set.subsequent_product_classification='jewellery';set.include_unclassified_products=true}const excluded=[...lower.matchAll(/\bexclude\s+([^,.?]+?)(?=\s+(?:and|but|from|what|which)\b|[,.?]|$)/g)].map(m=>m[1].trim()).filter(Boolean);if(excluded.length)set.excluded_product_titles=[...base.excluded_product_titles,...excluded.map(x=>x.replace(/\b\w/g,c=>c.toUpperCase()))];if(/which collaboration/.test(lower))set.journey_group_by='collaboration_name';else if(/acquisition products?/.test(lower))set.journey_group_by='entry_product';else if(/each year separately|by (?:cohort )?year|annual cohorts?/.test(lower))set.journey_group_by='cohort_year_downstream_product';else if(/what|top|products?|items?/.test(lower))set.journey_group_by=base.journey_group_by==='cohort_year_downstream_product'?'cohort_year_downstream_product':'downstream_product';const seq=lower.match(/\b(second|third) (?:purchase|order)\b/);if(seq){const n=seq[1]==='second'?2:3;set.minimum_order_sequence=n;set.maximum_order_sequence=n}const days=lower.match(/\bwithin (30|60|90|365) days?\b/);if(days)set.within_days=+days[1]}
     else if(/\brefunds?\b/.test(lower)) set.metrics=['refunds'],set.analysis_type='finance';
@@ -112,4 +116,4 @@ export function initializeFromReportContext(existing, report={}){
   return validateAnalysisContext(allowed);
 }
 export function analysisScope(context){const c=validateAnalysisContext(context);if(!c.metrics.length)return null;return [c.metrics.join('/'),c.grain,c.start_date&&`${c.start_date}–${c.end_date}`,c.currencies.join('/'),c.channel_breakdown?'online vs instore':c.channel||'all channels'].filter(Boolean).join(' · ')}
-export function clarificationFor(context){const c=validateAnalysisContext(context);if(c.unresolved_required_fields.includes('start_date'))return c.tool_route==='get_shopify_online_country_products'?'What date range would you like? I’ll keep each currency in a separate ranking unless you specify one.':`What date range would you like? I’ll use ${c.currencies[0]||'GBP'} unless you specify another currency.`;return null}
+export function clarificationFor(context){const c=validateAnalysisContext(context);if(c.unresolved_required_fields.includes('start_date')){if(c.tool_route==='get_shopify_online_country_products')return 'What date range would you like? I’ll keep each currency in a separate ranking unless you specify one.';if(c.analysis_type!=='finance')return 'What date range would you like?';return `What date range would you like? I’ll use ${c.currencies[0]||'GBP'} unless you specify another currency.`;}return null}
