@@ -12,7 +12,15 @@ export const JOB_SCHEMA = [
 export const ORACLE_JOB_DEFAULTS = Object.freeze({dataset:'commerce',table:'oracle_analysis_jobs_v1',location:'EU'});
 export const SCHEMA_DIFF_LIMIT = 20;
 const ORACLE_OWNERSHIP_COLUMNS = ['job_id','owner_key','request_id','status','payload_json','created_at','updated_at'];
-const signature = field => `${String(field.type||'').toUpperCase()}:${String(field.mode||'NULLABLE').toUpperCase()}`;
+const BIGQUERY_TYPE_ALIASES = Object.freeze({
+  BOOLEAN:'BOOL', INTEGER:'INT64', FLOAT:'FLOAT64', DECIMAL:'NUMERIC',
+  BIGDECIMAL:'BIGNUMERIC', RECORD:'STRUCT'
+});
+const normalizedType = type => {
+  const upper=String(type||'').toUpperCase();
+  return BIGQUERY_TYPE_ALIASES[upper]||upper;
+};
+const signature = field => `${normalizedType(field.type)}:${String(field.mode||'NULLABLE').toUpperCase()}`;
 
 /** Compares metadata only. The returned, bounded diagnostic can never contain row values. */
 export function inspectJobTableSchema(fields=[],expected=JOB_SCHEMA,limit=SCHEMA_DIFF_LIMIT) {
