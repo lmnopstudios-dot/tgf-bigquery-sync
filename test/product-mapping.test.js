@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { applyProductFamilies, approvedMappingEdges, assertFamilyAssignment, candidateDiagnostics, classifyProduct, generateMappingCandidates, resolveFamilyDecisions, resolveMappingDecisions, sanitizeReviewerNote, searchProducts, validateGraphApproval } from '../oracle/product-mapping.js';
+import { applyProductFamilies, approvedMappingEdges, assertFamilyAssignment, buildProductChoicePreview, candidateDiagnostics, classifyProduct, generateMappingCandidates, resolveFamilyDecisions, resolveMappingDecisions, sanitizeReviewerNote, searchProducts, validateGraphApproval } from '../oracle/product-mapping.js';
 import { buildCanonicalProductGraph, mapProductPair } from '../oracle/product-identity.js';
 
 const p=(ref,title,extra={})=>({source_product_ref:ref,source_platform:ref.split(':')[0],source_store:ref.split(':')[1],source_product_id:ref.split(':')[2],title,...extra});
@@ -137,4 +137,22 @@ test('ordinary exact identity remains separate from reporting-family resolution'
   const products=[p('woo:ww:1','Exact Pendant',{sku:'EX-1'}),p('shopify:shopify:2','Exact Pendant',{sku:'EX-1'})];
   assert.equal(mapProductPair([products[0]],[products[1]])[0].mapping_method,'exact_unique_sku');
   assert.equal(applyProductFamilies(products,[])[0].reporting_product_ref,'source:woo:ww:1');
+});
+
+test('choice preview explains the Micro Michael same-source identity conflict while allowing family assignment',()=>{
+  const shopify='shopify:shopify:gid://shopify/Product/10434341601607';
+  const products=[p('woo:ww:135969','Ready To Ship - Micro Michael Rodent Pendant'),p('woo:ww:62682','Micro Michael Rodent Pendant'),p(shopify,'Micro Michael Rodent Pendant')];
+  const preview=buildProductChoicePreview({products,candidate:{candidate_id:'a'.repeat(24),left_ref:'woo:ww:135969',right_ref:shopify},selectedRef:shopify});
+  assert.equal(preview.read_only,true);assert.equal(preview.identity_preview.allowed,false);assert.deepEqual(preview.identity_preview.conflicting_products.map(x=>x.source_product_ref).sort(),['woo:ww:135969','woo:ww:62682']);
+  assert.equal(preview.family_preview.allowed,true);assert.equal(preview.family_preview.canonical_graph_changed,false);
+  assert.deepEqual(preview.identity_component.map(x=>x.source_product_ref).sort(),[shopify,'woo:ww:62682'].sort());
+});
+
+test('choice preview allows a genuinely valid identity and separately exposes a conflicting family assignment',()=>{
+  const shopify='shopify:shopify:gid://shopify/Product/10434341601607',source='woo:ww:135969';
+  const products=[p(source,'Historical pendant'),p(shopify,'Current pendant'),p('shopify:shopify:other','Other parent')];
+  const candidate={candidate_id:'b'.repeat(24),left_ref:source,right_ref:'square:square:old'};
+  const valid=buildProductChoicePreview({products,candidate,selectedRef:shopify});assert.equal(valid.identity_preview.allowed,true);assert.equal(valid.family_preview.allowed,true);
+  const conflict=buildProductChoicePreview({products,candidate,selectedRef:shopify,familyDecisions:[{decision_id:'f1',source_ref:source,shopify_parent_ref:'shopify:shopify:other',status:'active',reviewed_at:'2026-09-20'}]});
+  assert.equal(conflict.family_preview.allowed,false);assert.match(conflict.family_preview.reason,/already assigned.*other/);
 });

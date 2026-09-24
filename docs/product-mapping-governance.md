@@ -50,13 +50,13 @@ Report v2 resolves an active family membership to `family:shopify:shopify:<paren
 
 On rollout, application startup invokes the additive schema setup and creates `commerce.product_family_decisions`; no backfill or automatic title-based assignment occurs. Existing identity decisions need no migration. A reviewer then assigns `woo:ww:135969` and `woo:ww:62682` independently to the Shopify **Micro Michael Rodent Pendant** parent.
 
-The exact first Render Shell command is read-only and previews both the current identity conflict and the non-identity family resolution (including whether the family table exists):
+The exact first Render Shell command is read-only and previews the production candidate against the selected Shopify parent (including the identity conflict and non-identity family result):
 
 ```sh
-npm run diagnose:product-mapping-candidate -- 82a4a562756f935c97ba559e
+npm run diagnose:product-mapping-candidate -- '82a4a562756f935c97ba559e=gid://shopify/Product/10434341601607'
 ```
 
-After deployment: open **Product Mapping**, find the candidate, choose **Choose correct product**, search Shopify for **Micro Michael Rodent Pendant**, select the parent, and verify that **Confirm identity mapping** and **Assign to Shopify reporting family** are visibly distinct. Choose the family action and confirm its warning. Open **Reporting Families** and verify the active row, source ref `woo:ww:135969`, parent ref/title, reviewer, time, provenance, and note. Repeat for `woo:ww:62682`; both rows must remain active. Check Report v2 Products for one family reporting ref with separate source-product rows and unchanged totals. Finally exercise **Change family** and **Revoke family** on a non-production test membership (or inspect their controls without confirming in production), and rerun both read-only validators.
+After deployment: open **Product Mapping**, find Woo `woo:ww:135969`, choose **Choose correct product**, search Shopify for product `10434341601607`, and select it. While loading, verify both confirmations are disabled. Verify the identity component lists Shopify `10434341601607` and Woo `62682` with source, title, and reference; verify active reporting-family members are separately labelled. Confirm identity must be blocked and name Woo `135969` and `62682` as the conflict, while family assignment is allowed and says identity is preserved. Select a different Shopify result and verify the panel returns to loading and never shows or enables actions from the old selection. Finally simulate a preview failure (or temporarily block the request in browser developer tools) and verify the visible error leaves both actions disabled. Restore product `10434341601607`, wait for the current preview, choose the family action, confirm its warning, and verify the append-only row under **Reporting Families**.
 
 ## Reporting and validation
 
