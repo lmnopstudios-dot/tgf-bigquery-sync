@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { buildOracleInlineChart } from '../oracle/inline-charts.js';
+import { placeRenderedInlineChart } from '../public/oracle/inline-chart.js';
 
 test('country chart deduplicates product rows and preserves order net sales and unknown coverage by currency',()=>{
   const base={period:{start_date:'2026-01-01',end_date:'2026-01-31'},rows:[
@@ -24,6 +25,7 @@ test('journey chart requires exact second order and retains distinct-customer va
   const chart=buildOracleInlineChart('analyze_customer_journey',result);
   assert.deepEqual(chart.groups.map(x=>[x.label,x.items[0].label,x.items[0].value]),[['First-order cohort 2023','Ring',12],['First-order cohort 2024','Chain',7]]);
   assert.equal(chart.metric,'Distinct customers');
+  assert.deepEqual(chart.placement,{section_id:'cohort-overview-end'});
   assert.equal(buildOracleInlineChart('analyze_customer_journey',{...result,scope:{...result.scope,exact_order_sequence:null}}),null);
 });
 
@@ -35,8 +37,25 @@ test('invalid, empty, oversized and unrelated structured results safely fall bac
   assert.equal(buildOracleInlineChart('get_shopify_online_country_products',{period:{start_date:'2026-01-01',end_date:'2026-01-31'},rows}).groups[0].items.length,10);
 });
 
-test('chat keeps the prose answer and only appends a validated optional chart',async()=>{
+test('chat keeps the prose answer and places a validated optional chart',async()=>{
   const source=await readFile(new URL('../public/oracle/app.js',import.meta.url),'utf8');
-  assert.match(source,/renderMarkdown\(loading\.querySelector\('p'\),data\.answer\)/);
-  assert.match(source,/const chart=renderInlineChart\(data\.inline_chart\);if\(chart\)loading\.append\(chart\)/);
+  assert.match(source,/renderMarkdown\(answer,data\.answer\)/);
+  assert.match(source,/placeInlineChart\(answer,loading,data\.inline_chart\)/);
+});
+
+test('chart placement replaces its structured marker and otherwise uses the safe append fallback',()=>{
+  const chart={},marker={replaced:null,replaceWith(node){this.replaced=node}},inline={querySelector:selector=>selector==='[data-oracle-section="cohort-overview-end"]'?marker:null},message={appended:null,append(node){this.appended=node}};
+  assert.equal(placeRenderedInlineChart(inline,message,chart,{section_id:'cohort-overview-end'}),chart);
+  assert.equal(marker.replaced,chart);assert.equal(message.appended,null);
+  marker.replaced=null;
+  assert.equal(placeRenderedInlineChart({querySelector:()=>null},message,chart,{section_id:'missing'}),chart);
+  assert.equal(message.appended,chart);assert.equal(marker.replaced,null);
+});
+
+test('inline cohort charts preserve ten rows but initially expose five with an accessible control',async()=>{
+  const source=await readFile(new URL('../public/oracle/inline-chart.js',import.meta.url),'utf8');
+  assert.match(source,/if\(itemIndex>=5\)row\.hidden=true/);
+  assert.match(source,/toggle\.textContent='Show top 10'/);
+  assert.match(source,/setAttribute\('aria-expanded','false'\)/);
+  assert.match(source,/setAttribute\('aria-controls',list\.id\)/);
 });
