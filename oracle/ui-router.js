@@ -6,6 +6,7 @@ import { createSession, csrfToken, parseCookies, safeError, verifySession } from
 import { reportCsv, reportPdf, reportWorkbook } from './report-export.js';
 import { analysisScope, clarificationFor, emptyAnalysisContext, transitionAnalysisContext } from './analysis-context.js';
 import { governanceDiagnostic, governancePublicError, isGovernanceBusinessError } from './governance-diagnostics.js';
+import { SHOPIFY_RATE_LIMIT_MESSAGE } from './shopifyql-throttle.js';
 
 const json = express.json({ limit: '48kb', type: 'application/json' });
 const allowedOrigins = request => new Set([`${request.protocol}://${request.get('host')}`, process.env.ORACLE_UI_ORIGIN].filter(Boolean));
@@ -16,6 +17,7 @@ export function createOracleUiRouter({ knowledgeService, bigquery, project, chat
   const sessionSecret = env.ORACLE_UI_SESSION_SECRET;
   const proposalModel = env.ORACLE_PROPOSAL_MODEL || 'gpt-5.6';
   const analysisSessions = new Map();
+  const recentChatEvidence = new Map();
   const logProposalError = error => console.error('Oracle UI proposal generation failed:', proposalDiagnostic(error, proposalModel));
   const mappingReadDiagnostic=(error,context)=>{const value=governanceDiagnostic(error,context);delete value.internal_message;return value};
   if (!password || !sessionSecret || sessionSecret.length < 32) throw new Error('ORACLE_UI_PASSWORD and ORACLE_UI_SESSION_SECRET (32+ characters) are required');
@@ -61,7 +63,7 @@ export function createOracleUiRouter({ knowledgeService, bigquery, project, chat
   const sessionKey=req=>crypto.createHash('sha256').update(parseCookies(req.headers.cookie).oracle_session||'').digest('hex');
   const sessionContext=req=>{const key=sessionKey(req),entry=analysisSessions.get(key);if(!entry||entry.expires_at<=Date.now()){analysisSessions.delete(key);return emptyAnalysisContext()}return entry.context};
   const saveSessionContext=(req,context)=>analysisSessions.set(sessionKey(req),{context,expires_at:req.oracleUser.exp*1000});
-  router.post('/auth/logout', authenticate, protectWrite, (req, res) => { analysisSessions.delete(sessionKey(req));res.setHeader('Set-Cookie', ['oracle_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0', 'oracle_csrf=; Path=/; SameSite=Strict; Max-Age=0']); res.json({ success: true }); });
+  router.post('/auth/logout', authenticate, protectWrite, (req, res) => { const key=sessionKey(req);analysisSessions.delete(key);recentChatEvidence.delete(key);res.setHeader('Set-Cookie', ['oracle_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0', 'oracle_csrf=; Path=/; SameSite=Strict; Max-Age=0']); res.json({ success: true }); });
   router.get('/session', authenticate, (req, res) => res.json({ success: true, user: req.oracleUser.sub, role: req.oracleUser.role, analysis_scope:analysisScope(sessionContext(req)) }));
   router.post('/analysis/clear',authenticate,protectWrite,json,(req,res)=>{analysisSessions.delete(sessionKey(req));res.json({success:true,analysis_scope:null})});
   router.post('/chat', authenticate, protectWrite, json, async (req, res) => {
@@ -72,12 +74,18 @@ export function createOracleUiRouter({ knowledgeService, bigquery, project, chat
       if(result.transition.applies_to_message) saveSessionContext(req,result.context);
       console.info('Oracle analysis context transition:',{continuation:result.transition.continuation,changed_fields:result.transition.set,cleared_fields:result.transition.clear,retained_field_names:result.transition.retain,missing_required_field_names:result.transition.missing_required_fields,ready_to_execute:result.transition.ready_to_execute});
       const clarification=result.transition.applies_to_message?clarificationFor(result.context):null;
-      const answer=clarification?{answer:clarification,tools:[]}:await chat(req.body.message,{analysisContext:result.transition.applies_to_message?result.context:null,transition:result.transition});
+      const key=sessionKey(req),cached=recentChatEvidence.get(key);
+      const recentEvidence=cached&&cached.expires_at>now()?cached.value:null;
+      const answer=clarification?{answer:clarification,tools:[]}:await chat(req.body.message,{analysisContext:result.transition.applies_to_message?result.context:null,transition:result.transition,recentEvidence});
+      recentChatEvidence.set(key,{expires_at:now()+15*60*1000,value:{as_of:new Date(now()).toISOString(),answer:String(answer.answer||'').slice(0,6000),tools:(answer.tools||[]).slice(0,20)}});
       let proposals = [], proposal_error = null;
       try { proposals = await proposalsFor(req.body.message, req.oracleUser.sub); }
       catch (error) { logProposalError(error); proposal_error = 'Knowledge proposal could not be generated.'; }
       res.json({ success: true, answer: answer.answer, proposals, proposal_error, analysis_scope:analysisScope(sessionContext(req)) });
-    } catch (error) { console.error('Oracle UI chat failed:', safeError(error)); res.status(500).json({ success: false, error: safeError(error) }); }
+    } catch (error) {
+      if (error?.code === 'THROTTLED') return res.status(429).json({ success: false, code: 'SHOPIFY_TEMPORARILY_RATE_LIMITED', error: SHOPIFY_RATE_LIMIT_MESSAGE });
+      console.error('Oracle UI chat failed:', safeError(error)); res.status(500).json({ success: false, error: safeError(error) });
+    }
   });
   router.post('/propose', authenticate, protectWrite, json, async (req, res) => {
     try {
