@@ -39,11 +39,14 @@ test('aggregate diagnostic is read-only, date-aware, channelled and validates sa
   assert.doesNotMatch(sql,/\b(?:INSERT|UPDATE|DELETE|MERGE|CREATE|DROP|ALTER|TRUNCATE)\b/i);
   assert.match(queries.coverage,/DATE '2020-02-01'/); assert.match(queries.coverage,/eligible_eu_samples/); assert.match(queries.coverage,/missing_address/); assert.match(queries.coverage,/invalid_code/); assert.match(queries.coverage,/retail_location_id IS NULL/);
   assert.match(queries.parent_sales,/expected_sales/); assert.match(queries.integrity,/MAX\(g\.synced_at\)/);
+  assert.match(queries.destination_metadata,/INFORMATION_SCHEMA\.TABLES/);
+  assert.match(queries.direct_field_evidence,/INFORMATION_SCHEMA\.COLUMNS/);
+  assert.match(queries.source_scope,/matrixify_excluded_orders/);
 });
 
 test('diagnostic emits valid BigQuery named STRUCT fields in every generated query',()=>{
   const queries=diagnosticQueries('p');
-  assert.deepEqual(Object.keys(queries),['coverage','integrity','parent_sales']);
+  assert.deepEqual(Object.keys(queries),['destination_metadata','direct_field_evidence','source_scope','coverage','integrity','parent_sales']);
   for (const [stage,sql] of Object.entries(queries)) {
     assert.doesNotMatch(sql,/STRUCT\([^)]*(?:'[^']*'|DATE '[^']*'|\))\s+(?:code|joined|left_on)\b/,
       `${stage} contains a STRUCT field alias without AS`);
@@ -54,8 +57,51 @@ test('diagnostic emits valid BigQuery named STRUCT fields in every generated que
 test('diagnostic query errors identify the bounded failing stage',async()=>{
   const bigquery={query:async()=>{throw new Error(`Expected ")" or ","${'x'.repeat(400)}\nunsafe detail`)}};
   await assert.rejects(diagnose({bigquery,project:'p'}),error=>{
-    assert.match(error.message,/^Shopify shipping geography diagnostic failed during coverage: Expected "\)" or ","/);
+    assert.match(error.message,/^Shopify shipping geography diagnostic failed during destination_metadata: Expected "\)" or ","/);
     assert.ok(error.message.length <= 365); assert.doesNotMatch(error.message,/unsafe detail/);
     return true;
+  });
+});
+
+test('missing destination produces a valid PII-free pre-backfill report without querying it',async()=>{
+  const calls=[];
+  const bigquery={query:async options=>{
+    calls.push(options);
+    if(options.query.includes('INFORMATION_SCHEMA.TABLES')) return [[{destination_table_count:0}]];
+    if(options.query.includes('INFORMATION_SCHEMA.COLUMNS')) return [[{table_name:'legacy_orders',column_name:'shipping_country',data_type:'STRING'}]];
+    return [[{source_shopify_orders:12,matrixify_excluded_orders:2,expected_write_orders:10,expected_online_orders:8,expected_pos_orders:2}]];
+  }};
+  const report=await diagnose({bigquery,project:'p'});
+  assert.equal(report.valid,true); assert.equal(report.phase,'pre_backfill'); assert.equal(report.destination_present,false);
+  assert.equal(report.evidence.source_scope[0].expected_write_orders,10);
+  assert.deepEqual(report.evidence.coverage,{status:'not_yet_measurable',reason:'destination_table_absent'});
+  assert.deepEqual(report.evidence.parent_sales,{status:'not_yet_measurable',reason:'destination_table_absent'});
+  assert.equal(calls.length,3);
+  assert.ok(calls.every(call=>!/\b(?:INSERT|UPDATE|DELETE|MERGE|CREATE|DROP|ALTER|TRUNCATE)\b/i.test(call.query)));
+  assert.doesNotMatch(JSON.stringify(report),/(?:email|phone|postcode|recipient|address_line)/i);
+});
+
+test('present destination runs and validates the full coverage and integrity path',async()=>{
+  const calls=[];
+  const bigquery={query:async options=>{
+    calls.push(options.query);
+    if(options.query.includes('INFORMATION_SCHEMA.TABLES')) return [[{destination_table_count:1}]];
+    if(options.query.includes('INFORMATION_SCHEMA.COLUMNS')) return [[]];
+    if(options.query.includes('source_shopify_orders')) return [[{source_shopify_orders:10,matrixify_excluded_orders:1,expected_write_orders:9}]];
+    if(options.query.includes('geography_rows')) return [[{geography_rows:9,distinct_geography_orders:9,orphan_rows:0,matrixify_rows:0}]];
+    if(options.query.includes('joined_rows')) return [[{joined_rows:9,distinct_orders:9,joined_sales:100,expected_sales:100}]];
+    return [[{month:'2026-01-01',channel:'Online',orders:9,valid_direct_country:8}]];
+  }};
+  const report=await diagnose({bigquery,project:'p'});
+  assert.equal(report.valid,true); assert.equal(report.phase,'post_backfill'); assert.equal(report.destination_present,true);
+  assert.ok(Array.isArray(report.evidence.coverage)); assert.equal(calls.length,6);
+});
+
+test('post-metadata stage errors remain bounded and name the safe stage',async()=>{
+  let call=0;
+  const bigquery={query:async()=>{call++; if(call<=3)return call===1?[[{destination_table_count:1}]]:[[]]; throw new Error('denied\nquery text with sensitive detail')}};
+  await assert.rejects(diagnose({bigquery,project:'p'}),error=>{
+    assert.equal(error.message,'Shopify shipping geography diagnostic failed during coverage: denied');
+    assert.doesNotMatch(error.message,/sensitive/); return true;
   });
 });
