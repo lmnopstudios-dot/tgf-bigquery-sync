@@ -136,6 +136,32 @@ export function assertFamilyAssignment(sourceRef,parentRef,history=[],{replacing
   if(existing)throw new Error(`conflicting family assignment: ${sourceRef} is already assigned to ${existing.shopify_parent_ref}; use Change family`);
   return true;
 }
+
+const productSummary=(ref,productByRef)=>{const product=productByRef.get(ref);return{source:namespace(product||{source_platform:ref.split(':')[0],source_store:ref.split(':')[1]}),title:product?.title||null,source_product_ref:ref};};
+
+/** Read-only, shared-authority preview for the two deliberately separate reviewer actions. */
+export function buildProductChoicePreview({products=[],mappingDecisions=[],familyDecisions=[],candidate,selectedRef}={}) {
+  const productByRef=new Map(products.map(product=>[product.source_product_ref,product]));
+  const selected=productByRef.get(selectedRef);
+  if(!selected||!selectedRef?.startsWith('shopify:shopify:'))throw new Error('selected Shopify product was not found');
+  const originalRefs=[candidate?.left_ref,candidate?.right_ref].filter(Boolean);
+  const sourceRef=originalRefs.find(ref=>!ref.startsWith('shopify:'));
+  if(!sourceRef||!productByRef.has(sourceRef))throw new Error('candidate source product was not found');
+  const explicitEdges=approvedMappingEdges(mappingDecisions),deterministicEdges=deterministicMappingEdges(products);
+  const graph=inspectProductGraph({products,explicitEdges,deterministicEdges});
+  const component=graph.components.find(item=>item.source_products.includes(selectedRef));
+  const replacement={candidate_id:candidate.candidate_id,left_ref:sourceRef,right_ref:selectedRef,left_title:productByRef.get(sourceRef)?.title||null,right_title:selected.title,candidate_method:'human_replacement'};
+  const diagnosis=diagnoseProposedProductEdge({products,explicitEdges,deterministicEdges,candidate:replacement});
+  const familyState=resolveFamilyDecisions(familyDecisions),familyMembers=familyState.active.filter(item=>item.shopify_parent_ref===selectedRef);
+  let familyReason=null;try{assertFamilyAssignment(sourceRef,selectedRef,familyDecisions)}catch(error){familyReason=error.message;}
+  return {
+    read_only:true,candidate_id:candidate.candidate_id,selected_product:productSummary(selectedRef,productByRef),
+    identity_component:(component?.source_products||[selectedRef]).map(ref=>productSummary(ref,productByRef)),
+    reporting_family_members:familyMembers.map(item=>productSummary(item.source_ref,productByRef)),
+    identity_preview:{allowed:diagnosis.new_conflicts.length===0,conflicting_products:diagnosis.new_conflicts.flatMap(conflict=>conflict.products.map(item=>productSummary(item.source_product_ref,productByRef))),reason:diagnosis.new_conflicts.length?diagnosis.diagnosis:null},
+    family_preview:{allowed:!familyReason,reason:familyReason,source_ref:sourceRef,shopify_parent_ref:selectedRef,source_identity_preserved:true,canonical_graph_changed:false}
+  };
+}
 export function applyProductFamilies(rows,history=[]) {
   const active=resolveFamilyDecisions(history).active,bySource=new Map(active.map(x=>[x.source_ref,x])),parents=new Map(active.map(x=>[x.shopify_parent_ref,x]));
   return rows.map(row=>{const ref=row.source_product_ref||`${row.source_platform}:${row.source_store}:${row.source_product_id}`,family=bySource.get(ref)||parents.get(ref);return family?{...row,reporting_product_ref:`family:${family.shopify_parent_ref}`,reporting_title:family.shopify_parent_title,mapping_method:'governed_product_family'}:{...row,reporting_product_ref:row.product_ref||`source:${ref}`};});
@@ -224,6 +250,15 @@ export function createProductMappingService({ bigquery, project, dataset = PRODU
       const [schema]=await bigquery.query({query:`SELECT COUNTIF(table_name=@table) present FROM \`${project}.${dataset}.INFORMATION_SCHEMA.TABLES\``,params:{table:PRODUCT_FAMILY_TABLE},useLegacySql:false});
       let families=[];if(Number(schema[0]?.present||0))families=await familyDecisions();const familyState=resolveFamilyDecisions(families),existing=familyState.active.find(x=>x.source_ref===sourceRef);
       return {...graph,family_preview:sourceRef&&parentRef?{relationship_type:'reporting_family_not_identity',source_ref:sourceRef,shopify_parent_ref:parentRef,reporting_product_ref:`family:${parentRef}`,source_identity_preserved:true,canonical_graph_changed:false,would_conflict:Boolean(existing&&existing.shopify_parent_ref!==parentRef),current_parent_ref:existing?.shopify_parent_ref||null,decision_table_present:Boolean(Number(schema[0]?.present||0))}:{available:false,reason:'preview requires one non-Shopify source and one Shopify parent'}};
+    },
+    async previewChoice(candidateId,selectedRef){
+      if(!/^[a-f0-9]{24}$/i.test(String(candidateId||''))||String(selectedRef||'').length>200)throw new Error('invalid product choice preview request');
+      const [products,mappingHistory,familyHistory]=await Promise.all([loadProducts(),decisions(),familyDecisions()]);
+      const candidate=generateMappingCandidates(products,{decisions:mappingHistory,familyDecisions:familyHistory}).find(item=>item.candidate_id===candidateId)
+        || mappingHistory.find(item=>item.candidate_id===candidateId);
+      if(!candidate)throw new Error('product mapping candidate was not found');
+      const normalizedRef=String(selectedRef).startsWith('shopify:shopify:')?String(selectedRef):`shopify:shopify:${selectedRef}`;
+      return buildProductChoicePreview({products,mappingDecisions:mappingHistory,familyDecisions:familyHistory,candidate,selectedRef:normalizedRef});
     },
     async currentState(){return resolveMappingDecisions(await decisions());},
     async list({ products, search = '' } = {}) { await setup(); const [history,families]=await Promise.all([decisions(),familyDecisions()]); const items=generateMappingCandidates(products || await loadProducts(),{decisions:history,familyDecisions:families}).filter(x=>!search || `${x.left_title} ${x.right_title}`.toLowerCase().includes(search.toLowerCase())).slice(0,250); return { items, summary:`I found ${items.filter(x=>x.confidence==='high').length} high-confidence unresolved product mappings that could improve historical product comparison.` }; },
