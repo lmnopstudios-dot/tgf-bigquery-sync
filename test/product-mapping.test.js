@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { applyProductFamilies, approvedMappingEdges, assertFamilyAssignment, buildHistoricalReviewQueue, buildProductChoicePreview, buildProductMappingCoverage, candidateDiagnostics, classifyProduct, createProductMappingService, generateMappingCandidates, isShopifyParentProduct, productSourceLabel, resolveFamilyDecisions, resolveMappingDecisions, sanitizeReviewerNote, searchProducts, suggestShopifyParents, validateGraphApproval } from '../oracle/product-mapping.js';
+import { applyProductFamilies, approvedMappingEdges, assertFamilyAssignment, buildHistoricalReviewQueue, buildProductChoicePreview, buildProductMappingCoverage, candidateDiagnostics, classifyProduct, createProductMappingService, generateMappingCandidates, isShopifyParentProduct, productMoneyContract, productSourceLabel, resolveFamilyDecisions, resolveMappingDecisions, sanitizeReviewerNote, searchProducts, suggestShopifyParents, validateGraphApproval } from '../oracle/product-mapping.js';
 import { buildCanonicalProductGraph, mapProductPair } from '../oracle/product-identity.js';
 
 const p=(ref,title,extra={})=>({source_product_ref:ref,source_platform:ref.split(':')[0],source_store:ref.split(':')[1],source_product_id:ref.split(':')[2],title,...extra});
@@ -196,7 +196,26 @@ test('coverage reports unresolved historical impact, resolutions, outcomes and c
   const products=[p('woo:ww:1','Exact Ring',{line_items:3,sales:30}),p('woo:usd:2','Old Ring',{line_items:5,sales:50}),p('square:square:3','Shipping',{line_items:7,sales:70}),p('shopify:shopify:4','Exact Ring')];
   const mappings=[{decision_id:'m',left_ref:'woo:ww:1',right_ref:'shopify:shopify:4',status:'approved'}],outcomes=[{source_ref:'woo:usd:2',outcome:'no_equivalent',reviewed_at:'2026-01-01'}];
   const queue=buildHistoricalReviewQueue(products,[],{mappingDecisions:mappings,reviewOutcomes:outcomes}),coverage=buildProductMappingCoverage(products,queue,{mappingDecisions:mappings,reviewOutcomes:outcomes});
-  assert.equal(coverage.by_source['woo:usd'].order_lines,5);assert.equal(coverage.by_source['woo:usd'].no_equivalent,1);assert.equal(coverage.by_source['square:square'].classification_impact.shipping.order_lines,7);assert.equal(coverage.completed,2);
+  assert.equal(coverage.by_source['woo:usd'].order_lines,5);assert.equal(coverage.by_source['woo:usd'].no_equivalent,1);assert.equal(coverage.by_source['square:square'].intentional_exclusions.shipping.order_lines,7);assert.equal(coverage.completed,2);assert.equal(coverage.remaining,0);assert.equal(coverage.reconciliation.reconciled,true);
+});
+
+test('production-shaped coverage assigns every historical product to one non-overlapping state',()=>{
+  const completed=Array.from({length:42},(_,i)=>p(`woo:ww:c${i}`,'Completed ring'));
+  const reviewable=Array.from({length:2412},(_,i)=>p(`woo:usd:r${i}`,'Review ring'));
+  const excluded=Array.from({length:1138},(_,i)=>p(`square:square:x${i}`,'Shipping'));
+  const mappings=completed.map((row,i)=>({decision_id:`m${i}`,left_ref:row.source_product_ref,right_ref:`shopify:shopify:${i}`,status:'approved'}));
+  const products=[...completed,...reviewable,...excluded];
+  const coverage=buildProductMappingCoverage(products,buildHistoricalReviewQueue(products,[],{mappingDecisions:mappings}),{mappingDecisions:mappings});
+  assert.equal(coverage.total,3592);assert.equal(coverage.completed,42);assert.equal(coverage.remaining,2412);assert.equal(coverage.categories.intentional_exclusions,1138);
+  assert.equal(Object.values(coverage.by_source).reduce((n,value)=>n+value.products,0),3592);assert.deepEqual(coverage.reconciliation,{equation:'total = completed + remaining + deterministic_match + intentional_exclusions',reconciled:true,overlap_products:0,missing_products:0});
+});
+
+test('money contracts preserve currencies and never add Square minor units to Woo major units',()=>{
+  const products=[p('woo:ww:1','Ring',{currency:'GBP',monetary_unit:'major_unit',sales:10}),p('woo:usd:2','Ring',{currency:'USD',monetary_unit:'major_unit',sales:20}),p('square:square:3','Ring',{currency:'GBP',monetary_unit:'minor_unit',sales:300})];
+  const coverage=buildProductMappingCoverage(products,buildHistoricalReviewQueue(products,[]));
+  assert.deepEqual(productMoneyContract('square:square'),{currency_field:'currency',amount_field:'total_amount',monetary_unit:'minor_unit'});
+  assert.deepEqual(coverage.by_source['square:square'].sales_by_currency,[{currency:'GBP',monetary_unit:'minor_unit',sales:300}]);
+  assert.deepEqual(coverage.by_source['woo:ww'].sales_by_currency,[{currency:'GBP',monetary_unit:'major_unit',sales:10}]);
 });
 
 test('queue resolution state distinguishes active identity and active reporting family',()=>{
