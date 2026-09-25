@@ -5,6 +5,7 @@ import { createOracleUiRouter } from '../oracle/ui-router.js';
 import { BigQuery } from '@google-cloud/bigquery';
 import { bigQueryErrorDiagnostic, createAnalysisJobWorker, createBigQueryAnalysisJobStore, createMemoryAnalysisJobStore, streamingInsertDiagnostic } from '../oracle/analysis-jobs.js';
 import { smokeOracleJobQueue } from '../diagnostics/oracle-job-queue-smoke.js';
+import { diagnoseOrdinaryClaim } from '../diagnostics/oracle-ordinary-claim.js';
 
 const env={ORACLE_UI_PASSWORD:'test-password',ORACLE_UI_SESSION_SECRET:'12345678901234567890123456789012',ORACLE_JOB_RUNTIME_MS:'120000',ORACLE_ANALYSIS_JOBS_ENABLED:'true'};
 const DANIELLE_FULL_EMAIL=`Danielle has asked us to look at clearing the following stock online:
@@ -81,14 +82,14 @@ test('PartialFailure diagnostics never include rejected streaming rows',()=>{
   const diagnostic=streamingInsertDiagnostic(rejected);assert.deepEqual(diagnostic,{error_class:'PartialFailureError',reason:'invalid',code:'400',field:'payload_json'});assert.doesNotMatch(JSON.stringify(diagnostic),/customer secret|sql_parameters|owner|request/);
 });
 
-test('production BigQuery claim uses its dataset location, a TIMESTAMP parameter, and returns after commit',async()=>{
+test('targeted BigQuery claim uses its dataset location, a TIMESTAMP parameter, and returns after commit',async()=>{
   let options;const dataset={getMetadata:async()=>[{location:'EU'}]};
   const bigquery={dataset:name=>{assert.equal(name,'commerce');return dataset},query:async input=>{options=input;return [[{job_id:'smoke-job',status:'running',attempts:1,lease_until:{value:'2026-09-25T00:01:00.000Z'}}]]}};
   const store=createBigQueryAnalysisJobStore({bigquery,project:'production-project'});
   const claimed=await store.claim({worker_id:'smoke-worker',leaseMs:60_000,now:Date.parse('2026-09-25T00:00:00.000Z'),job_id:'smoke-job'});
   assert.equal(claimed.job_id,'smoke-job');assert.equal(options.location,'EU');assert.ok(options.params.lease instanceof Date);
   const encoded=BigQuery.valueToQueryParameter_(options.params.lease);assert.equal(encoded.parameterType.type,'TIMESTAMP');
-  assert.match(options.query,/DECLARE claimed_job_id STRING; BEGIN TRANSACTION;/);assert.match(options.query,/SET claimed_job_id=\(SELECT job_id/);assert.match(options.query,/COMMIT TRANSACTION; SELECT \*/);assert.match(options.query,/WHERE job_id=claimed_job_id AND status='running' LIMIT 1;$/);
+  assert.match(options.query,/BEGIN TRANSACTION;/);assert.match(options.query,/queued\.job_id=@job_id/);assert.match(options.query,/COMMIT TRANSACTION; SELECT \*/);assert.match(options.query,/claimed\.job_id=@job_id/);
   assert.ok(options.query.indexOf('COMMIT TRANSACTION')<options.query.lastIndexOf('SELECT *'));
 });
 
@@ -98,9 +99,25 @@ test('BigQuery query diagnostics expose only bounded redacted message and locati
 });
 
 test('worker infrastructure failures use bounded exponential backoff and safe stage logs',async()=>{
-  let claims=0;const logs=[];const worker=createAnalysisJobWorker({store:{claim:async()=>{claims++;const error=new Error('prompt and credential secret');error.code='private secret';throw error}},run:async()=>{},pollMs:5,maxBackoffMs:20,logger:{error:(message,detail)=>logs.push({message,detail})}});
+  let claims=0;const logs=[];const worker=createAnalysisJobWorker({store:{claim:async()=>{claims++;throw {name:'ApiError',code:400,errors:[{reason:'invalidQuery',location:'query',message:"Bad 'prompt secret' in `private.table` at [1:42]"}]};}},run:async()=>{},pollMs:5,maxBackoffMs:20,logger:{error:(message,detail)=>logs.push({message,detail})}});
   worker.start();await sleep(38);worker.stop();
-  assert.ok(claims>=2&&claims<=3,`expected 2-3 bounded claims, received ${claims}`);assert.equal(worker.backoffMs,20);assert.ok(logs.every(log=>log.detail.stage==='claim'));assert.doesNotMatch(JSON.stringify(logs),/prompt|credential|private secret/);
+  assert.ok(claims>=2&&claims<=3,`expected 2-3 bounded claims, received ${claims}`);assert.equal(worker.backoffMs,20);assert.ok(logs.every(log=>log.detail.stage==='claim'&&log.detail.bigquery_reason==='invalidQuery'&&log.detail.bigquery_message.includes('[redacted]')));assert.doesNotMatch(JSON.stringify(logs),/prompt secret|private\.table/);
+});
+
+test('production-shaped ordinary claim handles empty and queued queues and excludes smoke jobs',async()=>{
+  for(const scenario of ['empty','queued']){
+    const calls=[];let selected=scenario==='queued';const dataset={getMetadata:async()=>[{location:'EU'}]};
+    const bigquery={dataset:()=>dataset,query:async options=>{calls.push(options);if(options.query.startsWith('SELECT job_id'))return [selected? [{job_id:'ordinary-job'}]:[]];selected=false;return [[{job_id:'ordinary-job',status:'running',attempts:1,payload_json:{message:'safe'}}]];}};
+    const store=createBigQueryAnalysisJobStore({bigquery,project:'production-project'}),claimed=await store.claim({worker_id:'worker',leaseMs:60_000});
+    assert.match(calls[0].query,/NOT STARTS_WITH\(candidate\.request_id,'oracle-smoke-'\)/);
+    if(scenario==='empty'){assert.equal(claimed,null);assert.equal(calls.length,1);}else{assert.equal(claimed.job_id,'ordinary-job');assert.equal(calls.length,2);assert.equal(calls[1].params.job_id,'ordinary-job');}
+  }
+});
+
+test('ordinary claim diagnostic is read-only by default and acceptance uses ordinary claim',async()=>{
+  let creates=0,claims=0,finishes=0;const store={peekOrdinary:async()=>null,create:async input=>{creates++;assert.equal(input.payload_json.non_customer,true);return {job_id:'accepted'};},claim:async input=>{claims++;assert.equal(input.job_id,undefined);return {job_id:'accepted'};},finish:async()=>{finishes++;}};
+  assert.deepEqual(await diagnoseOrdinaryClaim({store}),{success:true,mode:'read_only',ordinary_job_waiting:false});assert.equal(creates,0);
+  assert.deepEqual((await diagnoseOrdinaryClaim({store,accept:true})).stages,['enqueue','ordinary_claim','completion']);assert.deepEqual([creates,claims,finishes],[1,1,1]);
 });
 
 test('browser keeps interactive chat as default and offers an explicit durable job path',async()=>{
