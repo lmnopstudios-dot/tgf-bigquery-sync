@@ -5,6 +5,7 @@ import { KNOWLEDGE_TOOL_DEFINITIONS } from './knowledge.js';
 import { SHOPIFY_COUNTRY_PRODUCTS_TOOL_DEFINITION } from './shopify-country-products.js';
 import { CUSTOMER_ORDER_INTERVAL_TOOL_DEFINITION } from './customer-order-interval.js';
 import { ONLINE_COUNTRY_SALES_TOOL_DEFINITION } from './online-country-sales.js';
+import { DEVICE_SOURCE_CONVERSION_TOOL_DEFINITION } from './device-source-conversion.js';
 
 /** The exact OpenAI tool registry submitted by the Oracle request boundary. */
 export function createOracleToolDefinitions() {
@@ -16,6 +17,7 @@ export function createOracleToolDefinitions() {
         SHOPIFY_COUNTRY_PRODUCTS_TOOL_DEFINITION,
         CUSTOMER_ORDER_INTERVAL_TOOL_DEFINITION,
         ONLINE_COUNTRY_SALES_TOOL_DEFINITION,
+        DEVICE_SOURCE_CONVERSION_TOOL_DEFINITION,
         {
           type: 'function',
           name: 'get_ecommerce_management_report',

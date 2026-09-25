@@ -32,6 +32,7 @@ import { normalizeShippingGeography, persistShippingGeography } from './shopify/
 import { createShopifyCountryProductsService } from './oracle/shopify-country-products.js';
 import { createCustomerOrderIntervalService } from './oracle/customer-order-interval.js';
 import { createOnlineCountrySalesService, ONLINE_COUNTRY_MAX_BYTES } from './oracle/online-country-sales.js';
+import { createDeviceSourceConversionService, executeDeviceSourceConversionToolCall } from './oracle/device-source-conversion.js';
 import { runWithShopifyThrottle, SHOPIFY_RATE_LIMIT_MESSAGE } from './oracle/shopifyql-throttle.js';
 import { buildOracleInlineChart } from './oracle/inline-charts.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
@@ -142,6 +143,7 @@ const collectionClassificationService = createCollectionClassificationService({ 
 const shopifyCountryProductsService = createShopifyCountryProductsService({ bigquery, project: GOOGLE_PROJECT_ID });
 const customerOrderIntervalService = createCustomerOrderIntervalService({ bigquery, project: GOOGLE_PROJECT_ID });
 const onlineCountrySalesService = createOnlineCountrySalesService({ bigquery, project: GOOGLE_PROJECT_ID });
+const deviceSourceConversionService = createDeviceSourceConversionService({ bigquery, project: GOOGLE_PROJECT_ID });
 productMappingService.setup().catch(error => console.error('Product mapping storage setup failed:', redactError(error?.message || error)));
 collectionClassificationService.setup().catch(error => console.error('Collection classification storage setup failed:', redactError(error?.message || error)));
 
@@ -8353,7 +8355,10 @@ Important rules:
                 );
                 if (knowledgeCall.handled) {
                   result = knowledgeCall.result;
-                } else if (item.name === 'get_average_customer_order_interval') {
+                } else {
+                  const deviceConversionCall = await executeDeviceSourceConversionToolCall(deviceSourceConversionService, item.name, args);
+                  if (deviceConversionCall.handled) result = deviceConversionCall.result;
+                  else if (item.name === 'get_average_customer_order_interval') {
   result = await customerOrderIntervalService(args);
 } else if (item.name === 'get_shopify_online_country_products') {
   result = await shopifyCountryProductsService(args);
@@ -8447,6 +8452,7 @@ Important rules:
             };
             }
               }
+            }
             }
             }
           } catch (error) {
@@ -8572,7 +8578,6 @@ if (process.env.ORACLE_UI_PASSWORD || process.env.ORACLE_UI_SESSION_SECRET) {
   app.use('/oracle', express.static(new URL('./public/oracle', import.meta.url).pathname, { index: 'index.html' }));
   app.get('/oracle', (_req, res) => res.redirect('/oracle/'));
 }
-
 
 /* =========================================================
    START SERVER

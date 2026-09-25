@@ -19,6 +19,7 @@
     "diagnose:shopify-shipping-geography": "node diagnostics/shopify-shipping-geography.js",
     "sync:shopify-shipping-geography": "node shopify/order-geography.js",
     "sync:ga4": "node ga4/sync.js",
+    "backfill:ga4": "node ga4/backfill.js",
     "validate:ga4": "node diagnostics/ga4-semantic-validation.js",
     "test": "node --test",
     "sync:search-console": "node search-console/sync.js",
