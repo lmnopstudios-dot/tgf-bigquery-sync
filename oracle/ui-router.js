@@ -25,6 +25,7 @@ export function createOracleUiRouter({ knowledgeService, bigquery, project, chat
   const proposalModel = env.ORACLE_PROPOSAL_MODEL || 'gpt-5.6';
   const analysisSessions = new Map();
   const recentChatEvidence = new Map();
+  const unansweredIntents = new Map();
   const logProposalError = error => console.error('Oracle UI proposal generation failed:', proposalDiagnostic(error, proposalModel));
   const mappingReadDiagnostic=(error,context)=>{const value=governanceDiagnostic(error,context);delete value.internal_message;return value};
   if (!password || !sessionSecret || sessionSecret.length < 32) throw new Error('ORACLE_UI_PASSWORD and ORACLE_UI_SESSION_SECRET (32+ characters) are required');
@@ -70,7 +71,7 @@ export function createOracleUiRouter({ knowledgeService, bigquery, project, chat
   const sessionKey=req=>crypto.createHash('sha256').update(parseCookies(req.headers.cookie).oracle_session||'').digest('hex');
   const sessionContext=req=>{const key=sessionKey(req),entry=analysisSessions.get(key);if(!entry||entry.expires_at<=Date.now()){analysisSessions.delete(key);return emptyAnalysisContext()}return entry.context};
   const saveSessionContext=(req,context)=>analysisSessions.set(sessionKey(req),{context,expires_at:req.oracleUser.exp*1000});
-  router.post('/auth/logout', authenticate, protectWrite, (req, res) => { const key=sessionKey(req);analysisSessions.delete(key);recentChatEvidence.delete(key);res.setHeader('Set-Cookie', ['oracle_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0', 'oracle_csrf=; Path=/; SameSite=Strict; Max-Age=0']); res.json({ success: true }); });
+  router.post('/auth/logout', authenticate, protectWrite, (req, res) => { const key=sessionKey(req);analysisSessions.delete(key);recentChatEvidence.delete(key);unansweredIntents.delete(key);res.setHeader('Set-Cookie', ['oracle_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0', 'oracle_csrf=; Path=/; SameSite=Strict; Max-Age=0']); res.json({ success: true }); });
   router.get('/session', authenticate, (req, res) => res.json({ success: true, user: req.oracleUser.sub, role: req.oracleUser.role, analysis_scope:analysisScope(sessionContext(req)), deep_analysis_enabled:Boolean(analysisJobStore&&env.ORACLE_ANALYSIS_JOBS_ENABLED==='true') }));
   router.post('/analysis/clear',authenticate,protectWrite,json,(req,res)=>{analysisSessions.delete(sessionKey(req));res.json({success:true,analysis_scope:null})});
   // Durable jobs remain opt-in until the production-shaped enqueue/claim/finish/poll
@@ -115,10 +116,12 @@ export function createOracleUiRouter({ knowledgeService, bigquery, project, chat
       const clarification=result.transition.applies_to_message?clarificationFor(result.context):null;
       const key=sessionKey(req),cached=recentChatEvidence.get(key);
       const recentEvidence=cached&&cached.expires_at>now()?cached.value:null;
+      const pending=unansweredIntents.get(key);
+      const effectiveMessage=pending?`${pending.message}\n\nUser follow-up: ${req.body.message}`:req.body.message;
       const chatStarted=Date.now();
       let answer;
       try {
-        answer=clarification?{answer:clarification,tools:[]}:await chat(req.body.message,{analysisContext:result.transition.applies_to_message?result.context:null,transition:result.transition,recentEvidence,requestId:id,signal:cancellation.signal});
+        answer=clarification?{answer:clarification,tools:[]}:await chat(effectiveMessage,{analysisContext:result.transition.applies_to_message?result.context:null,transition:result.transition,recentEvidence,pendingIntent:pending?.message||null,requestId:id,signal:cancellation.signal});
         console.info('Oracle UI stage outcome:',stageOutcome({id,stage:'agent_request',startedAt:chatStarted,outcome:'success',extra:{tool_count:(answer.tools||[]).length}}));
       } catch(error) {
         console.error('Oracle UI stage outcome:',stageOutcome({id,stage:'agent_request',startedAt:chatStarted,outcome:'failed',error}));
@@ -126,6 +129,11 @@ export function createOracleUiRouter({ knowledgeService, bigquery, project, chat
         return res.status(504).json({success:false,code:'ORACLE_AGENT_DEADLINE',error:terminalMessage('agent_request'),request_id:id});
       }
       recentChatEvidence.set(key,{expires_at:now()+15*60*1000,value:{as_of:new Date(now()).toISOString(),answer:String(answer.answer||'').slice(0,6000),tools:(answer.tools||[]).slice(0,20)}});
+      // If either the local classifier or the model asks for a date, retain the
+      // unanswered request. A short date reply must resume that request rather
+      // than replace it with a scope-only answer.
+      if(/what date range|which date range|what period/i.test(String(answer.answer||''))) unansweredIntents.set(key,{message:pending?.message||req.body.message});
+      else unansweredIntents.delete(key);
       let proposals = [], proposal_error = null;
       const proposalStarted=Date.now();
       try { proposals = await proposalsFor(req.body.message, req.oracleUser.sub); console.info('Oracle UI stage outcome:',stageOutcome({id,stage:'knowledge_proposals',startedAt:proposalStarted,outcome:'success',extra:{proposal_count:proposals.length}})); }
