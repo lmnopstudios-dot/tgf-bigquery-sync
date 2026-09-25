@@ -13,7 +13,7 @@ test('Oracle job readiness checks location, table, write permission and typed dr
   const bigquery=fakeBigQuery(),result=await checkOracleJobReadiness({bigquery,project:'p'});
   assert.equal(result.dataset,'commerce');assert.equal(result.table,'oracle_analysis_jobs_v1');assert.equal(result.configured_location,'EU');assert.equal(result.actual_location,'EU');
   assert.equal(result.success,true);assert.deepEqual(result.stages.map(stage=>stage.stage),['dataset_metadata','job_table_schema','service_account_permissions','parameter_binding']);
-  const query=bigquery.calls.find(call=>call.query).query;assert.equal(query.dryRun,true);assert.equal(query.location,'EU');assert.deepEqual(query.types,{job_id:'STRING',owner_key:'STRING'});assert.match(query.query,/LIMIT 0/);assert.doesNotMatch(JSON.stringify(bigquery.calls),/INSERT|UPDATE|DELETE|MERGE/);
+  const query=bigquery.calls.find(call=>call.query).query;assert.equal(query.dryRun,true);assert.equal(query.location,'EU');assert.deepEqual(query.types,{job_id:'STRING',owner_key:'STRING',request_id:'STRING',payload_json:'STRING',created_at:'TIMESTAMP'});assert.match(query.query,/^INSERT INTO/);assert.match(query.query,/PARSE_JSON\(@payload_json\)/);assert.equal(query.params.payload_json,'{"synthetic":true}');
 });
 
 test('Oracle job readiness reports the exact safe failing stage',async()=>{
