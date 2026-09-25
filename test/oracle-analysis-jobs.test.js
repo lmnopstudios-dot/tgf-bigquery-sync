@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
 import { createOracleUiRouter } from '../oracle/ui-router.js';
-import { createAnalysisJobWorker, createBigQueryAnalysisJobStore, createMemoryAnalysisJobStore, streamingInsertDiagnostic } from '../oracle/analysis-jobs.js';
+import { BigQuery } from '@google-cloud/bigquery';
+import { bigQueryErrorDiagnostic, createAnalysisJobWorker, createBigQueryAnalysisJobStore, createMemoryAnalysisJobStore, streamingInsertDiagnostic } from '../oracle/analysis-jobs.js';
 import { smokeOracleJobQueue } from '../diagnostics/oracle-job-queue-smoke.js';
 
 const env={ORACLE_UI_PASSWORD:'test-password',ORACLE_UI_SESSION_SECRET:'12345678901234567890123456789012',ORACLE_JOB_RUNTIME_MS:'120000',ORACLE_ANALYSIS_JOBS_ENABLED:'true'};
@@ -71,6 +72,22 @@ test('BigQuery enqueue serializes JSON columns and PartialFailure diagnostics ne
   const diagnostic=streamingInsertDiagnostic(rejected);assert.deepEqual(diagnostic,{error_class:'PartialFailureError',reason:'invalid',code:'400',field:'payload_json'});assert.doesNotMatch(JSON.stringify(diagnostic),/customer secret|sql_parameters|owner|request/);
 });
 
+test('production BigQuery claim uses its dataset location, a TIMESTAMP parameter, and returns after commit',async()=>{
+  let options;const dataset={getMetadata:async()=>[{location:'EU'}]};
+  const bigquery={dataset:name=>{assert.equal(name,'commerce');return dataset},query:async input=>{options=input;return [[{job_id:'smoke-job',status:'running',attempts:1,lease_until:{value:'2026-09-25T00:01:00.000Z'}}]]}};
+  const store=createBigQueryAnalysisJobStore({bigquery,project:'production-project'});
+  const claimed=await store.claim({worker_id:'smoke-worker',leaseMs:60_000,now:Date.parse('2026-09-25T00:00:00.000Z'),job_id:'smoke-job'});
+  assert.equal(claimed.job_id,'smoke-job');assert.equal(options.location,'EU');assert.ok(options.params.lease instanceof Date);
+  const encoded=BigQuery.valueToQueryParameter_(options.params.lease);assert.equal(encoded.parameterType.type,'TIMESTAMP');
+  assert.match(options.query,/DECLARE claimed_job_id STRING; BEGIN TRANSACTION;/);assert.match(options.query,/SET claimed_job_id=\(SELECT job_id/);assert.match(options.query,/COMMIT TRANSACTION; SELECT \*/);assert.match(options.query,/WHERE job_id=claimed_job_id AND status='running' LIMIT 1;$/);
+  assert.ok(options.query.indexOf('COMMIT TRANSACTION')<options.query.lastIndexOf('SELECT *'));
+});
+
+test('BigQuery query diagnostics expose only bounded redacted message and location',()=>{
+  const diagnostic=bigQueryErrorDiagnostic({errors:[{reason:'invalidQuery',location:'query;secret',message:`Value 'customer prompt' cannot be assigned to \`private-project.commerce.jobs\` at [1:415] ${'x'.repeat(500)}`}]});
+  assert.equal(diagnostic.reason,'invalidQuery');assert.equal(diagnostic.location,undefined);assert.ok(diagnostic.message.length<=300);assert.match(diagnostic.message,/Value \[redacted\] cannot be assigned to \[redacted\] at \[1:415\]/);assert.doesNotMatch(JSON.stringify(diagnostic),/customer prompt|private-project|secret/);
+});
+
 test('worker infrastructure failures use bounded exponential backoff and safe stage logs',async()=>{
   let claims=0;const logs=[];const worker=createAnalysisJobWorker({store:{claim:async()=>{claims++;const error=new Error('prompt and credential secret');error.code='private secret';throw error}},run:async()=>{},pollMs:5,maxBackoffMs:20,logger:{error:(message,detail)=>logs.push({message,detail})}});
   worker.start();await sleep(38);worker.stop();
@@ -89,4 +106,6 @@ test('production smoke lifecycle targets only its marked synthetic job and retri
   assert.equal(store.jobs.get('customer-job').status,'queued');
   const synthetic=[...store.jobs.values()].find(job=>job.request_id.startsWith('oracle-smoke-'));
   assert.equal(synthetic.status,'completed');assert.deepEqual(synthetic.payload_json,{synthetic:true,non_customer:true,purpose:'oracle-job-queue-smoke'});
+  store.create=async()=>{throw {errors:[{reason:'invalidQuery',location:'query',message:"Bad value 'customer prompt' in `private.dataset.table` at [1:9]"}]}};
+  const failure=await smokeOracleJobQueue({store,delayMs:0});assert.deepEqual(failure,{success:false,failed_stage:'enqueue',bigquery_reason:'invalidQuery',bigquery_message:'Bad value [redacted] in [redacted] at [1:9]',bigquery_location:'query'});
 });
