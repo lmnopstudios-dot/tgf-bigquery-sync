@@ -125,9 +125,23 @@ test('one-button browser deterministically routes bounded requests before either
   const source=await import('node:fs/promises').then(fs=>fs.readFile(new URL('../public/oracle/app.js',import.meta.url),'utf8'));
   assert.equal(oracleRequestRoute('For made-to-order stock, is size M ready and size N made to order? What if there is no tag?'),'chat');
   assert.equal(oracleRequestRoute('How much did we sell?'),'chat');
+  assert.equal(oracleRequestRoute('Currently our global cart upsells are Vintage Reissue 70s ‘UFO tshirt’, TGF Cotton Tote Bag and TGF Socks. Give their sales performance over the last year and recommend global upsells using data.'),'job');
   assert.equal(oracleRequestRoute(DANIELLE_FULL_EMAIL),'job');
   assert.equal(oracleRequestRoute('What should Danielle do next?',{hasCompletedJob:true}),'chat');
   assert.match(source,/oracleRequestRoute\(text/);assert.match(source,/api\('\/chat'/);assert.match(source,/api\('\/jobs'/);assert.match(source,/followJob|recoverJob/);assert.doesNotMatch(source,/deep-analysis|event\.submitter/);
+});
+
+test('exact cart-upsell browser request follows the jobs route and receives the durable budget',async t=>{
+  const question='Currently our global cart upsells are Vintage Reissue 70s ‘UFO tshirt’, TGF Cotton Tote Bag and TGF Socks. Give their sales performance over the last year and recommend global upsells using data.';
+  const store=createMemoryAnalysisJobStore();let received;
+  const chat=async(message,conversation)=>{received={message,conversation};return {answer:'complete',tools:['sales','catalogue','behaviour']}};
+  const app=express();app.use('/api/oracle',createOracleUiRouter({knowledgeService:{},bigquery:{},project:'p',chat,generateProposals:async()=>[],analysisJobStore:store,env}));
+  const server=await new Promise(resolve=>{const value=app.listen(0,()=>resolve(value))});t.after(()=>server.close());
+  const base=`http://127.0.0.1:${server.address().port}/api/oracle`,auth=await login(base),headers={cookie:auth.cookie,origin:new URL(base).origin,'content-type':'application/json','x-csrf-token':auth.csrf,'x-request-id':'cart-upsell-browser'};
+  assert.equal(oracleRequestRoute(question),'job');
+  const submitted=await (await fetch(`${base}/jobs`,{method:'POST',headers,body:JSON.stringify({message:question})})).json();
+  const result=await poll(base,submitted.job_id,auth.cookie);
+  assert.equal(result.status,'completed');assert.equal(received.message,question);assert.equal(received.conversation.durable,true);
 });
 
 test('a request id makes repeat job submissions return one owned job',async t=>{
