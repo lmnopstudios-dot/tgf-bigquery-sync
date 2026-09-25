@@ -8130,7 +8130,7 @@ app.post(
       const completedEvidence=[];
       let toolAdmissionStopped=false;
       stage='initial_model';
-      console.info('Agent stage outcome:',stageOutcome({id,stage:'request_received',startedAt:requestStarted,outcome:'success'}));
+      console.info('Agent stage outcome:',stageOutcome({id,stage:'request_received',startedAt:requestStarted,outcome:'success',extra:{route:req.body?.durable_job===true?'durable_job':'interactive',deadline_budget_ms:Math.max(0,deadlineAt-requestStarted)}}));
       let response = await openai.responses.create({
         model: 'gpt-5.6',
         instructions: `
@@ -8231,6 +8231,7 @@ Important rules:
 - Shopify conversion_rate means sessions that completed checkout divided by sessions. Its value is a decimal, so 0.01 means 1%.
 - Do not use GA4 to fill historical gaps in Shopify conversion data unless the user explicitly asks you to.
 - When comparing conversion rates, report the percentage-point change as well as the relative percentage change where useful.
+- For a pre-launch WooCommerce versus post-launch Shopify conversion request, retrieve the precise governed launch boundary before choosing periods. Establish separately whether sessions, converting orders/purchases, device category, and session traffic-source attribution exist on both sides with matching definitions. Conversion rate is converting sessions (or the source's explicitly documented conversion numerator) divided by sessions. Never calculate it from orders alone, join separate GA4 device and acquisition aggregates as though they were a joint device-by-source denominator, or describe a platform migration as a like-for-like trend when tracking eras differ. Return the verified subset and name every missing denominator or dimension.
 - Clearly state when a reporting period is partial.
 - For cross-period comparisons, report absolute and percentage changes where appropriate and clearly identify partial periods.
 - Distinguish customer population summaries from customer cohort/purchase-journey questions. Questions containing first purchase/order, bought after/next, second or nth order, repeat rate, within N days, acquisition product, or downstream revenue require analyze_customer_journey, not get_customer_metrics.
@@ -8477,7 +8478,7 @@ Important rules:
             output: JSON.stringify(result)
           });
           const outputBytes=Buffer.byteLength(outputs.at(-1).output,'utf8');
-          console.info('Agent tool result outcome:',{request_id:id,stage:`tool_result:${item.name}`,outcome:'validated',result_bytes:outputBytes});
+          console.info('Agent tool result outcome:',{request_id:id,stage:`tool_result:${item.name}`,outcome:'validated',result_bytes:outputBytes,deadline_remaining_ms:Math.max(0,deadlineAt-Date.now())});
           inlineChart ||= buildOracleInlineChart(item.name, result);
           if (result?.success !== false && !result?.error) { successfulTools.push(item.name); completedEvidence.push({name:item.name,result}); }
         }
@@ -8485,7 +8486,7 @@ Important rules:
         stage='response_generation';
         if(toolAdmissionStopped) {
           console.info('Agent stage outcome:',stageOutcome({id,stage:'tool_admission_stopped',startedAt:requestStarted,outcome:'bounded',extra:{proposed_call_count:callBudget.proposed,dispatched_call_count:callBudget.dispatched}}));
-          if(!res.writableEnded&&!cancellation.signal.aborted) return res.status(206).json({success:true,partial:true,answer:partialAnswer(message,successfulTools,failedTools),tools_used:[...toolsUsed],inline_chart:inlineChart,request_id:id});
+          if(!res.writableEnded&&!cancellation.signal.aborted) return res.status(206).json({success:true,partial:true,answer:completedEvidence.length?evidenceSummary(completedEvidence,{unavailable:failedTools}):partialAnswer(message,successfulTools,failedTools),tools_used:[...toolsUsed],inline_chart:inlineChart,request_id:id});
           return;
         }
         const synthesisStarted=Date.now();
@@ -8501,7 +8502,7 @@ Important rules:
           console.info('Agent stage outcome:',stageOutcome({id,stage,startedAt:synthesisStarted,outcome:'success',extra:{round:toolRounds}}));
         } catch(error) {
           const failure_kind=synthesisFailureKind(error,{deadlineAt,signal:cancellation.signal,outputBytes:synthesisInputBytes});
-          console.error('Agent stage outcome:',stageOutcome({id,stage,startedAt:synthesisStarted,outcome:'failed',error,extra:{round:toolRounds,failure_kind,synthesis_input_bytes:synthesisInputBytes}}));
+          console.error('Agent stage outcome:',stageOutcome({id,stage,startedAt:synthesisStarted,outcome:'failed',error,extra:{round:toolRounds,failure_kind,synthesis_input_bytes:synthesisInputBytes,deadline_remaining_ms:Math.max(0,deadlineAt-Date.now())}}));
           if(successfulTools.length||failedTools.length) return res.status(206).json({success:true,partial:true,answer:evidenceSummary(completedEvidence,{unavailable:failedTools}),tools_used:[...toolsUsed],inline_chart:inlineChart,request_id:id});
           throw error;
         }

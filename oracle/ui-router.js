@@ -105,6 +105,7 @@ export function createOracleUiRouter({ knowledgeService, bigquery, project, chat
       const cached=recentChatEvidence.get(sessionKey(req)),recent=cached&&cached.expires_at>now()?cached.value:null;
       const id=requestId(req.get('x-request-id'));
       const owner=ownerKey(parseCookies(req.headers.cookie).oracle_session,sessionSecret);
+      console.info('Oracle route selection:',{request_id:id,stage:'route_selection',route:'durable_job',outcome:'selected'});
       let job;try{job=await analysisJobStore.getByRequest?.(id,owner)||await analysisJobStore.create({owner_key:owner,request_id:id,payload_json:{message:req.body.message,analysis_context:result.transition.applies_to_message?result.context:null,transition:result.transition,recent_evidence:recent,created_by:req.oracleUser.sub}});}catch(error){console.error('Oracle job enqueue failed:',{request_id:id,...streamingInsertDiagnostic(error)});return res.status(503).json({success:false,code:'ORACLE_JOB_ENQUEUE_FAILED',error:'The analysis could not be queued. Please retry.',request_id:id});}
       res.setHeader('x-request-id',id).status(202).json({success:true,job_id:job.job_id,status:'queued'});
     });
