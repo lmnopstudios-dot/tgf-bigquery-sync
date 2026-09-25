@@ -10,7 +10,15 @@ The endpoint test uses the in-memory queue. It proves browser serialization, mid
 
 The pre-existing `commerce.oracle_analysis_jobs` production table does not match any schema shipped by the Oracle queue (the original Oracle schema already contained all twelve current fields), so it is treated as a name collision with another feature. The safe fix is the distinct Oracle-owned `_v1` table above. Startup never drops, truncates, rewrites, or adopts the colliding table. Run `npm run diagnose:oracle-job-readiness` as the first Render Shell command after deploying; it reads metadata, tests IAM, and submits only a dry run, without reading row data.
 
-Run `npm run diagnose:oracle-job-readiness` in the Render shell before acceptance. This check is read-only: it reads dataset and table metadata, validates the complete job schema and dataset location, calls `testIamPermissions` for the exact table permissions, and submits a typed `LIMIT 0` dry-run with the production lookup parameter names. It returns only the failing stage and a bounded error code on failure—never credentials, prompts, parameter values, or provider error text. Because it deliberately performs no insert, a passing result establishes configuration and advertised IAM readiness but is not proof of a successful production enqueue; the staged `202` acceptance remains required.
+Run `npm run diagnose:oracle-job-readiness` in the Render shell before acceptance. This check is read-only: it reads dataset and table metadata, validates the complete job schema and dataset location, calls `testIamPermissions` for the exact table permissions, and submits a typed `LIMIT 0` dry-run with the production lookup parameter names. It returns only the failing stage and a bounded error code on failure—never credentials, prompts, parameter values, or provider error text.
+
+Then run this exact, deliberately opt-in Render Shell command:
+
+```sh
+ORACLE_JOB_QUEUE_SMOKE=true npm run smoke:oracle-job-queue
+```
+
+The smoke command is never imported by startup. It uses the configured real BigQuery table and writes one clearly marked `oracle-smoke-*`, synthetic, non-customer job. Normal workers exclude that marker; the smoke process targets only its own job while verifying queued retrieval, claim, completion, and completed-result retrieval. It does not invoke the Oracle agent, create a table, print payloads, or print credentials. Success emits only the passed stage names. Failure emits only `failed_stage` and a sanitized `bigquery_reason`.
 
 The `product_affinity` primary and guest BigQuery jobs both completed. They were not the terminal failure. The next agent round still had to submit their function outputs to the Responses API and obtain a final answer. The UI-to-agent request shared the same 90-second edge as the agent deadline, so a slow continuation could be aborted by the UI fetch before the agent returned a bounded response. That transport exception reached the UI router's outer catch and became the generic “The request could not be completed” message. Proposal generation happens after chat and is already optional; it cannot explain a log line emitted by the outer chat failure path.
 
@@ -19,9 +27,18 @@ The affinity call was unnecessary. “Use data where possible” in a broad clea
 ## Safe production acceptance sequence
 
 1. Deploy to a non-production revision and confirm startup succeeds.
-2. In the Render shell run `npm run diagnose:oracle-job-readiness`; require `success:true` for all four stages. Then send the full 20-item Danielle email. Confirm `POST /api/oracle/jobs` returns `202` and a job ID promptly, then refresh the page and confirm the same job continues.
-3. Confirm logs contain `request_id`, `stage`, `outcome`, `elapsed_ms`, and (only on failure) `error_class`; confirm they contain no SQL, parameter values, customer names, bearer tokens, or prompt payloads.
-4. Confirm the brief does not call product affinity and that catalogue, exact-location inventory, sales comparison and final synthesis cover all 20 requested items without invented figures.
-5. Let synthesis run beyond 74 seconds, refresh again, and confirm one complete answer is returned. In a separate job press Cancel and confirm it becomes `cancelled`.
-6. Inject catalogue, inventory, affinity, and proposal failures independently. Confirm successful evidence and useful advice remain, unavailable evidence is labelled, and each durable claim produces no more than one proposal card.
-7. Restart the staged Render service with one queued job and one deliberately running job: queued work must resume, while the expired running lease must become safely failed (never silently replayed). Run `npm test`, inspect only request/stage/outcome/error-class metadata in logs, then shift traffic gradually.
+2. In the Render shell run `npm run diagnose:oracle-job-readiness`; require `success:true` for all four stages. Run `ORACLE_JOB_QUEUE_SMOKE=true npm run smoke:oracle-job-queue` and require all five lifecycle stages.
+3. Open Oracle and paste Danielle's complete email below, then click **Deep analysis** (not **Send**):
+
+   > Danielle has asked us to look at clearing the following stock online:
+   >
+   > Small Signet; Butterfly, Ankh, Eagle and Pig charms; Sun and Moon, Serpent, Dagger, Snake and Dagger, Magic Mushroom and Enchanted Castle pendants; Reaper and Pentagram; gold and silver bat earrings; Solid Heart and Smallest Evil Skull rings; and all three skull-hoop variations.
+   >
+   > Any ideas of what we can do? Use data where possible.
+
+   Confirm the queued/running progress appears promptly, refresh the page while it is running, and confirm polling resumes. When it completes, verify the entire answer is present (including all 20 items), the inline chart renders, and every knowledge proposal card remains available. Submit a short ordinary question with **Send** and confirm it still uses the immediate `/chat` path.
+4. Confirm logs contain `request_id`, `stage`, `outcome`, `elapsed_ms`, and (only on failure) `error_class`; confirm they contain no SQL, parameter values, customer names, bearer tokens, or prompt payloads.
+5. Confirm the brief does not call product affinity and that catalogue, exact-location inventory, sales comparison and final synthesis cover all 20 requested items without invented figures.
+6. Let synthesis run beyond 74 seconds, refresh again, and confirm one complete answer is returned. In a separate job press Cancel and confirm it becomes `cancelled`.
+7. Inject catalogue, inventory, affinity, and proposal failures independently. Confirm successful evidence and useful advice remain, unavailable evidence is labelled, and each durable claim produces no more than one proposal card.
+8. Restart the staged Render service with one queued job and one deliberately running job: queued work must resume, while the expired running lease must become safely failed (never silently replayed). Run `npm test`, inspect only request/stage/outcome/error-class metadata in logs, then shift traffic gradually.

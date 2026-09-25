@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import express from 'express';
 import { createOracleUiRouter } from '../oracle/ui-router.js';
 import { createAnalysisJobWorker, createBigQueryAnalysisJobStore, createMemoryAnalysisJobStore, streamingInsertDiagnostic } from '../oracle/analysis-jobs.js';
+import { smokeOracleJobQueue } from '../diagnostics/oracle-job-queue-smoke.js';
 
 const env={ORACLE_UI_PASSWORD:'test-password',ORACLE_UI_SESSION_SECRET:'12345678901234567890123456789012',ORACLE_JOB_RUNTIME_MS:'120000',ORACLE_ANALYSIS_JOBS_ENABLED:'true'};
 const DANIELLE_FULL_EMAIL=`Danielle has asked us to look at clearing the following stock online:
@@ -76,7 +77,16 @@ test('worker infrastructure failures use bounded exponential backoff and safe st
   assert.ok(claims>=2&&claims<=3,`expected 2-3 bounded claims, received ${claims}`);assert.equal(worker.backoffMs,20);assert.ok(logs.every(log=>log.detail.stage==='claim'));assert.doesNotMatch(JSON.stringify(logs),/prompt|credential|private secret/);
 });
 
-test('browser submits interactive chat by default and contains no job submission or polling path',async()=>{
+test('browser keeps interactive chat as default and offers an explicit durable job path',async()=>{
   const source=await import('node:fs/promises').then(fs=>fs.readFile(new URL('../public/oracle/app.js',import.meta.url),'utf8'));
-  assert.match(source,/api\('\/chat',\{method:'POST'/);assert.doesNotMatch(source,/api\('\/jobs/);assert.doesNotMatch(source,/followJob|recoverJob/);
+  assert.match(source,/deep=event\.submitter\?\.id==='deep-analysis'/);assert.match(source,/else showResult\(loading,await api\('\/chat'/);assert.match(source,/api\('\/jobs'/);assert.match(source,/followJob|recoverJob/);
+});
+
+test('production smoke lifecycle targets only its marked synthetic job and retrieves completion',async()=>{
+  const store=createMemoryAnalysisJobStore([{job_id:'customer-job',owner_key:'customer',request_id:'customer-request',status:'queued',payload_json:{message:'must not be claimed'},attempts:0,cancel_requested:false}]);
+  const result=await smokeOracleJobQueue({store,delayMs:0});
+  assert.equal(result.success,true);assert.deepEqual(result.stages,['enqueue','enqueue_retrieval','claim','completion','completed_retrieval']);
+  assert.equal(store.jobs.get('customer-job').status,'queued');
+  const synthetic=[...store.jobs.values()].find(job=>job.request_id.startsWith('oracle-smoke-'));
+  assert.equal(synthetic.status,'completed');assert.deepEqual(synthetic.payload_json,{synthetic:true,non_customer:true,purpose:'oracle-job-queue-smoke'});
 });
