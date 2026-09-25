@@ -5,7 +5,11 @@ import { governanceDiagnostic } from '../oracle/governance-diagnostics.js';
 
 /** Runs the route's default empty-search read path without schema setup or writes. */
 export async function validateProductMappingReviewQueue({bigquery,project}) {
-  return createProductMappingService({bigquery,project}).validateReviewQueue();
+  const result=await createProductMappingService({bigquery,project}).validateReviewQueue();
+  if(!result.coverage.reconciliation.reconciled||result.coverage.reconciliation.missing_products||result.coverage.reconciliation.overlap_products)throw new Error(`review queue reconciliation failed: ${JSON.stringify(result.coverage.reconciliation)}`);
+  const square=result.coverage.by_source['square:square'];
+  if(square.money_contract.amount_field!=='total_amount'||square.money_contract.currency_field!=='currency'||square.money_contract.monetary_unit!=='minor_unit')throw new Error('Square product impact must use the persisted retail_order_items Money amount/currency contract in minor units');
+  return result;
 }
 
 async function main(){
