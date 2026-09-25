@@ -35,6 +35,7 @@
     "diagnose:oracle-job-readiness": "node diagnostics/oracle-job-readiness.js",
     "smoke:oracle-job-queue": "node diagnostics/oracle-job-queue-smoke.js",
     "diagnose:oracle-ordinary-claim": "node diagnostics/oracle-ordinary-claim.js",
+    "diagnose:category-sales-production": "node diagnostics/category-sales-production.js",
     "import:metorik-geography": "node metorik/geography.js",
     "validate:metorik-geography": "node diagnostics/metorik-geography-validation.js",
     "validate:report-v2-production": "node diagnostics/report-v2-production-validation.js",
