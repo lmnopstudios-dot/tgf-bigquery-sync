@@ -2,7 +2,7 @@
 import crypto from 'node:crypto';
 import { BigQuery } from '@google-cloud/bigquery';
 import { pathToFileURL } from 'node:url';
-import { createBigQueryAnalysisJobStore } from '../oracle/analysis-jobs.js';
+import { bigQueryErrorDiagnostic, createBigQueryAnalysisJobStore } from '../oracle/analysis-jobs.js';
 import { checkOracleJobReadiness, loadOracleJobReadinessConfig } from './oracle-job-readiness.js';
 
 const STAGES=new Set(['configuration','readiness','enqueue','enqueue_retrieval','claim','completion','completed_retrieval']);
@@ -12,6 +12,7 @@ const bigQueryReason=error=>{
   const detail=Array.isArray(outer?.errors)?outer.errors[0]:outer;
   return safeToken(detail?.reason||error?.reason||error?.error_code||error?.code);
 };
+const failure=(stage,error)=>{const diagnostic=bigQueryErrorDiagnostic(error);return {success:false,failed_stage:STAGES.has(stage)?stage:'unknown',bigquery_reason:bigQueryReason(error),...(diagnostic.message?{bigquery_message:diagnostic.message}:{}),...(diagnostic.location?{bigquery_location:diagnostic.location}:{})}};
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const expect=(condition,reason)=>{if(!condition)throw Object.assign(new Error('smoke assertion failed'),{reason})};
 
@@ -37,16 +38,16 @@ export async function smokeOracleJobQueue({store,attempts=20,delayMs=500}){
     expect(row?.status==='completed'&&row.result_json?.synthetic===true&&row.result_json?.lifecycle==='completed','COMPLETION_NOT_RETRIEVED');
     return {success:true,synthetic:true,stages:['enqueue','enqueue_retrieval','claim','completion','completed_retrieval']};
   } catch(error) {
-    return {success:false,failed_stage:STAGES.has(stage)?stage:'unknown',bigquery_reason:bigQueryReason(error)};
+    return failure(stage,error);
   }
 }
 
 async function main(env=process.env){
   if(env.ORACLE_JOB_QUEUE_SMOKE!=='true')return {success:false,failed_stage:'configuration',bigquery_reason:'OPT_IN_REQUIRED'};
   let config;
-  try{config=loadOracleJobReadinessConfig(env);}catch(error){return {success:false,failed_stage:'configuration',bigquery_reason:bigQueryReason(error)};}
+  try{config=loadOracleJobReadinessConfig(env);}catch(error){return failure('configuration',error);}
   const bigquery=new BigQuery({projectId:config.project,credentials:config.credentials});
-  try{await checkOracleJobReadiness({...config,bigquery});}catch(error){return {success:false,failed_stage:'readiness',bigquery_reason:bigQueryReason(error?.readiness||error)};}
+  try{await checkOracleJobReadiness({...config,bigquery});}catch(error){return failure('readiness',error?.readiness||error);}
   const store=createBigQueryAnalysisJobStore({bigquery,project:config.project,dataset:config.dataset,table:config.table,location:config.expectedLocation});
   return smokeOracleJobQueue({store});
 }

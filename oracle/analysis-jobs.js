@@ -23,6 +23,20 @@ const normalizedType = type => {
 const signature = field => `${normalizedType(field.type)}:${String(field.mode||'NULLABLE').toUpperCase()}`;
 
 const safeToken=(value,fallback='unknown')=>/^[A-Za-z0-9_.-]{1,80}$/.test(String(value||''))?String(value):fallback;
+const QUERY_MESSAGE_LIMIT=300;
+export function bigQueryErrorDiagnostic(error) {
+  const outer=Array.isArray(error?.errors)?error.errors[0]:null;
+  const detail=Array.isArray(outer?.errors)?outer.errors[0]:outer;
+  // Only BigQuery's structured error detail is eligible for output. Generic
+  // application errors can contain prompts, credentials, or row values.
+  const raw=String(detail?.message||'');
+  const message=raw.replace(/`[^`]*`|'[^']*'|"[^"]*"/g,'[redacted]').replace(/[\r\n\t]+/g,' ').replace(/\s+/g,' ').trim().slice(0,QUERY_MESSAGE_LIMIT);
+  return {
+    reason:safeToken(detail?.reason||error?.reason||error?.code),
+    ...(message?{message}:{}),
+    ...(safeToken(detail?.location||error?.location,'')?{location:safeToken(detail?.location||error?.location)}:{})
+  };
+}
 /** BigQuery PartialFailureError contains the rejected row. Never return or log it. */
 export function streamingInsertDiagnostic(error) {
   const failure=Array.isArray(error?.errors)?error.errors[0]:null;
@@ -63,7 +77,7 @@ export function createBigQueryAnalysisJobStore({bigquery,project,dataset=ORACLE_
     async setup(){const ds=bigquery.dataset(dataset);const [exists]=await ds.exists();if(!exists)await ds.create({location});await resolveDatasetLocation(ds);const t=ds.table(table);const [present]=await t.exists();if(!present){await t.create({schema:JOB_SCHEMA});return;}const [metadata]=await t.getMetadata();const inspection=inspectJobTableSchema(metadata.schema?.fields||[]);if(!inspection.matches)throw Object.assign(new Error(`Oracle job table schema mismatch: ${table}`),{code:'SCHEMA_MISMATCH',schema_diff:inspection});},
     async create({owner_key,request_id,payload_json}){const job_id=crypto.randomUUID(),now=new Date().toISOString();await bigquery.dataset(dataset).table(table).insert([{job_id,owner_key,request_id,status:'queued',payload_json:JSON.stringify(payload_json),result_json:null,error_code:null,created_at:now,updated_at:now,lease_until:null,attempts:0,cancel_requested:false}]);return {job_id,status:'queued',created_at:now};},
     async get(job_id,owner_key){return normalize((await query(`SELECT * FROM ${fq} WHERE job_id=@job_id AND owner_key=@owner_key LIMIT 1`,{job_id,owner_key}))[0]);},
-    async claim({worker_id,leaseMs,now=Date.now(),job_id=null}){const lease=new Date(now+leaseMs).toISOString(),target=job_id?'job_id=@job_id':"request_id NOT LIKE 'oracle-smoke-%'";const rows=await query(`BEGIN TRANSACTION; UPDATE ${fq} SET status='failed',error_code='WORKER_RESTARTED',updated_at=CURRENT_TIMESTAMP(),lease_until=NULL WHERE status='running' AND lease_until<CURRENT_TIMESTAMP(); UPDATE ${fq} SET status='running',attempts=attempts+1,updated_at=CURRENT_TIMESTAMP(),lease_until=@lease WHERE job_id=(SELECT job_id FROM ${fq} WHERE status='queued' AND cancel_requested=FALSE AND ${target} ORDER BY created_at LIMIT 1) AND status='queued'; SELECT * FROM ${fq} WHERE status='running' AND lease_until=@lease${job_id?' AND job_id=@job_id':''} LIMIT 1; COMMIT TRANSACTION;`,job_id?{lease,job_id}:{lease});return normalize(rows[0]);},
+    async claim({worker_id,leaseMs,now=Date.now(),job_id=null}){const lease=new Date(now+leaseMs),target=job_id?'job_id=@job_id':"request_id NOT LIKE 'oracle-smoke-%'";const rows=await query(`DECLARE claimed_job_id STRING; BEGIN TRANSACTION; UPDATE ${fq} SET status='failed',error_code='WORKER_RESTARTED',updated_at=CURRENT_TIMESTAMP(),lease_until=NULL WHERE status='running' AND lease_until<CURRENT_TIMESTAMP(); SET claimed_job_id=(SELECT job_id FROM ${fq} WHERE status='queued' AND cancel_requested=FALSE AND ${target} ORDER BY created_at LIMIT 1); UPDATE ${fq} SET status='running',attempts=attempts+1,updated_at=CURRENT_TIMESTAMP(),lease_until=@lease WHERE job_id=claimed_job_id AND status='queued'; COMMIT TRANSACTION; SELECT * FROM ${fq} WHERE job_id=claimed_job_id AND status='running' LIMIT 1;`,job_id?{lease,job_id}:{lease});return normalize(rows[0]);},
     async finish(job_id,result_json){await query(`UPDATE ${fq} SET status=IF(cancel_requested,'cancelled','completed'),result_json=IF(cancel_requested,NULL,PARSE_JSON(@result)),updated_at=CURRENT_TIMESTAMP(),lease_until=NULL WHERE job_id=@job_id AND status='running'`,{job_id,result:JSON.stringify(result_json)});},
     async fail(job_id,error_code){await query(`UPDATE ${fq} SET status=IF(cancel_requested,'cancelled','failed'),error_code=IF(cancel_requested,NULL,@code),updated_at=CURRENT_TIMESTAMP(),lease_until=NULL WHERE job_id=@job_id AND status='running'`,{job_id,code:error_code});},
     async cancel(job_id,owner_key){await query(`UPDATE ${fq} SET cancel_requested=TRUE,status=IF(status IN ('queued','running'),'cancelled',status),updated_at=CURRENT_TIMESTAMP() WHERE job_id=@job_id AND owner_key=@owner_key`,{job_id,owner_key});},
