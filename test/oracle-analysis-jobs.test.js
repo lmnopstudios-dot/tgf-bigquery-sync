@@ -6,6 +6,7 @@ import { BigQuery } from '@google-cloud/bigquery';
 import { bigQueryErrorDiagnostic, createAnalysisJobWorker, createBigQueryAnalysisJobStore, createMemoryAnalysisJobStore, streamingInsertDiagnostic } from '../oracle/analysis-jobs.js';
 import { smokeOracleJobQueue } from '../diagnostics/oracle-job-queue-smoke.js';
 import { diagnoseOrdinaryClaim } from '../diagnostics/oracle-ordinary-claim.js';
+import { oracleRequestRoute } from '../public/oracle/request-routing.js';
 
 const env={ORACLE_UI_PASSWORD:'test-password',ORACLE_UI_SESSION_SECRET:'12345678901234567890123456789012',ORACLE_JOB_RUNTIME_MS:'120000',ORACLE_ANALYSIS_JOBS_ENABLED:'true'};
 const DANIELLE_FULL_EMAIL=`Danielle has asked us to look at clearing the following stock online:
@@ -120,9 +121,18 @@ test('ordinary claim diagnostic is read-only by default and acceptance uses ordi
   assert.deepEqual((await diagnoseOrdinaryClaim({store,accept:true})).stages,['enqueue','ordinary_claim','completion']);assert.deepEqual([creates,claims,finishes],[1,1,1]);
 });
 
-test('browser keeps interactive chat as default and offers an explicit durable job path',async()=>{
+test('one-button browser deterministically routes bounded requests before either transport',async()=>{
   const source=await import('node:fs/promises').then(fs=>fs.readFile(new URL('../public/oracle/app.js',import.meta.url),'utf8'));
-  assert.match(source,/deep=event\.submitter\?\.id==='deep-analysis'/);assert.match(source,/else showResult\(loading,await api\('\/chat'/);assert.match(source,/api\('\/jobs'/);assert.match(source,/followJob|recoverJob/);
+  assert.equal(oracleRequestRoute('For made-to-order stock, is size M ready and size N made to order? What if there is no tag?'),'chat');
+  assert.equal(oracleRequestRoute('How much did we sell?'),'chat');
+  assert.equal(oracleRequestRoute(DANIELLE_FULL_EMAIL),'job');
+  assert.equal(oracleRequestRoute('What should Danielle do next?',{hasCompletedJob:true}),'chat');
+  assert.match(source,/oracleRequestRoute\(text/);assert.match(source,/api\('\/chat'/);assert.match(source,/api\('\/jobs'/);assert.match(source,/followJob|recoverJob/);assert.doesNotMatch(source,/deep-analysis|event\.submitter/);
+});
+
+test('a request id makes repeat job submissions return one owned job',async t=>{
+  const store=createMemoryAnalysisJobStore();const app=express();app.use('/api/oracle',createOracleUiRouter({knowledgeService:{},bigquery:{},project:'p',chat:async()=>({answer:'done'}),generateProposals:async()=>[],analysisJobStore:store,env}));const server=await new Promise(resolve=>{const s=app.listen(0,()=>resolve(s))});t.after(()=>server.close());const base=`http://127.0.0.1:${server.address().port}/api/oracle`,auth=await login(base),headers={cookie:auth.cookie,origin:new URL(base).origin,'content-type':'application/json','x-csrf-token':auth.csrf,'x-request-id':'same-click'};
+  const first=await (await fetch(`${base}/jobs`,{method:'POST',headers,body:JSON.stringify({message:DANIELLE_FULL_EMAIL})})).json();const second=await (await fetch(`${base}/jobs`,{method:'POST',headers,body:JSON.stringify({message:DANIELLE_FULL_EMAIL})})).json();assert.equal(second.job_id,first.job_id);assert.equal(store.jobs.size,1);const recovered=await (await fetch(`${base}/jobs/request/same-click`,{headers:{cookie:auth.cookie}})).json();assert.equal(recovered.job_id,first.job_id);
 });
 
 test('production smoke lifecycle targets only its marked synthetic job and retrieves completion',async()=>{

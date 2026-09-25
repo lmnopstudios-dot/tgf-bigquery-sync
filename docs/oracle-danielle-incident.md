@@ -46,7 +46,7 @@ The affinity call was unnecessary. “Use data where possible” in a broad clea
 
 1. Deploy to a non-production revision and confirm startup succeeds.
 2. In the Render shell run `npm run diagnose:oracle-job-readiness`; require `success:true` for all four stages. Run `ORACLE_JOB_QUEUE_SMOKE=true npm run smoke:oracle-job-queue` and require all five lifecycle stages.
-3. Open Oracle and paste Danielle's complete email below, then click **Deep analysis** (not **Send**):
+3. Open Oracle and paste Danielle's complete email below, then click the single **Send** button:
 
    > Danielle has asked us to look at clearing the following stock online:
    >
@@ -54,7 +54,7 @@ The affinity call was unnecessary. “Use data where possible” in a broad clea
    >
    > Any ideas of what we can do? Use data where possible.
 
-   Confirm the queued/running progress appears promptly, refresh the page while it is running, and confirm polling resumes. When it completes, verify the entire answer is present (including all 20 items), the inline chart renders, and every knowledge proposal card remains available. Submit a short ordinary question with **Send** and confirm it still uses the immediate `/chat` path.
+   Confirm the background queued/running progress appears promptly, refresh the page while it is running, and confirm polling resumes. When it completes, verify the entire answer is present (including all 20 items), the inline chart renders, and every knowledge proposal card remains available. Submit a short ordinary question with **Send** and confirm it still uses the immediate `/chat` path.
 4. Confirm logs contain `request_id`, `stage`, `outcome`, `elapsed_ms`, and (only on failure) `error_class`; confirm they contain no SQL, parameter values, customer names, bearer tokens, or prompt payloads.
 5. Confirm the brief does not call product affinity and that catalogue, exact-location inventory, sales comparison and final synthesis cover all 20 requested items without invented figures.
 6. Let synthesis run beyond 74 seconds, refresh again, and confirm one complete answer is returned. In a separate job press Cancel and confirm it becomes `cancelled`.
