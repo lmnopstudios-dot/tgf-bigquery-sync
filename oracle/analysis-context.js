@@ -37,7 +37,7 @@ export function validateAnalysisContext(value={}){
   out.unresolved_required_fields=[...new Set(value.unresolved_required_fields||[])].filter(x=>FIELDS.has(x)).slice(0,8);
   if(value.tool_route!=null&&!['get_shopify_online_country_products','get_online_country_sales','get_average_customer_order_interval'].includes(value.tool_route)) throw new Error('invalid tool_route');
   out.tool_route=value.tool_route??null;
-  if(value.request_kind!=null&&value.request_kind!=='advisory') throw new Error('invalid request_kind');
+  if(value.request_kind!=null&&!['advisory','knowledge_save','policy_definition'].includes(value.request_kind)) throw new Error('invalid request_kind');
   out.request_kind=value.request_kind??null;
   if(value.advisory_topic!=null&&value.advisory_topic!=='stock_clearance') throw new Error('invalid advisory_topic');
   out.advisory_topic=value.advisory_topic??null;
@@ -74,11 +74,18 @@ export function transitionAnalysisContext(existing, message, {now=Date.now(),rep
   let base=validateAnalysisContext(existing||{}); const text=String(message||'').trim(), lower=text.toLowerCase();
   if(reportContext) base=initializeFromReportContext(base,reportContext);
   const set={},clear=[];
+  // Definitions and policy hypotheticals can contain words such as "product" or
+  // "stock", but they are not historical product analyses. Classify them before
+  // the broad metric keyword rules so they never acquire a date or currency.
+  const knowledgeSave=/\b(?:save|record|remember|store|add)\b[\s\S]*\b(?:definition|policy|rule|knowledge)\b|\b(?:propose|create|write)\b[\s\S]*\b(?:timeless|operational|governed)\s+definition\b/i.test(text);
+  const policyDefinition=/\b(?:made[ -]to[ -]order|ready to ship)\b/i.test(text)&&/\b(?:if|when|without|tag(?:ged)?|definition|policy|rule|available|availability|stock|units?|size)\b/i.test(text);
+  const nonTemporalKind=knowledgeSave?'knowledge_save':policyDefinition?'policy_definition':null;
+  if(nonTemporalKind){base=emptyAnalysisContext();set.request_kind=nonTemporalKind;}
   const unrelated=/^(?:what do you know about|who |why is |new question:|forget that\b)/i.test(text)&&!/\b(sales|refunds?|customers?|products?|revenue)\b/i.test(text);
   const explicitNew=/^(?:new (?:question|analysis)|forget that|start over)\b/i.test(text);
   const continuation=!unrelated&&!explicitNew&&(base.metrics.length>0||/\b(refunds?|sales|customers?|products?|ecommerce)\b/i.test(lower));
   if(explicitNew) base=emptyAnalysisContext();
-  if(!unrelated){
+  if(!unrelated&&!nonTemporalKind){
     const advisory=isStockClearanceAdvisory(text,base);
     if(advisory){set.request_kind='advisory';set.advisory_topic='stock_clearance';}
     const countryProducts=/\b(?:top\s+(?:ten|10)\s+)?(?:locations?|countries)\b[\s\S]*\bonline sales\b[\s\S]*\b(?:top\s+(?:ten|10)\s+)?products?\b|\bonline sales\b[\s\S]*\b(?:locations?|countries)\b[\s\S]*\bproducts?\b/i.test(text);
@@ -108,7 +115,7 @@ export function transitionAnalysisContext(existing, message, {now=Date.now(),rep
     if(!base.currencies.length&&!set.currencies&&set.analysis_type==='finance'&&!['get_shopify_online_country_products','get_online_country_sales'].includes(set.tool_route||base.tool_route)&&!advisory) set.currencies=['GBP'];
   }
   const next={...base,...set};if(next.analysis_type==='customer_journey'){next.first_order_semantic=next.first_order_semantic||'first_observed_ever';if(next.start_date){next.cohort_entry_start=next.start_date;next.cohort_entry_end=next.end_date;next.observation_end=next.end_date;}}for(const key of clear) next[key]=emptyAnalysisContext()[key];
-  const missing=[];if(next.metrics.length&&!next.start_date&&next.request_kind!=='advisory') missing.push('start_date','end_date');
+  const missing=[];if(next.metrics.length&&!next.start_date&&!['advisory','knowledge_save','policy_definition'].includes(next.request_kind)) missing.push('start_date','end_date');
   next.unresolved_required_fields=[...new Set(missing)];
   const ready=next.metrics.length>0&&Boolean(next.start_date&&next.end_date);
   const changed=Object.keys(set).filter(k=>JSON.stringify(base[k])!==JSON.stringify(next[k]));

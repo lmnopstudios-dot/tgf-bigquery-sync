@@ -43,6 +43,26 @@ test('stock-clearance ideas are advisory and are not blocked by a missing date o
   assert.equal(clarificationFor(result.context),null);
 });
 
+test('timeless definition save and stock-policy hypothetical require neither dates nor currency',()=>{
+  const save=apply(emptyAnalysisContext(),'Please propose and save a timeless operational definition for made-to-order availability.');
+  assert.equal(save.context.request_kind,'knowledge_save');
+  assert.deepEqual(save.context.metrics,[]);assert.deepEqual(save.context.currencies,[]);
+  assert.deepEqual(save.context.unresolved_required_fields,[]);assert.equal(clarificationFor(save.context),null);
+
+  const question='For a made-to-order ring with 3 units of size M available at the Online location and 0 of size N, which size is ready to ship? What if the product has no made-to-order tag?';
+  const policy=apply(emptyAnalysisContext(),question);
+  assert.equal(policy.context.request_kind,'policy_definition');
+  assert.deepEqual(policy.context.metrics,[]);assert.deepEqual(policy.context.currencies,[]);
+  assert.equal(policy.context.start_date,null);assert.equal(policy.context.end_date,null);
+  assert.deepEqual(policy.context.unresolved_required_fields,[]);assert.equal(clarificationFor(policy.context),null);
+});
+
+test('genuinely date-dependent sales analysis still asks for dates and defaults GBP',()=>{
+  const result=apply(emptyAnalysisContext(),'How are product sales performing?');
+  assert.deepEqual(result.context.metrics,['sales']);assert.deepEqual(result.context.currencies,['GBP']);
+  assert.equal(clarificationFor(result.context),'What date range would you like? I’ll use GBP unless you specify another currency.');
+});
+
 test('stock-clearance meaning survives alternate evidence wording and a separate follow-up',()=>{
   const brief='Danielle has asked us to look at clearing the following stock online: Large Anatomical Heart Ring, Small Anatomical Heart Ring, and Anatomical Heart Pendant.';
   let result=apply(emptyAnalysisContext(),brief);
