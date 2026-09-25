@@ -33,6 +33,7 @@ import { createShopifyCountryProductsService } from './oracle/shopify-country-pr
 import { createCustomerOrderIntervalService } from './oracle/customer-order-interval.js';
 import { createOnlineCountrySalesService, ONLINE_COUNTRY_MAX_BYTES } from './oracle/online-country-sales.js';
 import { createDeviceSourceConversionService, executeDeviceSourceConversionToolCall } from './oracle/device-source-conversion.js';
+import { CATEGORY_SALES_MAX_BYTES, createCategorySalesService, executeCategorySalesToolCall } from './oracle/category-sales.js';
 import { runWithShopifyThrottle, SHOPIFY_RATE_LIMIT_MESSAGE } from './oracle/shopifyql-throttle.js';
 import { buildOracleInlineChart } from './oracle/inline-charts.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
@@ -144,6 +145,7 @@ const shopifyCountryProductsService = createShopifyCountryProductsService({ bigq
 const customerOrderIntervalService = createCustomerOrderIntervalService({ bigquery, project: GOOGLE_PROJECT_ID });
 const onlineCountrySalesService = createOnlineCountrySalesService({ bigquery, project: GOOGLE_PROJECT_ID });
 const deviceSourceConversionService = createDeviceSourceConversionService({ bigquery, project: GOOGLE_PROJECT_ID });
+const categorySalesService = createCategorySalesService({ bigquery, project: GOOGLE_PROJECT_ID });
 productMappingService.setup().catch(error => console.error('Product mapping storage setup failed:', redactError(error?.message || error)));
 collectionClassificationService.setup().catch(error => console.error('Collection classification storage setup failed:', redactError(error?.message || error)));
 
@@ -8244,6 +8246,7 @@ Important rules:
 - For “what/top products customers buy”, rank by distinct returning customers by default and also show orders, units, source-native net sales by currency, and returning-cohort penetration. Never combine currencies.
 - Use structured placement markers on their own line for validated inline charts. After the cohort overview in an exact-second-order answer, emit [[oracle-section:cohort-overview-end]] before the product ranking table. After the overview in a Shopify online country/product answer, emit [[oracle-section:country-overview-end]] before its product ranking table. Keep all prose and tables; never use a prose heading as a placement marker.
 - Product classifications must come from governed classification evidence. Never infer collaboration, ring, clothing, jewellery, material, or campaign membership from product names or model intuition. Suggested/fuzzy product mappings cannot propagate classification.
+- Category-sales comparisons (for example, “Can you show me sunglasses sales this year vs jewellery?”) require get_governed_category_sales. Report sunglasses, jewellery, other and unclassified totals by source and currency, including partial coverage; never substitute a customer cohort/order-sequence analysis and omit cohort/order-sequence boilerplate from the answer.
 - A follow-up asking for jewellery items filters downstream products, not the first-order cohort. Apply explicit product exclusions in the journey tool. Report governed classification coverage and label unclassified historical products explicitly; never silently treat an unclassified product as non-jewellery.
 - If the requested classification is unavailable or insufficient, say exactly: “I can construct the customer journey, but collaboration classification is not sufficiently governed yet.” Then describe the reported coverage/gap; never fall back to a generic customer summary.
 - Journey results are aggregate-only. Never expose customer references, source customer IDs, emails, names, addresses, phone numbers, or individual journeys. Disclose unresolved identities, limited historical Square/POS identity coverage, classification gaps, and the absent Woo-to-Shopify bridge where relevant.
@@ -8312,7 +8315,7 @@ Important rules:
               continue;
             }
             if (cancellation.signal.aborted) throw cancellation.signal.reason;
-            const queryCharge = item.name === 'get_online_country_sales' ? ONLINE_COUNTRY_MAX_BYTES : 0;
+            const queryCharge = item.name === 'get_online_country_sales' ? ONLINE_COUNTRY_MAX_BYTES : item.name === 'get_governed_category_sales' ? CATEGORY_SALES_MAX_BYTES : 0;
             if (queryCharge > remainingQueryBytes) throw new Error('Oracle request-wide BigQuery budget exceeded');
             remainingQueryBytes -= queryCharge;
             const args = item.name==='analyze_customer_journey'
@@ -8358,6 +8361,7 @@ Important rules:
                 } else {
                   const deviceConversionCall = await executeDeviceSourceConversionToolCall(deviceSourceConversionService, item.name, args);
                   if (deviceConversionCall.handled) result = deviceConversionCall.result;
+                  else { const categorySalesCall=await executeCategorySalesToolCall(categorySalesService,item.name,args); if(categorySalesCall.handled) result=categorySalesCall.result;
                   else if (item.name === 'get_average_customer_order_interval') {
   result = await customerOrderIntervalService(args);
 } else if (item.name === 'get_shopify_online_country_products') {
@@ -8451,7 +8455,8 @@ Important rules:
               error: `Unknown tool: ${item.name}`
             };
             }
-              }
+            }
+            }
             }
             }
             }
