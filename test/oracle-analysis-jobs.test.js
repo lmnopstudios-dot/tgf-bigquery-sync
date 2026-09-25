@@ -63,11 +63,20 @@ test('disabled queue cannot take down ordinary interactive chat',async t=>{
   assert.equal(response.status,200);assert.equal(body.answer,'interactive:dafuk');assert.equal((await fetch(`${base}/jobs`,{method:'POST',headers,body:'{"message":"not enabled"}'})).status,404);
 });
 
-test('BigQuery enqueue serializes JSON columns and PartialFailure diagnostics never include rejected rows',async()=>{
-  let inserted;const table={insert:async rows=>{inserted=rows}};const dataset={table:()=>table};
-  const store=createBigQueryAnalysisJobStore({bigquery:{dataset:()=>dataset},project:'p'});
-  await store.create({owner_key:'owner',request_id:'request',payload_json:{message:'customer secret',sql_parameters:['secret']}});
-  assert.equal(typeof inserted[0].payload_json,'string');assert.deepEqual(JSON.parse(inserted[0].payload_json),{message:'customer secret',sql_parameters:['secret']});
+test('BigQuery enqueue uses committed query DML with JSON binding and can be claimed immediately',async()=>{
+  const calls=[];const dataset={getMetadata:async()=>[{location:'EU'}]};
+  const bigquery={dataset:()=>dataset,query:async options=>{calls.push(options);return options.query.startsWith('INSERT INTO')?[[]]:[[{job_id:options.params.job_id,status:'running',attempts:1,payload_json:options.params.payload_json}]]}};
+  const store=createBigQueryAnalysisJobStore({bigquery,project:'p'});
+  const created=await store.create({owner_key:'owner',request_id:'request',payload_json:{message:'customer secret',sql_parameters:['secret']}});
+  const claimed=await store.claim({worker_id:'worker',leaseMs:60_000,job_id:created.job_id});
+  assert.equal(claimed.job_id,created.job_id);assert.equal(claimed.status,'running');assert.equal(calls.length,2);
+  const enqueue=calls[0];assert.equal(enqueue.location,'EU');assert.match(enqueue.query,/^INSERT INTO `p\.commerce\.oracle_analysis_jobs_v1`/);assert.match(enqueue.query,/PARSE_JSON\(@payload_json\)/);assert.equal(typeof enqueue.params.payload_json,'string');assert.deepEqual(JSON.parse(enqueue.params.payload_json),{message:'customer secret',sql_parameters:['secret']});assert.ok(enqueue.params.created_at instanceof Date);
+  assert.doesNotMatch(enqueue.query,/table\.insert|insertAll/i);
+  assert.match(calls[1].query,/BEGIN TRANSACTION/);
+});
+
+test('PartialFailure diagnostics never include rejected streaming rows',()=>{
+  const inserted=[{owner_key:'owner',request_id:'request',payload_json:JSON.stringify({message:'customer secret',sql_parameters:['secret']})}];
   const rejected={name:'PartialFailureError',errors:[{row:inserted[0],errors:[{reason:'invalid',code:'400',message:'Invalid value for field payload_json: customer secret'}]}]};
   const diagnostic=streamingInsertDiagnostic(rejected);assert.deepEqual(diagnostic,{error_class:'PartialFailureError',reason:'invalid',code:'400',field:'payload_json'});assert.doesNotMatch(JSON.stringify(diagnostic),/customer secret|sql_parameters|owner|request/);
 });
@@ -100,12 +109,19 @@ test('browser keeps interactive chat as default and offers an explicit durable j
 });
 
 test('production smoke lifecycle targets only its marked synthetic job and retrieves completion',async()=>{
-  const store=createMemoryAnalysisJobStore([{job_id:'customer-job',owner_key:'customer',request_id:'customer-request',status:'queued',payload_json:{message:'must not be claimed'},attempts:0,cancel_requested:false}]);
+  const store=createMemoryAnalysisJobStore([{job_id:'customer-job',owner_key:'customer',request_id:'customer-request',status:'queued',payload_json:{message:'customer job'},attempts:0,cancel_requested:false},{job_id:'abandoned-smoke',owner_key:'synthetic',request_id:'oracle-smoke-failed-run',status:'queued',payload_json:{synthetic:true},attempts:0,cancel_requested:false}]);
   const result=await smokeOracleJobQueue({store,delayMs:0});
   assert.equal(result.success,true);assert.deepEqual(result.stages,['enqueue','enqueue_retrieval','claim','completion','completed_retrieval']);
   assert.equal(store.jobs.get('customer-job').status,'queued');
-  const synthetic=[...store.jobs.values()].find(job=>job.request_id.startsWith('oracle-smoke-'));
+  assert.equal(store.jobs.get('abandoned-smoke').status,'queued');
+  const synthetic=[...store.jobs.values()].find(job=>job.request_id.startsWith('oracle-smoke-')&&job.job_id!=='abandoned-smoke');
   assert.equal(synthetic.status,'completed');assert.deepEqual(synthetic.payload_json,{synthetic:true,non_customer:true,purpose:'oracle-job-queue-smoke'});
   store.create=async()=>{throw {errors:[{reason:'invalidQuery',location:'query',message:"Bad value 'customer prompt' in `private.dataset.table` at [1:9]"}]}};
   const failure=await smokeOracleJobQueue({store,delayMs:0});assert.deepEqual(failure,{success:false,failed_stage:'enqueue',bigquery_reason:'invalidQuery',bigquery_message:'Bad value [redacted] in [redacted] at [1:9]',bigquery_location:'query'});
+});
+
+test('ordinary workers skip synthetic rows abandoned by smoke runs',async()=>{
+  const store=createMemoryAnalysisJobStore([{job_id:'abandoned-smoke',owner_key:'synthetic',request_id:'oracle-smoke-failed-run',status:'queued',payload_json:{synthetic:true},attempts:0,cancel_requested:false},{job_id:'customer-job',owner_key:'customer',request_id:'customer-request',status:'queued',payload_json:{message:'customer job'},attempts:0,cancel_requested:false}]);
+  const claimed=await store.claim({worker_id:'ordinary-worker',leaseMs:60_000});
+  assert.equal(claimed.job_id,'customer-job');assert.equal(store.jobs.get('abandoned-smoke').status,'queued');
 });
