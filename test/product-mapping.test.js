@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { applyProductFamilies, approvedMappingEdges, assertFamilyAssignment, buildHistoricalReviewQueue, buildProductChoicePreview, candidateDiagnostics, classifyProduct, createProductMappingService, generateMappingCandidates, isShopifyParentProduct, productSourceLabel, resolveFamilyDecisions, resolveMappingDecisions, sanitizeReviewerNote, searchProducts, validateGraphApproval } from '../oracle/product-mapping.js';
+import { applyProductFamilies, approvedMappingEdges, assertFamilyAssignment, buildHistoricalReviewQueue, buildProductChoicePreview, buildProductMappingCoverage, candidateDiagnostics, classifyProduct, createProductMappingService, generateMappingCandidates, isShopifyParentProduct, productSourceLabel, resolveFamilyDecisions, resolveMappingDecisions, sanitizeReviewerNote, searchProducts, suggestShopifyParents, validateGraphApproval } from '../oracle/product-mapping.js';
 import { buildCanonicalProductGraph, mapProductPair } from '../oracle/product-identity.js';
 
 const p=(ref,title,extra={})=>({source_product_ref:ref,source_platform:ref.split(':')[0],source_store:ref.split(':')[1],source_product_id:ref.split(':')[2],title,...extra});
@@ -176,6 +176,27 @@ test('Shopify parent selection excludes variant identifiers',()=>{
   assert.equal(isShopifyParentProduct(p('shopify:shopify:gid://shopify/Product/10434341601607','Micro Michael')),true);
   assert.equal(isShopifyParentProduct(p('shopify:shopify:gid://shopify/ProductVariant/1','Micro Michael size 8')),false);
   assert.equal(isShopifyParentProduct(p('woo:ww:1','Historical')),false);
+});
+
+test('size-specific Woo variants suggest one Shopify parent family but never a Shopify variant',()=>{
+  const source=p('woo:ww:8','Serpent Ring size 8',{sku:'SERP-8'}),parent=p('shopify:shopify:gid://shopify/Product/9','Serpent Ring',{sku:'SERP'}),variant=p('shopify:shopify:gid://shopify/ProductVariant/10','Serpent Ring size 8',{sku:'SERP-8'});
+  const suggestions=suggestShopifyParents(source,[source,parent,variant]);
+  assert.deepEqual(suggestions.map(x=>x.source_product_ref),[parent.source_product_ref]);
+  assert.match(suggestions[0].conflicting_evidence.join(' '),/SKU differs|variant\/size/);
+});
+
+test('ambiguous Shopify suggestions stay visibly ambiguous and never become confirmations',()=>{
+  const source=p('square:square:1','Silver Skull Ring'),products=[source,p('shopify:shopify:2','Silver Skull Ring'),p('shopify:shopify:3','Silver Skull Ring')];
+  const suggestions=suggestShopifyParents(source,products);
+  assert.equal(suggestions.length,2);assert.ok(suggestions.every(x=>x.ambiguous));
+  const [row]=buildHistoricalReviewQueue(products,[]);assert.equal(row.resolution_status,'needs_review');assert.equal(row.active_identity_mapping,null);
+});
+
+test('coverage reports unresolved historical impact, resolutions, outcomes and classification impact by source',()=>{
+  const products=[p('woo:ww:1','Exact Ring',{line_items:3,sales:30}),p('woo:usd:2','Old Ring',{line_items:5,sales:50}),p('square:square:3','Shipping',{line_items:7,sales:70}),p('shopify:shopify:4','Exact Ring')];
+  const mappings=[{decision_id:'m',left_ref:'woo:ww:1',right_ref:'shopify:shopify:4',status:'approved'}],outcomes=[{source_ref:'woo:usd:2',outcome:'no_equivalent',reviewed_at:'2026-01-01'}];
+  const queue=buildHistoricalReviewQueue(products,[],{mappingDecisions:mappings,reviewOutcomes:outcomes}),coverage=buildProductMappingCoverage(products,queue,{mappingDecisions:mappings,reviewOutcomes:outcomes});
+  assert.equal(coverage.by_source['woo:usd'].order_lines,5);assert.equal(coverage.by_source['woo:usd'].no_equivalent,1);assert.equal(coverage.by_source['square:square'].classification_impact.shipping.order_lines,7);assert.equal(coverage.completed,2);
 });
 
 test('queue resolution state distinguishes active identity and active reporting family',()=>{
