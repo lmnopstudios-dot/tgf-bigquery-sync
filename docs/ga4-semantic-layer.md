@@ -4,7 +4,9 @@ GA4 property `291532339` is read through the Google Analytics Data API using `GA
 
 ## Objects and semantics
 
-Dataset `ga4` contains partitioned tables `daily`, `acquisition`, `landing_pages`, `device_geo`, and `ecommerce_funnel`, plus `tracking_eras`. `daily` and the funnel have one row per requested date. Dimensional tables have one row per daily dimension key. Landing values are paths with query strings and fragments removed.
+Dataset `ga4` contains partitioned tables `daily`, `acquisition`, `landing_pages`, `device_geo`, `conversion_breakdown`, and `ecommerce_funnel`, plus `tracking_eras`. `daily` and the funnel have one row per requested date. Dimensional tables have one row per daily dimension key. Landing values are paths with query strings and fragments removed.
+
+`conversion_breakdown` keeps GA4 sessions, ecommerce purchases, and purchasers at one shared `device category × session channel × session source/medium` grain. Its conversion rate is recomputed as `SUM(ecommerce_purchases) / SUM(sessions)` for the requested slice; it must not be reconstructed by joining the separate acquisition and device/geo aggregates or by using Shopify/finance orders as the numerator.
 
 Traffic, users, engagement, acquisition, landing-page and device/geo metrics are GA4 behavioural evidence. GA4 `purchase` is **not** transaction or revenue truth. Shopify is order truth, `finance.sales_master` is money truth, Square is retail truth, and Metorik/Woo provides historical ecommerce continuity. No Shopify value is substituted into a GA4 field.
 

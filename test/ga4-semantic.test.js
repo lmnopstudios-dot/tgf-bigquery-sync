@@ -28,21 +28,22 @@ test('tracking contract separates unavailable, observed zero, and reliability', 
 });
 
 const gaRow = (dims, metrics) => ({ dimensionValues: dims.map(value => ({ value })), metricValues: metrics.map(value => ({ value: String(value) })) });
-function fakeClient({ fail = false, omitDaily = false } = {}) { return { async runReport(request) { if (fail) { const e = new Error('secret token abc'); e.code = 3; throw e; } const dims = request.dimensions.map(d => d.name); if (dims.join() === 'date') return [{ rows: omitDaily ? [] : [gaRow(['20260907'], [10,8,3,6,.6,20])] }]; if (dims.includes('eventName')) return [{ rows: [gaRow(['20260907','view_item'],[0])] }]; return [{ rows: [gaRow(['20260907', ...dims.slice(1).map(() => '(not set)')], request.metrics.map(() => 1))] }]; } }; }
+function fakeClient({ fail = false, omitDaily = false } = {}) { return { async runReport(request) { if (fail) { const e = new Error('secret token abc'); e.code = 3; throw e; } const dims = request.dimensions.map(d => d.name); if (dims.join() === 'date') return [{ rows: omitDaily ? [] : [gaRow(['20260907'], [10,8,3,6,.6,20])] }]; if (dims.includes('eventName')) return [{ rows: [gaRow(['20260907','view_item'],[0])] }]; if (dims.includes('deviceCategory') && dims.includes('sessionDefaultChannelGroup')) return [{ rows: [gaRow(['20260907','mobile','Organic Search','google','organic'],[10,2,2])] }]; return [{ rows: [gaRow(['20260907', ...dims.slice(1).map(() => '(not set)')], request.metrics.map(() => 1))] }]; } }; }
 
 test('collect normalizes responses, represents observed zero, and detects incomplete ranges', async () => {
   const data = await collect({ client: fakeClient(), propertyId:'291532339', startDate:'2026-09-07', endDate:'2026-09-07' });
   assert.equal(data.daily[0].view_item, 0); assert.equal(data.daily[0].ecommerce_observed, true); assert.equal(data.landing_pages[0].landing_path, '(not set)');
+  assert.equal(data.conversion_breakdown[0].device_category, 'mobile'); assert.equal(data.conversion_breakdown[0].ecommerce_conversion_rate, .2);
   await assert.rejects(collect({ client: fakeClient({ fail:true }), propertyId:'x', startDate:'2026-09-07', endDate:'2026-09-07' }), /GA4 Data API request failed/);
-  assert.throws(() => validateCollected({ daily:[], ecommerce_funnel:[], acquisition:[], landing_pages:[], device_geo:[] }, '2026-09-07','2026-09-07'), /Incomplete sync/);
+  assert.throws(() => validateCollected({ daily:[], ecommerce_funnel:[], acquisition:[], landing_pages:[], device_geo:[], conversion_breakdown:[] }, '2026-09-07','2026-09-07'), /Incomplete sync/);
 });
 
 test('promotion is range-scoped and idempotent rather than destructive', () => {
   const sql = promotionSql('p','ga4','daily'); assert.match(sql, /BEGIN TRANSACTION/); assert.match(sql, /BETWEEN @startDate AND @endDate/); assert.doesNotMatch(sql, /TRUNCATE/);
-  const coordinated = coordinatedPromotionSql('p','ga4'); assert.equal((coordinated.match(/BEGIN TRANSACTION/g) || []).length, 1); assert.equal((coordinated.match(/DELETE FROM/g) || []).length, 5);
-  assert.equal((coordinated.match(/must not contain duplicate semantic keys/g) || []).length, 5);
+  const coordinated = coordinatedPromotionSql('p','ga4'); assert.equal((coordinated.match(/BEGIN TRANSACTION/g) || []).length, 1); assert.equal((coordinated.match(/DELETE FROM/g) || []).length, 6);
+  assert.equal((coordinated.match(/must not contain duplicate semantic keys/g) || []).length, 6);
   assert.equal((coordinated.match(/must contain exactly one row per requested date/g) || []).length, 2);
-  assert.equal((coordinated.match(/promoted row count must match its stage/g) || []).length, 5);
+  assert.equal((coordinated.match(/promoted row count must match its stage/g) || []).length, 6);
 });
 
 test('DATE query parameters serialize as values rather than NULL', () => {
@@ -185,4 +186,5 @@ test('controlled query helpers attach provenance and fail closed for mixed ecomm
   const service = createGa4QueryService({ project:'p', bigquery:{ query:async () => [[{ sessions: 4 }]] } });
   const traffic = await service.trafficSummary('2026-09-07','2026-09-07'); assert.equal(traffic.provenance.source, 'Google Analytics 4 Data API'); assert.equal(traffic.provenance.property_role, 'website_behaviour_not_transaction_or_money_truth');
   const funnel = await service.ecommerceFunnel('2026-09-06','2026-09-07'); assert.equal(funnel.values, null); assert.equal(funnel.zero_is_not_assumed, true);
+  const conversion = await service.conversionBreakdown('2025-09-25','2025-11-19'); assert.match(conversion.conversion_definition, /same dimensional grain/); assert.equal(conversion.rows[0].sessions, 4);
 });
