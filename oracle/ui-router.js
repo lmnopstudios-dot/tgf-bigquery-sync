@@ -28,6 +28,16 @@ export function createOracleUiRouter({ knowledgeService, bigquery, project, chat
   const unansweredIntents = new Map();
   const logProposalError = error => console.error('Oracle UI proposal generation failed:', proposalDiagnostic(error, proposalModel));
   const mappingReadDiagnostic=(error,context)=>{const value=governanceDiagnostic(error,context);delete value.internal_message;return value};
+  const mappingLimit=Math.max(1,Math.min(Number(env.ORACLE_MAPPING_CONCURRENCY)||1,2));
+  const mappingQueueLimit=Math.max(0,Math.min(Number(env.ORACLE_MAPPING_QUEUE_LIMIT)||2,10));
+  let activeMappingReads=0;const mappingWaiters=[];
+  const acquireMappingRead=req=>new Promise((resolve,reject)=>{
+    if(activeMappingReads<mappingLimit){activeMappingReads++;return resolve();}
+    if(mappingWaiters.length>=mappingQueueLimit)return reject(Object.assign(new Error('Product mapping is busy; retry shortly.'),{code:'MAPPING_BUSY'}));
+    const waiter={resolve:()=>{activeMappingReads++;resolve();},reject};mappingWaiters.push(waiter);
+    req.once('aborted',()=>{const index=mappingWaiters.indexOf(waiter);if(index>=0){mappingWaiters.splice(index,1);reject(Object.assign(new Error('mapping request cancelled'),{code:'ABORT_ERR'}));}});
+  });
+  const releaseMappingRead=()=>{activeMappingReads--;mappingWaiters.shift()?.resolve();};
   if (!password || !sessionSecret || sessionSecret.length < 32) throw new Error('ORACLE_UI_PASSWORD and ORACLE_UI_SESSION_SECRET (32+ characters) are required');
   const authenticate = (req, res, next) => {
     const session = verifySession(parseCookies(req.headers.cookie).oracle_session, sessionSecret);
@@ -173,21 +183,22 @@ export function createOracleUiRouter({ knowledgeService, bigquery, project, chat
     const supplied=String(req.get('x-request-id')||'');
     const requestId=/^[A-Za-z0-9._-]{1,80}$/.test(supplied)?supplied:crypto.randomUUID();
     const started=Date.now();
+    let acquired=false;const cancellation=new AbortController();req.once('aborted',()=>cancellation.abort());res.once('close',()=>{if(!res.writableEnded)cancellation.abort()});
     try {
       if(!productMappingService) throw new Error('Product mappings are unavailable');
-      const payload={success:true,...await productMappingService.list({search:String(req.query.search||'')})};
-      // Force serialization inside this stage so serialization failures receive the
-      // same bounded diagnostic as loading and queue construction failures.
-      JSON.stringify(payload);
-      console.info('Oracle product mapping read succeeded:',{request_id:requestId,operation:'list_review_candidates',stage:'response_serialization',item_count:payload.items?.length||0,duration_ms:Date.now()-started});
-      res.setHeader('x-request-id',requestId).json(payload);
+      await acquireMappingRead(req);acquired=true;
+      const payload={success:true,...await productMappingService.list({search:String(req.query.search||''),source:String(req.query.source||''),sort:String(req.query.sort||'impact'),page:req.query.page,pageSize:req.query.page_size,signal:cancellation.signal})};
+      // Serialize once (rather than making Express repeat it) and profile local CPU.
+      const serializationStarted=performance.now(),serializationCpu=process.cpuUsage(),serialized=JSON.stringify(payload),serializationUsed=process.cpuUsage(serializationCpu);
+      console.info('Oracle product mapping read succeeded:',{request_id:requestId,operation:'list_review_candidates',stage:'response_serialization',item_count:payload.items?.length||0,duration_ms:Date.now()-started,serialization_wall_ms:Math.round((performance.now()-serializationStarted)*10)/10,serialization_cpu_ms:Math.round((serializationUsed.user+serializationUsed.system)/100)/10});
+      res.setHeader('x-request-id',requestId).type('application/json').send(serialized);
     } catch(error){
       console.error('Oracle product mapping read failed:',mappingReadDiagnostic(error,{request_id:requestId,operation:'list_review_candidates',duration_ms:Date.now()-started}));
-      res.setHeader('x-request-id',requestId).status(503).json({success:false,error:governancePublicError(error),request_id:requestId});
-    }
+      if(!res.headersSent&&!cancellation.signal.aborted)res.setHeader('x-request-id',requestId).status(error.code==='MAPPING_BUSY'?429:503).json({success:false,code:error.code==='MAPPING_BUSY'?'PRODUCT_MAPPING_BUSY':undefined,error:error.code==='MAPPING_BUSY'?error.message:governancePublicError(error),request_id:requestId});
+    } finally {if(acquired)releaseMappingRead();}
   });
   router.get('/product-mappings/search', authenticate, async (req,res) => { try { if(!productMappingService) throw new Error('Product mappings are unavailable'); res.json({success:true,...await productMappingService.search({query:String(req.query.q||''),sources:String(req.query.sources||'').split(',').filter(Boolean),exclude_ref:req.query.exclude_ref||null,limit:req.query.limit})}); } catch(error){res.status(400).json({success:false,error:safeError(error)});} });
-  router.get('/product-mappings/choice-preview',authenticate,async(req,res)=>{try{if(!productMappingService)throw new Error('Product mappings are unavailable');res.json({success:true,...await productMappingService.previewChoice(String(req.query.candidate_id||''),String(req.query.selected_ref||''))})}catch(error){console.error('Oracle product choice preview failed:',governanceDiagnostic(error,{operation:'choice_preview',candidate_id:String(req.query.candidate_id||'unknown').slice(0,128),reviewer:req.oracleUser.sub}));res.status(isGovernanceBusinessError(error)?400:503).json({success:false,error:governancePublicError(error)})}});
+  router.get('/product-mappings/choice-preview',authenticate,async(req,res)=>{try{if(!productMappingService)throw new Error('Product mappings are unavailable');res.json({success:true,...await productMappingService.previewChoice(String(req.query.candidate_id||''),String(req.query.selected_ref||''),String(req.query.source_ref||''))})}catch(error){console.error('Oracle product choice preview failed:',governanceDiagnostic(error,{operation:'choice_preview',candidate_id:String(req.query.candidate_id||'unknown').slice(0,128),reviewer:req.oracleUser.sub}));res.status(isGovernanceBusinessError(error)?400:503).json({success:false,error:governancePublicError(error)})}});
   router.get('/product-mappings/decisions', authenticate, async (req,res) => { try { if(!productMappingService) throw new Error('Product mappings are unavailable'); res.json({success:true,...await productMappingService.history({status:req.query.status||null,source:req.query.source||null,search:req.query.search||null,reviewer:req.query.reviewer||null,start_date:req.query.start_date||null,end_date:req.query.end_date||null})}); } catch(error){res.status(503).json({success:false,error:safeError(error)});} });
   router.get('/product-mappings/families',authenticate,async(req,res)=>{try{if(!productMappingService)throw new Error('Product mappings are unavailable');res.json({success:true,...await productMappingService.familyHistory()})}catch(error){res.status(503).json({success:false,error:safeError(error)})}});
   const mappingDiagnostic=(req,operation,error)=>governanceDiagnostic(error,{operation,candidate_id:String(req.body?.candidate?.candidate_id||req.body?.decision_id||'unknown').slice(0,128),reviewer:req.oracleUser.sub});
