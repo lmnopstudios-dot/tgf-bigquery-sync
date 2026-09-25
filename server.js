@@ -23,6 +23,7 @@ import { createCollectionClassificationService } from './oracle/collection-class
 import { redactError } from './oracle/ui-security.js';
 import { affinityJustified, partialAnswer, requestId, stageOutcome, terminalMessage } from './oracle/request-observability.js';
 import { RequestToolBudget, boundedToolFailure, toolCallSignature } from './oracle/request-tool-budget.js';
+import { evidenceSummary, synthesisFailureKind } from './oracle/evidence-summary.js';
 import {
   AcquisitionValidationError,
   syncShopifyAcquisition
@@ -8126,6 +8127,7 @@ app.post(
       let affinityCalls = 0;
       const successfulTools=[];
       const failedTools=[];
+      const completedEvidence=[];
       let toolAdmissionStopped=false;
       stage='initial_model';
       console.info('Agent stage outcome:',stageOutcome({id,stage:'request_received',startedAt:requestStarted,outcome:'success'}));
@@ -8474,8 +8476,10 @@ Important rules:
             call_id: item.call_id,
             output: JSON.stringify(result)
           });
+          const outputBytes=Buffer.byteLength(outputs.at(-1).output,'utf8');
+          console.info('Agent tool result outcome:',{request_id:id,stage:`tool_result:${item.name}`,outcome:'validated',result_bytes:outputBytes});
           inlineChart ||= buildOracleInlineChart(item.name, result);
-          if (result?.success !== false && !result?.error) successfulTools.push(item.name);
+          if (result?.success !== false && !result?.error) { successfulTools.push(item.name); completedEvidence.push({name:item.name,result}); }
         }
 
         stage='response_generation';
@@ -8485,6 +8489,7 @@ Important rules:
           return;
         }
         const synthesisStarted=Date.now();
+        const synthesisInputBytes=outputs.reduce((sum,item)=>sum+Buffer.byteLength(item.output||'','utf8'),0);
         try {
           if(!callBudget.canContinueModel()) throw new Error('Oracle request cancelled or deadline exceeded before synthesis');
           response = await openai.responses.create({
@@ -8495,8 +8500,9 @@ Important rules:
           }, { timeout: Math.max(1, deadlineAt - Date.now()), signal:cancellation.signal });
           console.info('Agent stage outcome:',stageOutcome({id,stage,startedAt:synthesisStarted,outcome:'success',extra:{round:toolRounds}}));
         } catch(error) {
-          console.error('Agent stage outcome:',stageOutcome({id,stage,startedAt:synthesisStarted,outcome:'failed',error,extra:{round:toolRounds}}));
-          if(successfulTools.length||failedTools.length) return res.status(206).json({success:true,partial:true,answer:partialAnswer(message,successfulTools,failedTools),tools_used:[...toolsUsed],inline_chart:inlineChart,request_id:id});
+          const failure_kind=synthesisFailureKind(error,{deadlineAt,signal:cancellation.signal,outputBytes:synthesisInputBytes});
+          console.error('Agent stage outcome:',stageOutcome({id,stage,startedAt:synthesisStarted,outcome:'failed',error,extra:{round:toolRounds,failure_kind,synthesis_input_bytes:synthesisInputBytes}}));
+          if(successfulTools.length||failedTools.length) return res.status(206).json({success:true,partial:true,answer:evidenceSummary(completedEvidence,{unavailable:failedTools}),tools_used:[...toolsUsed],inline_chart:inlineChart,request_id:id});
           throw error;
         }
       }
