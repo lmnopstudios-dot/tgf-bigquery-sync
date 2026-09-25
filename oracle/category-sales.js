@@ -35,7 +35,7 @@ export function categorySalesSql(project) {
       LOGICAL_OR(classification_type='product_category' AND classification_value IN (${jewellery})) is_jewellery,
       COUNT(*) governed_classifications,LOGICAL_OR(mapping_type='direct') has_direct_classification,
       LOGICAL_OR(mapping_type='approved_identity') has_identity_mapping,LOGICAL_OR(mapping_type='approved_reporting_family') has_reporting_family_mapping,
-      ARRAY_AGG(DISTINCT STRUCT(classification_type,classification_value,provenance,mapping_type) ORDER BY classification_type,classification_value LIMIT 50) evidence
+      ARRAY_AGG(DISTINCT STRUCT(classification_type,classification_value,provenance,mapping_type) LIMIT 50) evidence
     FROM source_classifications GROUP BY source_ref),
   woo_orders AS (
     SELECT 'ww' source_store,CAST(order_id AS STRING) order_ref,DATE(order_created_at) order_date,LOWER(status) status,total,ABS(COALESCE(total_refunds,0)) refunds FROM \`${project}.metorik_uk.orders\`
@@ -60,16 +60,39 @@ export function categorySalesSql(project) {
     COUNTIF(governed_classifications>0) classified_lines,COUNTIF(governed_classifications=0) unclassified_lines,SUM(IF(governed_classifications=0,sales,0)) unclassified_sales,
     COUNTIF(has_direct_classification) directly_classified_lines,COUNTIF(has_identity_mapping) identity_mapped_lines,COUNTIF(has_reporting_family_mapping) reporting_family_mapped_lines
     FROM assigned GROUP BY 1,2,3,4),
-  buckets AS (SELECT source_platform,source_store,currency,monetary_unit,sales_category,COUNT(*) line_items,SUM(units) units,SUM(sales) sales FROM assigned GROUP BY 1,2,3,4,5)
+  categories AS (SELECT sales_category FROM UNNEST(['sunglasses','jewellery','other','unclassified']) sales_category),
+  buckets AS (SELECT source_platform,source_store,currency,monetary_unit,sales_category,COUNT(*) line_items,SUM(units) units,SUM(sales) sales FROM assigned GROUP BY 1,2,3,4,5),
+  complete_buckets AS (SELECT t.source_platform,t.source_store,t.currency,t.monetary_unit,c.sales_category,COALESCE(b.line_items,0) line_items,COALESCE(b.units,0) units,COALESCE(b.sales,0) sales
+    FROM totals t CROSS JOIN categories c LEFT JOIN buckets b USING(source_platform,source_store,currency,monetary_unit,sales_category))
   SELECT b.*,t.eligible_lines,t.eligible_units,t.eligible_sales,t.classified_lines,t.unclassified_lines,t.unclassified_sales,
     t.directly_classified_lines,t.identity_mapped_lines,t.reporting_family_mapped_lines,SAFE_DIVIDE(t.classified_lines,t.eligible_lines) classified_line_share,SAFE_DIVIDE(t.unclassified_sales,t.eligible_sales) unclassified_sales_share,SAFE_DIVIDE(b.sales,t.eligible_sales) sales_share
-  FROM buckets b JOIN totals t USING(source_platform,source_store,currency,monetary_unit)
+  FROM complete_buckets b JOIN totals t USING(source_platform,source_store,currency,monetary_unit)
   ORDER BY currency,monetary_unit,source_platform,source_store,sales_category LIMIT 100`;
 }
 
 export function createCategorySalesService({bigquery,project}) {
   if(!bigquery?.query||!project)throw new Error('bigquery and project are required');
-  return async input=>{const params=validateCategorySalesInput(input);const [rows]=await bigquery.query({query:categorySalesSql(project),params,useLegacySql:false,maximumBytesBilled:String(CATEGORY_SALES_MAX_BYTES),labels:{component:'oracle',operation:'category_sales'}});return {period:params,rows:JSON.parse(JSON.stringify(rows)),classification_contract:{sunglasses:'Active governed product_type=sunglasses, direct or inherited through an approved identity/reporting-family route.',jewellery:`Active governed product_category in ${JEWELLERY_CATEGORIES.join(', ')}, direct or inherited through an approved identity/reporting-family route.`,precedence:['sunglasses','jewellery','unclassified','other'],forbidden_inputs:['historical product title keywords','current tags alone','suggested or fuzzy mappings']},coverage:'Every source/currency row includes eligible sales and category share; unclassified is returned rather than discarded.',money:{currencies_separate:true,major_unit_sources:['woo','shopify'],minor_unit_sources:['square'],fx_conversion:false},semantics:{eligibility:'Woo completed/processing; Shopify paid/partially paid/partially refunded, not cancelled, not Matrixify, and both exclude fully refunded orders.',refunds:'Woo and Shopify retain their established eligible-order and discounted-line contracts. Square subtracts persisted return-line amounts linked to the sold line.',channel:'Woo is Online; Shopify includes native Online and POS; Square is In-store.'},contract:{read_only:true,aggregate_only:true,pii_free:true,maximum_rows:100}}};
+  return async input=>{const params=validateCategorySalesInput(input);const [rows]=await bigquery.query(categorySalesQueryOptions(project,params));assertCategorySalesReconciles(rows);return {period:params,rows:JSON.parse(JSON.stringify(rows)),classification_contract:{sunglasses:'Active governed product_type=sunglasses, direct or inherited through an approved identity/reporting-family route.',jewellery:`Active governed product_category in ${JEWELLERY_CATEGORIES.join(', ')}, direct or inherited through an approved identity/reporting-family route.`,precedence:['sunglasses','jewellery','unclassified','other'],forbidden_inputs:['historical product title keywords','current tags alone','suggested or fuzzy mappings']},coverage:'Every source/currency group includes sunglasses, jewellery, other and unclassified sales; the four buckets reconcile to eligible sales.',money:{currencies_separate:true,major_unit_sources:['woo','shopify'],minor_unit_sources:['square'],fx_conversion:false},semantics:{eligibility:'Woo completed/processing; Shopify paid/partially paid/partially refunded, not cancelled, not Matrixify, and both exclude fully refunded orders.',refunds:'Woo and Shopify retain their established eligible-order and discounted-line contracts. Square subtracts persisted return-line amounts linked to the sold line.',channel:'Woo is Online; Shopify includes native Online and POS; Square is In-store.'},contract:{read_only:true,aggregate_only:true,pii_free:true,maximum_rows:100}}};
+}
+
+export function categorySalesQueryOptions(project,input){return {query:categorySalesSql(project),params:validateCategorySalesInput(input),useLegacySql:false,maximumBytesBilled:String(CATEGORY_SALES_MAX_BYTES),labels:{component:'oracle',operation:'category_sales'}}}
+
+
+const numeric=value=>Number(value?.value??value??0);
+export function assertCategorySalesReconciles(rows){
+  const groups=new Map();
+  for(const row of rows){
+    const key=[row.source_platform,row.source_store,row.currency,row.monetary_unit].join('\u0000');
+    const group=groups.get(key)||{categories:new Set(),sales:0,total:numeric(row.eligible_sales)};
+    group.categories.add(row.sales_category);group.sales+=numeric(row.sales);
+    if(Math.abs(group.total-numeric(row.eligible_sales))>.000001)throw new Error('category sales total changed within a source/currency group');
+    groups.set(key,group);
+  }
+  for(const group of groups.values()){
+    if(['sunglasses','jewellery','other','unclassified'].some(category=>!group.categories.has(category)))throw new Error('category sales response is missing a governed bucket');
+    if(Math.abs(group.sales-group.total)>.000001*Math.max(1,Math.abs(group.total)))throw new Error('category sales buckets do not reconcile to eligible sales');
+  }
+  return true;
 }
 
 export const CATEGORY_SALES_TOOL_DEFINITION={type:'function',name:'get_governed_category_sales',strict:true,description:'Compare governed sunglasses, jewellery, other-classified and unclassified product-line sales with coverage by source and currency. Use for category sales questions, including partial historical classification coverage. Never use customer cohorts/order sequences or infer categories from titles/current tags.',parameters:{type:'object',additionalProperties:false,properties:{start_date:{type:'string',description:'Inclusive YYYY-MM-DD date.'},end_date:{type:'string',description:'Inclusive YYYY-MM-DD date.'}},required:['start_date','end_date']}};
