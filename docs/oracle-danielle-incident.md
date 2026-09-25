@@ -18,6 +18,24 @@ Then run this exact, deliberately opt-in Render Shell command:
 ORACLE_JOB_QUEUE_SMOKE=true npm run smoke:oracle-job-queue
 ```
 
+The targeted smoke does not establish that ordinary polling is healthy. After
+deployment, this Render Shell command safely executes only the production
+worker's read-only ordinary candidate lookup (it returns only whether a job is
+waiting, never an ID or payload):
+
+```sh
+npm run diagnose:oracle-ordinary-claim
+```
+
+Then run one controlled acceptance lifecycle from a single shell. It enqueues a fixed non-customer
+payload, claims it through the ordinary (not targeted-smoke) path, and completes
+it without invoking Oracle analysis. Do not run multiple acceptance commands
+concurrently:
+
+```sh
+ORACLE_ORDINARY_CLAIM_ACCEPTANCE=true npm run diagnose:oracle-ordinary-claim
+```
+
 The smoke command is never imported by startup. It uses the configured real BigQuery table and writes one clearly marked `oracle-smoke-*`, synthetic, non-customer job. Normal workers exclude that marker; the smoke process targets only its own job while verifying queued retrieval, claim, completion, and completed-result retrieval. It does not invoke the Oracle agent, create a table, print payloads, or print credentials. Success emits only the passed stage names. Failure emits only `failed_stage` and a sanitized `bigquery_reason`.
 
 The `product_affinity` primary and guest BigQuery jobs both completed. They were not the terminal failure. The next agent round still had to submit their function outputs to the Responses API and obtain a final answer. The UI-to-agent request shared the same 90-second edge as the agent deadline, so a slow continuation could be aborted by the UI fetch before the agent returned a bounded response. That transport exception reached the UI router's outer catch and became the generic “The request could not be completed” message. Proposal generation happens after chat and is already optional; it cannot explain a log line emitted by the outer chat failure path.
