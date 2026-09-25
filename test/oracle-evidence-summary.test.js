@@ -20,3 +20,10 @@ test('synthesis diagnostics distinguish deadline, provider and oversized tool re
   assert.equal(synthesisFailureKind(new Error(),{deadlineAt:Date.now()+1000}),'provider_failure');
   assert.equal(synthesisFailureKind(Object.assign(new Error(),{status:413}),{deadlineAt:Date.now()+1000}),'tool_result_size');
 });
+
+test('conversion fallback preserves validated aggregates without inventing missing breakdowns',()=>{
+  const answer=evidenceSummary([{name:'get_shopify_conversion_kpis',result:{start_date:'2025-11-16',end_date:'2025-12-15',metrics:{sessions:12500,orders:250,conversion_rate:0.02}}}],{unavailable:['pre-launch device conversion denominator','traffic-source conversion denominator']});
+  assert.match(answer,/Sessions 12,500/);assert.match(answer,/Orders 250/);assert.match(answer,/Conversion Rate 0\.02/);
+  assert.match(answer,/No conversion rate, device\/channel denominator, cross-platform equivalence/);
+  assert.doesNotMatch(answer,/conversion rate 2%/i);
+});

@@ -14,6 +14,13 @@ export function oracleRequestRoute(message,{hasCompletedJob=false}={}) {
     && /\b(?:sales|performance|data|figures|revenue|units)\b/i.test(text)
     && ((text.match(/[,;]/g)||[]).length>=2||/\b(?:and|versus|vs\.?|compared? (?:with|to))\b/i.test(text));
   if(multiProductRecommendation)return 'job';
+  // Cross-platform conversion requests require several governed reads (the
+  // launch boundary, session denominators, orders, and attribution coverage).
+  // They must not inherit the short interactive synthesis deadline.
+  if(/\bconversion rate\b/i.test(text)
+    && /\b(?:before|pre[- ]launch)\b/i.test(text)
+    && /\b(?:after|post[- ]launch)\b/i.test(text)
+    && /\b(?:shopify|launch|migration)\b/i.test(text))return 'job';
   const separators=(text.match(/[;,]/g)||[]).length;
   const scopeTerms=(lower.match(/\b(stock|inventory|sales|product|products|items|catalogue|online)\b/g)||[]).length;
   const analytical=/\b(analy[sz]e|analysis|investigate|recommend|strategy|clear(?:ing|ance)?|use data|across|complete|comprehensive)\b/i.test(text);

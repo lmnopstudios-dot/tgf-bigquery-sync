@@ -13,6 +13,7 @@ const DANIELLE_FULL_EMAIL=`Danielle has asked us to look at clearing the followi
 Small Signet; Butterfly, Ankh, Eagle and Pig charms; Sun and Moon, Serpent, Dagger, Snake and Dagger, Magic Mushroom and Enchanted Castle pendants; Reaper and Pentagram; gold and silver bat earrings; Solid Heart and Smallest Evil Skull rings; and all three skull-hoop variations.
 Any ideas of what we can do? Use data where possible.`;
 const ITEMS=['Small Signet','Butterfly','Ankh','Eagle','Pig','Sun and Moon','Serpent','Dagger','Snake and Dagger','Magic Mushroom','Enchanted Castle','Reaper','Pentagram','gold bat earrings','silver bat earrings','Solid Heart','Smallest Evil Skull','skull-hoop 1','skull-hoop 2','skull-hoop 3'];
+const CONVERSION_QUESTION='I would like a comparison of the conversion rate for desktop and mobile before we launched the Shopify site and after launching it. A breakdown by traffic source would also be useful.';
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 async function login(base){const response=await fetch(`${base}/auth/login`,{method:'POST',headers:{origin:new URL(base).origin,'content-type':'application/json'},body:'{"password":"test-password"}'}),data=await response.json();return {cookie:response.headers.getSetCookie().map(x=>x.split(';')[0]).join('; '),csrf:data.csrf};}
 const poll=async(base,id,cookie)=>{for(let i=0;i<10_000;i++){const body=await (await fetch(`${base}/jobs/${id}`,{headers:{cookie}})).json();if(['completed','failed','cancelled'].includes(body.status))return body;await sleep(10)}throw new Error('job did not finish')};
@@ -127,8 +128,22 @@ test('one-button browser deterministically routes bounded requests before either
   assert.equal(oracleRequestRoute('How much did we sell?'),'chat');
   assert.equal(oracleRequestRoute('Currently our global cart upsells are Vintage Reissue 70s ‘UFO tshirt’, TGF Cotton Tote Bag and TGF Socks. Give their sales performance over the last year and recommend global upsells using data.'),'job');
   assert.equal(oracleRequestRoute(DANIELLE_FULL_EMAIL),'job');
+  assert.equal(oracleRequestRoute(CONVERSION_QUESTION),'job');
   assert.equal(oracleRequestRoute('What should Danielle do next?',{hasCompletedJob:true}),'chat');
   assert.match(source,/oracleRequestRoute\(text/);assert.match(source,/api\('\/chat'/);assert.match(source,/api\('\/jobs'/);assert.match(source,/followJob|recoverJob/);assert.doesNotMatch(source,/deep-analysis|event\.submitter/);
+});
+
+test('exact conversion request uses the durable queue and survives a delayed final response',async t=>{
+  const store=createMemoryAnalysisJobStore();let received;
+  const chat=async(message,conversation)=>{received={message,conversation};await sleep(80);return {answer:'Verified subset: Shopify sessions 1,000; conversion rate 2%. Pre-launch device/channel conversion denominators are unavailable, so no like-for-like trend is claimed.',tools:['search_knowledge','get_shopify_conversion_kpis']}};
+  const app=express();app.use('/api/oracle',createOracleUiRouter({knowledgeService:{},bigquery:{},project:'p',chat,generateProposals:async()=>[],analysisJobStore:store,env}));
+  const server=await new Promise(resolve=>{const value=app.listen(0,()=>resolve(value))});t.after(()=>server.close());
+  const base=`http://127.0.0.1:${server.address().port}/api/oracle`,auth=await login(base),headers={cookie:auth.cookie,origin:new URL(base).origin,'content-type':'application/json','x-csrf-token':auth.csrf,'x-request-id':'conversion-boundary-e2e'};
+  assert.equal(oracleRequestRoute(CONVERSION_QUESTION),'job');
+  const submitted=await (await fetch(`${base}/jobs`,{method:'POST',headers,body:JSON.stringify({message:CONVERSION_QUESTION})})).json();
+  const result=await poll(base,submitted.job_id,auth.cookie);
+  assert.equal(result.status,'completed');assert.match(result.answer,/1,000/);assert.match(result.answer,/unavailable/);assert.match(result.answer,/no like-for-like trend/i);
+  assert.equal(received.message,CONVERSION_QUESTION);assert.equal(received.conversation.durable,true);assert.equal(received.conversation.requestId,'conversion-boundary-e2e');
 });
 
 test('exact cart-upsell browser request follows the jobs route and receives the durable budget',async t=>{
