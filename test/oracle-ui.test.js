@@ -168,19 +168,15 @@ test('UI terminates throttled chat with a safe inventory-specific response',asyn
 
 test('successful follow-up receives bounded recent governed evidence with freshness',async t=>{const calls=[];let clock=Date.parse('2026-09-24T17:00:00Z');const chat=async(message,conversation)=>{calls.push({message,conversation});return {answer:calls.length===1?'Soho has governed stock evidence.':'Follow-up used that evidence.',tools:['get_shopify_inventory_by_location']}};const app=express();app.use('/api/oracle',createOracleUiRouter({knowledgeService:{},bigquery:{},project:'test',chat,env,now:()=>clock}));const server=await new Promise(resolve=>{const value=app.listen(0,()=>resolve(value))});t.after(()=>server.close());const base=`http://127.0.0.1:${server.address().port}/api/oracle`,request=(path,options={})=>fetch(base+path,options),auth=await login(request,base),headers={cookie:auth.cookie,origin:new URL(base).origin,'content-type':'application/json','x-csrf-token':auth.csrf};assert.equal((await request('/chat',{method:'POST',headers,body:'{"message":"check Soho stock"}'})).status,200);clock+=60_000;const response=await request('/chat',{method:'POST',headers,body:'{"message":"what should Danielle do next?"}'});assert.equal(response.status,200);assert.equal(calls.length,2);assert.equal(calls[1].conversation.recentEvidence.as_of,'2026-09-24T17:00:00.000Z');assert.match(calls[1].conversation.recentEvidence.answer,/Soho/);assert.deepEqual(calls[1].conversation.recentEvidence.tools,['get_shopify_inventory_by_location'])});
 
-test('stock-policy date detour retains and answers the exact unanswered intent',async t=>{
+test('made-to-order size M/N question answers immediately without date or currency clarification',async t=>{
   const question='For a made-to-order ring with 3 units of size M available at the Online location and 0 of size N, which size is ready to ship? What if the product has no made-to-order tag?';
   const calls=[];
-  const chat=async(message,conversation)=>{calls.push({message,conversation});return calls.length===1
-    ?{answer:'What date range would you like?',tools:[]}
-    :{answer:'For a tagged made-to-order ring, M is ready to ship and N is made to order. Without the tag, M has positive Online stock and may be ready to ship under normal product rules; N’s zero stock does not imply made-to-order availability.',tools:['search_knowledge']}};
+  const chat=async(message,conversation)=>{calls.push({message,conversation});return {answer:'For a tagged made-to-order ring, M is ready to ship and N is made to order. Without the tag, M has positive Online stock and may be ready to ship under normal product rules; N’s zero stock does not imply made-to-order availability.',tools:['search_knowledge']}};
   const app=express();app.use('/api/oracle',createOracleUiRouter({knowledgeService:{searchKnowledge:async()=>({items:[]}),searchMemory:async()=>({items:[]})},bigquery:{},project:'test',chat,env,now:()=>Date.parse('2026-09-25T12:00:00Z')}));
   const server=await new Promise(resolve=>{const value=app.listen(0,()=>resolve(value))});t.after(()=>server.close());
   const base=`http://127.0.0.1:${server.address().port}/api/oracle`,request=(path,options={})=>fetch(base+path,options),auth=await login(request,base),headers={cookie:auth.cookie,origin:new URL(base).origin,'content-type':'application/json','x-csrf-token':auth.csrf};
-  const first=await request('/chat',{method:'POST',headers,body:JSON.stringify({message:question})});assert.equal(first.status,200);assert.equal((await first.json()).answer,'What date range would you like?');
-  const second=await request('/chat',{method:'POST',headers,body:JSON.stringify({message:'this year'})}),body=await second.json();
-  assert.equal(second.status,200);assert.match(calls[1].message,new RegExp(question.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')));assert.match(calls[1].message,/User follow-up: this year/);
-  assert.equal(calls[1].conversation.pendingIntent,question);assert.match(body.answer,/M is ready to ship and N is made to order/);assert.doesNotMatch(body.answer,/cohort|order sequence|classification coverage|resolved scope/i);
+  const response=await request('/chat',{method:'POST',headers,body:JSON.stringify({message:question})}),body=await response.json();
+  assert.equal(response.status,200);assert.equal(calls.length,1);assert.equal(calls[0].message,question);assert.match(body.answer,/M is ready to ship and N is made to order/);assert.doesNotMatch(body.answer,/date range|GBP|USD|currency/i);
 });
 
 test('explicit timeless-definition save request reaches chat and proposal generation without date scope',async t=>{
