@@ -71,7 +71,7 @@ export function createOracleUiRouter({ knowledgeService, bigquery, project, chat
   const sessionContext=req=>{const key=sessionKey(req),entry=analysisSessions.get(key);if(!entry||entry.expires_at<=Date.now()){analysisSessions.delete(key);return emptyAnalysisContext()}return entry.context};
   const saveSessionContext=(req,context)=>analysisSessions.set(sessionKey(req),{context,expires_at:req.oracleUser.exp*1000});
   router.post('/auth/logout', authenticate, protectWrite, (req, res) => { const key=sessionKey(req);analysisSessions.delete(key);recentChatEvidence.delete(key);res.setHeader('Set-Cookie', ['oracle_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0', 'oracle_csrf=; Path=/; SameSite=Strict; Max-Age=0']); res.json({ success: true }); });
-  router.get('/session', authenticate, (req, res) => res.json({ success: true, user: req.oracleUser.sub, role: req.oracleUser.role, analysis_scope:analysisScope(sessionContext(req)) }));
+  router.get('/session', authenticate, (req, res) => res.json({ success: true, user: req.oracleUser.sub, role: req.oracleUser.role, analysis_scope:analysisScope(sessionContext(req)), deep_analysis_enabled:Boolean(analysisJobStore&&env.ORACLE_ANALYSIS_JOBS_ENABLED==='true') }));
   router.post('/analysis/clear',authenticate,protectWrite,json,(req,res)=>{analysisSessions.delete(sessionKey(req));res.json({success:true,analysis_scope:null})});
   // Durable jobs remain opt-in until the production-shaped enqueue/claim/finish/poll
   // diagnostic has passed. Interactive chat must never depend on queue health.
