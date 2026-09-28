@@ -106,7 +106,7 @@ export function transitionAnalysisContext(existing, message, {now=Date.now(),rep
     for(const currency of CURRENCIES) if(new RegExp(`\\b${currency}\\b`,'i').test(text)) set.currencies=[currency];
     if(/all currencies/i.test(text)) clear.push('currencies');
     if(/all channels/i.test(text)){clear.push('channel');set.channel_breakdown=false}
-    else if(/split .*online.*(?:in ?store|pos)|split .*in ?store.*online/i.test(lower)) {clear.push('channel');set.channel_breakdown=true}
+    else if(/split .*online.*(?:in ?store|pos)|split .*(?:in ?store|pos).*online/i.test(lower)) {clear.push('channel');set.channel_breakdown=true}
     else if(/online only/i.test(lower)) set.channel='online',set.channel_breakdown=false;
     else if(/(?:in ?store|pos) only/i.test(lower)) set.channel='instore',set.channel_breakdown=false;
     if(/graph it|chart it/i.test(lower)) set.output_preference='chart';
