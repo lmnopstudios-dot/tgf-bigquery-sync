@@ -28,10 +28,20 @@ function nextDate(date) { const day = new Date(`${date}T00:00:00Z`); day.setUTCD
 
 export async function runBackfill({ options, sync }) {
   const chunks = plannedChunks(options); const completed = [];
-  for (const chunk of chunks) { await sync(chunk); completed.push(chunk); }
+  for (const chunk of chunks) {
+    try { await sync(chunk); completed.push(chunk); }
+    catch (cause) {
+      const resumeAfter = completed.at(-1)?.endDate || options.resumeAfter || previousDate(options.startDate);
+      const status = { failed_chunk: chunk, committed_chunks: completed, earlier_chunks_committed: completed.length > 0, resume_after: resumeAfter, next_command: `npm run backfill:ga4 -- --start ${options.startDate} --end ${options.endDate} --resume-after ${resumeAfter} --chunk-days ${options.chunkDays} --max-chunks ${options.maxChunks}` };
+      throw new BackfillChunkError(cause, status);
+    }
+  }
   const resumeAfter = completed.at(-1)?.endDate || options.resumeAfter || previousDate(options.startDate);
   return { requested: { start_date: options.startDate, end_date: options.endDate }, completed, resume_after: resumeAfter, complete: resumeAfter >= options.endDate,
     next_command: resumeAfter >= options.endDate ? null : `npm run backfill:ga4 -- --start ${options.startDate} --end ${options.endDate} --resume-after ${resumeAfter} --chunk-days ${options.chunkDays} --max-chunks ${options.maxChunks}` };
+}
+export class BackfillChunkError extends Error {
+  constructor(cause, status) { super(`GA4 backfill chunk failed atomically: ${cause?.message || cause}`); this.name = 'BackfillChunkError'; this.cause = cause; this.status = status; }
 }
 
 async function main() {
@@ -41,4 +51,4 @@ async function main() {
   const result = await runBackfill({ options, sync: chunk => syncGa4({ ...chunk, maxDays: options.chunkDays, maxRows: 100000, dataset: options.dataset, project, propertyId, bigquery, client }) });
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 }
-if (import.meta.url === pathToFileURL(process.argv[1] || '').href) main().catch(error => { console.error(error.message); process.exitCode = 1; });
+if (import.meta.url === pathToFileURL(process.argv[1] || '').href) main().catch(error => { console.error(JSON.stringify({ error: error.message, ...(error.status || {}) }, null, 2)); process.exitCode = 1; });
