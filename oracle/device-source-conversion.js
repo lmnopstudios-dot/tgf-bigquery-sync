@@ -12,9 +12,9 @@ export const DEVICE_SOURCE_CONVERSION_TOOL_DEFINITION=DEVICE_SOURCE_CONVERSION_T
 const safeId=value=>{if(!/^[A-Za-z0-9_-]+$/.test(value))throw new Error('Invalid BigQuery identifier');return value;};
 const days=(a,b)=>datesBetween(a,b).length;
 export const SHOPIFY_PUBLIC_LAUNCH_DATE='2025-11-20';
-export function conversionQueries(project,{source=false}={}){safeId(project);const sourceColumn=source?", CONCAT(session_source, ' / ', session_medium) referrer_source":'';const shopifySource=source?', referrer_source':'';return {
+export function conversionQueries(project,{source=false}={}){safeId(project);const sourceColumn=source?", CONCAT(session_source, ' / ', session_medium) referrer_source":'';const shopifySource=source?', referrer_source':'';const wooTable=source?'conversion_breakdown':'conversion_device';const grain=source?'device_channel_source_medium':'device';return {
   boundary:`SELECT DATE '${SHOPIFY_PUBLIC_LAUNCH_DATE}' launch_date`,
-  woo:`SELECT device_category device_type${sourceColumn},SUM(sessions) sessions,SUM(ecommerce_purchases) numerator,COUNT(DISTINCT date) covered_days FROM \`${project}.ga4.conversion_breakdown\` WHERE date BETWEEN @before_start AND @before_end AND device_category IN ('desktop','mobile') GROUP BY 1${source?',2':''}`,
+  woo:`SELECT device_category device_type${sourceColumn},SUM(sessions) sessions,SUM(ecommerce_purchases) numerator,COUNT(DISTINCT date) covered_days FROM \`${project}.ga4.${wooTable}\` c WHERE date BETWEEN @before_start AND @before_end AND device_category IN ('desktop','mobile') AND EXISTS (SELECT 1 FROM \`${project}.ga4.conversion_coverage\` v WHERE v.date=c.date AND v.grain='${grain}' AND v.status='reportable') GROUP BY 1${source?',2':''}`,
   shopify:`SELECT device_type${shopifySource},SUM(sessions) sessions,SUM(sessions_that_completed_checkout) numerator,COUNT(DISTINCT date) covered_days,COUNTIF(measurement_era='from_2026_09_session_measurement_change') changed_days FROM \`${project}.shopify_data.session_conversion_by_device${source?'_source':''}\` WHERE date BETWEEN @after_start AND @after_end AND device_type IN ('desktop','mobile') GROUP BY 1${source?',2':''}`
 };}
 export const conversionQuery=(project,options)=>conversionQueries(project,options);

@@ -1,6 +1,6 @@
 # Governed device conversion rollout
 
-This capability keeps two different populations visibly separate. WooCommerce evidence is GA4 `ecommercePurchases / sessions` at a shared date × device × source grain and is named **purchases per session**, not session conversion. Shopify evidence is native human Online Store sessions and `sessions_that_completed_checkout / sessions`. No order count is used as a GA4 numerator.
+This capability keeps two different populations visibly separate. WooCommerce device evidence is GA4 `ecommercePurchases / sessions` at a reconciled date × device grain and is named **purchases per session**, not session conversion. Source detail is available only on dates where the date × device × channel × source × medium session total also reconciles. Shopify evidence is native human Online Store sessions and `sessions_that_completed_checkout / sessions`. No order count is used as a GA4 numerator.
 
 ## Production evidence gate and commands
 
