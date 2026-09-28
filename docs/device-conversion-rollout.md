@@ -10,7 +10,7 @@ Run this **first on Render** (a read-only, 1 GB-bounded query):
 npm run diagnose:conversion-evidence
 ```
 
-Do not infer a launch date from documentation. Review the returned first non-Matrixify native Shopify order together with the governed migration record and approve the operational boundary. Then run the existing focused GA4 diagnostic and inspect its change points and ecommerce completeness:
+The governed public launch is **20 November 2025** (confirmed by Stuart): WooCommerce reporting runs through 19 November and Shopify reporting starts on 20 November. The first native order on 16 November remains source evidence, but is pre-launch and must not be described as a public-launch session. Then run the existing focused GA4 diagnostic and inspect its change points and ecommerce completeness:
 
 ```sh
 npm run diagnose:ga4-shopify-transition
@@ -19,15 +19,15 @@ npm run diagnose:ga4-shopify-transition
 The first Shopify backfill chunk is deliberately a seven-day production pilot. It establishes whether historical `FROM sessions` accepts both dimensions, the actual returned coverage, and operational ShopifyQL cost/throttling before a broad run:
 
 ```sh
-npm run backfill:shopify-conversion -- --start 2025-11-16 --end 2025-11-22 --chunk-days 7 --max-chunks 1 --max-sources 40 --timezone Europe/London
-npm run validate:conversion-history -- --start 2025-11-16 --end 2025-11-22
+npm run backfill:shopify-conversion -- --start 2025-11-20 --end 2025-11-26 --chunk-days 7 --max-chunks 1 --max-sources 40 --timezone Europe/London
+npm run validate:conversion-history -- --start 2025-11-20 --end 2025-11-26
 ```
 
 Only after that pilot validates, run backfills in this order (replace dates only with the approved boundary/coverage dates and use the printed `next_command` until `complete: true`):
 
 ```sh
-npm run backfill:ga4 -- --start 2022-08-18 --end 2025-11-15 --chunk-days 31 --max-chunks 3
-npm run backfill:shopify-conversion -- --start 2025-11-16 --end 2026-09-27 --chunk-days 7 --max-chunks 2 --max-sources 40 --timezone Europe/London
+npm run backfill:ga4 -- --start 2022-08-18 --end 2025-11-19 --chunk-days 31 --max-chunks 3
+npm run backfill:shopify-conversion -- --start 2025-11-20 --end 2026-09-27 --chunk-days 7 --max-chunks 2 --max-sources 40 --timezone Europe/London
 ```
 
 These small invocations preserve the normal incremental GA4 sync, do not bypass Oracle's request/job controls, and ensure historical work cannot monopolise ShopifyQL or Render. Failed or empty dates are listed as `incomplete` and are not promoted. Writes replace a bounded date range transactionally using stable date × device × source identities. `unknown` is a real missing dimension; sources beyond the top 40 per device-day are summed into `__other__`, preserving additive funnel totals.
@@ -35,8 +35,8 @@ These small invocations preserve the normal incremental GA4 sync, do not bypass 
 After each completed backfill, run:
 
 ```sh
-npm run validate:ga4 -- --start 2022-08-18 --end 2025-11-15
-npm run validate:conversion-history -- --start 2025-11-16 --end 2026-09-27
+npm run validate:ga4 -- --start 2022-08-18 --end 2025-11-19
+npm run validate:conversion-history -- --start 2025-11-20 --end 2026-09-27
 npm test
 ```
 
