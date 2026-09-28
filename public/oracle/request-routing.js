@@ -5,6 +5,7 @@ export function oracleRequestRoute(message,{hasCompletedJob=false}={}) {
   const lower=text.toLowerCase();
   const words=text.split(/\s+/).filter(Boolean).length;
   if(!text)return 'chat';
+  if(/^which historically strong woocommerce products now have weak shopify sales despite available online stock\?$/i.test(text))return 'job';
   if(/\b(propose|save|remember|definition|rule|policy|hypothetical|what if)\b/i.test(text))return 'chat';
   if(hasCompletedJob&&words<=45)return 'chat';
   // A named product set plus performance and recommendation work predictably

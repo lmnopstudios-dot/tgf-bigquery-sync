@@ -7,6 +7,7 @@ import { CUSTOMER_ORDER_INTERVAL_TOOL_DEFINITION } from './customer-order-interv
 import { ONLINE_COUNTRY_SALES_TOOL_DEFINITION } from './online-country-sales.js';
 import { DEVICE_SOURCE_CONVERSION_TOOL_DEFINITIONS } from './device-source-conversion.js';
 import { CATEGORY_SALES_TOOL_DEFINITION } from './category-sales.js';
+import { HISTORICAL_PRODUCT_OPPORTUNITY_TOOL } from './historical-product-opportunity.js';
 
 /** The exact OpenAI tool registry submitted by the Oracle request boundary. */
 export function createOracleToolDefinitions() {
@@ -20,6 +21,7 @@ export function createOracleToolDefinitions() {
         ONLINE_COUNTRY_SALES_TOOL_DEFINITION,
         ...DEVICE_SOURCE_CONVERSION_TOOL_DEFINITIONS,
         CATEGORY_SALES_TOOL_DEFINITION,
+        HISTORICAL_PRODUCT_OPPORTUNITY_TOOL,
         {
           type: 'function',
           name: 'get_ecommerce_management_report',
