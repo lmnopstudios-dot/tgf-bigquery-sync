@@ -28,7 +28,7 @@ test('tracking contract separates unavailable, observed zero, and reliability', 
 });
 
 const gaRow = (dims, metrics) => ({ dimensionValues: dims.map(value => ({ value })), metricValues: metrics.map(value => ({ value: String(value) })) });
-function fakeClient({ fail = false, omitDaily = false } = {}) { return { async runReport(request) { if (fail) { const e = new Error('secret token abc'); e.code = 3; throw e; } const dims = request.dimensions.map(d => d.name); const metrics = request.metrics.map(m => m.name); if (dims.join() === 'date') return [{ rows: omitDaily ? [] : [gaRow(['20260907'], [10,8,3,6,.6,20])] }]; if (dims.includes('eventName')) return [{ rows: [gaRow(['20260907','view_item'],[0]), gaRow(['20260907','purchase'],[2])] }]; if (dims.includes('deviceCategory') && dims.includes('sessionDefaultChannelGroup')) return [{ rows: [gaRow(['20260907','mobile','Organic Search','google','organic'], metrics.length===3 ? [10,2,2] : [10])] }]; return [{ rows: [gaRow(['20260907', ...dims.slice(1).map(() => '(not set)')], request.metrics.map(() => 1))] }]; } }; }
+function fakeClient({ fail = false, omitDaily = false } = {}) { return { async runReport(request) { if (fail) { const e = new Error('secret token abc'); e.code = 3; throw e; } const dims = request.dimensions.map(d => d.name); const metrics = request.metrics.map(m => m.name); if (dims.join() === 'date') return [{ rows: omitDaily ? [] : [gaRow(['20260907'], [10,8,3,6,.6,20])] }]; if (dims.includes('eventName')) return [{ rows: [gaRow(['20260907','view_item'],[0]), gaRow(['20260907','purchase'],[2])] }]; if (dims.includes('deviceCategory') && dims.includes('sessionDefaultChannelGroup')) return [{ rows: [gaRow(['20260907','mobile','Organic Search','google','organic'], metrics[0]==='ecommercePurchases' ? [2] : [10])] }]; if(dims.join()==='date,deviceCategory')return[{rows:[gaRow(['20260907','mobile'],metrics[0]==='ecommercePurchases'?[2]:[10])]}]; return [{ rows: [gaRow(['20260907', ...dims.slice(1).map(() => '(not set)')], request.metrics.map(() => 1))] }]; } }; }
 
 test('collect normalizes responses, represents observed zero, and detects incomplete ranges', async () => {
   const data = await collect({ client: fakeClient(), propertyId:'291532339', startDate:'2026-09-07', endDate:'2026-09-07' });
@@ -38,14 +38,14 @@ test('collect normalizes responses, represents observed zero, and detects incomp
   assert.throws(() => validateCollected({ daily:[], ecommerce_funnel:[], acquisition:[], landing_pages:[], device_geo:[], conversion_breakdown:[] }, '2026-09-07','2026-09-07'), /Incomplete sync/);
 });
 
-test('18 August 2022 uses one same-grain sessions and purchases response', async () => {
+test('18 August 2022 joins separate sessions and purchase reports on identical keys', async () => {
   const client = { async runReport(request) {
     const dims = request.dimensions.map(d => d.name); const metrics = request.metrics.map(m => m.name);
     if (dims.join() === 'date') return [{ rows: [gaRow(['20220818'], [5,4,2,3,.6,9])] }];
     if (dims.includes('eventName')) return [{ rows: [gaRow(['20220818','purchase'], [1])] }];
     if (dims.includes('deviceCategory') && dims.includes('sessionDefaultChannelGroup')) {
-      if(metrics.length===3)return [{rows:[gaRow(['20220818','desktop','Direct','(direct)','(none)'],[5,0,0]),gaRow(['20220818','mobile','Referral','partner','referral'],[0,1,1])] }];
-      return [{ rows: [gaRow(['20220818','desktop','Direct','(direct)','(none)'], [5])] }];
+      if(metrics[0]==='ecommercePurchases')return [{rows:[gaRow(['20220818','desktop','Direct','(direct)','(none)'],[0]),gaRow(['20220818','mobile','Referral','partner','referral'],[1])] }];
+      return [{ rows: [gaRow(['20220818','desktop','Direct','(direct)','(none)'], [5]),gaRow(['20220818','mobile','Referral','partner','referral'],[0])] }];
     }
     return [{ rows: [gaRow(['20220818', ...dims.slice(1).map(() => '(not set)')], metrics.map(() => 1))] }];
   } };

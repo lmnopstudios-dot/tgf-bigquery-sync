@@ -1,6 +1,6 @@
 # Governed device conversion rollout
 
-WooCommerce device evidence is taken directly from one compatible GA4 Data API report containing `date × deviceCategory × sessions × ecommercePurchases × totalPurchasers`. The published measure is **purchases per session** (`ecommercePurchases / sessions`), never “session conversion rate”. Sessions are HLL++ approximate distinct counts: an independently queried date total can differ after dimensions are added. Its total and signed difference remain a diagnostic; equality is not a gate and no balancing session is allocated or invented.
+WooCommerce sessions and `ecommercePurchases` are requested in separate compatible GA4 Data API reports and joined only when their observed dimension-key sets are identical. The published measure remains **purchases per session** (`ecommercePurchases / sessions`), never “session conversion rate”. Numerator coverage is disclosed in `conversion_coverage`; an omitted purchase key is not inferred to mean zero, and an unavailable device-grain numerator produces no device rate. `totalPurchasers` is probed separately but is not the purchase numerator.
 
 The device × channel × source × medium report is separately validated on its own grain. Pagination must reach the API `rowCount`, requested dimensions and metrics must pass GA4 compatibility, keys/dates/values must be valid, and metadata is inspected for thresholding and `(other)` data loss. `(other)`, missing dimension values, thresholds, or a row limit make source attribution `limited`; those rows are not published as complete attribution. A difference from the independent HLL++ date total alone does not.
 
@@ -9,7 +9,7 @@ The device × channel × source × medium report is separately validated on its 
 Run this **first on Render**. It is a read-only GA4 Data API pilot (at most 24 dates and 100,000 rows per report) and performs no BigQuery writes:
 
 ```sh
-npm run diagnose:ga4-device-coverage
+npm run diagnose:ga4-purchase-compatibility -- --dates 2022-08-18,2022-09-17
 ```
 
 The ten production-shaped probe dates are 2022-08-18, 2023-02-15, 2023-08-17, 2023-11-24, 2024-02-15, 2024-08-15, 2024-11-29, 2025-02-13, 2025-08-14, and 2025-11-19. Review signed differences in both directions as diagnostics, plus pagination and API limitation metadata; do not require an exact match.
