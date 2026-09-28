@@ -1,33 +1,7 @@
-import assert from 'node:assert/strict';
-import test from 'node:test';
-import { comparisonQuery, createDeviceSourceConversionService, DEVICE_SOURCE_CONVERSION_TOOL_DEFINITION } from '../oracle/device-source-conversion.js';
-
-test('exact Oracle question uses same-grain evidence and explicitly returns unavailable cells', async () => {
-  const submitted = [];
-  const bigquery = { query: async options => { submitted.push(options); return [[
-    { period: 'before', device_category: 'mobile', session_default_channel_group: 'Organic Search', session_source: 'google', session_medium: 'organic', sessions: 100, ecommerce_purchases: 4, observed_dates: 7, expected_dates: 7, reliable_dates: 7 },
-    { period: 'after', device_category: 'mobile', session_default_channel_group: 'Organic Search', session_source: 'google', session_medium: 'organic', sessions: 120, ecommerce_purchases: 3, observed_dates: 7, expected_dates: 7, reliable_dates: 0 }
-  ]]; } };
-  const service = createDeviceSourceConversionService({ bigquery, project: 'p' });
-  const result = await service({ before_start: '2025-10-01', before_end: '2025-10-07', after_start: '2025-11-17', after_end: '2025-11-23', launch_date: '2025-11-16', launch_evidence: 'governed migration record #1' });
-  assert.equal(result.question, 'Compare desktop and mobile conversion before and after the Shopify launch, broken down by traffic source.');
-  const mobile = result.cells.find(cell => cell.device_category === 'mobile');
-  const desktop = result.cells.find(cell => cell.device_category === 'desktop');
-  assert.equal(mobile.periods.before.conversion_rate, 0.04);
-  assert.equal(mobile.periods.after.conversion_rate, null);
-  assert.equal(mobile.periods.after.observed_rate, 0.025);
-  assert.equal(mobile.comparable_platform_effect, false);
-  assert.equal(desktop.periods.before.availability, 'unavailable');
-  assert.match(result.methods.shopify_native, /unavailable/);
-  assert.match(submitted[0].query, /conversion_breakdown/);
-  assert.doesNotMatch(submitted[0].query, /order_locations|shopify.*orders/i);
-});
-
-test('tool refuses to infer a launch date and SQL is bounded SELECT-only', async () => {
-  assert.equal(DEVICE_SOURCE_CONVERSION_TOOL_DEFINITION.strict, true);
-  const service = createDeviceSourceConversionService({ bigquery: { query: async () => [[]] }, project: 'p' });
-  await assert.rejects(service({ before_start: '2025-10-01', before_end: '2025-10-07', after_start: '2025-11-17', after_end: '2025-11-23', launch_date: '2025-11-16', launch_evidence: '' }), /must not be guessed/);
-  const sql = comparisonQuery('p');
-  assert.match(sql, /^WITH/); assert.doesNotMatch(sql, /\b(?:INSERT|UPDATE|DELETE|MERGE|CREATE|DROP)\b/i);
-  assert.match(sql, /SUM\(c\.ecommerce_purchases\)/); assert.match(sql, /SUM\(c\.sessions\)/);
-});
+import assert from 'node:assert/strict';import test from 'node:test';
+import {conversionQuery,createDeviceSourceConversionService,DEVICE_SOURCE_CONVERSION_TOOL_DEFINITIONS} from '../oracle/device-source-conversion.js';
+const args={before_start:'2025-11-09',before_end:'2025-11-15',after_start:'2025-11-16',after_end:'2025-11-22'};
+test('three exact bounded aggregate tools are registered',()=>{assert.deepEqual(DEVICE_SOURCE_CONVERSION_TOOL_DEFINITIONS.map(x=>x.name),['get_woocommerce_device_conversion','compare_device_conversion_before_after_shopify','compare_device_conversion_by_traffic_source']);for(const tool of DEVICE_SOURCE_CONVERSION_TOOL_DEFINITIONS){assert.equal(tool.strict,true);assert.equal(tool.parameters.additionalProperties,false);}});
+test('comparison labels native definitions and suppresses cross-platform delta',async()=>{const bigquery={query:async()=>[[{period:'before',launch_date:{value:'2025-11-16'},device_type:'mobile',sessions:100,numerator:4,covered_days:7,changed_days:0,definition:'GA4'},{period:'after',launch_date:{value:'2025-11-16'},device_type:'mobile',sessions:120,numerator:3,covered_days:7,changed_days:0,definition:'Shopify'}]]};const service=createDeviceSourceConversionService({bigquery,project:'p'});const result=await service('compare_device_conversion_before_after_shopify',args);assert.equal(result.rows[0].rate,.04);assert.equal(result.rows[1].rate,.025);assert.equal(result.cross_platform_percentage_point_difference,null);assert.match(result.comparability,/not_established/);});
+test('incomplete GA4 history returns null and source query uses joint tables',async()=>{const bigquery={query:async()=>[[{period:'before',launch_date:{value:'2025-11-16'},device_type:'desktop',referrer_source:'google / organic',sessions:10,numerator:1,covered_days:2,changed_days:0}]]};const result=await createDeviceSourceConversionService({bigquery,project:'p'})('compare_device_conversion_by_traffic_source',args);assert.equal(result.rows[0].rate,null);assert.equal(result.rows[0].coverage.missing_days,5);const sql=conversionQuery('p',{source:true});assert.match(sql,/conversion_breakdown/);assert.match(sql,/session_conversion_by_device_source/);assert.doesNotMatch(sql,/order.*\/.*sessions/i);});
+test('follow-up periods are explicit, equal and remain on boundary sides',async()=>{const service=createDeviceSourceConversionService({bigquery:{query:async()=>[[{period:'before',launch_date:{value:'2025-11-16'},device_type:'mobile',sessions:1,numerator:0,covered_days:7,changed_days:0}]]},project:'p'});await assert.rejects(service('compare_device_conversion_before_after_shopify',{...args,after_end:'2025-11-23'}),/equal-length/);await assert.rejects(service('compare_device_conversion_before_after_shopify',{...args,before_start:'2025-11-10',before_end:'2025-11-16'}),/respective sides/);});
