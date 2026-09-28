@@ -8,9 +8,9 @@ First run this bounded, read-only command in a Render Shell. It reads one day fr
 npm run diagnose:ga4-session-reconciliation -- --date 2022-08-18
 ```
 
-The diagnostic labels the exact sources of both totals. Collection-time reconciliation compares two fresh GA4 API responses—not an old `ga4.daily` BigQuery row. It also reports breakdown row counts, unknown dimensions, the property reporting timezone, thresholding/data-loss metadata, quota metadata, and whether the 100,000-row bound was reached.
+The diagnostic labels the exact sources of every total. It probes date, date × device, date × device × channel, and date × device × channel × source × medium with separate fresh GA4 API requests—not an old `ga4.daily` BigQuery row. For the production-shaped 18 August case, 364 sessions reconcile through device × channel and the detailed source/medium grain returns 363: the session disappears when source and medium are added. It also reports row counts, unknown dimensions, the property reporting timezone, thresholding/data-loss metadata, quota metadata, and whether the 100,000-row bound was reached.
 
-The historical discrepancy was caused by requesting session-scoped `sessions` together with ecommerce metrics at a mixed metric scope. The sync now obtains the dimensional session denominator from a sessions-only report and obtains ecommerce purchases and purchasers separately. It unions the dimension keys, so ecommerce-only rows are retained and no sessions are inferred from purchase events.
+The sync obtains session denominators from sessions-only reports and ecommerce purchases and purchasers separately. It records observed and expected totals plus `reportable`/`incomplete` status for device, device × channel, and source detail. A reconciled device aggregate is persisted for Woo desktop-versus-mobile answers; a non-reconciling source breakdown is not persisted or exposed. No unknown session is invented and no equality check is relaxed.
 
 Because the failed first chunk did not reach the coordinated BigQuery promotion transaction, resume safely from the day before coverage begins:
 

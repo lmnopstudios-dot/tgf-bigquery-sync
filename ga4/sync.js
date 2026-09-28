@@ -6,7 +6,7 @@ import { loadConfig } from '../diagnostics/ga4-access.js';
 import { datasetLocation } from '../bigquery/dataset-location.js';
 import { dateRange, datesBetween, normalizeAcquisition, normalizeDimension, normalizeGa4Date, normalizeLandingPath, previousDate, SHOPIFY_ECOMMERCE_OBSERVED_FROM, trackingStatus, TRACKING_ERAS } from './semantic.js';
 
-export const TABLES = ['daily', 'acquisition', 'landing_pages', 'device_geo', 'conversion_breakdown', 'ecommerce_funnel'];
+export const TABLES = ['daily', 'acquisition', 'landing_pages', 'device_geo', 'conversion_device', 'conversion_breakdown', 'conversion_coverage', 'ecommerce_funnel'];
 const METRICS = ['sessions', 'totalUsers', 'newUsers', 'engagedSessions', 'engagementRate', 'screenPageViews'];
 const EVENTS = ['view_item', 'add_to_cart', 'begin_checkout', 'purchase'];
 const SEMANTIC_KEYS = {
@@ -14,7 +14,9 @@ const SEMANTIC_KEYS = {
   acquisition: ['date', 'session_default_channel_group', 'session_source', 'session_medium', 'session_campaign_name'],
   landing_pages: ['date', 'landing_path'],
   device_geo: ['date', 'device_category', 'browser', 'country'],
+  conversion_device: ['date', 'device_category'],
   conversion_breakdown: ['date', 'device_category', 'session_default_channel_group', 'session_source', 'session_medium'],
+  conversion_coverage: ['date', 'grain'],
   ecommerce_funnel: ['date']
 };
 const SCHEMAS = {
@@ -22,7 +24,9 @@ const SCHEMAS = {
   acquisition: 'date DATE, session_default_channel_group STRING, session_source STRING, session_medium STRING, session_campaign_name STRING, sessions INT64, total_users INT64, engaged_sessions INT64, engagement_rate FLOAT64, synced_at TIMESTAMP',
   landing_pages: 'date DATE, landing_path STRING, sessions INT64, total_users INT64, engaged_sessions INT64, engagement_rate FLOAT64, screen_page_views INT64, synced_at TIMESTAMP',
   device_geo: 'date DATE, device_category STRING, browser STRING, country STRING, sessions INT64, total_users INT64, engaged_sessions INT64, engagement_rate FLOAT64, synced_at TIMESTAMP',
+  conversion_device: 'date DATE, device_category STRING, sessions INT64, ecommerce_purchases INT64, total_purchasers INT64, ecommerce_conversion_rate FLOAT64, synced_at TIMESTAMP',
   conversion_breakdown: 'date DATE, device_category STRING, session_default_channel_group STRING, session_source STRING, session_medium STRING, sessions INT64, ecommerce_purchases INT64, total_purchasers INT64, ecommerce_conversion_rate FLOAT64, synced_at TIMESTAMP',
+  conversion_coverage: 'date DATE, grain STRING, status STRING, observed_sessions INT64, expected_sessions INT64, difference INT64, synced_at TIMESTAMP',
   ecommerce_funnel: 'date DATE, view_item INT64, add_to_cart INT64, begin_checkout INT64, purchase INT64, era_id STRING, platform STRING, ecommerce_status STRING, ecommerce_observed BOOL, ecommerce_reliable BOOL, comparability STRING, synced_at TIMESTAMP',
   tracking_eras: 'era_id STRING, platform STRING, from_date DATE, to_date DATE, traffic_status STRING, ecommerce_status STRING, ecommerce_observed BOOL, ecommerce_reliable BOOL, comparability STRING, evidence_note STRING'
 };
@@ -57,11 +61,14 @@ export async function collect({ client, propertyId, startDate, endDate, maxRows 
     // making its session cells non-additive even though neither report is
     // truncated.  Sessions therefore come from a sessions-only report.
     fetchReport(client, propertyId, range, ['date', 'deviceCategory', 'sessionDefaultChannelGroup', 'sessionSource', 'sessionMedium'], ['sessions'], common),
+    fetchReport(client, propertyId, range, ['date', 'deviceCategory'], ['sessions'], common),
+    fetchReport(client, propertyId, range, ['date', 'deviceCategory', 'sessionDefaultChannelGroup'], ['sessions'], common),
     fetchReport(client, propertyId, range, ['date', 'eventName'], ['eventCount'], { ...common, dimensionFilter: { filter: { fieldName: 'eventName', inListFilter: { values: EVENTS } } } }),
-    fetchReport(client, propertyId, range, ['date', 'deviceCategory', 'sessionDefaultChannelGroup', 'sessionSource', 'sessionMedium'], ['ecommercePurchases', 'totalPurchasers'], common)
+    fetchReport(client, propertyId, range, ['date', 'deviceCategory', 'sessionDefaultChannelGroup', 'sessionSource', 'sessionMedium'], ['ecommercePurchases', 'totalPurchasers'], common),
+    fetchReport(client, propertyId, range, ['date', 'deviceCategory'], ['ecommercePurchases', 'totalPurchasers'], common)
   ]);
   const traffic = new Map(rows(reports[0], ['date'], METRICS).map(r => [normalizeGa4Date(r.date), r])); const events = new Map();
-  for (const r of rows(reports[5], ['date', 'eventName'], ['eventCount'])) { const date = normalizeGa4Date(r.date); if (!events.has(date)) events.set(date, {}); events.get(date)[r.eventName] = r.eventCount; }
+  for (const r of rows(reports[7], ['date', 'eventName'], ['eventCount'])) { const date = normalizeGa4Date(r.date); if (!events.has(date)) events.set(date, {}); events.get(date)[r.eventName] = r.eventCount; }
   const daily = datesBetween(startDate, endDate).map(date => { const r = traffic.get(date) || {}; const s = trackingStatus(date); const e = events.get(date); const eventObserved = Boolean(e) || s.ecommerce_observed; const ecommerceStatus = s.ecommerce_observed ? s.ecommerce_status : e ? 'historical_event_evidence_platform_boundary_unresolved' : s.ecommerce_status; return { date: iso(date), sessions: number(r.sessions), total_users: number(r.totalUsers), new_users: number(r.newUsers), engaged_sessions: number(r.engagedSessions), engagement_rate: number(r.engagementRate), screen_page_views: number(r.screenPageViews), ...Object.fromEntries(EVENTS.map(k => [k, eventObserved ? number(e?.[k]) : null])), ecommerce_status: ecommerceStatus, ecommerce_observed: eventObserved, ecommerce_reliable: false, synced_at: syncedAt }; });
   const acquisition = consolidate(rows(reports[1], ['date', 'sessionDefaultChannelGroup', 'sessionSource', 'sessionMedium', 'sessionCampaignName'], ['sessions', 'totalUsers', 'engagedSessions', 'engagementRate']).map(r => ({ date: iso(normalizeGa4Date(r.date)), ...normalizeAcquisition(r), sessions: r.sessions, total_users: r.totalUsers, engaged_sessions: r.engagedSessions, engagement_rate: r.engagementRate, synced_at: syncedAt })), ['date','session_default_channel_group','session_source','session_medium','session_campaign_name'], ['sessions','total_users','engaged_sessions']);
   const landing_pages = consolidate(rows(reports[2], ['date', 'landingPagePlusQueryString'], ['sessions', 'totalUsers', 'engagedSessions', 'engagementRate', 'screenPageViews']).map(r => ({ date: iso(normalizeGa4Date(r.date)), landing_path: normalizeLandingPath(r.landingPagePlusQueryString), sessions: r.sessions, total_users: r.totalUsers, engaged_sessions: r.engagedSessions, engagement_rate: r.engagementRate, screen_page_views: r.screenPageViews, synced_at: syncedAt })), ['date','landing_path'], ['sessions','total_users','engaged_sessions','screen_page_views']);
@@ -71,23 +78,37 @@ export async function collect({ client, propertyId, startDate, endDate, maxRows 
   const conversionKeys = ['date','device_category','session_default_channel_group','session_source','session_medium'];
   const keyOf = row => JSON.stringify(conversionKeys.map(key => row[key]));
   const sessionRows = consolidate(normalizedConversion(reports[4], ['sessions']), conversionKeys, ['sessions']);
-  const commerceRows = consolidate(normalizedConversion(reports[6], ['ecommercePurchases','totalPurchasers']), conversionKeys, ['ecommercePurchases','totalPurchasers']);
+  const commerceRows = consolidate(normalizedConversion(reports[8], ['ecommercePurchases','totalPurchasers']), conversionKeys, ['ecommercePurchases','totalPurchasers']);
   // A full union retains commerce-only dimension tuples instead of silently
   // dropping them.  Their session value is genuinely absent from the separate
   // sessions report and is represented as zero, never inferred from purchasers.
   const conversion = new Map(sessionRows.map(row => [keyOf(row), { ...row, ecommercePurchases: 0, totalPurchasers: 0 }]));
   for (const row of commerceRows) conversion.set(keyOf(row), { ...(conversion.get(keyOf(row)) || { ...row, sessions: 0 }), ecommercePurchases: row.ecommercePurchases, totalPurchasers: row.totalPurchasers });
-  const conversion_breakdown = [...conversion.values()].map(row => ({ ...Object.fromEntries(conversionKeys.map(key => [key, row[key]])), sessions: row.sessions, ecommerce_purchases: row.ecommercePurchases, total_purchasers: row.totalPurchasers, ecommerce_conversion_rate: row.sessions ? row.ecommercePurchases / row.sessions : 0, synced_at: syncedAt }));
+  const totalByDate = new Map(daily.map(row => [row.date, row.sessions]));
+  const totalFor = (report, dimensions) => { const totals = new Map(); for (const r of rows(report, dimensions, ['sessions'])) { const date = normalizeGa4Date(r.date); totals.set(date, (totals.get(date) || 0) + r.sessions); } return totals; };
+  const deviceTotals = totalFor(reports[5], ['date','deviceCategory']);
+  const channelTotals = totalFor(reports[6], ['date','deviceCategory','sessionDefaultChannelGroup']);
+  const detailTotals = totalFor(reports[4], conversionDimensions);
+  const coverageGrains = [['device',deviceTotals],['device_channel',channelTotals],['device_channel_source_medium',detailTotals]];
+  const conversion_coverage = datesBetween(startDate,endDate).flatMap(date => coverageGrains.map(([grain, totals]) => { const observed = totals.get(date) || 0; const expected = totalByDate.get(date) || 0; return { date, grain, status: observed === expected ? 'reportable' : 'incomplete', observed_sessions: observed, expected_sessions: expected, difference: observed - expected, synced_at: syncedAt }; }));
+  const detailedDates = new Set(conversion_coverage.filter(row => row.grain === 'device_channel_source_medium' && row.status === 'reportable').map(row => row.date));
+  const conversion_breakdown = [...conversion.values()].filter(row => detailedDates.has(row.date)).map(row => ({ ...Object.fromEntries(conversionKeys.map(key => [key, row[key]])), sessions: row.sessions, ecommerce_purchases: row.ecommercePurchases, total_purchasers: row.totalPurchasers, ecommerce_conversion_rate: row.sessions ? row.ecommercePurchases / row.sessions : 0, synced_at: syncedAt }));
+  const deviceDimensions = ['date','deviceCategory']; const deviceKeys = ['date','device_category'];
+  const normalizeDevice = (report, metrics) => rows(report, deviceDimensions, metrics).map(r => ({ date: normalizeGa4Date(r.date), device_category: normalizeDimension(r.deviceCategory), ...Object.fromEntries(metrics.map(metric => [metric,r[metric]])) }));
+  const deviceSessions = consolidate(normalizeDevice(reports[5],['sessions']),deviceKeys,['sessions']); const deviceCommerce = consolidate(normalizeDevice(reports[9],['ecommercePurchases','totalPurchasers']),deviceKeys,['ecommercePurchases','totalPurchasers']);
+  const deviceMap = new Map(deviceSessions.map(row => [JSON.stringify(deviceKeys.map(k=>row[k])),{...row,ecommercePurchases:0,totalPurchasers:0}])); for (const row of deviceCommerce) { const key=JSON.stringify(deviceKeys.map(k=>row[k])); deviceMap.set(key,{...(deviceMap.get(key)||{...row,sessions:0}),ecommercePurchases:row.ecommercePurchases,totalPurchasers:row.totalPurchasers}); }
+  const deviceDates = new Set(conversion_coverage.filter(row => row.grain === 'device' && row.status === 'reportable').map(row => row.date));
+  const conversion_device = [...deviceMap.values()].filter(row=>deviceDates.has(row.date)).map(row=>({date:row.date,device_category:row.device_category,sessions:row.sessions,ecommerce_purchases:row.ecommercePurchases,total_purchasers:row.totalPurchasers,ecommerce_conversion_rate:row.sessions?row.ecommercePurchases/row.sessions:0,synced_at:syncedAt}));
   const ecommerce_funnel = daily.map(r => { const s = trackingStatus(r.date); return { date: r.date, ...Object.fromEntries(EVENTS.map(k => [k, r[k]])), era_id: s.era_id, platform: s.platform, ecommerce_status: r.ecommerce_status, ecommerce_observed: r.ecommerce_observed, ecommerce_reliable: false, comparability: s.comparability, synced_at: syncedAt }; });
-  return validateCollected({ daily, acquisition, landing_pages, device_geo, conversion_breakdown, ecommerce_funnel }, startDate, endDate);
+  return validateCollected({ daily, acquisition, landing_pages, device_geo, conversion_device, conversion_breakdown, conversion_coverage, ecommerce_funnel }, startDate, endDate);
 }
 export function validateCollected(data, startDate, endDate) {
   const expected = datesBetween(startDate, endDate).length; if (data.daily.length !== expected || data.ecommerce_funnel.length !== expected) throw new Error('Incomplete sync: daily tables must contain exactly one row per requested date');
-  for (const name of TABLES) { const seen = new Set(); for (const row of data[name]) { const vals = Object.values(row); if (vals.some(v => typeof v === 'number' && (!Number.isFinite(v) || v < 0))) throw new Error(`${name} contains invalid negative/non-finite metric`); if ('engagement_rate' in row && row.engagement_rate > 1) throw new Error(`${name} engagement_rate exceeds 1`); const key = JSON.stringify(SEMANTIC_KEYS[name].map(column => row[column])); if (seen.has(key)) throw new Error(`${name} contains duplicate dimensional key`); seen.add(key); } }
+  for (const name of TABLES) { const seen = new Set(); for (const row of data[name]) { const vals = Object.entries(row); if (vals.some(([key,v]) => typeof v === 'number' && (!Number.isFinite(v) || (v < 0 && key !== 'difference')))) throw new Error(`${name} contains invalid negative/non-finite metric`); if ('engagement_rate' in row && row.engagement_rate > 1) throw new Error(`${name} engagement_rate exceeds 1`); const key = JSON.stringify(SEMANTIC_KEYS[name].map(column => row[column])); if (seen.has(key)) throw new Error(`${name} contains duplicate dimensional key`); seen.add(key); } }
   if (data.landing_pages.some(r => /[?#]/.test(r.landing_path))) throw new Error('landing_pages contains query strings or fragments');
   const conversionByDate = new Map(datesBetween(startDate, endDate).map(date => [date, { rows: 0, sessions: 0, purchases: 0 }]));
   for (const row of data.conversion_breakdown) { const total = conversionByDate.get(row.date); if (!total) throw new Error('conversion_breakdown contains a date outside the requested range'); total.rows += 1; total.sessions += row.sessions; total.purchases += row.ecommerce_purchases; }
-  for (const daily of data.daily) { const total = conversionByDate.get(daily.date); if (daily.sessions > 0 && !total.rows) throw new Error(`conversion_breakdown is incomplete for ${daily.date}`); if (total.sessions !== daily.sessions) throw new Error(`conversion_breakdown sessions do not reconcile for ${daily.date}`); if (daily.purchase != null && total.purchases !== daily.purchase) throw new Error(`conversion_breakdown purchases do not reconcile for ${daily.date}`); }
+  for (const daily of data.daily) { const total = conversionByDate.get(daily.date); const coverage=data.conversion_coverage.filter(r=>r.date===daily.date); if(coverage.length!==3)throw new Error(`conversion coverage is incomplete for ${daily.date}`); const detailed=coverage.find(r=>r.grain==='device_channel_source_medium'); if(detailed.status==='reportable'){if (daily.sessions > 0 && !total.rows) throw new Error(`conversion_breakdown is incomplete for ${daily.date}`); if (total.sessions !== daily.sessions) throw new Error(`conversion_breakdown sessions do not reconcile for ${daily.date}`); if(daily.purchase!=null&&total.purchases!==daily.purchase)throw new Error(`conversion_breakdown purchases do not reconcile for ${daily.date}`);} else if(total.rows)throw new Error(`incomplete source breakdown must not be persisted for ${daily.date}`); const device=coverage.find(r=>r.grain==='device'); const deviceRows=data.conversion_device.filter(r=>r.date===daily.date); if(device.status==='reportable'&&deviceRows.reduce((n,r)=>n+r.sessions,0)!==daily.sessions)throw new Error(`conversion_device sessions do not reconcile for ${daily.date}`); if(device.status==='reportable'&&daily.purchase!=null&&deviceRows.reduce((n,r)=>n+r.ecommerce_purchases,0)!==daily.purchase)throw new Error(`conversion_device purchases do not reconcile for ${daily.date}`); if(device.status!=='reportable'&&deviceRows.length)throw new Error(`incomplete device breakdown must not be persisted for ${daily.date}`); }
   for (const row of data.ecommerce_funnel) if (row.date >= SHOPIFY_ECOMMERCE_OBSERVED_FROM && (!row.ecommerce_observed || row.ecommerce_reliable)) throw new Error('Shopify ecommerce status must be observed and provisional');
   return data;
 }

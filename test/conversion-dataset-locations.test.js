@@ -29,7 +29,7 @@ test('validation and Shopify historical writes execute in existing US dataset lo
 });
 
 test('Oracle runs independent regional aggregates and combines only returned rows',async()=>{
-  const bigquery=productionBigQuery({responses:[[/DATE '2025-11-20'/,[{launch_date:{value:'2025-11-20'}}]],[/ga4\.conversion_breakdown/,[{device_type:'mobile',sessions:100,numerator:4,covered_days:7}]],[/session_conversion_by_device`/,[{device_type:'mobile',sessions:120,numerator:3,covered_days:7,changed_days:0}]]]});
+  const bigquery=productionBigQuery({responses:[[/DATE '2025-11-20'/,[{launch_date:{value:'2025-11-20'}}]],[/ga4\.conversion_device/,[{device_type:'mobile',sessions:100,numerator:4,covered_days:7}]],[/session_conversion_by_device`/,[{device_type:'mobile',sessions:120,numerator:3,covered_days:7,changed_days:0}]]]});
   const service=createDeviceSourceConversionService({bigquery,project:'p'}),result=await service('compare_device_conversion_before_after_shopify',{before_start:'2025-11-13',before_end:'2025-11-19',after_start:'2025-11-20',after_end:'2025-11-26'});
   assert.deepEqual(result.rows.map(x=>x.rate),[.04,.025]);
   assert.deepEqual(bigquery.calls.filter(x=>x.query).map(x=>x.query.location),['US','EU','US']);

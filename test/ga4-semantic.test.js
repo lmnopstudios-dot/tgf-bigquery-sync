@@ -55,12 +55,32 @@ test('18 August 2022 uses a sessions-only denominator and retains commerce-only 
   assert.equal(data.conversion_breakdown.find(row => row.device_category === 'mobile').sessions, 0);
 });
 
+test('production-shaped source loss preserves reportable device conversion and explicit grain coverage', async()=>{
+  const client={async runReport(request){const dims=request.dimensions.map(d=>d.name),metrics=request.metrics.map(m=>m.name),date='20220818';
+    if(dims.join()==='date')return[{rows:[gaRow([date],[364,300,100,250,.68,900])]}];
+    if(dims.join()==='date,deviceCategory')return[{rows:[gaRow([date,'desktop'],metrics[0]==='sessions'?[250]:[5,5]),gaRow([date,'mobile'],metrics[0]==='sessions'?[114]:[3,3])]}];
+    if(dims.join()==='date,deviceCategory,sessionDefaultChannelGroup')return[{rows:[gaRow([date,'desktop','Direct'],[250]),gaRow([date,'mobile','Organic Search'],[114])]}];
+    if(dims.includes('eventName'))return[{rows:[gaRow([date,'purchase'],[8])]}];
+    if(dims.join()==='date,deviceCategory,sessionDefaultChannelGroup,sessionSource,sessionMedium')return[{rows:[gaRow([date,'desktop','Direct','(direct)','(none)'],metrics[0]==='sessions'?[249]:[5,5]),gaRow([date,'mobile','Organic Search','google','organic'],metrics[0]==='sessions'?[114]:[3,3])]}];
+    return[{rows:[gaRow([date,...dims.slice(1).map(()=>'(not set)')],metrics.map(()=>1))]}];
+  }};
+  const data=await collect({client,propertyId:'production',startDate:'2022-08-18',endDate:'2022-08-18'});
+  assert.equal(data.conversion_device.reduce((sum,row)=>sum+row.sessions,0),364);
+  assert.equal(data.conversion_device.reduce((sum,row)=>sum+row.ecommerce_purchases,0),8);
+  assert.equal(data.conversion_breakdown.length,0);
+  assert.deepEqual(data.conversion_coverage.map(({grain,status,observed_sessions,expected_sessions})=>({grain,status,observed_sessions,expected_sessions})),[
+    {grain:'device',status:'reportable',observed_sessions:364,expected_sessions:364},
+    {grain:'device_channel',status:'reportable',observed_sessions:364,expected_sessions:364},
+    {grain:'device_channel_source_medium',status:'incomplete',observed_sessions:363,expected_sessions:364}
+  ]);
+});
+
 test('promotion is range-scoped and idempotent rather than destructive', () => {
   const sql = promotionSql('p','ga4','daily'); assert.match(sql, /BEGIN TRANSACTION/); assert.match(sql, /BETWEEN @startDate AND @endDate/); assert.doesNotMatch(sql, /TRUNCATE/);
-  const coordinated = coordinatedPromotionSql('p','ga4'); assert.equal((coordinated.match(/BEGIN TRANSACTION/g) || []).length, 1); assert.equal((coordinated.match(/DELETE FROM/g) || []).length, 6);
-  assert.equal((coordinated.match(/must not contain duplicate semantic keys/g) || []).length, 6);
+  const coordinated = coordinatedPromotionSql('p','ga4'); assert.equal((coordinated.match(/BEGIN TRANSACTION/g) || []).length, 1); assert.equal((coordinated.match(/DELETE FROM/g) || []).length, TABLES.length);
+  assert.equal((coordinated.match(/must not contain duplicate semantic keys/g) || []).length, TABLES.length);
   assert.equal((coordinated.match(/must contain exactly one row per requested date/g) || []).length, 2);
-  assert.equal((coordinated.match(/promoted row count must match its stage/g) || []).length, 6);
+  assert.equal((coordinated.match(/promoted row count must match its stage/g) || []).length, TABLES.length);
 });
 
 test('DATE query parameters serialize as values rather than NULL', () => {
