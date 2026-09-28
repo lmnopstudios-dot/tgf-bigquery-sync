@@ -10,7 +10,7 @@ const number = value => Number(value ?? 0);
 
 export function shopifyql(startDate, endDate, withSource = false) {
   assertDate(startDate); assertDate(endDate);
-  return `FROM sessions\nSHOW ${METRICS.join(', ')}\nBY day, device_type${withSource ? ', referrer_source' : ''}\nWHERE human_or_bot_session = 'human'\nSINCE ${startDate} UNTIL ${endDate}\nORDER BY day ASC`;
+  return `FROM sessions\nSHOW ${METRICS.join(', ')}\nGROUP BY day, device_type${withSource ? ', referrer_source' : ''}\nWHERE human_or_bot_session = 'human'\nSINCE ${startDate} UNTIL ${endDate}\nORDER BY day ASC`;
 }
 
 export function normalizeRows(rows, { withSource = false, maxSourcesPerDeviceDay = 40, timezone, syncedAt = new Date().toISOString() }) {
