@@ -1,54 +1,20 @@
-import { assertDate } from '../ga4/semantic.js';
+import { assertDate, datesBetween } from '../ga4/semantic.js';
 
-export const DEVICE_SOURCE_CONVERSION_TOOL_DEFINITION = {
-  type: 'function', name: 'compare_device_source_conversion_around_launch', strict: true,
-  description: 'Compare GA4 desktop/mobile conversion before and after a verified Shopify launch boundary at the native device × session traffic-source grain. Requires explicit periods: this tool never guesses the launch date and never divides Shopify orders by GA4 sessions.',
-  parameters: { type: 'object', additionalProperties: false, properties: {
-    before_start: { type: 'string' }, before_end: { type: 'string' }, after_start: { type: 'string' }, after_end: { type: 'string' },
-    launch_date: { type: 'string', description: 'The separately governed, verified Shopify launch date.' },
-    launch_evidence: { type: 'string', description: 'Human-readable governed record or evidence reference supporting launch_date.' }
-  }, required: ['before_start','before_end','after_start','after_end','launch_date','launch_evidence'] }
-};
+const commonProperties={start_date:{type:'string'},end_date:{type:'string'}};
+export const DEVICE_SOURCE_CONVERSION_TOOL_DEFINITIONS = Object.freeze([
+  {type:'function',name:'get_woocommerce_device_conversion',strict:true,description:'Answer exactly: What was desktop versus mobile conversion during the WooCommerce era? Aggregate-only; returns GA4 purchases per session only when same-grain history is complete.',parameters:{type:'object',additionalProperties:false,properties:commonProperties,required:['start_date','end_date']}},
+  {type:'function',name:'compare_device_conversion_before_after_shopify',strict:true,description:'Compare equal, explicit pre/post windows around the governed Shopify boundary. Returns Woo GA4 and Shopify-native measures side by side without silently treating them as comparable.',parameters:{type:'object',additionalProperties:false,properties:{before_start:{type:'string'},before_end:{type:'string'},after_start:{type:'string'},after_end:{type:'string'}},required:['before_start','before_end','after_start','after_end']}},
+  {type:'function',name:'compare_device_conversion_by_traffic_source',strict:true,description:'Break the governed pre/post device comparison down by traffic source, only where source and device metrics coexist.',parameters:{type:'object',additionalProperties:false,properties:{before_start:{type:'string'},before_end:{type:'string'},after_start:{type:'string'},after_end:{type:'string'}},required:['before_start','before_end','after_start','after_end']}}
+]);
+// Backwards export retained so deployments that imported the previous symbol fail closed rather than losing registration.
+export const DEVICE_SOURCE_CONVERSION_TOOL_DEFINITION=DEVICE_SOURCE_CONVERSION_TOOL_DEFINITIONS[1];
+const safeId=value=>{if(!/^[A-Za-z0-9_-]+$/.test(value))throw new Error('Invalid BigQuery identifier');return value;};
+const days=(a,b)=>datesBetween(a,b).length;
+export function conversionQuery(project,{source=false}={}){safeId(project);const sourceSelect=source?', referrer_source':'';return `WITH requested AS (SELECT 'before' period,@before_start start_date,@before_end end_date UNION ALL SELECT 'after',@after_start,@after_end),
+boundary AS (SELECT MIN(DATE(order_created_at)) launch_date FROM \`${project}.shopify_data.order_customers\` WHERE source_app_id IS DISTINCT FROM 'gid://shopify/App/1758145'),
+woo AS (SELECT 'before' period,b.launch_date,device_category device_type${source?', CONCAT(session_source, \' / \', session_medium) referrer_source':''},SUM(sessions) sessions,SUM(ecommerce_purchases) numerator,COUNT(DISTINCT date) covered_days FROM \`${project}.ga4.conversion_breakdown\`,requested CROSS JOIN boundary b WHERE period='before' AND date BETWEEN start_date AND end_date AND device_category IN ('desktop','mobile') GROUP BY 1,2,3${source?',4':''}),
+shopify AS (SELECT 'after' period,b.launch_date,device_type${sourceSelect},SUM(sessions) sessions,SUM(sessions_that_completed_checkout) numerator,COUNT(DISTINCT date) covered_days,COUNTIF(measurement_era='from_2026_09_session_measurement_change') changed_days FROM \`${project}.shopify_data.session_conversion_by_device${source?'_source':''}\`,requested CROSS JOIN boundary b WHERE period='after' AND date BETWEEN start_date AND end_date AND device_type IN ('desktop','mobile') GROUP BY 1,2,3${source?',4':''})
+SELECT *, 'GA4 ecommercePurchases / sessions (purchases per session)' definition, 0 changed_days FROM woo UNION ALL SELECT *, 'Shopify sessions_that_completed_checkout / sessions (session conversion rate)' definition FROM shopify ORDER BY period,device_type${source?',referrer_source':''}`;}
 
-const safeId = value => { if (!/^[A-Za-z0-9_-]+$/.test(value)) throw new Error('Invalid BigQuery identifier'); return value; };
-export function comparisonQuery(project, dataset = 'ga4') {
-  safeId(project); safeId(dataset);
-  return `WITH periods AS (SELECT 'before' period,@before_start start_date,@before_end end_date UNION ALL SELECT 'after',@after_start,@after_end),
-cells AS (SELECT p.period,c.device_category,c.session_default_channel_group,c.session_source,c.session_medium,SUM(c.sessions) sessions,SUM(c.ecommerce_purchases) ecommerce_purchases,COUNT(DISTINCT c.date) observed_dates FROM periods p JOIN \`${project}.${dataset}.conversion_breakdown\` c ON c.date BETWEEN p.start_date AND p.end_date WHERE c.device_category IN ('desktop','mobile') GROUP BY 1,2,3,4,5),
-quality AS (SELECT p.period,COUNT(DISTINCT d.date) expected_dates,COUNTIF(d.ecommerce_reliable) reliable_dates,COUNTIF(d.ecommerce_observed) observed_ecommerce_dates FROM periods p LEFT JOIN \`${project}.${dataset}.daily\` d ON d.date BETWEEN p.start_date AND p.end_date GROUP BY 1)
-SELECT c.*,q.expected_dates,q.reliable_dates,q.observed_ecommerce_dates FROM cells c JOIN quality q USING(period) ORDER BY session_default_channel_group,session_source,session_medium,device_category,period`;
-}
-
-export function createDeviceSourceConversionService({ bigquery, project, dataset = 'ga4' }) {
-  return async args => {
-    for (const key of ['before_start','before_end','after_start','after_end','launch_date']) assertDate(args[key], key);
-    if (!String(args.launch_evidence || '').trim()) throw new Error('launch_evidence is required; the launch date must not be guessed');
-    if (args.before_start > args.before_end || args.after_start > args.after_end || args.before_end >= args.launch_date || args.after_start < args.launch_date) throw new Error('Periods must be ordered on their respective sides of launch_date');
-    const dateKeys = ['before_start','before_end','after_start','after_end'];
-    const [rows] = await bigquery.query({ query: comparisonQuery(project, dataset), params: Object.fromEntries(dateKeys.map(key => [key, args[key]])), types: Object.fromEntries(dateKeys.map(key => [key, 'DATE'])), labels: { component: 'oracle_device_source_conversion' } });
-    const keyed = new Map(rows.map(row => [[row.period,row.device_category,row.session_default_channel_group,row.session_source,row.session_medium].join('\0'), row]));
-    const dimensions = [...new Set(rows.map(row => [row.session_default_channel_group,row.session_source,row.session_medium].join('\0')))];
-    const cells = [];
-    for (const source of dimensions) for (const device of ['desktop','mobile']) {
-      const [channel, sessionSource, medium] = source.split('\0');
-      const periods = Object.fromEntries(['before','after'].map(period => {
-        const row = keyed.get([period,device,channel,sessionSource,medium].join('\0'));
-        if (!row) return [period, { availability: 'unavailable', reason: 'No persisted GA4 row exists for this device × source cell.', sessions: null, ecommerce_purchases: null, conversion_rate: null }];
-        const reliable = Number(row.reliable_dates) === Number(row.expected_dates) && Number(row.expected_dates) > 0;
-        return [period, { availability: reliable ? 'available' : 'observed_but_not_reliable_for_platform_effect', sessions: Number(row.sessions), ecommerce_purchases: Number(row.ecommerce_purchases), conversion_rate: reliable && Number(row.sessions) ? Number(row.ecommerce_purchases) / Number(row.sessions) : null,
-          observed_rate: Number(row.sessions) ? Number(row.ecommerce_purchases) / Number(row.sessions) : null, observed_dates: Number(row.observed_dates), expected_dates: Number(row.expected_dates) }];
-      }));
-      cells.push({ device_category: device, session_default_channel_group: channel, session_source: sessionSource, session_medium: medium, periods,
-        comparable_platform_effect: periods.before.availability === 'available' && periods.after.availability === 'available' });
-    }
-    return { question: 'Compare desktop and mobile conversion before and after the Shopify launch, broken down by traffic source.', launch_boundary: { date: args.launch_date, evidence: args.launch_evidence, supplied_not_inferred: true },
-      methods: { ga4_same_grain: 'GA4 ecommercePurchases / GA4 sessions from the same device × session channel × session source/medium rows.', shopify_native: 'Shopify Online Store sessions conversion is governed for overall/time-series reporting, but no governed device × traffic-source joint grain is established; those cells are unavailable.' },
-      periods: { before: { start_date: args.before_start, end_date: args.before_end, platform: 'WooCommerce' }, after: { start_date: args.after_start, end_date: args.after_end, platform: 'Shopify' } }, cells,
-      limitations: ['GA4 is behavioural measurement, not order truth.', 'Observed but unreliable rates are diagnostic only and are not presented as a like-for-like platform effect.', 'Shopify order counts are never divided by GA4 sessions.', 'Missing device × source cells are explicitly returned as unavailable.'] };
-  };
-}
-
-export async function executeDeviceSourceConversionToolCall(service, name, args) {
-  if (name !== DEVICE_SOURCE_CONVERSION_TOOL_DEFINITION.name) return { handled: false, result: null };
-  return { handled: true, result: await service(args) };
-}
+export function createDeviceSourceConversionService({bigquery,project}){return async(name,args)=>{for(const [key,value] of Object.entries(args))assertDate(value,key);let periods;if(name==='get_woocommerce_device_conversion')periods={before_start:args.start_date,before_end:args.end_date,after_start:args.end_date,after_end:args.end_date};else periods=args;if(!DEVICE_SOURCE_CONVERSION_TOOL_DEFINITIONS.some(t=>t.name===name))throw new Error('Unsupported conversion tool');if(periods.before_start>periods.before_end||periods.after_start>periods.after_end)throw new Error('Invalid period ordering');if(name!=='get_woocommerce_device_conversion'&&days(periods.before_start,periods.before_end)!==days(periods.after_start,periods.after_end))throw new Error('Launch comparisons require equal-length pre/post windows');const source=name==='compare_device_conversion_by_traffic_source';const [rows]=await bigquery.query({query:conversionQuery(project,{source}),params:periods,types:Object.fromEntries(Object.keys(periods).map(k=>[k,'DATE'])),maximumBytesBilled:1_000_000_000,labels:{component:'oracle_device_conversion'}});const launchDate=String(rows[0]?.launch_date?.value||rows[0]?.launch_date||'');if(!launchDate)throw new Error('Governed Shopify launch boundary is unavailable');if(name!=='get_woocommerce_device_conversion'&&(periods.before_end>=launchDate||periods.after_start<launchDate))throw new Error('Periods must fall on their respective sides of the governed launch boundary');const expected={before:days(periods.before_start,periods.before_end),after:days(periods.after_start,periods.after_end)};const resultRows=rows.filter(r=>name!=='get_woocommerce_device_conversion'||r.period==='before').map(r=>{const complete=Number(r.covered_days)===expected[r.period];return {...r,sessions:Number(r.sessions),numerator:Number(r.numerator),rate:complete&&Number(r.sessions)?Number(r.numerator)/Number(r.sessions):null,coverage:{covered_days:Number(r.covered_days),expected_days:expected[r.period],complete,missing_days:expected[r.period]-Number(r.covered_days)},measurement_change_warning:Number(r.changed_days)>0?'Shopify changed session measurement in September 2026; do not interpret this discontinuity as customer behaviour.':null};});return {question:name,governed_launch_boundary:{date:launchDate,evidence:'Earliest persisted non-Matrixify Shopify order; production diagnostic must approve this as the operational launch boundary.'},periods,rows:resultRows,cross_platform_percentage_point_difference:null,comparability:'not_established: GA4 purchase events count purchases; Shopify counts sessions that completed checkout. Show side by side only.',seasonality_warning:'Equal windows can still differ because Black Friday and Christmas affect demand; choose alternate equal windows if needed.',provenance:{before:'GA4 same-grain persisted aggregate',after:'Shopify-native FROM sessions persisted aggregate'},limitations:['No Shopify order count is divided by GA4 sessions.','Incomplete cells have a null rate.','Traffic-source results exist only from the joint device × source table.']};};}
+export async function executeDeviceSourceConversionToolCall(service,name,args){if(!DEVICE_SOURCE_CONVERSION_TOOL_DEFINITIONS.some(tool=>tool.name===name))return{handled:false,result:null};return{handled:true,result:await service(name,args)};}
