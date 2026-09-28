@@ -33,6 +33,7 @@ import { createShopifyCountryProductsService } from './oracle/shopify-country-pr
 import { createCustomerOrderIntervalService } from './oracle/customer-order-interval.js';
 import { createOnlineCountrySalesService, ONLINE_COUNTRY_MAX_BYTES } from './oracle/online-country-sales.js';
 import { createDeviceSourceConversionService, executeDeviceSourceConversionToolCall } from './oracle/device-source-conversion.js';
+import { answerWooDeviceConversionRequest } from './oracle/woo-device-conversion-request.js';
 import { CATEGORY_SALES_MAX_BYTES, createCategorySalesService, executeCategorySalesToolCall } from './oracle/category-sales.js';
 import { runWithShopifyThrottle, SHOPIFY_RATE_LIMIT_MESSAGE } from './oracle/shopifyql-throttle.js';
 import { buildOracleInlineChart } from './oracle/inline-charts.js';
@@ -8121,6 +8122,17 @@ app.post(
         .slice(0, 10);
 
       const tools = createOracleToolDefinitions();
+
+      // Keep this governed aggregate out of probabilistic routing/synthesis. The
+      // result validator refuses to turn persisted reportable coverage into a
+      // false "no covered days" answer.
+      const governedDeviceAnswer = await answerWooDeviceConversionRequest(message, deviceSourceConversionService);
+      if (governedDeviceAnswer) return res.json({
+        success: true,
+        answer: governedDeviceAnswer.answer,
+        tools_used: [governedDeviceAnswer.route.tool],
+        request_id: id
+      });
 
       const toolsUsed = new Set();
       let remainingQueryBytes = 20_000_000_000;
