@@ -18,18 +18,18 @@ test('one-day diagnostic identifies both fresh API totals and API loss indicator
   assert.deepEqual(parseDiagnosticArgs(['--date','2022-08-18']), { date: '2022-08-18' });
 });
 
-test('production-shaped 2022-08-18 probe locates loss at source and medium grain', async () => {
+test('production-shaped 2022-08-18 probe locates loss at device grain', async () => {
   const client = { async runReport(request) {
     const dimensions=request.dimensions.map(d=>d.name);
     if(dimensions.length===1)return [{rows:[row(['20220818'],364)],rowCount:1}];
-    if(dimensions.length===2)return [{rows:[row(['20220818','desktop'],250),row(['20220818','mobile'],114)],rowCount:2}];
-    if(dimensions.length===3)return [{rows:[row(['20220818','desktop','Direct'],250),row(['20220818','mobile','Organic Search'],114)],rowCount:2}];
+    if(dimensions.length===2)return [{rows:[row(['20220818','desktop'],250),row(['20220818','mobile'],113)],rowCount:2}];
+    if(dimensions.length===3)return [{rows:[row(['20220818','desktop','Direct'],250),row(['20220818','mobile','Organic Search'],113)],rowCount:2}];
     const detailed=Array.from({length:25},(_,index)=>row(['20220818',index<17?'desktop':'mobile',index===0?'(not set)':'Direct',index===0?'':'(direct)',index===0?'':'(none)'],index===24?123:10));
     return [{rows:detailed,rowCount:25,metadata:{dataLossFromOtherRow:false}}];
   }};
   const result=await diagnoseSessionReconciliation({client,propertyId:'production',date:'2022-08-18'});
-  assert.deepEqual(Object.fromEntries(Object.entries(result.grains).map(([name,value])=>[name,value.sessions])),{date:364,device:364,device_channel:364,device_channel_source_medium:363});
-  assert.equal(result.disappearance.first_non_reconciling_grain,'device_channel_source_medium');
-  assert.equal(result.disappearance.highest_reconciling_grain,'device_channel');
+  assert.deepEqual(Object.fromEntries(Object.entries(result.grains).map(([name,value])=>[name,value.sessions])),{date:364,device:363,device_channel:363,device_channel_source_medium:363});
+  assert.equal(result.disappearance.first_non_reconciling_grain,'device');
+  assert.equal(result.disappearance.highest_reconciling_grain,'date');
   assert.equal(result.grains.device_channel_source_medium.row_count,25);
 });

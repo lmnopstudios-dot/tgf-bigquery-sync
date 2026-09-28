@@ -23,14 +23,14 @@ npm run backfill:shopify-conversion -- --start 2025-11-20 --end 2025-11-26 --chu
 npm run validate:conversion-history -- --start 2025-11-20 --end 2025-11-26
 ```
 
-Only after that pilot validates, run backfills in this order (replace dates only with the approved boundary/coverage dates and use the printed `next_command` until `complete: true`):
+Before spending time on the full GA4 backfill, run `npm run diagnose:ga4-device-coverage`. This bounded read-only sample emphasizes representative 2023–2025 dates and reports the device reconciliation rate and excluded dates. Only after reviewing it and after that pilot validates, run backfills in this order (replace dates only with the approved boundary/coverage dates and use the printed `next_command` until `complete: true`):
 
 ```sh
 npm run backfill:ga4 -- --start 2022-08-18 --end 2025-11-19 --chunk-days 31 --max-chunks 3
 npm run backfill:shopify-conversion -- --start 2025-11-20 --end 2026-09-27 --chunk-days 7 --max-chunks 2 --max-sources 40 --timezone Europe/London
 ```
 
-These small invocations preserve the normal incremental GA4 sync, do not bypass Oracle's request/job controls, and ensure historical work cannot monopolise ShopifyQL or Render. Failed or empty dates are listed as `incomplete` and are not promoted. Writes replace a bounded date range transactionally using stable date × device × source identities. `unknown` is a real missing dimension; sources beyond the top 40 per device-day are summed into `__other__`, preserving additive funnel totals.
+These small invocations preserve the normal incremental GA4 sync, do not bypass Oracle's request/job controls, and ensure historical work cannot monopolise ShopifyQL or Render. GA4 incomplete dates are processed atomically with their observed coverage counts and reason, while unsupported device/source rows are omitted; the cursor then continues. “Processed with incomplete coverage” is not “fully reportable.” Oracle calculates Woo conversion only when every requested date is validated at the requested grain and discloses excluded days. Writes replace a bounded date range transactionally using stable date × device × source identities. `unknown` is a real returned missing dimension, never a bucket for the absent 18 August session; sources beyond the top 40 per device-day are summed into `__other__`, preserving additive funnel totals.
 
 After each completed backfill, run:
 

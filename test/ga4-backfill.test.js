@@ -22,3 +22,9 @@ test('a failed chunk reports atomic resume state and previously committed chunks
     return true;
   });
 });
+
+test('an incomplete day is processed, recorded, and advances the resume cursor',async()=>{
+  const options=parseBackfillArgs(['--start','2022-08-18','--end','2022-08-19','--chunk-days','1','--max-chunks','2']);
+  const result=await runBackfill({options,sync:async chunk=>chunk.startDate==='2022-08-18'?{processing_status:'processed_with_incomplete_coverage',fully_reportable:false,incomplete_days:[{date:'2022-08-18'}]}:{processing_status:'fully_reportable',fully_reportable:true,incomplete_days:[]}});
+  assert.equal(result.resume_after,'2022-08-19');assert.equal(result.complete,true);assert.equal(result.next_command,null);assert.equal(result.fully_reportable,false);assert.deepEqual(result.processed_with_incomplete_coverage[0].incomplete_days,[{date:'2022-08-18'}]);
+});
