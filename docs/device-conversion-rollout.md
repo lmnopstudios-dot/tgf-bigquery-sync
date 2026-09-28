@@ -1,53 +1,47 @@
 # Governed device conversion rollout
 
-This capability keeps two different populations visibly separate. WooCommerce device evidence is GA4 `ecommercePurchases / sessions` at a reconciled date × device grain and is named **purchases per session**, not session conversion. Source detail is available only on dates where the date × device × channel × source × medium session total also reconciles. Shopify evidence is native human Online Store sessions and `sessions_that_completed_checkout / sessions`. No order count is used as a GA4 numerator.
+WooCommerce device evidence is taken directly from one compatible GA4 Data API report containing `date × deviceCategory × sessions × ecommercePurchases × totalPurchasers`. The published measure is **purchases per session** (`ecommercePurchases / sessions`), never “session conversion rate”. Sessions are HLL++ approximate distinct counts: an independently queried date total can differ after dimensions are added. Its total and signed difference remain a diagnostic; equality is not a gate and no balancing session is allocated or invented.
 
-## Production evidence gate and commands
+The device × channel × source × medium report is separately validated on its own grain. Pagination must reach the API `rowCount`, requested dimensions and metrics must pass GA4 compatibility, keys/dates/values must be valid, and metadata is inspected for thresholding and `(other)` data loss. `(other)`, missing dimension values, thresholds, or a row limit make source attribution `limited`; those rows are not published as complete attribution. A difference from the independent HLL++ date total alone does not.
 
-Run this **first on Render** (a read-only, 1 GB-bounded query):
+## Production gate and commands
+
+Run this **first on Render**. It is a read-only GA4 Data API pilot (at most 24 dates and 100,000 rows per report) and performs no BigQuery writes:
+
+```sh
+npm run diagnose:ga4-device-coverage
+```
+
+The ten production-shaped probe dates are 2022-08-18, 2023-02-15, 2023-08-17, 2023-11-24, 2024-02-15, 2024-08-15, 2024-11-29, 2025-02-13, 2025-08-14, and 2025-11-19. Review signed differences in both directions as diagnostics, plus pagination and API limitation metadata; do not require an exact match.
+
+The governed public launch remains **20 November 2025**: Woo reporting ends 19 November and the existing Shopify-native pilot begins 20 November. The first native order on 16 November is pre-launch source evidence, not a public-launch session. Run the existing Shopify pilot unchanged:
 
 ```sh
 npm run diagnose:conversion-evidence
-```
-
-The governed public launch is **20 November 2025** (confirmed by Stuart): WooCommerce reporting runs through 19 November and Shopify reporting starts on 20 November. The first native order on 16 November remains source evidence, but is pre-launch and must not be described as a public-launch session. Then run the existing focused GA4 diagnostic and inspect its change points and ecommerce completeness:
-
-```sh
 npm run diagnose:ga4-shopify-transition
-```
-
-The first Shopify backfill chunk is deliberately a seven-day production pilot. It establishes whether historical `FROM sessions` accepts both dimensions, the actual returned coverage, and operational ShopifyQL cost/throttling before a broad run:
-
-```sh
 npm run backfill:shopify-conversion -- --start 2025-11-20 --end 2025-11-26 --chunk-days 7 --max-chunks 1 --max-sources 40 --timezone Europe/London
 npm run validate:conversion-history -- --start 2025-11-20 --end 2025-11-26
 ```
 
-Before spending time on the full GA4 backfill, run `npm run diagnose:ga4-device-coverage`. This bounded read-only sample emphasizes representative 2023–2025 dates and reports the device reconciliation rate and excluded dates. Only after reviewing it and after that pilot validates, run backfills in this order (replace dates only with the approved boundary/coverage dates and use the printed `next_command` until `complete: true`):
+Then run the bounded GA4 backfill:
 
 ```sh
 npm run backfill:ga4 -- --start 2022-08-18 --end 2025-11-19 --chunk-days 31 --max-chunks 3
-npm run backfill:shopify-conversion -- --start 2025-11-20 --end 2026-09-27 --chunk-days 7 --max-chunks 2 --max-sources 40 --timezone Europe/London
 ```
 
-These small invocations preserve the normal incremental GA4 sync, do not bypass Oracle's request/job controls, and ensure historical work cannot monopolise ShopifyQL or Render. GA4 incomplete dates are processed atomically with their observed coverage counts and reason, while unsupported device/source rows are omitted; the cursor then continues. “Processed with incomplete coverage” is not “fully reportable.” Oracle calculates Woo conversion only when every requested date is validated at the requested grain and discloses excluded days. Writes replace a bounded date range transactionally using stable date × device × source identities. `unknown` is a real returned missing dimension, never a bucket for the absent 18 August session; sources beyond the top 40 per device-day are summed into `__other__`, preserving additive funnel totals.
+Every invocation prints `resume_after`. The exact safe resume form is:
 
-After each completed backfill, run:
+```sh
+npm run backfill:ga4 -- --start 2022-08-18 --end 2025-11-19 --resume-after 2022-11-18 --chunk-days 31 --max-chunks 3
+```
+
+The explicit command above is the safe resume after all three documented initial chunks commit (`resume_after: 2022-11-18`). If fewer chunks commit, instead use the exact committed `resume_after` value printed by that invocation; never substitute the failed chunk end. Each chunk transactionally replaces stable date × device or date × device × channel × source × medium keys. `processed_with_limited_attribution` means the valid device-grain data was committed while a finer attribution grain was not represented as complete.
+
+After each completed backfill run:
 
 ```sh
 npm run validate:ga4 -- --start 2022-08-18 --end 2025-11-19
-npm run validate:conversion-history -- --start 2025-11-20 --end 2026-09-27
 npm test
 ```
 
-The read-only validator checks duplicate keys, missing days, impossible funnel counts, and reconciliation of device × source to device totals. Output is aggregate and missing-date examples are capped at 50. Do not claim historical coverage until it returns `REPORTABLE`. September 2026 is marked as a Shopify session-measurement era change and must not be narrated as changed customer behaviour.
-
-## Oracle acceptance questions
-
-Ask these exactly, then repeat questions 2 and 3 with a different pair of equal windows to confirm follow-up period retention:
-
-1. **What was the desktop versus mobile conversion rate during the WooCommerce era?**
-2. **Compare desktop and mobile conversion before and after the Shopify launch.**
-3. **Break that comparison down by traffic source.**
-
-Acceptance requires sessions, numerator, correctly named rate, native source, actual covered/expected days and missing coverage. The comparison must use equal windows, disclose Black Friday/Christmas seasonality, show Woo GA4 and Shopify-native figures side by side, and omit a percentage-point delta unless production evidence establishes comparable populations. Source results must be unavailable—not guessed—when the joint source table is incomplete.
+The Oracle may return Woo device purchases per session when all requested days have a valid device-grain report, regardless of the independently queried date-total difference. Traffic-source results require all requested days to be reportable at that finer grain; otherwise rates are null and limitations are disclosed. Shopify continues to use its native `sessions_that_completed_checkout / sessions` measure, shown side by side without a cross-platform percentage-point claim.
