@@ -52,3 +52,21 @@ test('exact production request uses the traced SQL parameters and reconciles all
   assert.throws(()=>assertCategorySalesReconciles([['sunglasses',400],['jewellery',300],['other',200],['unclassified',99]].map(([sales_category,sales])=>({...common,sales_category,sales}))),/do not reconcile/);
   assert.match(options.query,/COALESCE\(i\.total_amount,0\)-COALESCE\(r\.returned_amount,0\)/);assert.match(options.query,/'minor_unit'/);
 });
+
+test('Square return subtraction matches the production retail semantic schema and money contract',()=>{
+  // These are the deployed view columns consumed by the category query. In
+  // particular, retail_returns exposes total_return_amount, not total_amount.
+  const productionSchema={
+    retail_order_items:['order_id','line_item_uid','order_date','catalog_object_id','quantity','total_amount','currency','transaction_line_item_json'],
+    retail_returns:['containing_order_id','source_line_item_uid','total_return_amount','currency']
+  };
+  const sql=categorySalesSql('gf-full-data');
+  const returnsCte=sql.match(/square_returns AS \((.*?)\),\n  eligible_lines AS/s)?.[1];
+  assert.ok(returnsCte);
+  assert.match(returnsCte,/FROM `gf-full-data\.square_data\.retail_returns`/);
+  assert.match(returnsCte,/SUM\(COALESCE\(total_return_amount,0\)\) returned_amount/);
+  assert.doesNotMatch(returnsCte,/COALESCE\(total_amount,0\)/);
+  assert.ok(productionSchema.retail_returns.includes('total_return_amount'));
+  assert.ok(productionSchema.retail_order_items.includes('total_amount'));
+  assert.match(sql,/COALESCE\(i\.total_amount,0\)-COALESCE\(r\.returned_amount,0\),UPPER\(i\.currency\),'minor_unit'/);
+});
