@@ -26,7 +26,11 @@ test('SQL uses only governed direct/approved mapping evidence and returns partia
   assert.match(sql,/WHEN COALESCE\(c\.governed_classifications,0\)=0 THEN 'unclassified'/);
   assert.match(sql,/source_platform,source_store,currency,monetary_unit/);assert.match(sql,/sales_share/);
   assert.match(sql,/directly_classified_lines/);assert.match(sql,/identity_mapped_lines/);assert.match(sql,/reporting_family_mapped_lines/);assert.match(sql,/unclassified_sales_share/);
-  assert.doesNotMatch(sql,/ARRAY_AGG\(DISTINCT STRUCT\([^)]*\) ORDER BY/); // BigQuery rejects ORDER BY expressions outside the DISTINCT argument.
+  // BigQuery does not support DISTINCT over STRUCT values. Evidence must first
+  // be deduplicated by stable scalar keys, then collected as ordinary STRUCTs.
+  assert.match(sql,/governed_evidence AS \([\s\S]*GROUP BY source_ref,classification_type,classification_value,provenance,mapping_type/);
+  assert.match(sql,/ARRAY_AGG\(STRUCT\(classification_type,classification_value,provenance,mapping_type\)/);
+  assert.doesNotMatch(sql,/ARRAY_AGG\s*\(\s*DISTINCT\s+(?:STRUCT\s*\(|\(\s*SELECT\s+AS\s+STRUCT)/i);
   assert.match(sql,/CROSS JOIN categories/);
   assert.doesNotMatch(sql,/LOWER\([^)]*(?:title|name)|tags/i);
   assert.match(sql,/source_app_id!='gid:\/\/shopify\/App\/1758145'/);
@@ -50,6 +54,7 @@ test('exact production request uses the traced SQL parameters and reconciles all
   const common={source_platform:'square',source_store:'square',currency:'GBP',monetary_unit:'minor_unit',eligible_sales:1000};
   assert.equal(assertCategorySalesReconciles([['sunglasses',400],['jewellery',300],['other',200],['unclassified',100]].map(([sales_category,sales])=>({...common,sales_category,sales}))),true);
   assert.throws(()=>assertCategorySalesReconciles([['sunglasses',400],['jewellery',300],['other',200],['unclassified',99]].map(([sales_category,sales])=>({...common,sales_category,sales}))),/do not reconcile/);
+  assert.throws(()=>assertCategorySalesReconciles([['sunglasses',400],['sunglasses',0],['jewellery',300],['other',200],['unclassified',100]].map(([sales_category,sales])=>({...common,sales_category,sales}))),/repeats a governed bucket/);
   assert.match(options.query,/COALESCE\(i\.total_amount,0\)-COALESCE\(r\.returned_amount,0\)/);assert.match(options.query,/'minor_unit'/);
 });
 

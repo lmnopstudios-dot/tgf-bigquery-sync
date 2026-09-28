@@ -30,13 +30,17 @@ export function categorySalesSql(project) {
   source_classifications AS (
     SELECT subject_ref source_ref,classification_type,classification_value,provenance,'direct' mapping_type FROM active_classifications
     UNION ALL SELECT r.source_ref,c.classification_type,c.classification_value,c.provenance,r.mapping_type FROM routes r JOIN active_classifications c ON c.subject_ref=r.classification_ref
+  ), governed_evidence AS (
+    SELECT source_ref,classification_type,classification_value,provenance,mapping_type
+    FROM source_classifications
+    GROUP BY source_ref,classification_type,classification_value,provenance,mapping_type
   ), classification_sets AS (SELECT source_ref,
       LOGICAL_OR(classification_type='product_type' AND classification_value='sunglasses') is_sunglasses,
       LOGICAL_OR(classification_type='product_category' AND classification_value IN (${jewellery})) is_jewellery,
       COUNT(*) governed_classifications,LOGICAL_OR(mapping_type='direct') has_direct_classification,
       LOGICAL_OR(mapping_type='approved_identity') has_identity_mapping,LOGICAL_OR(mapping_type='approved_reporting_family') has_reporting_family_mapping,
-      ARRAY_AGG(DISTINCT STRUCT(classification_type,classification_value,provenance,mapping_type) LIMIT 50) evidence
-    FROM source_classifications GROUP BY source_ref),
+      ARRAY_AGG(STRUCT(classification_type,classification_value,provenance,mapping_type) ORDER BY classification_type,classification_value,provenance,mapping_type LIMIT 50) evidence
+    FROM governed_evidence GROUP BY source_ref),
   woo_orders AS (
     SELECT 'ww' source_store,CAST(order_id AS STRING) order_ref,DATE(order_created_at) order_date,LOWER(status) status,total,ABS(COALESCE(total_refunds,0)) refunds FROM \`${project}.metorik_uk.orders\`
     UNION ALL SELECT 'usd',CAST(order_id AS STRING),DATE(order_created_at),LOWER(status),total,ABS(COALESCE(total_refunds,0)) FROM \`${project}.metorik_us.orders\`),
@@ -84,6 +88,7 @@ export function assertCategorySalesReconciles(rows){
   for(const row of rows){
     const key=[row.source_platform,row.source_store,row.currency,row.monetary_unit].join('\u0000');
     const group=groups.get(key)||{categories:new Set(),sales:0,total:numeric(row.eligible_sales)};
+    if(group.categories.has(row.sales_category))throw new Error('category sales response repeats a governed bucket within a source/currency group');
     group.categories.add(row.sales_category);group.sales+=numeric(row.sales);
     if(Math.abs(group.total-numeric(row.eligible_sales))>.000001)throw new Error('category sales total changed within a source/currency group');
     groups.set(key,group);
