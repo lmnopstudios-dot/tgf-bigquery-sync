@@ -7,11 +7,12 @@ const LABELS={
   get_shopify_conversion_kpis:'Shopify Online Store conversion',
   get_shopify_sales_kpis:'Shopify Online Store sales',
   get_ecommerce_report_v2_evidence:'Governed ecommerce evidence',
-  search_knowledge:'Governed business context'
+  search_knowledge:'Governed business context',
+  get_historical_product_opportunities:'Joined Woo + Shopify + Online stock comparison'
 };
 
 const IDENTITY_KEYS=['product_title','title','name','product','variant_title','product_variant_title'];
-const METRIC_KEYS=['net_items_sold','units_sold','orders','gross_sales','discounts','returns','net_sales','total_sales','available','available_quantity','inventory_quantity','sell_through_rate','customers','customer_count','overlap_customers','affinity_rate'];
+const METRIC_KEYS=['net_items_sold','units_sold','orders','gross_sales','discounts','returns','net_sales','total_sales','available','available_quantity','inventory_quantity','sell_through_rate','woo_units','shopify_units','woo_units_per_day','shopify_units_per_day','online_positive_stock','customers','customer_count','overlap_customers','affinity_rate'];
 const ROW_KEYS=['products','rows','items','results','variants','product_affinity'];
 const SUMMARY_KEYS=['sessions','orders','conversion_rate','checkout_conversion_rate','purchases','purchase','total_sales','net_sales','gross_sales','average_order_value','total_users','engaged_sessions'];
 
@@ -40,6 +41,14 @@ export function evidenceSummary(entries,{unavailable=[]}={}){
   const sections=[];
   for(const entry of entries){
     const rows=rowsFor(entry.result).slice(0,12), lines=summaryLines(entry.result);
+    if(entry.name==='get_historical_product_opportunities'){
+      const windows=entry.result?.observation_windows||{};
+      lines.push(`- **Windows:** Woo ${windows.woo?.start_date||'unavailable'} to ${windows.woo?.end_date||'unavailable'}; Shopify Online ${windows.shopify?.start_date||'unavailable'} to ${windows.shopify?.end_date||'unavailable'}; Online inventory as of ${windows.inventory?.as_of||'unavailable'}.`);
+      for(const row of rows)lines.push(`- **#${row.rank??'?'} ${String(row.product_title||row.product_ref||'Unknown').slice(0,120)}:** Woo ${value(row.woo_units)} units (WW ${JSON.stringify(row.woo_ww||{})}; US ${JSON.stringify(row.woo_us||{})}); Shopify Online ${value(row.shopify_units)} units ${JSON.stringify(row.shopify_online||{})}; velocities ${value(row.woo_units_per_day)} → ${value(row.shopify_units_per_day)} units/day; Online stock ${value(row.online_positive_stock)} across ${JSON.stringify(row.stocked_variants||[])}; mapping ${JSON.stringify(row.mapping_provenance||[])}.`);
+      lines.push(`- **Coverage:** ${JSON.stringify(entry.result.coverage||{})}. **Limitations:** ${(entry.result.limitations||[]).join(' ')}`);
+      sections.push(`### ${LABELS[entry.name]}\n${lines.join('\n')}`);
+      continue;
+    }
     for(const row of rows){
       if(!row||typeof row!=='object')continue;
       const identity=IDENTITY_KEYS.map(key=>row[key]).find(item=>typeof item==='string'&&item.trim());

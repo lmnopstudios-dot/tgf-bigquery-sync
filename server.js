@@ -35,6 +35,7 @@ import { createOnlineCountrySalesService, ONLINE_COUNTRY_MAX_BYTES } from './ora
 import { createDeviceSourceConversionService, executeDeviceSourceConversionToolCall } from './oracle/device-source-conversion.js';
 import { answerWooDeviceConversionRequest } from './oracle/woo-device-conversion-request.js';
 import { CATEGORY_SALES_MAX_BYTES, createCategorySalesService, executeCategorySalesToolCall } from './oracle/category-sales.js';
+import { createHistoricalProductOpportunityService } from './oracle/historical-product-opportunity.js';
 import { runWithShopifyThrottle, SHOPIFY_RATE_LIMIT_MESSAGE } from './oracle/shopifyql-throttle.js';
 import { buildOracleInlineChart } from './oracle/inline-charts.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
@@ -147,6 +148,7 @@ const customerOrderIntervalService = createCustomerOrderIntervalService({ bigque
 const onlineCountrySalesService = createOnlineCountrySalesService({ bigquery, project: GOOGLE_PROJECT_ID });
 const deviceSourceConversionService = createDeviceSourceConversionService({ bigquery, project: GOOGLE_PROJECT_ID });
 const categorySalesService = createCategorySalesService({ bigquery, project: GOOGLE_PROJECT_ID });
+const historicalProductOpportunityService=createHistoricalProductOpportunityService({reportProducts:period=>ecommerceReportV2('products',period),loadInventory:()=>getShopifyInventoryByLocation({query:'status:active',location:'Online',limit:25})});
 productMappingService.setup().catch(error => console.error('Product mapping storage setup failed:', redactError(error?.message || error)));
 collectionClassificationService.setup().catch(error => console.error('Collection classification storage setup failed:', redactError(error?.message || error)));
 
@@ -8213,6 +8215,7 @@ Important rules:
 - For “Compare desktop and mobile conversion before and after the Shopify launch”, call compare_device_conversion_before_after_shopify with explicit equal windows. For “Break that comparison down by traffic source”, call compare_device_conversion_by_traffic_source and retain those windows on follow-ups. Never guess the launch boundary, mix Shopify orders with GA4 sessions, or manufacture missing GA4 purchases. Show Woo GA4 and Shopify-native definitions side by side; omit percentage-point differences unless the returned comparability permits them. Disclose Black Friday/Christmas seasonality and Shopify's September 2026 session-measurement change. Do not add cohort or order-sequence boilerplate.
 - Shopify get_shopify_sales_kpis is the source for Online Store operational sales KPIs such as orders and AOV.
 - Use get_shopify_product_performance for historical Shopify Online Store product performance.
+- For the exact historically-strong WooCommerce / weak-Shopify / available-Online-stock question, use get_historical_product_opportunities once. Its public launch boundary is 20 November 2025 (16 November was pre-launch source evidence). Do not substitute a Shopify best-sellers list. Preserve its approved mapping/family join, source currencies, exact stocked variants, rule, windows, evidence sizes and coverage.
 - Use search_shopify_products for the current catalogue, variants, aggregate inventory, availableForSale, tags and Made-to-Order status; get_shopify_inventory_by_location for current live available physical inventory by Shopify location; get_shopify_inventory_performance for historical location-specific inventory behaviour; and get_shopify_inventory_efficiency for aggregate historical velocity, sell-through, stock duration and overstock.
 - Do not confuse historical inventory snapshots with live stock. ending_inventory_units_at_location is location-specific historical data.
 - Combine get_shopify_product_performance with get_shopify_inventory_efficiency to identify fast sellers at risk of running out or slow sellers tying up stock.
@@ -8427,6 +8430,10 @@ Important rules:
 } else if (item.name === 'get_shopify_product_performance') {
 
   result = await getShopifyProductPerformance(args);
+
+} else if (item.name === 'get_historical_product_opportunities') {
+
+  result = await historicalProductOpportunityService(args);
 
 } else if (item.name === 'get_shopify_customer_kpis') {
 
