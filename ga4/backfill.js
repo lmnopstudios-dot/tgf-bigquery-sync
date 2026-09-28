@@ -27,9 +27,9 @@ export function plannedChunks(options) {
 function nextDate(date) { const day = new Date(`${date}T00:00:00Z`); day.setUTCDate(day.getUTCDate() + 1); return day.toISOString().slice(0, 10); }
 
 export async function runBackfill({ options, sync }) {
-  const chunks = plannedChunks(options); const completed = []; const processedWithIncompleteCoverage=[];
+  const chunks = plannedChunks(options); const completed = []; const processedWithLimitedAttribution=[];
   for (const chunk of chunks) {
-    try { const result=await sync(chunk); completed.push(chunk); if(result?.fully_reportable===false||result?.processing_status==='processed_with_incomplete_coverage')processedWithIncompleteCoverage.push({ ...chunk, incomplete_days: result.incomplete_days || [] }); }
+    try { const result=await sync(chunk); completed.push(chunk); if(result?.fully_reportable===false||result?.processing_status==='processed_with_limited_attribution')processedWithLimitedAttribution.push({ ...chunk, limited_days: result.limited_days || [] }); }
     catch (cause) {
       const resumeAfter = completed.at(-1)?.endDate || options.resumeAfter || previousDate(options.startDate);
       const status = { failed_chunk: chunk, committed_chunks: completed, earlier_chunks_committed: completed.length > 0, resume_after: resumeAfter, next_command: `npm run backfill:ga4 -- --start ${options.startDate} --end ${options.endDate} --resume-after ${resumeAfter} --chunk-days ${options.chunkDays} --max-chunks ${options.maxChunks}` };
@@ -37,7 +37,7 @@ export async function runBackfill({ options, sync }) {
     }
   }
   const resumeAfter = completed.at(-1)?.endDate || options.resumeAfter || previousDate(options.startDate);
-  return { requested: { start_date: options.startDate, end_date: options.endDate }, completed, processed_with_incomplete_coverage: processedWithIncompleteCoverage, fully_reportable: processedWithIncompleteCoverage.length===0, resume_after: resumeAfter, complete: resumeAfter >= options.endDate,
+  return { requested: { start_date: options.startDate, end_date: options.endDate }, completed, processed_with_limited_attribution: processedWithLimitedAttribution, fully_reportable: processedWithLimitedAttribution.length===0, resume_after: resumeAfter, complete: resumeAfter >= options.endDate,
     next_command: resumeAfter >= options.endDate ? null : `npm run backfill:ga4 -- --start ${options.startDate} --end ${options.endDate} --resume-after ${resumeAfter} --chunk-days ${options.chunkDays} --max-chunks ${options.maxChunks}` };
 }
 export class BackfillChunkError extends Error {

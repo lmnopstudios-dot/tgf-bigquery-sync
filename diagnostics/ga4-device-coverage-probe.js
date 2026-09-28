@@ -29,10 +29,10 @@ export async function probeDeviceCoverage({client,propertyId,dates=REPRESENTATIV
   for(const date of dates){
     const result=await diagnoseSessionReconciliation({client,propertyId,date});
     const grain=result.grains.device;
-    results.push({date,date_sessions:result.grains.date.sessions,device_sessions:grain.sessions,difference:grain.difference_from_date,device_reportable:grain.reconciles,first_non_reconciling_grain:result.disappearance.first_non_reconciling_grain,highest_reconciling_grain:result.disappearance.highest_reconciling_grain});
+    results.push({date,date_sessions:result.grains.date.sessions,device_sessions:grain.sessions,difference:grain.difference_from_date,exact_session_match:grain.reconciles,device_reportable:!grain.row_limit_reached,first_non_reconciling_grain:result.disappearance.first_non_reconciling_grain,highest_reconciling_grain:result.disappearance.highest_reconciling_grain});
   }
-  const reportable=results.filter(row=>row.device_reportable).length;
-  return{diagnostic:'ga4_bounded_woo_device_coverage_probe',read_only:true,requested_dates:dates.length,api_reports:dates.length*4,bound:{maximum_dates:MAX_DATES,maximum_rows_per_report:100000},device_reportable_dates:reportable,device_incomplete_dates:dates.length-reportable,device_reconciliation_rate:dates.length?reportable/dates.length:null,excluded_dates:results.filter(row=>!row.device_reportable).map(row=>row.date),dates:results,note:'Sample evidence only. Conversion is reportable only for individually validated dates; excluded dates receive no inferred device.'};
+  const reportable=results.filter(row=>row.device_reportable).length;const exactMatches=results.filter(row=>row.exact_session_match).length;
+  return{diagnostic:'ga4_bounded_woo_device_coverage_probe',read_only:true,requested_dates:dates.length,api_reports:dates.length*4,bound:{maximum_dates:MAX_DATES,maximum_rows_per_report:100000},device_reportable_dates:reportable,device_limited_dates:dates.length-reportable,exact_match_dates:exactMatches,exact_match_rate:dates.length?exactMatches/dates.length:null,dates:results,note:'Sample evidence only. Exact equality to the independent date report is diagnostic, not a device-reporting prerequisite: sessions are HLL++ approximate distinct counts and adding dimensions can change report populations. No balancing session is allocated.'};
 }
 
 async function main(){const {dates}=parseCoverageProbeArgs(process.argv.slice(2));const {propertyId,credentials}=loadConfig();const result=await probeDeviceCoverage({client:new BetaAnalyticsDataClient({credentials}),propertyId,dates});process.stdout.write(`${JSON.stringify(result,null,2)}\n`);}
