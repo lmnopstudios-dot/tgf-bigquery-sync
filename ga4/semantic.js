@@ -1,4 +1,5 @@
 export const GA4_COVERAGE_START = '2022-08-18';
+export const SHOPIFY_PUBLIC_LAUNCH = '2025-11-20';
 export const SHOPIFY_ECOMMERCE_OBSERVED_FROM = '2026-09-07';
 export const TRAFFIC_METRICS = new Set(['sessions', 'total_users', 'new_users', 'engaged_sessions', 'engagement_rate', 'screen_page_views']);
 export const ECOMMERCE_METRICS = new Set(['view_item', 'add_to_cart', 'begin_checkout', 'purchase', 'ecommerce_conversion_rate']);
@@ -36,12 +37,13 @@ export function normalizeLandingPath(value) {
 export function trackingStatus(date) {
   assertDate(date);
   if (date < GA4_COVERAGE_START) return { era_id: 'before_ga4_coverage', platform: 'unknown', traffic_status: 'unavailable', ecommerce_status: 'unavailable', ecommerce_observed: false, ecommerce_reliable: false, comparability: 'unavailable' };
-  if (date < SHOPIFY_ECOMMERCE_OBSERVED_FROM) return { era_id: 'woocommerce_or_shopify_boundary_unresolved', platform: 'woocommerce_or_shopify', traffic_status: 'available', ecommerce_status: 'platform_boundary_unresolved', ecommerce_observed: false, ecommerce_reliable: false, comparability: 'event_evidence_only_boundary_unresolved' };
+  if (date < SHOPIFY_PUBLIC_LAUNCH) return { era_id: 'woocommerce_ga4_historical', platform: 'woocommerce', traffic_status: 'available', ecommerce_status: 'historical_event_evidence', ecommerce_observed: true, ecommerce_reliable: false, comparability: 'within_woocommerce_era_only' };
+  if (date < SHOPIFY_ECOMMERCE_OBSERVED_FROM) return { era_id: 'shopify_traffic_ecommerce_unavailable', platform: 'shopify', traffic_status: 'available', ecommerce_status: 'unavailable_or_incomplete', ecommerce_observed: false, ecommerce_reliable: false, comparability: 'traffic_only' };
   return { era_id: 'shopify_ga4_ecommerce_observed', platform: 'shopify', traffic_status: 'available', ecommerce_status: 'ecommerce_observed_provisional', ecommerce_observed: true, ecommerce_reliable: false, comparability: 'within_provisional_era_only' };
 }
 export const TRACKING_ERAS = Object.freeze([
-  { era_id: 'woocommerce_ga4_historical', platform: 'woocommerce', from_date: GA4_COVERAGE_START, to_date: null, traffic_status: 'available', ecommerce_status: 'historical_evidence_boundary_unresolved', ecommerce_observed: true, ecommerce_reliable: false, comparability: 'within_confirmed_platform_dates_only', evidence_note: 'WooCommerce GA4 ecommerce history exists; the exact WooCommerce to Shopify boundary is unresolved.' },
-  { era_id: 'shopify_traffic_ecommerce_unavailable', platform: 'shopify', from_date: null, to_date: '2026-09-06', traffic_status: 'available', ecommerce_status: 'unavailable_or_incomplete', ecommerce_observed: false, ecommerce_reliable: false, comparability: 'traffic_only', evidence_note: 'Shopify migration was around November 2025, but no exact boundary is asserted. Current Shopify ecommerce events were absent through this date.' },
+  { era_id: 'woocommerce_ga4_historical', platform: 'woocommerce', from_date: GA4_COVERAGE_START, to_date: '2025-11-19', traffic_status: 'available', ecommerce_status: 'historical_event_evidence', ecommerce_observed: true, ecommerce_reliable: false, comparability: 'within_woocommerce_era_only', evidence_note: 'WooCommerce reporting ends 2025-11-19, immediately before the confirmed public Shopify launch.' },
+  { era_id: 'shopify_traffic_ecommerce_unavailable', platform: 'shopify', from_date: SHOPIFY_PUBLIC_LAUNCH, to_date: '2026-09-06', traffic_status: 'available', ecommerce_status: 'unavailable_or_incomplete', ecommerce_observed: false, ecommerce_reliable: false, comparability: 'traffic_only', evidence_note: 'Confirmed public Shopify launch is 2025-11-20. Current Shopify ecommerce events were absent through this date.' },
   { era_id: 'shopify_ga4_ecommerce_observed', platform: 'shopify', from_date: SHOPIFY_ECOMMERCE_OBSERVED_FROM, to_date: null, traffic_status: 'available', ecommerce_status: 'ecommerce_observed_provisional', ecommerce_observed: true, ecommerce_reliable: false, comparability: 'within_provisional_era_only', evidence_note: 'All four current Shopify ecommerce events are observed from this date; tracking is not yet fully reliable.' }
 ]);
 export function rangeCoverage(startDate, endDate) {
