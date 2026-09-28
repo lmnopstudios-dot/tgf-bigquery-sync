@@ -3,10 +3,10 @@ import assert from 'node:assert/strict';
 import {diagnoseCategorySales,sanitizeBigQueryError} from '../diagnostics/category-sales-production.js';
 
 test('production diagnostic runs the exact bounded query and emits reconciled aggregate coverage',async()=>{
-  let call;const common={source_platform:'woo',source_store:'ww',currency:'GBP',monetary_unit:'major_unit',eligible_sales:10,eligible_lines:2,classified_lines:1};
+  let call;const common={source_platform:'woo',source_store:'ww',sales_channel:'Online',currency:'GBP',monetary_unit:'major_unit',eligible_sales:10,eligible_lines:2,classified_lines:1,latest_synced_order_date:'2026-09-25',requested_end_date:'2026-09-28'};
   const rows=['sunglasses','jewellery','other','unclassified'].map((sales_category,index)=>({...common,sales_category,sales:index===0?10:0}));
   const result=await diagnoseCategorySales({project:'p',bigquery:{query:async options=>(call=options,[rows])}});
-  assert.equal(result.ok,true);assert.equal(result.reconciled,true);assert.deepEqual(call.params,{start_date:'2026-01-01',end_date:'2026-09-25'});assert.equal(result.source_currency_groups[0].categories.sunglasses,10);assert.equal(result.trace.query_sha256.length,64);
+  assert.equal(result.ok,true);assert.equal(result.reconciled,true);assert.deepEqual(call.params,{start_date:'2026-01-01',end_date:'2026-09-28'});assert.equal(result.source_currency_channel_groups[0].categories.sunglasses.sales,10);assert.equal(result.source_currency_channel_groups[0].latest_synced_order_date,'2026-09-25');assert.equal(result.trace.query_sha256.length,64);
 });
 
 test('production diagnostic reports only a bounded sanitized BigQuery failure',async()=>{
