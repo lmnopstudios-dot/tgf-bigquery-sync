@@ -4,6 +4,7 @@ import { BigQuery } from '@google-cloud/bigquery';
 import { loadConfig } from '../diagnostics/ga4-access.js';
 import { assertDate, previousDate } from './semantic.js';
 import { backfillChunks, syncGa4 } from './sync.js';
+import { ga4Dataset } from './storage-contract.js';
 
 export function parseBackfillArgs(argv) {
   const value = flag => { const index = argv.indexOf(flag); return index < 0 ? null : argv[index + 1]; };
@@ -16,7 +17,7 @@ export function parseBackfillArgs(argv) {
   if (resumeAfter) assertDate(resumeAfter, 'resume-after');
   const unknown = argv.filter((arg, index) => arg.startsWith('--') && !['--start','--end','--chunk-days','--max-chunks','--resume-after','--dataset'].includes(arg));
   if (unknown.length) throw new Error(`Unknown argument: ${unknown[0]}`);
-  return { startDate, endDate, chunkDays, maxChunks, resumeAfter, dataset: value('--dataset') || 'ga4' };
+  return { startDate, endDate, chunkDays, maxChunks, resumeAfter, dataset: ga4Dataset(value('--dataset') || undefined) };
 }
 
 export function plannedChunks(options) {
