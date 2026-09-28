@@ -2,6 +2,7 @@ import { assertDate, datesBetween } from '../ga4/semantic.js';
 import { datasetLocation } from '../bigquery/dataset-location.js';
 
 export const METRICS = Object.freeze(['sessions', 'sessions_that_completed_checkout', 'conversion_rate', 'sessions_with_cart_additions', 'sessions_that_reached_checkout']);
+export const SHOPIFYQL_DIMENSIONS = Object.freeze({ date: 'day', device: 'session_device_type', source: 'referrer_source' });
 export const SHOPIFY_SESSION_MEASUREMENT_CHANGE = '2026-09-01';
 export const SCHEMA = 'date DATE, device_type STRING, referrer_source STRING, sessions INT64, sessions_that_completed_checkout INT64, conversion_rate FLOAT64, sessions_with_cart_additions INT64, sessions_that_reached_checkout INT64, source_provenance STRING, reporting_timezone STRING, measurement_era STRING, source_cardinality_limited BOOL, synced_at TIMESTAMP';
 const safeId = value => { if (!/^[A-Za-z0-9_-]+$/.test(value)) throw new Error('Invalid BigQuery identifier'); return value; };
@@ -10,12 +11,14 @@ const number = value => Number(value ?? 0);
 
 export function shopifyql(startDate, endDate, withSource = false) {
   assertDate(startDate); assertDate(endDate);
-  return `FROM sessions\nSHOW ${METRICS.join(', ')}\nGROUP BY day, device_type${withSource ? ', referrer_source' : ''}\nWHERE human_or_bot_session = 'human'\nSINCE ${startDate} UNTIL ${endDate}\nORDER BY day ASC`;
+  const { date, device, source } = SHOPIFYQL_DIMENSIONS;
+  return `FROM sessions\nSHOW ${METRICS.join(', ')}\nGROUP BY ${date}, ${device}${withSource ? `, ${source}` : ''}\nWHERE human_or_bot_session = 'human'\nSINCE ${startDate} UNTIL ${endDate}\nORDER BY ${date} ASC`;
 }
 
 export function normalizeRows(rows, { withSource = false, maxSourcesPerDeviceDay = 40, timezone, syncedAt = new Date().toISOString() }) {
   if (!timezone) throw new Error('Shop reporting timezone is required');
-  const normalized = rows.map(row => ({ date: String(row.day || row.date).slice(0, 10), device_type: clean(row.device_type), referrer_source: withSource ? clean(row.referrer_source) : '__all__', ...Object.fromEntries(METRICS.map(m => [m, number(row[m])])), source_provenance: 'ShopifyQL FROM sessions (human sessions)', reporting_timezone: timezone, measurement_era: String(row.day || row.date).slice(0, 10) < SHOPIFY_SESSION_MEASUREMENT_CHANGE ? 'before_2026_09_session_measurement_change' : 'from_2026_09_session_measurement_change', source_cardinality_limited: false, synced_at: syncedAt }));
+  const { date, device, source } = SHOPIFYQL_DIMENSIONS;
+  const normalized = rows.map(row => ({ date: String(row[date]).slice(0, 10), device_type: clean(row[device]), referrer_source: withSource ? clean(row[source]) : '__all__', ...Object.fromEntries(METRICS.map(m => [m, number(row[m])])), source_provenance: 'ShopifyQL FROM sessions (human sessions)', reporting_timezone: timezone, measurement_era: String(row[date]).slice(0, 10) < SHOPIFY_SESSION_MEASUREMENT_CHANGE ? 'before_2026_09_session_measurement_change' : 'from_2026_09_session_measurement_change', source_cardinality_limited: false, synced_at: syncedAt }));
   if (!withSource) return normalized;
   const groups = new Map(); for (const row of normalized) { const key = `${row.date}\0${row.device_type}`; groups.set(key, [...(groups.get(key) || []), row]); } const output = [];
   for (const values of groups.values()) {
