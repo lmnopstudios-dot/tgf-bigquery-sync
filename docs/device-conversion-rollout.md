@@ -6,10 +6,10 @@ The device × channel × source × medium report is separately validated on its 
 
 ## Production gate and commands
 
-Run this **first on Render**. It is a read-only GA4 Data API pilot (at most 24 dates and 100,000 rows per report) and performs no BigQuery writes:
+Run this **first on Render**. It is a read-only GA4 Data API pilot for one Woo date (at most four 1,000-row reports) and performs no BigQuery writes:
 
 ```sh
-npm run diagnose:ga4-purchase-compatibility -- --dates 2022-08-18,2022-09-17
+npm run diagnose:ga4-purchase-compatibility -- --dates 2022-08-18
 ```
 
 The ten production-shaped probe dates are 2022-08-18, 2023-02-15, 2023-08-17, 2023-11-24, 2024-02-15, 2024-08-15, 2024-11-29, 2025-02-13, 2025-08-14, and 2025-11-19. Review signed differences in both directions as diagnostics, plus pagination and API limitation metadata; do not require an exact match.
@@ -23,7 +23,7 @@ npm run backfill:shopify-conversion -- --start 2025-11-20 --end 2025-11-26 --chu
 npm run validate:conversion-history -- --start 2025-11-20 --end 2025-11-26
 ```
 
-Then run the bounded GA4 backfill:
+Only after a real device-level purchase report succeeds (or GA4 explicitly marks it incompatible), consider the bounded GA4 backfill. Do not resume it while the compatibility response is malformed or ambiguous:
 
 ```sh
 npm run backfill:ga4 -- --start 2022-08-18 --end 2025-11-19 --chunk-days 31 --max-chunks 3
