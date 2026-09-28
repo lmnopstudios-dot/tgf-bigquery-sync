@@ -20,7 +20,7 @@ export function diagnosticQuery(project, dataset = ga4Dataset()) {
 ), devices AS (SELECT device FROM UNNEST(['desktop','mobile']) device),
 status_values AS (SELECT status FROM UNNEST(['reportable','limited','unavailable']) status),
 persisted AS (
-  SELECT date,device_category device,COUNT(*) rows,SUM(sessions) sessions,SUM(ecommerce_purchases) ecommerce_purchases
+  SELECT date,device_category device,COUNT(*) AS persisted_rows,SUM(sessions) sessions,SUM(ecommerce_purchases) ecommerce_purchases
   FROM \`${project}.${dataset}.${GA4_DEVICE_TABLE}\`
   WHERE date BETWEEN @startDate AND @endDate AND device_category IN ('desktop','mobile') GROUP BY 1,2
 ), reason_counts AS (
@@ -32,7 +32,7 @@ SELECT d.device,s.status,DATE_DIFF(@endDate,@startDate,DAY)+1 expected_days,
  COUNT(DISTINCT IF(c.status='limited',c.date,NULL)) limited_days,
  COUNT(DISTINCT IF(c.status='unavailable',c.date,NULL)) unavailable_days,
  COUNT(DISTINCT IF(COALESCE(c.status,'missing')=s.status,p.date,NULL)) persisted_conversion_device_days,
- COALESCE(SUM(IF(COALESCE(c.status,'missing')=s.status,p.rows,0)),0) persisted_conversion_device_rows,
+ COALESCE(SUM(IF(COALESCE(c.status,'missing')=s.status,p.persisted_rows,0)),0) persisted_conversion_device_rows,
  COALESCE(SUM(IF(COALESCE(c.status,'missing')=s.status,p.sessions,0)),0) sessions,
  COALESCE(SUM(IF(COALESCE(c.status,'missing')=s.status,p.ecommerce_purchases,0)),0) ecommerce_purchases,
  ARRAY(SELECT AS STRUCT reason,days FROM reason_counts r WHERE r.status=s.status ORDER BY days DESC,reason LIMIT 25) bounded_coverage_reasons

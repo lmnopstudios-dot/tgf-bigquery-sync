@@ -2,6 +2,14 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { diagnose, diagnosticQuery } from '../diagnostics/ga4-backfill-read-path.js';
 
+test('generated diagnostic SQL does not use ROWS as an implicit alias',()=>{
+  const query=diagnosticQuery('p');
+  assert.match(query,/COUNT\(\*\) AS persisted_rows/);
+  assert.match(query,/p\.persisted_rows/);
+  assert.doesNotMatch(query,/COUNT\(\*\)\s+rows\b/i);
+  assert.doesNotMatch(query,/p\.rows\b/i);
+});
+
 test('93-day production diagnostic is read-only, bounded, and confirms the Oracle/write contract',async()=>{
   const calls=[];const bigquery={dataset:()=>({getMetadata:async()=>[{location:'EU'}]}),query:async options=>{calls.push(options);return [[{device:'desktop',status:'limited',expected_days:93,coverage_record_days:93,persisted_conversion_device_days:0}]];}};
   const result=await diagnose({bigquery,project:'p'});
