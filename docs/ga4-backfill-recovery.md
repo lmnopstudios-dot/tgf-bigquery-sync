@@ -1,3 +1,15 @@
+# 2022 device backfill read-path diagnosis
+
+Before resuming after the 18 August–18 November 2022 incident, run this **read-only** Render Shell command first:
+
+```sh
+npm run diagnose:ga4-backfill-read-path
+```
+
+Expected output is JSON with `read_only: true`, the fixed 93-day range, identical `contract.writer` and `contract.oracle` objects (project, configured dataset, metadata-derived location, `conversion_coverage`, `conversion_device`, DATE field `date`, and statuses `reportable`/`limited`/`unavailable`), plus six rows (desktop/mobile × reportable/limited/unavailable). Each row reports expected days, coverage-record and status day counts, persisted device days/rows, sessions, explicitly observed ecommerce purchases, and at most 25 reasons (100 reason groups overall). The query is capped at 1 GB.
+
+Do not resume unless `same_read_write_contract` is true and both desktop and mobile show the required reportable and persisted coverage. A zero purchase total is evidence only when present in persisted same-grain rows; absence of a GA4 numerator row is never zero.
+
 # GA4 historical backfill recovery
 
 The confirmed public launch boundary remains **20 November 2025**: WooCommerce reporting ends on 19 November 2025 and Shopify reporting starts on 20 November 2025.
@@ -8,11 +20,11 @@ First run this bounded, read-only command in a Render Shell. It checks both cand
 npm run diagnose:ga4-purchase-compatibility -- --dates 2022-08-18
 ```
 
-The probe output is the deployment gate: use `ecommercePurchases` only where both `compatibility.compatible` and `execution.succeeded` are true. An explicit `INCOMPATIBLE` is distinct from an unrecognized response, which fails the command. Do not resume historical backfill until a real device-level purchase report succeeds or GA4 explicitly rejects it. `totalPurchasers` is reported independently and is not required for **purchases per session**. Collection makes separate sessions and numerator requests, requires identical observed keys, and publishes no rate at a grain marked `unavailable` or `limited`. In particular, an omitted ecommerce row is not converted to a zero purchase count.
+The probe output is the deployment gate: use `ecommercePurchases` only where both `compatibility.compatible` and `execution.succeeded` are true. An explicit `INCOMPATIBLE` is distinct from an unrecognized response, which fails the command. Do not resume historical backfill until a real device-level purchase report succeeds or GA4 explicitly rejects it. `totalPurchasers` is reported independently and is not required for **purchases per session**. Collection requests sessions and `ecommercePurchases` together at each identical grain and publishes no rate at a grain marked `unavailable` or `limited`. In particular, an omitted ecommerce row is not converted to a zero purchase count.
 
 The diagnostic labels the exact sources of every total. It probes date, date × device, date × device × channel, and date × device × channel × source × medium with separate fresh GA4 API requests—not an old `ga4.daily` BigQuery row. Fresh production results for 18 August are 364 at date and 363 at device, device × channel, and device × channel × source × medium. The first non-reconciling grain is therefore **device**, and the highest reconciling grain is **date**. The missing session must never be assigned to a device or source. It also reports row counts, unknown dimensions, the property reporting timezone, thresholding/data-loss metadata, quota metadata, and whether the 100,000-row bound was reached.
 
-The sync obtains session denominators from sessions-only reports and `ecommercePurchases` from separate numerator reports. It records observed and expected session totals, numerator coverage, a reason, and `reportable`/`limited`/`unavailable` status for device, device × channel, and source detail. Unsupported or key-incomplete device/source rates are not persisted. No unknown session or purchase is invented and no equality check is relaxed.
+The sync obtains each session denominator and `ecommercePurchases` numerator in one combined same-grain response. It records observed and expected session totals, numerator coverage, a reason, and `reportable`/`limited`/`unavailable` status for device, device × channel, and source detail. Unsupported or key-incomplete device/source rates are not persisted. No unknown session or purchase is invented and no equality check is relaxed.
 
 Before a full backfill, run `npm run diagnose:ga4-device-coverage`. This bounded read-only probe samples 10 seasonally spread Woo-era dates, emphasizing 2023–2025, and reports the device reconciliation rate and excluded dates. Sample evidence never makes an unvalidated date reportable.
 

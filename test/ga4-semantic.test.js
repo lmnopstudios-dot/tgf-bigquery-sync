@@ -28,7 +28,7 @@ test('tracking contract separates unavailable, observed zero, and reliability', 
 });
 
 const gaRow = (dims, metrics) => ({ dimensionValues: dims.map(value => ({ value })), metricValues: metrics.map(value => ({ value: String(value) })) });
-function fakeClient({ fail = false, omitDaily = false } = {}) { return { async runReport(request) { if (fail) { const e = new Error('secret token abc'); e.code = 3; throw e; } const dims = request.dimensions.map(d => d.name); const metrics = request.metrics.map(m => m.name); if (dims.join() === 'date') return [{ rows: omitDaily ? [] : [gaRow(['20260907'], [10,8,3,6,.6,20])] }]; if (dims.includes('eventName')) return [{ rows: [gaRow(['20260907','view_item'],[0]), gaRow(['20260907','purchase'],[2])] }]; if (dims.includes('deviceCategory') && dims.includes('sessionDefaultChannelGroup')) return [{ rows: [gaRow(['20260907','mobile','Organic Search','google','organic'], metrics[0]==='ecommercePurchases' ? [2] : [10])] }]; if(dims.join()==='date,deviceCategory')return[{rows:[gaRow(['20260907','mobile'],metrics[0]==='ecommercePurchases'?[2]:[10])]}]; return [{ rows: [gaRow(['20260907', ...dims.slice(1).map(() => '(not set)')], request.metrics.map(() => 1))] }]; } }; }
+function fakeClient({ fail = false, omitDaily = false } = {}) { return { async runReport(request) { if (fail) { const e = new Error('secret token abc'); e.code = 3; throw e; } const dims = request.dimensions.map(d => d.name); const metrics = request.metrics.map(m => m.name); if (dims.join() === 'date') return [{ rows: omitDaily ? [] : [gaRow(['20260907'], [10,8,3,6,.6,20])] }]; if (dims.includes('eventName')) return [{ rows: [gaRow(['20260907','view_item'],[0]), gaRow(['20260907','purchase'],[2])] }]; if (dims.includes('deviceCategory') && dims.includes('sessionDefaultChannelGroup')) return [{ rows: [gaRow(['20260907','mobile','Organic Search','google','organic'], metrics.includes('ecommercePurchases') ? [10,2] : [10])] }]; if(dims.join()==='date,deviceCategory')return[{rows:[gaRow(['20260907','mobile'],metrics.includes('ecommercePurchases')?[10,2]:[10])]}]; return [{ rows: [gaRow(['20260907', ...dims.slice(1).map(() => '(not set)')], request.metrics.map(() => 1))] }]; } }; }
 
 test('collect normalizes responses, represents observed zero, and detects incomplete ranges', async () => {
   const data = await collect({ client: fakeClient(), propertyId:'291532339', startDate:'2026-09-07', endDate:'2026-09-07' });
@@ -38,13 +38,13 @@ test('collect normalizes responses, represents observed zero, and detects incomp
   assert.throws(() => validateCollected({ daily:[], ecommerce_funnel:[], acquisition:[], landing_pages:[], device_geo:[], conversion_breakdown:[] }, '2026-09-07','2026-09-07'), /Incomplete sync/);
 });
 
-test('18 August 2022 joins separate sessions and purchase reports on identical keys', async () => {
+test('18 August 2022 uses an explicit combined sessions and purchase response', async () => {
   const client = { async runReport(request) {
     const dims = request.dimensions.map(d => d.name); const metrics = request.metrics.map(m => m.name);
     if (dims.join() === 'date') return [{ rows: [gaRow(['20220818'], [5,4,2,3,.6,9])] }];
     if (dims.includes('eventName')) return [{ rows: [gaRow(['20220818','purchase'], [1])] }];
     if (dims.includes('deviceCategory') && dims.includes('sessionDefaultChannelGroup')) {
-      if(metrics[0]==='ecommercePurchases')return [{rows:[gaRow(['20220818','desktop','Direct','(direct)','(none)'],[0]),gaRow(['20220818','mobile','Referral','partner','referral'],[1])] }];
+      if(metrics.includes('ecommercePurchases'))return [{rows:[gaRow(['20220818','desktop','Direct','(direct)','(none)'],[5,0]),gaRow(['20220818','mobile','Referral','partner','referral'],[0,1])] }];
       return [{ rows: [gaRow(['20220818','desktop','Direct','(direct)','(none)'], [5]),gaRow(['20220818','mobile','Referral','partner','referral'],[0])] }];
     }
     return [{ rows: [gaRow(['20220818', ...dims.slice(1).map(() => '(not set)')], metrics.map(() => 1))] }];
@@ -73,6 +73,22 @@ test('2022-08-18 independent HLL++ differences remain diagnostics and device row
     {grain:'device_channel_source_medium',status:'reportable',difference:-1}
   ]);
   assert.ok(data.conversion_coverage.every(row=>row.reason.includes('HLL++ approximate distinct counts')));
+});
+
+test('93-day historical collection does not turn omitted numerator-only rows into zero-result coverage',async()=>{
+  const dates=[];for(let d=new Date('2022-08-18T00:00:00Z');d<=new Date('2022-11-18T00:00:00Z');d.setUTCDate(d.getUTCDate()+1))dates.push(d.toISOString().slice(0,10).replaceAll('-',''));
+  const client={async runReport(request){const dims=request.dimensions.map(x=>x.name),metrics=request.metrics.map(x=>x.name);
+    if(dims.join()==='date')return[{rows:dates.map(date=>gaRow([date],[10,8,2,6,.6,20]))}];
+    if(dims.includes('eventName'))return[{rows:[gaRow([dates[0],'purchase'],[1])]}];
+    if(dims.join()==='date,deviceCategory')return[{rows:dates.flatMap((date,index)=>['desktop','mobile'].map((device,i)=>gaRow([date,device],metrics.includes('ecommercePurchases')?[5,index===0&&i===0?1:0]:[5])))}];
+    if(dims.join()==='date,deviceCategory,sessionDefaultChannelGroup')return[{rows:dates.flatMap(date=>[gaRow([date,'desktop','Direct'],[5]),gaRow([date,'mobile','Organic Search'],[5])])}];
+    if(dims.join()==='date,deviceCategory,sessionDefaultChannelGroup,sessionSource,sessionMedium')return[{rows:dates.flatMap((date,index)=>[['desktop','Direct','(direct)','(none)'],['mobile','Organic Search','google','organic']].map((v,i)=>gaRow([date,...v],metrics.includes('ecommercePurchases')?[5,index===0&&i===0?1:0]:[5])))}];
+    return[{rows:dates.map(date=>gaRow([date,...dims.slice(1).map(()=>'/')],metrics.map(()=>1)))}];
+  }};
+  const data=await collect({client,propertyId:'production-shaped',startDate:'2022-08-18',endDate:'2022-11-18'});
+  assert.equal(data.conversion_coverage.filter(row=>row.grain==='device'&&row.status==='reportable').length,93);
+  assert.equal(data.conversion_device.length,186);assert.equal(data.conversion_device.reduce((n,row)=>n+row.ecommerce_purchases,0),1);
+  assert.ok(data.conversion_coverage.every(row=>row.reason.includes('omitted numerator row is never interpreted as zero')));
 });
 
 test('promotion is range-scoped and idempotent rather than destructive', () => {
