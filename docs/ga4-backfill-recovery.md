@@ -2,15 +2,17 @@
 
 The confirmed public launch boundary remains **20 November 2025**: WooCommerce reporting ends on 19 November 2025 and Shopify reporting starts on 20 November 2025.
 
-First run this bounded, read-only command in a Render Shell. It reads one day from the GA4 Data API and does not read or mutate BigQuery:
+First run this bounded, read-only command in a Render Shell. It checks both candidate ecommerce metrics at device and traffic-source grains and executes at most four 1,000-row reports over the two incident-boundary dates. It uses the configured production property and does not read or mutate BigQuery:
 
 ```sh
-npm run diagnose:ga4-session-reconciliation -- --date 2022-08-18
+npm run diagnose:ga4-purchase-compatibility -- --dates 2022-08-18,2022-09-17
 ```
+
+The probe output is the deployment gate: use `ecommercePurchases` only where both `compatibility.compatible` and `execution.available` are true. `totalPurchasers` is reported independently and is not required for **purchases per session**. Collection makes separate sessions and numerator requests, requires identical observed keys, and publishes no rate at a grain marked `unavailable` or `limited`. In particular, an omitted ecommerce row is not converted to a zero purchase count.
 
 The diagnostic labels the exact sources of every total. It probes date, date × device, date × device × channel, and date × device × channel × source × medium with separate fresh GA4 API requests—not an old `ga4.daily` BigQuery row. Fresh production results for 18 August are 364 at date and 363 at device, device × channel, and device × channel × source × medium. The first non-reconciling grain is therefore **device**, and the highest reconciling grain is **date**. The missing session must never be assigned to a device or source. It also reports row counts, unknown dimensions, the property reporting timezone, thresholding/data-loss metadata, quota metadata, and whether the 100,000-row bound was reached.
 
-The sync obtains session denominators from sessions-only reports and ecommerce purchases and purchasers separately. It records observed and expected totals, a reason, and `reportable`/`incomplete` status for device, device × channel, and source detail. On 18 August all three dimensional grains are incomplete, so neither device conversion nor source rows are persisted. No unknown session is invented and no equality check is relaxed.
+The sync obtains session denominators from sessions-only reports and `ecommercePurchases` from separate numerator reports. It records observed and expected session totals, numerator coverage, a reason, and `reportable`/`limited`/`unavailable` status for device, device × channel, and source detail. Unsupported or key-incomplete device/source rates are not persisted. No unknown session or purchase is invented and no equality check is relaxed.
 
 Before a full backfill, run `npm run diagnose:ga4-device-coverage`. This bounded read-only probe samples 10 seasonally spread Woo-era dates, emphasizing 2023–2025, and reports the device reconciliation rate and excluded dates. Sample evidence never makes an unvalidated date reportable.
 

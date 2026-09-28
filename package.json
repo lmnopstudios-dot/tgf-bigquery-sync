@@ -12,6 +12,7 @@
     "diagnose:ga4-coverage": "node diagnostics/ga4-coverage-discovery.js",
     "diagnose:ga4-session-reconciliation": "node diagnostics/ga4-session-reconciliation.js",
     "diagnose:ga4-device-coverage": "node diagnostics/ga4-device-coverage-probe.js",
+    "diagnose:ga4-purchase-compatibility": "node diagnostics/ga4-purchase-compatibility.js",
     "diagnose:ga4-shopify-transition": "node diagnostics/ga4-shopify-transition.js",
     "diagnose:search-console-access": "node diagnostics/search-console-access.js",
     "diagnose:search-console-coverage": "node diagnostics/search-console-coverage.js",
