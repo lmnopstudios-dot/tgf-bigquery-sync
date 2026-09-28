@@ -45,11 +45,17 @@ export function backfillChunks(startDate, endDate, chunkDays = 31) { dateRange(s
 async function retry(fn, attempts = 4) { for (let n = 0; ; n++) { try { return await fn(); } catch (error) { if (n >= attempts - 1 || ![4, 8, 10, 13, 14].includes(Number(error?.code))) throw new Error(`GA4 Data API request failed: ${String(error?.message || error).replace(/-----BEGIN[\s\S]+?END PRIVATE KEY-----/g, '[REDACTED]').slice(0, 500)}`); await new Promise(resolve => setTimeout(resolve, 250 * 2 ** n)); } } }
 export async function checkMetricCompatibility(client, propertyId, dimensions, metric) {
   if (typeof client.checkCompatibility !== 'function') return { compatible: true, checked: false, reason: 'compatibility endpoint unavailable' }; // Test doubles.
-  const [response] = await retry(() => client.checkCompatibility({ property: `properties/${propertyId}`, dimensions: dimensions.map(name => ({ name })), metrics: [{ name: metric }], compatibilityFilter: 'COMPATIBLE' }));
-  const returnedDimensions=new Set((response.dimensions||[]).filter(x=>x.compatibility==='COMPATIBLE'||x.compatibility===1).map(x=>x.dimensionMetadata?.apiName));
-  const returnedMetrics=new Set((response.metrics||[]).filter(x=>x.compatibility==='COMPATIBLE'||x.compatibility===1).map(x=>x.metricMetadata?.apiName));
-  const missing=[...dimensions.filter(x=>!returnedDimensions.has(x)),...(returnedMetrics.has(metric)?[]:[metric])];
-  return { compatible: missing.length===0, checked: true, reason: missing.length ? `GA4 compatibility response did not mark compatible: ${missing.join(', ')}` : 'compatible' };
+  const [response] = await retry(() => client.checkCompatibility({ property: `properties/${propertyId}`, dimensions: dimensions.map(name => ({ name })), metrics: [{ name: metric }] }));
+  return parseCompatibilityResponse(response,dimensions,[metric]);
+}
+const compatibilityName=value=>value==='COMPATIBLE'||value===1?'COMPATIBLE':value==='INCOMPATIBLE'||value===2?'INCOMPATIBLE':null;
+export function parseCompatibilityResponse(response,dimensions,metrics){
+  if(!response||!Array.isArray(response.dimensionCompatibilities)||!Array.isArray(response.metricCompatibilities))throw new Error('GA4 compatibility response shape was not understood: expected dimensionCompatibilities[] and metricCompatibilities[]');
+  const parse=(entries,names,kind)=>names.map(name=>{const matches=entries.filter(entry=>entry?.[`${kind}Metadata`]?.apiName===name);if(matches.length!==1)throw new Error(`GA4 compatibility response shape was not understood: expected one ${kind} compatibility for ${name}`);const compatibility=compatibilityName(matches[0].compatibility);if(!compatibility)throw new Error(`GA4 compatibility response shape was not understood: unknown compatibility enum for ${name}`);return{name,compatibility};});
+  const dimension_compatibilities=parse(response.dimensionCompatibilities,dimensions,'dimension');
+  const metric_compatibilities=parse(response.metricCompatibilities,metrics,'metric');
+  const incompatible=[...dimension_compatibilities,...metric_compatibilities].filter(item=>item.compatibility==='INCOMPATIBLE').map(item=>item.name);
+  return{compatible:incompatible.length===0,checked:true,response_shape_understood:true,dimension_compatibilities,metric_compatibilities,reason:incompatible.length?`GA4 explicitly marked incompatible: ${incompatible.join(', ')}`:'compatible'};
 }
 async function fetchReport(client, propertyId, range, dimensions, metrics, { maxRows, dimensionFilter } = {}) {
   const result = []; const page = 10000; let metadata=null; let advertised=null;
