@@ -18,7 +18,7 @@ import { createOracleUiRouter } from './oracle/ui-router.js';
 import { createEcommerceReportV2 } from './oracle/ecommerce-report-v2.js';
 import { createOracleFinanceService } from './oracle/finance.js';
 import { createProposalGenerator } from './oracle/proposals.js';
-import { createProductMappingService } from './oracle/product-mapping.js';
+import { createProductMappingService, governedDecisionCtes, productFamilyCtes } from './oracle/product-mapping.js';
 import { createCollectionClassificationService } from './oracle/collection-classification.js';
 import { redactError } from './oracle/ui-security.js';
 import { affinityJustified, partialAnswer, requestId, stageOutcome, terminalMessage } from './oracle/request-observability.js';
@@ -149,7 +149,18 @@ const customerOrderIntervalService = createCustomerOrderIntervalService({ bigque
 const onlineCountrySalesService = createOnlineCountrySalesService({ bigquery, project: GOOGLE_PROJECT_ID });
 const deviceSourceConversionService = createDeviceSourceConversionService({ bigquery, project: GOOGLE_PROJECT_ID });
 const categorySalesService = createCategorySalesService({ bigquery, project: GOOGLE_PROJECT_ID });
-const historicalProductOpportunityService=createHistoricalProductOpportunityService({reportProducts:period=>ecommerceReportV2('products',period),loadInventory:()=>getShopifyInventoryByLocation({query:'status:active',location:'Online',limit:25})});
+const historicalProductOpportunityService=createHistoricalProductOpportunityService({
+  reportProducts:period=>ecommerceReportV2('products',period),
+  loadMappings:async()=>{
+    const [rows]=await bigquery.query({query:`WITH ${governedDecisionCtes(GOOGLE_PROJECT_ID)}, ${productFamilyCtes(GOOGLE_PROJECT_ID)}
+      SELECT IF(STARTS_WITH(left_ref,'woo:'),left_ref,right_ref) source_ref,IF(STARTS_WITH(left_ref,'shopify:shopify:'),left_ref,right_ref) shopify_parent_ref,'explicit_governed_mapping' mapping_method,TRUE active
+      FROM governed_active WHERE (STARTS_WITH(left_ref,'woo:') AND STARTS_WITH(right_ref,'shopify:shopify:')) OR (STARTS_WITH(right_ref,'woo:') AND STARTS_WITH(left_ref,'shopify:shopify:'))
+      UNION ALL SELECT source_ref,shopify_parent_ref,'governed_product_family',TRUE FROM family_active`,useLegacySql:false,maximumBytesBilled:'1000000000',labels:{component:'historical_product_opportunity',operation:'approved_mapping_read'}});return rows;
+  },
+  // Fetch each approved parent explicitly. The generic inventory tool's 25 is
+  // an interactive result bound, not a valid population bound for this join.
+  loadInventory:async ids=>{const pages=await mapWithConcurrency(ids,2,id=>getShopifyInventoryByLocation({query:`id:${id}`,location:'Online',limit:1}));return{products:pages.flatMap(page=>page.products)};}
+});
 productMappingService.setup().catch(error => console.error('Product mapping storage setup failed:', redactError(error?.message || error)));
 collectionClassificationService.setup().catch(error => console.error('Collection classification storage setup failed:', redactError(error?.message || error)));
 
