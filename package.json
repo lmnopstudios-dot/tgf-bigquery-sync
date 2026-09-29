@@ -14,6 +14,7 @@
     "diagnose:ga4-device-coverage": "node diagnostics/ga4-device-coverage-probe.js",
     "diagnose:ga4-backfill-read-path": "node diagnostics/ga4-backfill-read-path.js",
     "diagnose:oracle-woo-device-conversion": "node diagnostics/oracle-woo-device-conversion.js",
+    "diagnose:oracle-shopify-launch-device-conversion": "node diagnostics/oracle-shopify-launch-device-conversion.js",
     "diagnose:ga4-purchase-compatibility": "node diagnostics/ga4-purchase-compatibility.js",
     "diagnose:ga4-shopify-transition": "node diagnostics/ga4-shopify-transition.js",
     "diagnose:search-console-access": "node diagnostics/search-console-access.js",
