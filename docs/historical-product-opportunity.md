@@ -41,6 +41,14 @@ Products without a Shopify Online sale row are now retained as observed zero
 sales and can satisfy “weak sales”; they are not discarded before evaluation.
 Inventory is joined at Shopify **product parent** ID, while availability is
 computed only from exact child **variant** inventory at the Online location.
+The join normalizes only Shopify's two representations of that declared parent
+identity: a decimal product ID and `gid://shopify/Product/<id>`. It rejects
+`ProductVariant` GIDs as parent IDs. The diagnostic prints the count after each
+join plus bounded, non-customer identifier examples with their runtime type and
+format, making a GID/numeric or parent/variant mismatch visible without creating
+a match. Its mapping-read contract confirms that identity rows come from the
+same `governed_active` (`approved`) state and family rows from the same
+`family_active` (`active`) state used by Product Mapping.
 Suggested, fuzzy, and deterministic catalogue matches remain a separately
 visible coverage gap: the governance contract for this analysis permits only
 active human-approved identity or reporting-family decisions, so the read path

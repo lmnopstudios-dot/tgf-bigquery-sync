@@ -16,6 +16,9 @@ if(result.coverage?.retrieval?.full_population!==true)failures.push('retrieval i
 if(stages&&stages.complete_three_way_join?.total!==result.coverage.complete_join_candidates)failures.push('complete join count does not reconcile');
 if(stages&&stages.eligible_mappings?.total>(stages.active_identity_mappings?.total+stages.active_reporting_family_mappings?.total))failures.push('eligible mappings exceed active governed mappings');
 if(stages&&stages.mapping_intersect_inventory?.total>stages.mapped_shopify_parent_ids?.total)failures.push('inventory intersection exceeds mapped parents');
+if(stages&&!stages.mapping_intersect_exact_positive_online_stock)failures.push('missing exact Online stocked-variant intersection');
+if(result.coverage?.retrieval?.mapping_read?.same_active_records_as_product_mapping_ui!==true)failures.push('mapping read is not verified against Product Mapping UI active-state resolvers');
+if(!result.coverage?.join_diagnostics?.identifier_examples)failures.push('missing safe typed join identifier examples');
 for(const row of result.rows||[])if(!row.stocked_variants?.some(v=>v.online_available>0)||!row.mapping_provenance?.every(x=>['explicit_governed_mapping','governed_product_family'].includes(x)))failures.push(`invalid ranked row ${row.product_ref||'unknown'}`);
-const diagnostic={diagnostic:'historical_product_opportunity',read_only:true,acceptance_question:HISTORICAL_PRODUCT_QUESTION,valid:failures.length===0,failures,trace:result.trace,stages,join_failure_examples:result.coverage?.join_failure_examples||[],retrieval:result.coverage?.retrieval,windows:result.observation_windows};
+const diagnostic={diagnostic:'historical_product_opportunity',read_only:true,acceptance_question:HISTORICAL_PRODUCT_QUESTION,valid:failures.length===0,failures,trace:result.trace,stages,join_diagnostics:result.coverage?.join_diagnostics,join_failure_examples:result.coverage?.join_failure_examples||[],retrieval:result.coverage?.retrieval,windows:result.observation_windows};
 console.log(JSON.stringify(diagnostic,null,2));if(failures.length)process.exitCode=1;
