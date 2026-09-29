@@ -24,3 +24,25 @@ test('production-shaped approved WW and US mappings retain a stocked zero-Shopif
   const result=buildHistoricalProductOpportunity({wooRows:woo,shopifyRows:[],mappingRows,inventoryProducts:[product('200'),product('300')],wooPeriod:{start_date:'2024-11-20',end_date:'2025-11-19'},shopifyPeriod:{start_date:'2025-11-20',end_date:'2026-09-28'},asOf:'2026-09-28T00:00:00Z'});
   assert.equal(result.coverage.stages.complete_three_way_join.total,2);assert.equal(result.coverage.stages.complete_three_way_join.by_source.ww,2);assert.equal(result.coverage.stages.complete_three_way_join.by_source.usd,1);assert.ok(result.rows.some(x=>x.shopify_units===0));assert.ok(result.coverage.join_failure_examples.some(x=>x.reasons[0].includes('zero Shopify')));
 });
+
+test('joins Product GID mapping refs to GID sales and numeric inventory parents without treating variants as parents',()=>{
+  const result=buildHistoricalProductOpportunity({
+    wooRows:[row('woo','ww',365,7300,{source_product_id:10})],
+    shopifyRows:[row('shopify','shopify',2,100,{source_product_id:'gid://shopify/Product/100'})],
+    mappingRows:[
+      {source_ref:'woo:ww:10',shopify_parent_ref:'shopify:shopify:gid://shopify/Product/100',mapping_method:'explicit_governed_mapping',active:true},
+      {source_ref:'woo:ww:11',shopify_parent_ref:'shopify:shopify:gid://shopify/ProductVariant/999',mapping_method:'explicit_governed_mapping',active:true}
+    ],
+    inventoryProducts:[{id:'gid://shopify/Product/100',title:'Product 100',status:'ACTIVE',tags:[],variants:[{id:'gid://shopify/ProductVariant/1001',availableForSale:true,locations:[{location_name:'Online',available:2}]}]}],
+    wooPeriod:{start_date:'2024-11-20',end_date:'2025-11-19'},shopifyPeriod:{start_date:'2025-11-20',end_date:'2026-09-28'},asOf:'2026-09-28T00:00:00Z'
+  });
+  assert.equal(result.coverage.stages.eligible_mappings.total,1);
+  assert.equal(result.coverage.stages.woo_intersect_eligible_mapping.total,1);
+  assert.equal(result.coverage.stages.mapping_intersect_shopify_sales.total,1);
+  assert.equal(result.coverage.stages.mapping_intersect_exact_positive_online_stock.total,1);
+  assert.equal(result.coverage.stages.approved_mapping_shopify_sales_exact_stock.total,1);
+  assert.equal(result.coverage.stages.complete_three_way_join.total,1);
+  assert.equal(result.coverage.join_diagnostics.identifier_examples.approved_shopify_parent_reference[0].format,'governed_shopify_product_gid_ref');
+  assert.equal(result.coverage.join_diagnostics.identifier_examples.shopify_sales_product_id[0].format,'shopify_product_gid');
+  assert.equal(result.coverage.join_diagnostics.identifier_examples.inventory_variant_id[0].format,'shopify_variant_gid');
+});
