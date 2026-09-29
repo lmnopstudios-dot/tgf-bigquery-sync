@@ -16,3 +16,24 @@ test('validator clearly reports pre-backfill tables as absent without querying t
   assert.deepEqual(result.missing_tables, ['session_conversion_by_device','session_conversion_by_device_source']);
   assert.equal(queried, false);
 });
+
+test('validator uses runtime DATE values and fails closed when physical coverage fields are missing', async () => {
+  let options;
+  const bigquery={
+    dataset:()=>({getMetadata:async()=>[{location:'US'}],table:()=>({exists:async()=>[true]})}),
+    query:async value=>{options=value;return[[{missing_device_days:0,missing_source_days:0}]];}
+  };
+  const result=await runValidation({bigquery,project:'p',start:'2025-11-20',end:'2026-01-14'});
+  assert.equal(options.params.start.constructor.name,'BigQueryDate');
+  assert.equal(options.params.start.value,'2025-11-20');
+  assert.equal(result.decision,'DO_NOT_REPORT');
+  assert.ok(result.failures.includes('duplicate_device_keys'));
+});
+
+test('validator never reports physical missing dates as reportable',async()=>{
+  const checks={duplicate_device_keys:0,duplicate_source_keys:0,impossible_device_funnels:0,impossible_source_funnels:0,source_total_mismatches:0,missing_device_days:56,missing_source_days:56};
+  const bigquery={dataset:()=>({getMetadata:async()=>[{location:'US'}],table:()=>({exists:async()=>[true]})}),query:async()=>[[checks]]};
+  const result=await runValidation({bigquery,project:'p',start:'2025-11-20',end:'2026-01-14'});
+  assert.equal(result.decision,'DO_NOT_REPORT');
+  assert.deepEqual(result.failures,['missing_device_days','missing_source_days']);
+});
