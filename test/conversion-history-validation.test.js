@@ -35,5 +35,13 @@ test('validator never reports physical missing dates as reportable',async()=>{
   const bigquery={dataset:()=>({getMetadata:async()=>[{location:'US'}],table:()=>({exists:async()=>[true]})}),query:async()=>[[checks]]};
   const result=await runValidation({bigquery,project:'p',start:'2025-11-20',end:'2026-01-14'});
   assert.equal(result.decision,'DO_NOT_REPORT');
-  assert.deepEqual(result.failures,['missing_device_days','missing_source_days']);
+  assert.ok(result.failures.includes('missing_device_days'));assert.ok(result.failures.includes('missing_source_days'));
+});
+
+test('production-shaped 1,125/4,085 NULL-date population can never be REPORTABLE',async()=>{
+  const checks={null_device_dates:1125,null_source_dates:4085,in_range_device_rows:0,in_range_source_rows:0,physical_device_days:0,physical_source_days:0,duplicate_device_keys:0,duplicate_source_keys:0,impossible_device_funnels:0,impossible_source_funnels:0,source_total_mismatches:0,missing_device_days:0,missing_source_days:0};
+  const bigquery={dataset:()=>({getMetadata:async()=>[{location:'US'}],table:()=>({exists:async()=>[true]})}),query:async()=>[[checks]]};
+  const result=await runValidation({bigquery,project:'gf-full-data',start:'2025-11-20',end:'2026-09-27'});
+  assert.equal(result.decision,'DO_NOT_REPORT');assert.equal(result.acceptance.valid,false);
+  assert.ok(result.failures.includes('null_device_dates'));assert.ok(result.failures.includes('null_source_dates'));assert.ok(result.failures.includes('in_range_device_rows'));assert.ok(result.failures.includes('physical_device_days'));
 });

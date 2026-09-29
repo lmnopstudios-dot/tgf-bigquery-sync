@@ -8,15 +8,44 @@ The validator now uses the same `BigQueryDate` runtime values as Oracle and fail
 
 The governed exact-question route fixes the two inclusive windows at 25 September–19 November 2025 and 20 November 2025–14 January 2026. Its deterministic response requires desktop and mobile rows with all 56 covered days in both periods. It labels the two different measures `ecommerce purchases per session` and `completed-checkout sessions per session`, and refuses to emit a cross-platform percentage-point change because comparability is not established.
 
-## First read-only Render command
+## Confirmed NULL-date root cause and first read-only Render command
+
+The collection path was correct through ShopifyQL (`GROUP BY day`), GraphQL `tableData.columns/rows` decoding, and normalization to the ISO `date` string. The loss occurred at the final BigQuery array-parameter boundary: rows supplied a JavaScript string while the nested struct field was declared `DATE`. Unlike the project's proven scalar date path, the writer did not wrap each row value with `BigQuery.date(...)`. Production consequently contains 1,125 device rows and 4,085 device/source rows whose physical `date` is NULL.
+
+The writer now validates the raw ShopifyQL day as a real calendar date, validates its requested range, and binds every staged row date as `BigQueryDate`. Promotion assertions run inside the same transaction as both table replacements. New tables declare `date DATE NOT NULL`; every application promotion also rejects a staged or destination NULL date.
 
 Run this first in a Render Shell after deployment:
 
 ```sh
-timeout 120s npm run diagnose:oracle-shopify-launch-device-conversion
+timeout 120s npm run backfill:shopify-conversion -- --mode probe --start 2025-11-20 --end 2025-11-26 --chunk-days 7 --max-chunks 1 --max-sources 40 --timezone Europe/London
 ```
 
-The command is bounded to the exact 56-day post-launch interval, uses a 1 GB cap per query, dry-runs every diagnostic and Oracle-helper query before executing it, and performs no writes. **Do not rerun the completed Shopify backfill.**
+This performs one bounded device-grain ShopifyQL read and creates no BigQuery client, schema, staging table, or write. Its JSON must say `read_only: true`, show range `2025-11-20`–`2025-11-26`, a nonzero `row_count`, and seven distinct entries whose `shopifyql_day` equals `normalized_date`. It emits no customer field and never queries or prints `referrer_source`. Stop if any date is missing, invalid, or outside the chunk.
+
+## Transactional pilot and bounded resume
+
+Only after the probe passes, run the one-chunk pilot. The two expected counts are deliberate guards: the transaction aborts rather than deleting anything if the physical NULL population has changed. In the same transaction it removes exactly the known NULL-date contamination, replaces both tables for the pilot, rejects duplicate keys or any remaining NULL, and compares the ShopifyQL device session/funnel totals with the stored pilot totals.
+
+```sh
+timeout 180s npm run backfill:shopify-conversion -- --mode repair --start 2025-11-20 --end 2025-11-26 --chunk-days 7 --max-chunks 1 --max-sources 40 --expected-null-device 1125 --expected-null-source 4085 --timezone Europe/London
+timeout 120s npm run validate:conversion-history -- --start 2025-11-20 --end 2025-11-26
+```
+
+The pilot is accepted only when it commits one chunk, the validator reports zero NULL dates and duplicate keys, seven independently counted physical dates in each table, nonempty filtered populations, zero device/source funnel mismatch, and `acceptance.valid: true`. The first exact resume invocation is:
+
+```sh
+timeout 300s npm run backfill:shopify-conversion -- --mode repair --start 2025-11-20 --end 2026-09-27 --resume-after 2025-11-26 --chunk-days 7 --max-chunks 4 --max-sources 40 --timezone Europe/London
+```
+
+Each invocation is capped at four seven-day chunks. Run only the exact `next_command` printed by a successful invocation (optionally retaining the shell `timeout 300s` prefix); this advances `--resume-after` without overlap and ends with the shorter final chunk. Never restore the NULL rows or use an unscoped delete.
+
+Completion may be claimed only after the final whole-range, read-only validation:
+
+```sh
+timeout 120s npm run validate:conversion-history -- --start 2025-11-20 --end 2026-09-27
+```
+
+It must report whole-table `null_device_dates: 0` and `null_source_dates: 0`, 312 physical days and nonempty populations in both tables, no duplicate keys, no funnel/source mismatch, `decision: REPORTABLE`, and `acceptance.valid: true`.
 
 ## Production acceptance criteria
 
@@ -36,4 +65,4 @@ The command must exit zero and report all of the following:
 
 If the expected reconciliation is not obtained, stop without writing data. `PHYSICAL_GAP_OR_DIFFERENT_BACKFILL_TARGET` means the configured physical tables genuinely do not contain all 56 dates (the unfiltered/monthly inventory distinguishes an incomplete range from a likely different target); `DATE_BINDING_CONTRADICTION` means the validator and Oracle parameter representations disagree with literal dates; and `ORACLE_FILTER_CONTRADICTION` means physical and binding reads agree but the helper filters the rows out. Only the first result, corroborated against the intended backfill target, can justify planning another backfill.
 
-No acceptance step invokes `backfill:shopify-conversion`.
+The repair does not read or write Woo GA4 history or mappings.
