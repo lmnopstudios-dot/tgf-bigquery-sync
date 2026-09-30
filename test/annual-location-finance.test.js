@@ -26,8 +26,8 @@ test('annual service exposes exact stored rounding difference and reconciles com
   ];
   const calls=[];const service=createAnnualLocationFinanceService({project:'p',bigquery:{query:async options=>{calls.push(options);return[rows];}}});
   const result=await service({start_year:2023,end_year:2026,currency:'GBP'});
-  assert.deepEqual(result.period,{start_date:'2023-01-01',end_date:'2026-09-30',observation_end:'2026-09-30',reporting_timezone:'ledger DATE (upstream reporting timezone must be verified in production metadata)'});
-  assert.equal(result.locations[0].period_label,'2026 YTD through 2026-09-30');
+  assert.deepEqual(result.period,{start_date:'2023-01-01',end_date:'2026-09-24',observation_end:'2026-09-24',reporting_timezone:'ledger DATE (upstream reporting timezone must be verified in production metadata)'});
+  assert.equal(result.locations[0].period_label,'2026 YTD through 2026-09-24');
   assert.equal(result.locations[0].stored_component_difference,0.00002);
   assert.equal(result.reconciliation[0].status,'reconciled');
   assert.equal(calls[0].maximumBytesBilled,ANNUAL_LOCATION_MAX_BYTES);
@@ -54,19 +54,23 @@ test('year boundaries reject future/unordered ranges and completed years end on 
 
 test('Oracle registry routes annual questions and follow-up ranges to the precise finance tool',()=>{
   const tool=createOracleToolDefinitions().find(value=>value.name==='get_annual_sales_by_location');
-  assert.ok(tool);assert.match(tool.description,/net sales excluding recorded tax/);assert.match(tool.description,/2026-09-30/);
+  assert.ok(tool);assert.match(tool.description,/net sales excluding recorded tax/);assert.match(tool.description,/2026-09-24/);
   assert.deepEqual(tool.parameters.properties.start_year,{type:'integer',minimum:2022,maximum:2026});
 });
 
 test('production incident queries explain population, rounding and disputed location without customer data',()=>{
   const queries=incidentQueries('p');
-  assert.deepEqual(Object.keys(queries),['read_path_comparison','location_reconciliation','online_difference','online_cross_classification','rounding','disputed_location','source_tax_coverage','component_breakdown','component_examples','location_channel_population','duplicate_representations','annual_tax_comparison']);
+  assert.deepEqual(Object.keys(queries),['read_path_comparison','location_reconciliation','online_difference','online_cross_classification','rounding','disputed_location','source_tax_coverage','component_breakdown','component_examples','location_channel_population','duplicate_representations','annual_tax_comparison','square_known_records','square_gbp_affected','known_woo_refund']);
   for(const sql of Object.values(queries)){assert.match(sql.trim(),/^(WITH|SELECT)/);assert.doesNotMatch(sql,/email|phone|customer|INSERT|UPDATE|DELETE/i);}
   assert.match(queries.online_difference,/location_minus_channel/);assert.match(queries.rounding,/stored_component_difference/);assert.match(queries.disputed_location,/LIMIT 20/);assert.match(queries.disputed_location,/mapping_provenance/);
   assert.match(queries.component_breakdown,/transaction_type[\s\S]+sales_location[\s\S]+sales_channel/);
   assert.match(queries.component_examples,/ABS\(net_ex_tax-\(gross-tax\)\)>=@material_difference/);
   assert.match(queries.location_channel_population,/bounded_transaction_ids/);
   assert.match(queries.duplicate_representations,/HAVING COUNT\(\*\)>1/);
+  assert.match(queries.square_known_records,/known_square_transaction_ids/);
+  assert.match(queries.square_gbp_affected,/observed_zero_tax_records/);
+  assert.match(queries.square_gbp_affected,/missing_tax_records/);
+  assert.match(queries.known_woo_refund,/'108377'/);
   const comparisonLines=queries.read_path_comparison.split('\n');
   assert.match(comparisonLines[2],/EXTRACT\(YEAR FROM date\) year[\s\S]+\) dimension[\s\S]+GROUP BY year,currency,dimension/);
   assert.match(comparisonLines[3],/EXTRACT\(YEAR FROM date\) year[\s\S]+\) dimension[\s\S]+GROUP BY year,currency,dimension/);
@@ -88,6 +92,8 @@ test('mocked diagnostic preflights every exact statement before any bounded read
   assert.equal(result.retirement_status.square.confirmed_operational_end,null);
   assert.equal(result.statement_manifest.component_examples.typed_bindings.example_limit.type,'INT64');
   assert.equal(result.statement_manifest.shopify_collection_freshness.typed_bindings.shopify_reported_through.value,'2026-09-24');
+  assert.equal(result.collector_assessment.safe_bounded_refresh_available,false);
+  assert.match(result.collector_assessment.first_render_command,/2026-09-25 --end=2026-09-30/);
 });
 
 test('source-native probes keep sales, fulfilment, refunds and freshness distinct',()=>{

@@ -48,7 +48,9 @@ but they must be reconciled before extending the governed ledger contract.
 Sales and refunds use their ledger `date`; refunds therefore remain in the recorded refund period,
 not the original sale year. Dates are typed BigQuery `DATE` parameters. The current incident window
 is **1 January 2022 through 30 September 2026**. Years 2022–2025 are displayed as observed
-calendar-year evidence, while 2026 is labelled **YTD through 30 September 2026**.
+calendar-year evidence. Until collection is repaired and verified, the accountant tool deliberately
+ends and labels 2026 **YTD through the verified coverage date, 24 September 2026**. The requested
+30 September end remains visible in the incident diagnostic and is not misrepresented as coverage.
 
 Earliest/latest evidence is reported for every year/location/currency. Its presence is not a claim
 that 2022 is complete. `tax_evidence_records`, `missing_tax_records`, and `missing_ex_tax_records`
@@ -69,15 +71,22 @@ Each all-location year/currency is compared with the sum of every location row, 
 Reconciliation reports differences for tax-exclusive, recorded-tax, and tax-inclusive amounts.
 Null/incomplete components remain unreconciled rather than being coerced to zero.
 
-## First read-only Render commands
+## Exact first Render command
 
 Run the production diagnostic first on Render. It performs metadata reads, dry-runs **every exact
 statement before the first data read**, and then bounded SELECTs; every statement has a 5 GB billing
 cap. The JSON includes the exact SQL, typed bindings, and metadata-derived dataset location under
 `statement_manifest`.
 
+The first command is the bounded, read-only missing-window check (not a write):
+
 ```bash
-npm run diagnose:annual-location-finance -- --start=2022-01-01 --end=2026-09-30
+npm run diagnose:annual-location-finance -- --start=2026-09-25 --end=2026-09-30 --currency=GBP
+```
+
+Then run the full incident comparison if required:
+
+```bash
 npm run diagnose:annual-location-finance -- --start=2022-01-01 --end=2026-09-30 --currency=GBP --location='Online Ready to Ship'
 ```
 
@@ -110,31 +119,42 @@ The diagnostic:
 12. compares native Shopify order/refund dates and collection timestamps with ledger evidence after
     24 September, while exposing source table/view definitions and partition modification times.
 
-## Current incident assessment
+## Demonstrated incident findings
 
-The production figures supplied with this incident establish component differences, not their
-cause. In particular, 2025 GBP POS (-£12,779.99) and 2026 GBP POS (-£1,099.88) are too large to be
-silently labelled rounding; the +£0.03 and +£0.02 Online differences may be transaction aggregation
-or definition effects, but that remains a hypothesis until `component_breakdown`,
-`component_examples`, and the source fields agree. Stored amounts remain unchanged.
+The two exact Square ledger rows now have a dedicated bounded query:
 
-The supplied 2026 Online figures arithmetically reconcile as £1,280,423.63 less £151,627.16 =
-£1,128,796.47, versus stored £1,128,796.49. This demonstrates the two-pence stored-component
-difference only. It does not demonstrate incorrect tax or authorize replacing stored net-exclusive
-amounts.
+* `yqgPELNp1FBCGPmDIB0FVy5eV`, Shoreditch, 3 January 2022 records £434 gross,
+  £0 recorded tax and £0 stored tax-exclusive;
+* `bnuYSZ4hgC559kktkj74LvneV`, Soho, 21 June 2022 records £520 gross, £20 recorded
+  tax and £100 stored tax-exclusive.
 
-Likewise, the £515 Online sales-location/channel gap is presently a demonstrated population gap,
-not a demonstrated Woo explanation. The new cross-population output must show the exact Woo sale
-and/or refund rows, signs, dates, channel, and location before that explanation can be accepted.
-Draft, disputed, and unknown/unallocated labels remain unchanged.
+Those fields cannot all be additive components: their stored component differences are -£434 and
+-£400 respectively. This is a demonstrated transformation/component-contract defect in the finance
+output, not rounding. The evidence does **not** establish that source-recorded zero tax is wrong, so
+it remains zero and no VAT rate is estimated. `square_gbp_affected` quantifies every positive-gross
+affected GBP row by calendar year and source-recorded location, separately counting SQL null
+(missing) and observed zero for both tax and tax-exclusive evidence. View DDL in the metadata output
+is the authoritative transformation trace; the diagnostic does not guess a raw Square join when no
+governed source-to-ledger identity contract exists.
 
-The £175 transaction is currently known to be attributed by
-`finance.accountant_transactions.location`. The native probe locates transaction
-`gid://shopify/OrderTransaction/8599590666567` inside the persisted Shopify order transaction JSON
-and returns that order's `retail_location_id` and `retail_location_name`. It does not consult the
-configured inventory location `gid://shopify/Location/105063874887`. Until that output and the
-finance view definition demonstrate the transformation, “Online Ready to Ship” remains recorded
-ledger provenance rather than a source-native attribution conclusion.
+WooCommerce UK refund `108377` is also selected exactly. Its -£60 gross, -£9.38 recorded tax and
+-£50.63 stored tax-exclusive produce a -£0.01 stored component difference. It is disclosed as a
+component discrepancy, separately from the material Square defects, rather than automatically
+being labelled rounding.
+
+The £515 Online location/channel difference is explained by three WooCommerce Online records
+totalling -£515 gross and -£54.61 recorded tax. The diagnostic retains their source, signs, dates,
+location, channel and bounded IDs; it does not treat a matching aggregate alone as provenance.
+
+The disputed £175 item is successful Shopify Draft Order #1008 on 16 November 2025. Its persisted
+source-recorded retail location is `Online Ready to Ship`. That label is preserved: fulfilment and
+inventory configuration are neither read nor substituted.
+
+The other supplied production figures establish component differences but not necessarily the
+intended business definition of every upstream field. In particular, 2025 GBP POS (-£12,779.99) and
+2026 GBP POS (-£1,099.88) are too large to be silently labelled rounding. Stored amounts remain
+unchanged while source definitions are resolved. Internal reconciliation is not accountant
+acceptance.
 
 ## Coverage and retirement
 
@@ -154,12 +174,20 @@ recorded refund period.
 
 The application exposes authenticated Shopify and Woo sync routes, while the finance report reads
 BigQuery views. This repository does not contain a Render schedule definition or a separate finance
-materialization refresh job. Consequently a bounded refresh is warranted only if native Shopify
-rows after 24 September exist, their `synced_at` proves collection, the finance ledger lacks the
-corresponding governed rows, and metadata shows the finance object is materialized/stale rather than
-a live view. The reviewable plan is then to refresh only the affected finance build window from 25–30
-September 2026, dry-run its source/ledger identity and refund reconciliation, and obtain approval;
-this diagnostic performs no refresh or rewrite.
+materialization refresh job. The only supported order/refund collector is authenticated `POST
+/sync-shopify`. It has no date arguments or persisted watermark: it fetches all orders, truncates,
+then replaces the location, line, customer, financial and refund tables sequentially. A failure can
+therefore leave a partial multi-table refresh. Invoking it would be the prohibited broad backfill,
+not a bounded 25–30 September refresh.
+
+There is consequently **no safe exact write command to run yet**. After the first diagnostic above,
+inspect `shopify_collection_freshness`, table/view DDL, partition modification times and the Render
+external schedule history. If native rows are still absent, restore or implement an owner-approved,
+atomic bounded collector that selects orders updated in the half-open UTC interval
+`[2026-09-25, 2026-10-01)`, replaces all rows for those stable order IDs (including updated refunds),
+and retains the downstream Matrixify exclusion. Dry-run and reconcile that implementation before
+executing it. Do not invent flags for `/sync-shopify`, run its full replacement, rebuild finance
+first, or reactivate Square collection.
 
 Do not publish the supplied £547,600.56 / £598,406.21 / £561,246.78 annual tax figures or the
 £175 disputed location amount as validated targets. Compare diagnostic output to matching

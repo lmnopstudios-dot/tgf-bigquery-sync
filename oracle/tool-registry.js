@@ -124,7 +124,7 @@ export function createOracleToolDefinitions() {
           type: 'function',
           name: 'get_annual_sales_by_location',
           description:
-            'Answer accountant annual sales-by-location questions from 2022 onward. Returns source-native currency, net sales excluding recorded tax, recorded sales and refund tax, net recorded tax, tax-inclusive amount, evidence coverage and yearly reconciliation. The current year is YTD through 2026-09-30. Recorded tax is evidence, not VAT liability; unavailable tax remains null.',
+            'Answer accountant annual sales-by-location questions from 2022 onward. Returns source-native currency, net sales excluding recorded tax, recorded sales and refund tax, net recorded tax, tax-inclusive amount, evidence coverage and yearly reconciliation. The current verified year is YTD through 2026-09-24; a later requested report end does not imply collection coverage. Recorded tax is evidence, not VAT liability; unavailable tax remains null.',
           parameters: {
             type: 'object',
             properties: {

@@ -1,6 +1,9 @@
 import { bigQueryDateParameters } from '../bigquery/date-parameters.js';
 
-export const ANNUAL_LOCATION_OBSERVATION_END = '2026-09-30';
+// Do not advance this merely because a report requested a later date.  It is
+// the last date for which the incident review verified native Shopify finance
+// collection; advance it only after the bounded freshness checks pass.
+export const ANNUAL_LOCATION_OBSERVATION_END = '2026-09-24';
 export const ANNUAL_LOCATION_MAX_BYTES = 5_000_000_000;
 
 function assertDate(value, name) {
