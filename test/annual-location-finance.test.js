@@ -1,7 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { BigQuery } from '@google-cloud/bigquery';
 import { annualLocationFinanceQuery, createAnnualLocationFinanceService, ANNUAL_LOCATION_MAX_BYTES } from '../oracle/annual-location-finance.js';
-import { diagnose, incidentQueries } from '../diagnostics/annual-location-finance-production.js';
+import { diagnose, incidentQueries, schemaEvidenceQuery } from '../diagnostics/annual-location-finance-production.js';
+import { bigQueryDateParameters } from '../bigquery/date-parameters.js';
+import { datasetLocation } from '../bigquery/dataset-location.js';
 import { createOracleToolDefinitions } from '../oracle/tool-registry.js';
 
 test('annual location SQL preserves recorded components, signs, null evidence and source sales location',()=>{
@@ -58,14 +61,44 @@ test('production incident queries explain population, rounding and disputed loca
   assert.deepEqual(Object.keys(queries),['read_path_comparison','location_reconciliation','online_difference','online_cross_classification','rounding','disputed_location','source_tax_coverage']);
   for(const sql of Object.values(queries)){assert.match(sql.trim(),/^(WITH|SELECT)/);assert.doesNotMatch(sql,/email|phone|customer|INSERT|UPDATE|DELETE/i);}
   assert.match(queries.online_difference,/location_minus_channel/);assert.match(queries.rounding,/stored_component_difference/);assert.match(queries.disputed_location,/LIMIT 20/);assert.match(queries.disputed_location,/mapping_provenance/);
+  const comparisonLines=queries.read_path_comparison.split('\n');
+  assert.match(comparisonLines[2],/EXTRACT\(YEAR FROM date\) year[\s\S]+\) dimension[\s\S]+GROUP BY year,currency,dimension/);
+  assert.match(comparisonLines[3],/EXTRACT\(YEAR FROM date\) year[\s\S]+\) dimension[\s\S]+GROUP BY year,currency,dimension/);
 });
 
-test('diagnostic discovers source schemas and dry-runs every bounded finance query',async()=>{
+test('mocked diagnostic preflights every exact statement before any bounded read',async()=>{
   const calls=[];const bigquery={dataset:name=>({getMetadata:async()=>[{location:name==='shopify_data'?'US':'EU'}]}),query:async options=>{calls.push({kind:'query',...options});return[[]];},createQueryJob:async options=>{calls.push({kind:'dry',...options});return[{}];}};
   const result=await diagnose({bigquery,project:'p'});
   assert.equal(result.read_only,true);assert.equal(result.limitations.fulfilment_inventory_location.toLowerCase().includes('not present'),true);
-  assert.equal(calls.filter(call=>call.kind==='dry').length,Object.keys(incidentQueries('p')).length+1);
+  assert.equal(calls.filter(call=>call.kind==='dry').length,5+Object.keys(incidentQueries('p')).length+1);
+  assert.equal(calls.filter(call=>call.kind==='query').length,5+Object.keys(incidentQueries('p')).length);
+  assert.equal(calls.findIndex(call=>call.kind==='query'),calls.filter(call=>call.kind==='dry').length);
   assert.ok(calls.every(call=>call.maximumBytesBilled===ANNUAL_LOCATION_MAX_BYTES));
   assert.ok(calls.filter(call=>call.kind==='dry').every(call=>call.dryRun===true));
+  assert.ok(calls.filter(call=>call.kind==='dry').some(call=>call.query===annualLocationFinanceQuery('p')));
+  assert.ok(calls.filter(call=>call.kind==='dry').some(call=>call.query===schemaEvidenceQuery('p','finance')));
   assert.equal(result.bindings.start_date.declared_parameter_type,'DATE');
+});
+
+test('mocked preflight failure is bounded, stage-specific, and prevents every read',async()=>{
+  const calls=[];
+  const providerError=Object.assign(new Error('HTTP response with credential=secret and full request'),{name:'ApiError',code:400,errors:[{message:'large provider payload'}]});
+  const bigquery={dataset:()=>({getMetadata:async()=>[{location:'EU'}]}),query:async options=>{calls.push({kind:'query',...options});return[[]];},createQueryJob:async options=>{calls.push({kind:'dry',...options});if(options.labels.operation==='read_path_comparison')throw providerError;return[{}];}};
+  await assert.rejects(diagnose({bigquery,project:'p'}),error=>error.stage==='dry_run:read_path_comparison'&&error.cause_code===400&&error.message==='Annual location finance diagnostic failed during dry_run:read_path_comparison'&&!error.message.includes('credential'));
+  assert.equal(calls.some(call=>call.kind==='query'),false);
+});
+
+test('actual BigQuery validation of every generated annual statement (opt-in, no data reads)',{skip:!process.env.BIGQUERY_SYNTAX_PROJECT},async()=>{
+  const project=process.env.BIGQUERY_SYNTAX_PROJECT;
+  const bigquery=new BigQuery({projectId:project});
+  const financeLocation=await datasetLocation(bigquery,project,'finance',{fallback:'EU'});
+  const params={...bigQueryDateParameters({start_date:'2022-01-01',end_date:'2026-09-30'}),currency:null};
+  const types={start_date:'DATE',end_date:'DATE',currency:'STRING'};
+  const common={params,types,location:financeLocation,useLegacySql:false,maximumBytesBilled:ANNUAL_LOCATION_MAX_BYTES,dryRun:true};
+  for(const [name,query] of Object.entries(incidentQueries(project))) await bigquery.createQueryJob({...common,query,params:name==='disputed_location'?{...params,disputed_location:'Online Ready to Ship'}:params,types:name==='disputed_location'?{...types,disputed_location:'STRING'}:types});
+  await bigquery.createQueryJob({...common,query:annualLocationFinanceQuery(project)});
+  for(const dataset of ['finance','shopify_data','woocommerce_uk','woocommerce_us','square_data']) {
+    const location=await datasetLocation(bigquery,project,dataset,{fallback:'EU'});
+    await bigquery.createQueryJob({query:schemaEvidenceQuery(project,dataset),location,useLegacySql:false,maximumBytesBilled:ANNUAL_LOCATION_MAX_BYTES,dryRun:true});
+  }
 });

@@ -8,14 +8,33 @@ export const INCIDENT_START='2022-01-01';
 export const INCIDENT_END='2026-09-30';
 const DATASETS=['finance','shopify_data','woocommerce_uk','woocommerce_us','square_data'];
 
+export function schemaEvidenceQuery(project,dataset) {
+  return `SELECT table_name,column_name,data_type FROM \`${project}.${dataset}.INFORMATION_SCHEMA.COLUMNS\` WHERE REGEXP_CONTAINS(LOWER(column_name),r'(tax|location|shipping|currency|refund)') ORDER BY table_name,ordinal_position LIMIT 1000`;
+}
+
+function queryFailure(stage,error) {
+  const causeCode=error?.code||error?.name||'QUERY_ERROR';
+  return Object.assign(new Error(`Annual location finance diagnostic failed during ${stage}`),{stage,cause_code:causeCode});
+}
+
+async function dryRun(bigquery,stage,options) {
+  try { await bigquery.createQueryJob({...options,dryRun:true}); }
+  catch(error) { throw queryFailure(`dry_run:${stage}`,error); }
+}
+
+async function read(bigquery,stage,options) {
+  try { return await bigquery.query(options); }
+  catch(error) { throw queryFailure(`query:${stage}`,error); }
+}
+
 export function incidentQueries(project) {
   const table=`\`${project}.finance.accountant_transactions\``;
   const filter=`date BETWEEN @start_date AND @end_date AND (@currency IS NULL OR UPPER(currency)=UPPER(@currency))`;
   return {
     read_path_comparison:`WITH base AS (SELECT * FROM ${table} WHERE ${filter})
       SELECT 'annual_overall' read_path,EXTRACT(YEAR FROM date) year,currency,NULL dimension,SUM(gross) net_amount_including_tax,SUM(tax) observed_recorded_tax,SUM(net_ex_tax) observed_net_ex_tax,COUNT(*) records FROM base GROUP BY year,currency
-      UNION ALL SELECT 'annual_location',EXTRACT(YEAR FROM date),currency,COALESCE(NULLIF(TRIM(location),''),'Unknown / unallocated'),SUM(gross),SUM(tax),SUM(net_ex_tax),COUNT(*) FROM base GROUP BY year,currency,dimension
-      UNION ALL SELECT 'online_channel',EXTRACT(YEAR FROM date),currency,COALESCE(NULLIF(TRIM(source),''),'Unknown / unallocated'),SUM(gross),SUM(tax),SUM(net_ex_tax),COUNT(*) FROM base WHERE LOWER(channel)='online' GROUP BY year,currency,dimension
+      UNION ALL SELECT 'annual_location',EXTRACT(YEAR FROM date) year,currency,COALESCE(NULLIF(TRIM(location),''),'Unknown / unallocated') dimension,SUM(gross),SUM(tax),SUM(net_ex_tax),COUNT(*) FROM base GROUP BY year,currency,dimension
+      UNION ALL SELECT 'online_channel',EXTRACT(YEAR FROM date) year,currency,COALESCE(NULLIF(TRIM(source),''),'Unknown / unallocated') dimension,SUM(gross),SUM(tax),SUM(net_ex_tax),COUNT(*) FROM base WHERE LOWER(channel)='online' GROUP BY year,currency,dimension
       ORDER BY year,currency,read_path,dimension`,
     location_reconciliation:`WITH base AS (SELECT EXTRACT(YEAR FROM date) year,currency,COALESCE(NULLIF(TRIM(location),''),'Unknown / unallocated') location,gross,tax,net_ex_tax FROM ${table} WHERE ${filter}), locations AS (SELECT year,currency,location,SUM(gross) gross,SUM(tax) tax,SUM(net_ex_tax) ex_tax,COUNTIF(tax IS NULL) missing_tax FROM base GROUP BY 1,2,3), overall AS (SELECT year,currency,SUM(gross) gross,SUM(tax) tax,SUM(net_ex_tax) ex_tax,COUNTIF(tax IS NULL) missing_tax FROM base GROUP BY 1,2) SELECT o.*,COUNT(l.location) location_rows,SUM(l.gross)-o.gross gross_difference,IF(o.missing_tax=0 AND SUM(l.missing_tax)=0,SUM(l.tax)-o.tax,NULL) tax_difference,IF(COUNTIF(l.ex_tax IS NULL)=0,SUM(l.ex_tax)-o.ex_tax,NULL) ex_tax_difference FROM overall o JOIN locations l USING(year,currency) GROUP BY ALL ORDER BY year,currency`,
     online_difference:`WITH base AS (SELECT * FROM ${table} WHERE ${filter} AND EXTRACT(YEAR FROM date)=2026), by_channel AS (SELECT currency,SUM(gross) amount FROM base WHERE LOWER(channel)='online' GROUP BY currency), by_location AS (SELECT currency,SUM(gross) amount FROM base WHERE LOWER(COALESCE(location,''))='online' GROUP BY currency) SELECT COALESCE(c.currency,l.currency) currency,c.amount online_channel_amount,l.amount online_location_amount,l.amount-c.amount location_minus_channel FROM by_channel c FULL JOIN by_location l USING(currency)`,
@@ -28,23 +47,27 @@ export function incidentQueries(project) {
 
 export async function diagnose({bigquery,project,start=INCIDENT_START,end=INCIDENT_END,currency=null,disputedLocation='Online Ready to Ship'}) {
   const locations={};
-  for(const dataset of DATASETS) locations[dataset]=await datasetLocation(bigquery,project,dataset,{fallback:'EU'});
-  const schemas={};
-  for(const dataset of DATASETS){
-    const [rows]=await bigquery.query({query:`SELECT table_name,column_name,data_type FROM \`${project}.${dataset}.INFORMATION_SCHEMA.COLUMNS\` WHERE REGEXP_CONTAINS(LOWER(column_name),r'(tax|location|shipping|currency|refund)') ORDER BY table_name,ordinal_position LIMIT 1000`,location:locations[dataset],maximumBytesBilled:ANNUAL_LOCATION_MAX_BYTES,useLegacySql:false,labels:{component:'annual_location_incident',operation:'schema_evidence'}});
-    schemas[dataset]=rows;
-  }
+  for(const dataset of DATASETS) try { locations[dataset]=await datasetLocation(bigquery,project,dataset,{fallback:'EU'}); }
+  catch(error) { throw queryFailure(`dataset_location:${dataset}`,error); }
   const commonParams={...bigQueryDateParameters({start_date:start,end_date:end}),currency};
   const commonTypes={start_date:'DATE',end_date:'DATE',currency:'STRING'};
-  const evidence={};
+  const schemaJobs=Object.fromEntries(DATASETS.map(dataset=>[dataset,{query:schemaEvidenceQuery(project,dataset),location:locations[dataset],maximumBytesBilled:ANNUAL_LOCATION_MAX_BYTES,useLegacySql:false,labels:{component:'annual_location_incident',operation:'schema_evidence'}}]));
+  const evidenceJobs={};
   for(const [name,query] of Object.entries(incidentQueries(project))){
     const disputed=name==='disputed_location';
-    const options={query,params:disputed?{...commonParams,disputed_location:disputedLocation}:commonParams,types:disputed?{...commonTypes,disputed_location:'STRING'}:commonTypes,location:locations.finance,maximumBytesBilled:ANNUAL_LOCATION_MAX_BYTES,useLegacySql:false,labels:{component:'annual_location_incident',operation:name}};
-    await bigquery.createQueryJob({...options,dryRun:true});
-    [evidence[name]]=await bigquery.query(options);
+    evidenceJobs[name]={query,params:disputed?{...commonParams,disputed_location:disputedLocation}:commonParams,types:disputed?{...commonTypes,disputed_location:'STRING'}:commonTypes,location:locations.finance,maximumBytesBilled:ANNUAL_LOCATION_MAX_BYTES,useLegacySql:false,labels:{component:'annual_location_incident',operation:name}};
   }
-  const annualQuery=annualLocationFinanceQuery(project);
-  await bigquery.createQueryJob({query:annualQuery,params:commonParams,types:commonTypes,location:locations.finance,maximumBytesBilled:ANNUAL_LOCATION_MAX_BYTES,useLegacySql:false,dryRun:true,labels:{component:'annual_location_incident',operation:'oracle_exact_path'}});
+  const annualJob={query:annualLocationFinanceQuery(project),params:commonParams,types:commonTypes,location:locations.finance,maximumBytesBilled:ANNUAL_LOCATION_MAX_BYTES,useLegacySql:false,labels:{component:'annual_location_incident',operation:'oracle_exact_path'}};
+
+  // Preflight the complete statement set before the first diagnostic query read.
+  for(const [dataset,options] of Object.entries(schemaJobs)) await dryRun(bigquery,`schema_evidence:${dataset}`,options);
+  for(const [name,options] of Object.entries(evidenceJobs)) await dryRun(bigquery,name,options);
+  await dryRun(bigquery,'oracle_exact_path',annualJob);
+
+  const schemas={};
+  for(const [dataset,options] of Object.entries(schemaJobs)) [schemas[dataset]]=await read(bigquery,`schema_evidence:${dataset}`,options);
+  const evidence={};
+  for(const [name,options] of Object.entries(evidenceJobs)) [evidence[name]]=await read(bigquery,name,options);
   return {diagnostic:'annual_location_finance_incident',read_only:true,pii_free:true,bounded_transaction_ids:20,period:{start,end,observation_end:INCIDENT_END},filters:{currency,disputed_location:disputedLocation},bindings:{start_date:describeDateParameter(commonParams.start_date),end_date:describeDateParameter(commonParams.end_date)},maximum_bytes_billed:ANNUAL_LOCATION_MAX_BYTES,dataset_locations:locations,source_schema_evidence:schemas,limitations:{fulfilment_inventory_location:'Not present in the governed finance projection; no inventory selector is used or substituted.',source_report_validation:'Run matching source-native reports after this diagnostic; this command does not establish accountant acceptance.'},evidence};
 }
 
@@ -55,4 +78,4 @@ async function main(){
   const args=Object.fromEntries(process.argv.slice(2).map(value=>value.replace(/^--/,'').split('=')));
   console.log(JSON.stringify(await diagnose({bigquery:new BigQuery({projectId:project,credentials}),project,start:args.start||INCIDENT_START,end:args.end||INCIDENT_END,currency:args.currency||null,disputedLocation:args.location||'Online Ready to Ship'}),null,2));
 }
-if(import.meta.url===pathToFileURL(process.argv[1]||'').href)main().catch(error=>{console.error(error);process.exitCode=1;});
+if(import.meta.url===pathToFileURL(process.argv[1]||'').href)main().catch(error=>{console.error(JSON.stringify({error:error.message,stage:error.stage||'startup',cause_code:error.cause_code||error.code||error.name||'ERROR'}));process.exitCode=1;});
