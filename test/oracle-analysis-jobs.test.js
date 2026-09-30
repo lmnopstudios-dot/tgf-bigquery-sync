@@ -95,6 +95,27 @@ test('targeted BigQuery claim uses its dataset location, a TIMESTAMP parameter, 
   assert.ok(options.query.indexOf('COMMIT TRANSACTION')<options.query.lastIndexOf('SELECT *'));
 });
 
+test('concurrent claim abort retries boundedly and executes only the winning lease',async()=>{
+  const calls=[];let transactions=0;const dataset={getMetadata:async()=>[{location:'EU'}]};
+  const bigquery={dataset:()=>dataset,query:async options=>{calls.push(options);if(options.query.startsWith('BEGIN TRANSACTION')&&transactions++===0)throw {errors:[{reason:'aborted',message:'Transaction aborted due to concurrent update'}]};if(options.query.startsWith('SELECT *'))return [[{job_id:'job',status:'queued'}]];return [[{job_id:'job',status:'running',attempts:1,lease_until:options.params.lease}]];}};
+  const waits=[],store=createBigQueryAnalysisJobStore({bigquery,project:'p',sleep:async ms=>waits.push(ms)});
+  const claimed=await store.claim({worker_id:'worker',leaseMs:60_000,now:Date.parse('2026-09-30T00:00:00Z'),job_id:'job'});
+  assert.equal(claimed.status,'running');assert.equal(transactions,2);assert.deepEqual(waits,[50]);
+});
+
+test('concurrent claim loser observes another lease and does not execute analysis',async()=>{
+  const dataset={getMetadata:async()=>[{location:'EU'}]};let transactions=0;
+  const bigquery={dataset:()=>dataset,query:async options=>{if(options.query.startsWith('BEGIN TRANSACTION')){transactions++;throw {errors:[{reason:'aborted',message:'concurrent update'}]};}return [[{job_id:'job',status:'running',lease_until:{value:'2026-09-30T00:02:00.000Z'}}]];}};
+  const store=createBigQueryAnalysisJobStore({bigquery,project:'p',sleep:async()=>{}});
+  assert.equal(await store.claim({worker_id:'loser',leaseMs:60_000,now:Date.parse('2026-09-30T00:00:00Z'),job_id:'job'}),null);assert.equal(transactions,1);
+});
+
+test('worker persists tool code and failed stage as a terminal outcome',async()=>{
+  const store=createMemoryAnalysisJobStore([{job_id:'inventory-job',owner_key:'o',request_id:'r',status:'queued',payload_json:{},attempts:0,cancel_requested:false}]);
+  const worker=createAnalysisJobWorker({store,run:async()=>{throw Object.assign(new Error('safe failure'),{code:'ONLINE_LOCATION_NOT_FOUND',failed_stage:'inventory_retrieval'});}});
+  await worker.tick();const job=store.jobs.get('inventory-job');assert.equal(job.status,'failed');assert.equal(job.error_code,'ONLINE_LOCATION_NOT_FOUND');assert.deepEqual(job.result_json,{failed_stage:'inventory_retrieval',code:'ONLINE_LOCATION_NOT_FOUND'});
+});
+
 test('BigQuery query diagnostics expose only bounded redacted message and location',()=>{
   const diagnostic=bigQueryErrorDiagnostic({errors:[{reason:'invalidQuery',location:'query;secret',message:`Value 'customer prompt' cannot be assigned to \`private-project.commerce.jobs\` at [1:415] ${'x'.repeat(500)}`}]});
   assert.equal(diagnostic.reason,'invalidQuery');assert.equal(diagnostic.location,undefined);assert.ok(diagnostic.message.length<=300);assert.match(diagnostic.message,/Value \[redacted\] cannot be assigned to \[redacted\] at \[1:415\]/);assert.doesNotMatch(JSON.stringify(diagnostic),/customer prompt|private-project|secret/);
