@@ -41,7 +41,7 @@ import { CATEGORY_SALES_MAX_BYTES, createCategorySalesService, executeCategorySa
 import { createHistoricalProductOpportunityService } from './oracle/historical-product-opportunity.js';
 import { createProductViewPurchaseService, executeProductViewPurchaseToolCall } from './oracle/product-view-purchase.js';
 import { runWithShopifyThrottle, SHOPIFY_RATE_LIMIT_MESSAGE } from './oracle/shopifyql-throttle.js';
-import { createBatchedInventoryByLocation, inventoryLocationSelector } from './shopify/inventory-by-location.js';
+import { createBatchedInventoryByLocation, inventoryLocationSelector, inventoryLocationSelectorForRequest, listAndResolveInventoryLocations } from './shopify/inventory-by-location.js';
 import { buildOracleInlineChart } from './oracle/inline-charts.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { createBigQueryAnalysisJobStore, ORACLE_JOB_DEFAULTS } from './oracle/analysis-jobs.js';
@@ -159,15 +159,15 @@ const categorySalesService = createCategorySalesService({ bigquery, project: GOO
 const productViewPurchaseService = createProductViewPurchaseService({bigquery});
 const pageviewsPerSessionService=createPageviewsPerSessionService({bigquery,project:GOOGLE_PROJECT_ID,runShopifyql:async(query,reportName)=>runShopifyqlReport(await getShopifyAccessToken(),query,reportName),getShopTimezone:async()=>{const data=await shopifyGraphQL(await getShopifyAccessToken(),'{ shop { ianaTimezone } }');if(!data?.shop?.ianaTimezone)throw new Error('Shopify reporting timezone unavailable');return data.shop.ianaTimezone;}});
 const klaviyoEmailService=createKlaviyoEmailService({bigquery,project:GOOGLE_PROJECT_ID});
-const historicalInventoryLocationSelector=inventoryLocationSelector(process.env);
-console.info('Historical opportunity inventory configuration:',{selector:historicalInventoryLocationSelector,deployed_revision:DEPLOYED_GIT_REVISION||'unavailable'});
+const oracleInventoryLocationSelector=inventoryLocationSelector(process.env);
+console.info('Oracle inventory configuration:',{selector:oracleInventoryLocationSelector,deployed_revision:DEPLOYED_GIT_REVISION||'unavailable'});
 const loadHistoricalCandidateInventory=createBatchedInventoryByLocation({
   graphql:shopifyGraphQL,
   getToken:getShopifyAccessToken,
   // Resolve the selector from the same process environment and contract used
   // by diagnostics. Passing it explicitly prevents this durable path from
   // silently falling back to the default name selector.
-  locationSelector:historicalInventoryLocationSelector,
+  locationSelector:oracleInventoryLocationSelector,
   concurrency:2,
   log:diagnostic=>console.info('Historical opportunity inventory:',diagnostic)
 });
@@ -822,9 +822,8 @@ async function getShopifyInventoryPerformance({
     throw new Error('sort_direction must be one of: asc, desc');
   }
 
-  const locationFilter = location === null || location === undefined
-    ? ''
-    : `WHERE inventory_location_name = ${shopifyqlStringLiteral(location, 'location')}\n`;
+  const resolvedLocation = await resolveOracleInventoryLocation(location);
+  const locationFilter = `WHERE inventory_location_name = ${shopifyqlStringLiteral(resolvedLocation.name, 'location')}\n`;
   const shopifyql = `FROM inventory_by_location
 SHOW ${SHOPIFY_INVENTORY_METRICS.join(', ')}
 ${locationFilter}GROUP BY ${SHOPIFY_INVENTORY_DIMENSIONS.join(', ')}
@@ -847,7 +846,8 @@ LIMIT ${limit}`;
   return {
     start_date,
     end_date,
-    location,
+    location: resolvedLocation.name,
+    resolved_location: { id: resolvedLocation.id, name: resolvedLocation.name },
     sort_by,
     sort_direction,
     limit,
@@ -1604,6 +1604,33 @@ const SHOPIFY_INVENTORY_DISCOVERY_VARIANT_PAGE_SIZE = 20;
 const SHOPIFY_INVENTORY_VARIANT_PAGE_SIZE = 50;
 const SHOPIFY_INVENTORY_LEVEL_PAGE_SIZE = 50;
 
+async function resolveOracleInventoryLocation(requestedLocation, token = null) {
+  const accessToken = token || await getShopifyAccessToken();
+  const selector = inventoryLocationSelectorForRequest(
+    requestedLocation,
+    oracleInventoryLocationSelector
+  );
+  const resolution = await listAndResolveInventoryLocations({
+    selector,
+    call: (query, variables) => shopifyGraphQL(accessToken, query, variables)
+  });
+  if (!resolution.location) {
+    throw Object.assign(
+      new Error('Requested inventory location was not found or is not eligible for online fulfilment'),
+      {
+        code: 'INVENTORY_LOCATION_NOT_FOUND',
+        diagnostic: {
+          selector: resolution.selector,
+          reason: resolution.reason,
+          locations: resolution.locations,
+          truncated: resolution.truncated
+        }
+      }
+    );
+  }
+  return resolution.location;
+}
+
 async function mapWithConcurrency(values, concurrency, mapper) {
   const results = new Array(values.length);
   let next = 0;
@@ -1640,6 +1667,7 @@ const SHOPIFY_INVENTORY_BY_LOCATION_PRODUCTS_QUERY = `
             title
             sku
             availableForSale
+            inventoryPolicy
             inventoryItem {
               id
             }
@@ -1667,6 +1695,7 @@ const SHOPIFY_INVENTORY_BY_LOCATION_VARIANTS_QUERY = `
           title
           sku
           availableForSale
+          inventoryPolicy
           inventoryItem {
             id
           }
@@ -1724,9 +1753,7 @@ async function getShopifyInventoryByLocation({
   }
 
   const token = await getShopifyAccessToken();
-  const normalizedLocation = location === null
-    ? null
-    : location.trim().toLocaleLowerCase();
+  const resolvedLocation = await resolveOracleInventoryLocation(location, token);
   const data = await shopifyGraphQL(
     token,
     SHOPIFY_INVENTORY_BY_LOCATION_PRODUCTS_QUERY,
@@ -1736,7 +1763,6 @@ async function getShopifyInventoryByLocation({
       variantPageSize: SHOPIFY_INVENTORY_DISCOVERY_VARIANT_PAGE_SIZE
     }
   );
-  const activeLocationNames = new Set();
 
   const collectInventoryLevels = async inventoryItem => {
     if (!inventoryItem) {
@@ -1822,19 +1848,15 @@ async function getShopifyInventoryByLocation({
       const levels = await collectInventoryLevels(variant.inventoryItem);
       const activeLevels = levels.filter(level => level.location.isActive);
 
-      for (const level of activeLevels) {
-        activeLocationNames.add(level.location.name.toLocaleLowerCase());
-      }
-
       return {
         id: variant.id,
         title: variant.title,
         sku: variant.sku,
         availableForSale: variant.availableForSale,
+        inventoryPolicy: variant.inventoryPolicy,
         inventory_item_id: variant.inventoryItem?.id ?? null,
         locations: activeLevels
-          .filter(level => normalizedLocation === null ||
-            level.location.name.toLocaleLowerCase() === normalizedLocation)
+          .filter(level => level.location.id === resolvedLocation.id)
           .map(level => ({
             location_id: level.location.id,
             location_name: level.location.name,
@@ -1858,18 +1880,16 @@ async function getShopifyInventoryByLocation({
     });
   }
 
-  const locationFound = normalizedLocation === null
-    ? null
-    : activeLocationNames.has(normalizedLocation);
-
   return {
     query: query.trim(),
     location_filter: location,
-    location_found: locationFound,
-    ...(locationFound === false
-      ? { message: `Location not found: ${location.trim()}` }
-      : {}),
-    products
+    location_found: true,
+    resolved_location: { id: resolvedLocation.id, name: resolvedLocation.name },
+    products,
+    semantics: {
+      ready_to_ship: `The exact available quantity at ${resolvedLocation.name} is finished physical stock ready to ship.`,
+      made_to_order: 'Made-to-order purchasability is separate from ready-to-ship quantity and requires product status, publication, availableForSale, and CONTINUE inventory policy evidence.'
+    }
   };
 }
 
@@ -8320,7 +8340,7 @@ Important rules:
 - The Shopify product tag made-to-order is the sole source of truth for TGF Made-to-Order status. Compare it case-insensitively, and never infer Made-to-Order status from inventory, title, product type, availableForSale or any other heuristic.
 - For a product tagged made-to-order, zero inventory means no positive finished physical stock in that inventory scope, not sold out: the item may still be manufactured to order. Positive inventory is finished physical / ready-to-ship stock. Negative inventory is never negative physical stock and may represent Made-to-Order or backorder demand exceeding finished stock. Never describe an untagged zero-inventory product as Made to Order.
 - availableForSale represents current Shopify purchasability, not proof of physical inventory. Do not call a product or variant sold out solely because inventory is zero when availableForSale is true. Clearly distinguish finished / ready-to-ship stock, Made-to-Order availability and genuine current unavailability.
-- TGF's Online inventory location represents online fulfilment stock: positive inventory there is finished physical ready-to-ship stock, while zero means no finished ready-to-ship stock at Online. For a made-to-order product, zero Online stock does not imply it cannot be purchased. Never call aggregate inventory across Shopify locations Online inventory.
+- TGF's configured online inventory location represents online fulfilment stock: positive inventory there is finished physical ready-to-ship stock, while zero means no finished ready-to-ship stock at that resolved location. Always display the tool's actual resolved_location.name rather than calling it merely "Online". For a made-to-order product, zero ready-to-ship stock does not imply it cannot be purchased: distinguish exact per-variant physical quantities from MTO purchasability and cite availableForSale/inventoryPolicy evidence. Never call aggregate inventory across Shopify locations online inventory.
 - At a named retail location, positive inventory is finished physical stock held there and zero inventory means none is held there. Made-to-Order availability never implies physical availability at a retail store.
 - A missing inventory level is not the same as an explicit available quantity of zero. Never report a requested location as having zero stock when get_shopify_inventory_by_location reports that the location was not found.
 - Before claiming a current location imbalance, use get_shopify_inventory_by_location where practical. Without current location-level evidence, describe imbalance only as a possibility. Stock transfers may be suggested as candidates, not directives, and must account for variant or size identity, Made-to-Order status and sales history or velocity when available.

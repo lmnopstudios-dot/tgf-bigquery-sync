@@ -649,7 +649,7 @@ export function createOracleToolDefinitions() {
   type: 'function',
   name: 'get_shopify_inventory_by_location',
   description:
-    'Get current live available physical inventory for every variant of matched Shopify products, broken down by active inventory location. This is read-only and is not historical or aggregate inventory.',
+    'Get current live available physical inventory for every variant of matched Shopify products at one strictly resolved location. This is read-only and is not historical or aggregate inventory. Always report resolved_location.name.',
   strict: true,
   parameters: {
     type: 'object',
@@ -661,7 +661,7 @@ export function createOracleToolDefinitions() {
       },
       location: {
         type: ['string', 'null'],
-        description: 'Exact location name, matched case-insensitively, or null for every active inventory location.'
+        description: 'Exact non-default location name, or null for the configured online fulfilment location. The legacy value Online also selects that configured location. This never falls back to every location.'
       },
       limit: {
         type: 'integer',

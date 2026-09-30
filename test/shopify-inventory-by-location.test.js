@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createBatchedInventoryByLocation,inventoryLocationSelector,listAndResolveInventoryLocations,resolveInventoryLocation} from '../shopify/inventory-by-location.js';
+import {createBatchedInventoryByLocation,inventoryLocationSelector,inventoryLocationSelectorForRequest,listAndResolveInventoryLocations,resolveInventoryLocation} from '../shopify/inventory-by-location.js';
 
 const product=(id,variants,more=false,cursor=null)=>({id:`gid://shopify/Product/${id}`,title:`P${id}`,handle:`p${id}`,status:'ACTIVE',tags:[],variants:{nodes:variants,pageInfo:{hasNextPage:more,endCursor:cursor}}});
 const variant=i=>({id:`gid://shopify/ProductVariant/${i}`,title:`V${i}`,sku:`S${i}`,availableForSale:true,inventoryItem:{id:`gid://shopify/InventoryItem/${i}`}});
@@ -50,8 +50,26 @@ test('durable server path explicitly propagates the preferred configured locatio
   const selector=inventoryLocationSelector({SHOPIFY_INVENTORY_LOCATION_ID:'gid://shopify/Location/105063874887',SHOPIFY_INVENTORY_LOCATION_NAME:'Online'});
   assert.deepEqual(selector,{type:'id',value:'gid://shopify/Location/105063874887',configured_by:'SHOPIFY_INVENTORY_LOCATION_ID'});
   const source=await import('node:fs/promises').then(fs=>fs.readFile(new URL('../server.js',import.meta.url),'utf8'));
-  assert.match(source,/historicalInventoryLocationSelector=inventoryLocationSelector\(process\.env\)/);
-  assert.match(source,/locationSelector:historicalInventoryLocationSelector/);
+  assert.match(source,/oracleInventoryLocationSelector=inventoryLocationSelector\(process\.env\)/);
+  assert.match(source,/locationSelector:oracleInventoryLocationSelector/);
+});
+
+test('Oracle live and historical readers share the configured selector without all-location fallback',async()=>{
+  const configured=inventoryLocationSelector({SHOPIFY_INVENTORY_LOCATION_ID:'gid://shopify/Location/105063874887'});
+  assert.equal(inventoryLocationSelectorForRequest(null,configured),configured);
+  assert.equal(inventoryLocationSelectorForRequest('Online',configured),configured);
+  assert.deepEqual(inventoryLocationSelectorForRequest('Soho',configured),{type:'exact_name',value:'Soho',configured_by:'request',eligibility:'active'});
+  const source=await import('node:fs/promises').then(fs=>fs.readFile(new URL('../server.js',import.meta.url),'utf8'));
+  assert.match(source,/getShopifyInventoryPerformance[\s\S]+resolveOracleInventoryLocation\(location\)/);
+  assert.match(source,/getShopifyInventoryByLocation[\s\S]+resolveOracleInventoryLocation\(location, token\)/);
+  assert.doesNotMatch(source,/normalizedLocation === null/);
+});
+
+test('Oracle inventory contract reports the resolved name and preserves MTO evidence',async()=>{
+  const source=await import('node:fs/promises').then(fs=>fs.readFile(new URL('../server.js',import.meta.url),'utf8'));
+  assert.match(source,/resolved_location: \{ id: resolvedLocation\.id, name: resolvedLocation\.name \}/);
+  assert.match(source,/inventoryPolicy: variant\.inventoryPolicy/);
+  assert.match(source,/ready_to_ship:[\s\S]+made_to_order:/);
 });
 
 test('exact-name fallback is case-sensitive and never substitutes a similar location',()=>{
@@ -64,6 +82,12 @@ test('inactive and online-ineligible exact identities are rejected with a reason
   const selector={type:'id',value:'L1',configured_by:'test'};
   assert.equal(resolveInventoryLocation([{id:'L1',name:'Online',isActive:false,fulfillsOnlineOrders:true}],selector).reason,'the exact configured location is inactive');
   assert.equal(resolveInventoryLocation([{id:'L1',name:'Online',isActive:true,fulfillsOnlineOrders:false}],selector).reason,'the exact configured location is not eligible to fulfil online orders');
+});
+
+test('an explicit active retail location remains readable without being an online fallback',()=>{
+  const selector=inventoryLocationSelectorForRequest('Soho',{type:'id',value:'configured-online'});
+  const result=resolveInventoryLocation([{id:'retail',name:'Soho',isActive:true,fulfillsOnlineOrders:false}],selector);
+  assert.equal(result.location.name,'Soho');
 });
 
 test('location diagnostic listing is bounded and contains only location metadata',async()=>{
