@@ -42,9 +42,9 @@ export function createKlaviyoClient({apiKey, revision, fetchImpl=fetch, timeoutM
     }
   }
   async function paginate(path,{maxPages=8,maxItems=1000}={}) {
-    const data=[]; let next=path,pages=0;
-    while(next){if(++pages>maxPages)throw Object.assign(new Error(`Klaviyo pagination bound exceeded (${maxPages} pages)`),{code:'PAGINATION_BOUND'});const payload=await request(next);data.push(...(payload?.data||[]));if(data.length>maxItems)throw Object.assign(new Error(`Klaviyo item bound exceeded (${maxItems})`),{code:'ITEM_BOUND'});const link=payload?.links?.next;next=link?new URL(link,KLAVIYO_ORIGIN).pathname+new URL(link,KLAVIYO_ORIGIN).search:null;}
-    return {data,pages,calls};
+    const data=[],included=[]; let next=path,pages=0;
+    while(next){if(++pages>maxPages)throw Object.assign(new Error(`Klaviyo pagination bound exceeded (${maxPages} pages)`),{code:'PAGINATION_BOUND'});const payload=await request(next);data.push(...(payload?.data||[]));included.push(...(payload?.included||[]));if(data.length>maxItems||included.length>maxItems*4)throw Object.assign(new Error(`Klaviyo item bound exceeded (${maxItems})`),{code:'ITEM_BOUND'});const link=payload?.links?.next;next=link?new URL(link,KLAVIYO_ORIGIN).pathname+new URL(link,KLAVIYO_ORIGIN).search:null;}
+    return {data,included,pages,calls};
   }
   return {request,paginate,get callCount(){return calls}};
 }
