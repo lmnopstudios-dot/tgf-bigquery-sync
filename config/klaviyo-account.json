@@ -1,0 +1,29 @@
+{
+  "configuration_version": 1,
+  "account": "production",
+  "timezone": "Europe/London",
+  "currency": "GBP",
+  "approved_metric_ids": ["Xp9amv"],
+  "attribution_settings": {
+    "email_open_window_days": 5,
+    "email_click_window_days": 5,
+    "sms_delivery_window_hours": 12,
+    "sms_click_window_days": 5,
+    "exclude_transactional_messages": false,
+    "exclude_email_bot_clicks": true,
+    "exclude_sms_bot_clicks": true,
+    "exclude_apple_mpp_opens": false
+  },
+  "review": {
+    "reviewed_at": "2026-09-30T00:00:00.000Z",
+    "basis": "August 2026 production pilot and recorded Klaviyo account settings",
+    "change_policy": "A reviewed commit is required for metric or attribution-setting changes"
+  },
+  "refresh_policy": {
+    "rolling_days": 7,
+    "attribution_lag_days": 5,
+    "maximum_manual_days": 92,
+    "maximum_windows_per_run": 3
+  },
+  "permissions": ["campaigns:read", "flows:read", "metrics:read"]
+}

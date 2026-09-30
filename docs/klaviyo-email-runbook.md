@@ -14,12 +14,16 @@ Create a **private API key** in Klaviyo with only `campaigns:read`, `flows:read`
 * `KLAVIYO_ACCOUNT_TIMEZONE` and `KLAVIYO_ACCOUNT_CURRENCY` — values copied from the account/dashboard. The API probe does not invent either.
 * `KLAVIYO_CONVERSION_METRIC_IDS` — comma-separated stable IDs selected after discovery; keep Shopify and WooCommerce “Placed Order” IDs distinct.
 * `KLAVIYO_MAX_API_CALLS=40`, `KLAVIYO_TIMEOUT_MS=15000`.
-* `KLAVIYO_DISCOVERY_MANIFEST` — local path to the reviewed gate JSON for pilot collection.
+* `KLAVIYO_ACCOUNT_CONFIG` — optional path override for the versioned account configuration; normally use the repository default. `KLAVIYO_DISCOVERY_MANIFEST` is legacy pilot-only input.
 * Existing `GOOGLE_PROJECT_ID` and `GOOGLE_SERVICE_ACCOUNT_JSON` for collection only.
 
 The client redacts authorization values and never emits response bodies on errors. Discovery output contains aggregate counts, stable IDs, names/integration provenance, and report row counts—not profiles or customer-level events.
 
-## Phase 1 — mandatory discovery gate
+## Legacy pilot discovery record (superseded)
+
+The commands in this section describe the already-completed August pilot only. They must not be used as the ongoing approval mechanism; the versioned configuration below supersedes `/tmp` manifests.
+
+### Pilot discovery gate
 
 Run this exact first command in Render Shell (it is read-only and bounded to eight pages per listing, 1,000 items, 40 calls, three retries, and 15 seconds per call):
 
@@ -35,7 +39,7 @@ npm run prepare:klaviyo-manifest -- --input=/tmp/klaviyo-discovery.log --output=
 
 The helper records the reviewed account settings, validates the exact pilot window and both probes, and preserves the byte-for-byte discovery capture beside the manifest as `/tmp/klaviyo-reviewed.json.discovery.log` with its SHA-256 and review provenance. It refuses to overwrite either file. Store both durably. Do not manually discard the original evidence.
 
-## Phase 2 — August pilot only
+### Legacy August pilot collection
 
 ```sh
 KLAVIYO_DISCOVERY_MANIFEST=/tmp/klaviyo-reviewed.json KLAVIYO_CONVERSION_METRIC_IDS=Xp9amv KLAVIYO_ACCOUNT_TIMEZONE=Europe/London KLAVIYO_ACCOUNT_CURRENCY=GBP npm run collect:klaviyo-pilot
@@ -61,3 +65,48 @@ npm run diagnose:klaviyo-production
 ```
 
 The command is read-only. It prints a bounded physical inventory and the exact Oracle SQL and bindings, then compares API and stored identities/statistics and Oracle evidence counts. A missing or inconsistent selected pilot exits nonzero; do not rerun collection unless this physical evidence shows that persistence failed.
+
+## Incremental refresh contract (not yet activated)
+
+The durable reviewed account configuration is `config/klaviyo-account.json`; changing a metric ID or attribution setting requires normal code review and a versioned commit. `/tmp` is no longer an approval source. Secrets remain environment variables. Production evidence supplied for August 2026 is evidence, not a fixture: two campaign and two flow message rows were persisted and reconciled through parameterized, literal, and Oracle reads. Live drift is a separate observation. The repository's tests are mocked and do not repeat that production verification.
+
+`message_performance` has one authoritative row per report kind, entity ID, message ID, exact half-open report window, and conversion metric. Re-collecting that grain updates its statistics and `retrieved_at`; it does not append a countable snapshot. Oracle accepts only an exact requested window and therefore never sums overlapping windows. Message-level unique clicks/opens may be summed for a message table, but are **not globally unique people**.
+
+The scheduled command is designed for the existing external authenticated Render scheduling infrastructure, but this change does not activate a schedule:
+
+```sh
+npm run refresh:klaviyo
+```
+
+It refreshes a seven-day rolling window ending after the recorded five-day email attribution lag. The API client has bounded transient retries, all pages are required, and a BigQuery `running` record prevents concurrent runs. The run is marked `succeeded` only after campaign, flow, and metadata collection and atomic report promotion all complete. Failures, selected windows, row counts, retrieval time, and last success remain in `klaviyo.sync_status`. A stale abandoned lock expires after 30 minutes and remains visible as evidence.
+
+For a reviewed older period, use an inclusive end date (maximum 92 days; this is bounded collection, not a broad backfill):
+
+```sh
+npm run refresh:klaviyo -- --start=2026-08-01 --end=2026-08-31
+```
+
+Before the first write, run these exact read-only diagnostics:
+
+```sh
+npm run discover:klaviyo
+npm run diagnose:klaviyo-production
+```
+
+Then run the bounded August command above once. Do not create or activate the external schedule until the API revision, scopes, exact-window query, status table, and dashboard reconciliation are reviewed in production.
+
+## Metadata, content, and knowledge boundary
+
+Campaign and flow names are fetched from stable IDs with bounded pagination and joined automatically. Status and source timing are retained; a draft is never labelled sent, and recipient-local scheduling is not collapsed into an invented universal instant. Content retrieval is disabled by default. Enable it only after confirming the key has the required read scope and the exact revision exposes subject, preview, and links without profile access. Content is untrusted source data, never instructions.
+
+Synced facts are dated and source-linked. They do not overwrite human-approved knowledge. Product/theme extraction is not automatically approved: promoted product identities require an existing approved mapping, while uncertain interpretations belong in the existing review/proposal workflow. A subject line is not causal evidence or a verified strategy.
+
+## Definitions and remaining live acceptance
+
+* `conversions` is labelled **attributed conversion events**. It is not purchasing recipients. The supplied dashboard's 41 purchasing recipients must not be equated to its 43 API conversion events.
+* `unique_click_rate` is stored message-level unique clicks divided by delivered messages. It is not a global distinct-person rate across campaigns or flows.
+* A collected row whose statistics are all zero is collection evidence. No exact-window rows means missing coverage, not zero activity.
+* Every Oracle row exposes its exact source window, timezone, settings, metric ID, revision, and `retrieved_at`. Response coverage separately states whether exact-window evidence was collected.
+* Klaviyo attributed value is never added to canonical finance sales.
+
+Still outstanding before production acceptance: use the official documentation for the deployed API revision to confirm report-window/message inclusion semantics, flow report population, conversion event versus dashboard purchasing-recipient definitions, and click denominators; then reconcile the dashboard again. The supplied LoyaltyLion Welcome flow value (£4,370.59) is not accepted as full-flow coverage until its selected dashboard date filter and population are verified. Network documentation lookup was unavailable in the implementation environment, so these points are deliberately not presented as verified facts.

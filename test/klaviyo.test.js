@@ -63,7 +63,7 @@ test('attribution settings structure is exact',()=>{assert.equal(typeof serializ
 test('manifest preparation extracts JSON from npm output and records provenance',()=>{const source={gate_version:1,pilot:PILOT,timezone:'Europe/London',currency:'GBP',probes:probes('Xp9amv'),approved_for_pilot:false};const raw=`npm notice something\n${JSON.stringify(source,null,2)}\nnpm notice done\n`;assert.deepEqual(extractDiscoveryJson(raw),source);const manifest=prepareManifest(raw,{reviewer:'A Reviewer',reviewedAt:'2026-09-30T12:00:00Z',metricIds:'Xp9amv',evidencePath:'/safe/evidence.log'});assert.equal(manifest.approved_for_pilot,true);assert.equal(manifest.review.source_evidence,'/safe/evidence.log');assert.equal(manifest.review.source_sha256.length,64);});
 test('exact Oracle routes cover all requested questions',()=>{assert.equal(classifyKlaviyoQuestion('How did email campaigns and automated flows perform in August 2026?'),'get_klaviyo_email_performance');assert.equal(classifyKlaviyoQuestion('Which campaigns had strong clicks but weak attributed purchases?'),'get_klaviyo_click_purchase_opportunities');assert.equal(classifyKlaviyoQuestion('Compare Klaviyo with Shopify email-referrer traffic'),'compare_klaviyo_email_with_shopify_referrer');assert.equal(KLAVIYO_TOOL_DEFINITIONS.length,3);});
 test('Oracle retrieval failure remains an error and never fallback zero figures',async()=>{const service=createKlaviyoEmailService({project:'p',bigquery:{query:async()=>{throw new Error('missing')},getDatasets:async()=>[]}});await assert.rejects(service('get_klaviyo_email_performance',{start_date:'2026-08-01',end_date:'2026-08-31'}),e=>e.code==='KLAVIYO_RETRIEVAL_FAILED'&&!/zero performance$/.test(e.message));});
-test('Oracle interprets stored report boundaries in their recorded timezone',()=>{const query=klaviyoAggregateQuery('p');assert.match(query,/DATE\(report_start,reporting_timezone\)>=@start_date/);assert.match(query,/MIN\(DATE\(report_start,reporting_timezone\)\)/);assert.doesNotMatch(query,/DATE\(report_start\)>=/);});
+test('Oracle interprets stored report boundaries in their recorded timezone',()=>{const query=klaviyoAggregateQuery('p');assert.match(query,/DATE\(report_start,reporting_timezone\)=@start_date/);assert.match(query,/MIN\(DATE\(report_start,reporting_timezone\)\)/);assert.doesNotMatch(query,/DATE\(report_start\)>=/);});
 test('production diagnostic inventories physical rows and fails closed on an Oracle contradiction',async()=>{
   const row={report_kind:'campaign',entity_id:'c',message_id:'m',report_start:'2026-07-31T23:00:00.000Z',report_end:'2026-08-31T23:00:00.000Z',conversion_metric_id:'s',reporting_timezone:'Europe/London',...statistics()};let reads=0;
   const bigquery={dataset:()=>({getMetadata:async()=>[{location:'US'}]}),query:async options=>{reads++;if(options.query===inventoryQuery('p'))return [[{report_kind:'campaign',conversion_metric_id:'s',report_start:row.report_start,report_end:row.report_end,reporting_timezone:'Europe/London',row_count:1}]];if(options.query===physicalRowsQuery('p')||options.query===physicalRowsTimestampLiteralQuery('p',row.report_start,row.report_end))return [[row]];return [[[]]];}};
@@ -78,4 +78,31 @@ test('Klaviyo diagnostic reconciles typed and literal reads while treating live 
   const result=await diagnose({bigquery,project:'p',apiRows:[live],timezone:'Europe/London',metricIds:['Xp9amv']});
   assert.equal(result.status,'read_only_diagnostic_passed');assert.equal(result.comparison.live_attribution_statistics_changed,true);assert.equal(result.comparison.identity_consistent,true);assert.equal(result.comparison.binding_control.consistent,true);assert.equal(result.comparison.oracle_statistics.consistent,true);
   const bound=calls.find(call=>call.query===physicalRowsQuery('p'));assert.equal(bound.params.report_start.constructor.name,'BigQueryTimestamp');assert.equal(bound.params.report_end.constructor.name,'BigQueryTimestamp');assert.deepEqual(bound.types,{report_start:'TIMESTAMP',report_end:'TIMESTAMP',reporting_timezone:'STRING',metric_ids:['STRING']});
+});
+
+test('durable account config and bounded windows reject silent drift and broad history',async()=>{
+  const {readFile}=await import('node:fs/promises');
+  const {requireAccountConfig,validateBoundedWindow,rollingWindow}=await import('../klaviyo/sync.js');
+  const config=JSON.parse(await readFile(new URL('../config/klaviyo-account.json',import.meta.url)));
+  assert.equal(requireAccountConfig(config,{timezone:'Europe/London',currency:'GBP',metricIds:['Xp9amv']}),true);
+  assert.throws(()=>requireAccountConfig({...config,attribution_settings:{...config.attribution_settings,unreviewed_setting:true}},{timezone:'Europe/London',currency:'GBP',metricIds:['Xp9amv']}),/invalid attribution_settings structure/);
+  assert.throws(()=>validateBoundedWindow({start:'2020-01-01T00:00:00',end:'2021-01-01T00:00:00'}),/exceeds/);
+  assert.deepEqual(rollingWindow({now:new Date('2026-10-01T12:00:00Z'),timezone:'Europe/London',rollingDays:7,attributionLagDays:5}),{start:'2026-09-20T00:00:00',end:'2026-09-27T00:00:00'});
+});
+
+test('metadata joins stable names without treating drafts as sent',async()=>{
+  const {collectMetadata,joinMetadata}=await import('../klaviyo/metadata.js');
+  const client={paginate:async path=>({data:path.includes('campaigns')?[{id:'c1',attributes:{name:'LoyaltyLion Launch',status:'Draft'}}]:[{id:'f1',attributes:{name:'Welcome',status:'live'}}],included:[]})};
+  const metadata=await collectMetadata({client,retrievedAt:'2026-09-30T00:00:00Z'});
+  assert.equal(metadata[0].is_sent,false);assert.equal(metadata[0].subject,null);
+  assert.equal(joinMetadata([{report_kind:'campaign',entity_id:'c1'}],metadata)[0].entity_name,'LoyaltyLion Launch');
+});
+
+test('exact-window Oracle contract prevents overlapping snapshot double counting',()=>{const sql=klaviyoAggregateQuery('p');assert.match(sql,/DATE\(report_start,reporting_timezone\)=@start_date/);assert.match(sql,/DATE_ADD\(@end_date,INTERVAL 1 DAY\)/);assert.match(sql,/ROW_NUMBER\(\).*retrieved_at DESC/);assert.doesNotMatch(sql,/>=@start_date/);});
+
+test('refresh records failed status and can never report partial collection as success',async()=>{
+  const {runRefresh}=await import('../klaviyo/refresh.js');const queries=[];
+  const bigquery={query:async o=>{queries.push(o);return [[]]}};
+  await assert.rejects(runRefresh({client:{request:async()=>{throw new Error('no')}},bigquery,project:'p',config:{...JSON.parse(await (await import('node:fs/promises')).readFile(new URL('../config/klaviyo-account.json',import.meta.url))),refresh_policy:{rolling_days:7,attribution_lag_days:5,maximum_manual_days:92}},revision:'2026-07-15',args:['--start=2026-08-01','--end=2026-08-31']}));
+  assert.equal(queries.length,2);assert.match(queries[1].query,/status='failed'/);assert.doesNotMatch(queries[1].query,/succeeded/);
 });
