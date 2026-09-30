@@ -30,18 +30,30 @@ requested in bounded batches with bounded concurrency. All batches are
 attempted; if any batch fails, the result discloses incomplete coverage and
 contains no ranked rows or zero-stock/zero-opportunity conclusion.
 
-The first production action is the bounded live diagnostic below. It submits
-the exact acceptance question once and polls its authoritative durable outcome
-for at most eight minutes. It never writes mappings or inventory:
+The first production action is the bounded, read-only location diagnostic below.
+It lists at most 500 Shopify locations with only location ID, name, active status
+and online-fulfilment eligibility. It also prints the configured selector and the
+reason it did or did not resolve. It never reads customer data or prints Shopify
+credentials:
+
+```sh
+render ssh --service <oracle-service> -- npm run diagnose:shopify-inventory-location
+```
+
+This is the exact first Render diagnostic command. Verify that the resolved ID,
+name, active status and `fulfillsOnlineOrders` value identify the actual Online
+fulfilment location before running the opportunity question. If production
+already has `SHOPIFY_LOCATION_ID`, the resolver consumes that existing stable-ID
+contract. `SHOPIFY_INVENTORY_LOCATION_ID` is the inventory-specific override;
+either a numeric ID or a Shopify Location GID is accepted. With neither ID set,
+`SHOPIFY_INVENTORY_LOCATION_NAME` is an exact, case-sensitive name selector and
+defaults to exact `Online`. The resolver never guesses from a similar name.
+
+Only after location verification, submit the exact acceptance question once:
 
 ```sh
 render ssh --service <oracle-service> -- npm run diagnose:historical-product-opportunity -- --url="$RENDER_EXTERNAL_URL"
 ```
-
-This is the exact first Render diagnostic command. Completion proves only that
-the live production path finished, not that its analytical contents are
-correct. Capture its tool result and then use offline `--result` validation to
-reconcile the governed joins and evidence contract.
 
 Do not approve Oracle acceptance until every staged count reconciles and the
 command reports `valid: true`. The output reports WW and US independently for
@@ -90,12 +102,14 @@ supplied capture.
 
 Sales and approved mappings are read first. The complete mapped Woo-sales population sets the historical top-quartile cutoff; weak Shopify sales (including candidates with no Shopify sales row, treated as observed zero sales) then select the only parents sent to live inventory. This preserves the sales ranking population while avoiding inventory calls for products that cannot be returned.
 
-The production inventory helper uses Shopify GraphQL `nodes(ids:)`: one parent request per 20 parents and one inventory-item request per 100 variants. It fully paginates variants beyond 100, locates the exact active `Online` location, bounds concurrency at two, and waits at most once per call for a reported throttle reset only when the remaining deadline permits. Its credential-free aggregate diagnostic reports duration, requested/returned parents, variants, actual network calls by kind, pages, throttle waits, and coverage. It is live data: `inventory_as_of` is emitted, and incomplete coverage produces no ranking and is non-retryable within the analysis.
+The production inventory helper uses Shopify GraphQL `nodes(ids:)`: one parent request per 20 parents and one inventory-item request per 100 variants. It fully paginates variants beyond 100, resolves the configured exact location ID (or exact-name fallback), requires it to be active and eligible to fulfil online orders, bounds concurrency at two, and waits at most once per call for a reported throttle reset only when the remaining deadline permits. Its credential-free aggregate diagnostic reports duration, requested/returned parents, variants, actual network calls by kind, pages, throttle waits, and coverage. It is live data: `inventory_as_of` is emitted, and incomplete coverage produces no ranking and is non-retryable within the analysis.
 
 The exact first Render command is:
 
 ```sh
-render ssh --service <oracle-service> -- npm run diagnose:historical-product-opportunity -- --url="$RENDER_EXTERNAL_URL"
+render ssh --service <oracle-service> -- npm run diagnose:shopify-inventory-location
 ```
 
-This command exercises the same production helper through the exact Oracle question. Mocked tests prove only the batching, pagination, throttling, and failure contracts; they do not establish production success.
+After it verifies the actual Online location, run the historical-product command
+shown above. Mocked tests prove only the selection, batching, pagination,
+throttling, and failure contracts; they do not establish production success.

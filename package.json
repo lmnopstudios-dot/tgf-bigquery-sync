@@ -49,6 +49,7 @@
     "smoke:oracle-job-queue": "node diagnostics/oracle-job-queue-smoke.js",
     "diagnose:oracle-ordinary-claim": "node diagnostics/oracle-ordinary-claim.js",
     "diagnose:historical-product-opportunity": "node diagnostics/historical-product-opportunity-production.js",
+    "diagnose:shopify-inventory-location": "node diagnostics/shopify-inventory-location.js",
     "diagnose:category-sales-production": "node diagnostics/category-sales-production.js",
     "import:metorik-geography": "node metorik/geography.js",
     "validate:metorik-geography": "node diagnostics/metorik-geography-validation.js",
