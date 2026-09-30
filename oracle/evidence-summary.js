@@ -39,7 +39,7 @@ function summaryLines(result){
 
 /** Build a bounded user-facing fallback from already validated aggregate output. */
 export function evidenceSummary(entries,{unavailable=[]}={}){
-  const sections=[],hasValidatedEvidence=entries.some(entry=>entry.result?.success!==false&&!entry.result?.error);
+  const sections=[],hasValidatedEvidence=entries.some(entry=>entry.result?.success!==false&&(!entry.result?.error||entry.result?.partial_candidates?.length));
   for(const entry of entries){
     if(entry.result?.success===false){
       const stage=String(entry.result.failed_stage||'evidence retrieval').replaceAll('_',' '),code=String(entry.result.code||'TOOL_FAILED').slice(0,80);
@@ -58,6 +58,8 @@ export function evidenceSummary(entries,{unavailable=[]}={}){
       for(const row of rows)lines.push(`- **#${row.rank??'?'} ${String(row.product_title||row.product_ref||'Unknown').slice(0,120)}:** Woo ${value(row.woo_units)} units (WW ${JSON.stringify(row.woo_ww||{})}; US ${JSON.stringify(row.woo_us||{})}); Shopify Online ${value(row.shopify_units)} units ${JSON.stringify(row.shopify_online||{})}; velocities ${value(row.woo_units_per_day)} → ${value(row.shopify_units_per_day)} units/day; Online stock ${value(row.online_positive_stock)} across ${JSON.stringify(row.stocked_variants||[])}; mapping ${JSON.stringify(row.mapping_provenance||[])}.`);
       const excluded=(entry.result.excluded_candidates||[]).slice(0,10);
       if(excluded.length){lines.push('#### Excluded sales-qualified candidates');for(const row of excluded)lines.push(`- **${String(row.product_title||'Unknown').slice(0,120)}** (${row.shopify_parent_id}): Woo ${value(row.woo_units)} units / ${value(row.woo_observation_days)} days = ${value(row.woo_units_per_day)}/day; Shopify ${value(row.shopify_units)} units / ${value(row.shopify_observation_days)} days = ${value(row.shopify_units_per_day)}/day; weak when ratio ≤ ${value(row.weakness_threshold_ratio)} — ${row.weakness_result}; variants ${JSON.stringify(row.variants||[])}; mapping ${JSON.stringify(row.mapping_provenance||[])}; made-to-order purchasability ${JSON.stringify(row.made_to_order_purchasability||{status:'unknown'})}; **excluded:** ${(row.exclusion_reasons||[]).join(' ')}`);}
+      const partial=(entry.result.partial_candidates||[]).slice(0,10);
+      if(partial.length){lines.push('#### Sales-qualified candidates (inventory unavailable)');for(const row of partial)lines.push(`- **${row.shopify_parent_id}:** Woo ${value(row.woo_units)} units / ${value(row.woo_observation_days)} days = ${value(row.woo_units_per_day)}/day; Shopify ${value(row.shopify_units)} units / ${value(row.shopify_observation_days)} days = ${value(row.shopify_units_per_day)}/day; mapping ${JSON.stringify(row.mapping_provenance||[])}; Online stock unknown; made-to-order unknown.`);lines.push(`- **Failed stage:** ${String(entry.result.failed_stage||'inventory_retrieval').replaceAll('_',' ')} (${entry.result.code||'OPPORTUNITY_STAGE_FAILED'}; not retryable).`);}
       lines.push(`- **Result count:** ${rows.length} positive-stock opportunities; ${excluded.length} displayed excluded candidates. Candidate inventory coverage complete: ${entry.result.coverage?.retrieval?.candidate_inventory_complete===true?'yes':'not established'}.`);
       sections.push(`### ${LABELS[entry.name]}\n${lines.join('\n')}`);
       continue;
@@ -80,7 +82,7 @@ export function evidenceSummary(entries,{unavailable=[]}={}){
     missing.length?`### Unavailable\n${missing.join(', ')} could not be incorporated into the final analysis.`:'### Unavailable\nThe final comparison and interpretation are unavailable.',
     '### Interpretation boundary\nFigures are reproduced exactly from validated aggregate tool results. No conversion rate, device/channel denominator, cross-platform equivalence, or causal migration trend has been inferred by this fallback.',
     '### Recommendation status\nNo evidence-backed recommendation is claimed because the final synthesis did not complete.',
-    '**Retry:** Please retry this analysis; the background route allows the full evidence and synthesis workflow to run again.'
+    entries.some(entry=>entry.result?.retryable===false)?'**Retry:** The failed stage is non-retryable and was not automatically repeated. Retry only after the reported cause is corrected.':'**Retry:** Please retry this analysis; the background route allows the full evidence and synthesis workflow to run again.'
   ].join('\n\n');
 }
 

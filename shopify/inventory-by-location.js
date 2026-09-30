@@ -3,7 +3,12 @@ const tail=value=>String(value??'').replace(/^shopify:shopify:/,'').replace(/^gi
 const productGid=value=>`gid://shopify/Product/${tail(value)}`;
 const throttled=error=>error?.errors?.find(item=>item?.extensions?.code==='THROTTLED');
 
-const PRODUCTS=`query InventoryProducts($ids:[ID!]!){nodes(ids:$ids){... on Product{id title handle status tags onlineStoreUrl publishedOnCurrentPublication variants(first:100){pageInfo{hasNextPage endCursor}nodes{id title sku availableForSale inventoryPolicy inventoryItem{id}}}}}}`;
+// `publishedOnCurrentPublication` is not present in the Admin API schema used by
+// the deployed 2026-07 endpoint. Keeping it in this otherwise valid operation
+// makes GraphQL reject the whole request before returning any product. Do not
+// substitute a publication claim: the MTO presentation layer treats it as
+// unknown until a publication-scoped query is deliberately implemented.
+export const INVENTORY_PRODUCTS_QUERY=`query InventoryProducts($ids:[ID!]!){nodes(ids:$ids){... on Product{id title handle status tags onlineStoreUrl variants(first:100){pageInfo{hasNextPage endCursor}nodes{id title sku availableForSale inventoryPolicy inventoryItem{id}}}}}}`;
 const VARIANTS=`query InventoryVariants($id:ID!,$cursor:String!){product(id:$id){variants(first:100,after:$cursor){pageInfo{hasNextPage endCursor}nodes{id title sku availableForSale inventoryPolicy inventoryItem{id}}}}}`;
 export const LOCATIONS_QUERY=`query InventoryLocations($cursor:String){locations(first:100,after:$cursor,includeLegacy:true){pageInfo{hasNextPage endCursor}nodes{id name isActive fulfillsOnlineOrders}}}`;
 const LEVELS=`query InventoryLevels($ids:[ID!]!,$location:ID!){nodes(ids:$ids){... on InventoryItem{id inventoryLevel(locationId:$location){quantities(names:["available"]){name quantity}}}}}`;
@@ -55,7 +60,7 @@ export function createBatchedInventoryByLocation({graphql,getToken,locationSelec
     const onlineLocation=resolution.location;
     const products=[];
     const mapConcurrent=async(values,fn)=>{const out=new Array(values.length);let next=0;await Promise.all(Array.from({length:Math.min(concurrency,values.length)},async()=>{while(next<values.length){const i=next++;out[i]=await fn(values[i]);}}));return out;};
-    const parentPages=await mapConcurrent(chunk(parentIds,parentBatchSize),async ids=>{const data=await call(PRODUCTS,{ids:ids.map(productGid)},'parent_batch_calls');stats.pages++;return data.nodes;});
+    const parentPages=await mapConcurrent(chunk(parentIds,parentBatchSize),async ids=>{const data=await call(INVENTORY_PRODUCTS_QUERY,{ids:ids.map(productGid)},'parent_batch_calls');stats.pages++;return data.nodes;});
     for(const product of parentPages.flat().filter(Boolean)){
       const variants=[...product.variants.nodes];let info=product.variants.pageInfo,seen=new Set();
       while(info.hasNextPage){if(!info.endCursor||seen.has(info.endCursor))throw new Error('Invalid Shopify variant pagination cursor');seen.add(info.endCursor);const page=await call(VARIANTS,{id:product.id,cursor:info.endCursor},'variant_page_calls');stats.pages++;if(!page.product)throw new Error('Shopify product disappeared during pagination');variants.push(...page.product.variants.nodes);info=page.product.variants.pageInfo;}
