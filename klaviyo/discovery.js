@@ -8,7 +8,9 @@ export const REPORT_STATISTICS={
   campaign:['recipients','delivered','opens','opens_unique','clicks','clicks_unique','conversions','conversion_value','bounced','unsubscribes','spam_complaints'],
   flow:['recipients','delivered','opens','opens_unique','clicks','clicks_unique','conversions','conversion_value','bounced','unsubscribes','spam_complaints']
 };
-const reportFilter={campaign:`equals(campaigns.channel,'email')`,flow:`equals(flow-actions.action_type,'SEND_EMAIL')`};
+// The 2026-07-15 campaign- and flow-values contracts share this report filter.
+// Do not reuse the campaign-listing messages.channel contract here.
+const reportFilter={campaign:`equals(send_channel,'email')`,flow:`equals(send_channel,'email')`};
 const integration = metric => /woocommerce/i.test(metric.attributes?.integration?.name||metric.attributes?.name||'')?'woocommerce':/shopify/i.test(metric.attributes?.integration?.name||metric.attributes?.name||'')?'shopify':'other_or_unknown';
 export function metricCatalogue(metrics){return metrics.map(m=>({metric_id:m.id,name:m.attributes?.name||null,integration:integration(m)}));}
 function zonedDateTime(value,timezone){

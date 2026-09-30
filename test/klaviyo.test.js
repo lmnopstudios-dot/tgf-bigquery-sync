@@ -29,12 +29,14 @@ test('discovery omits unsupported page size for metrics and flows and follows th
 });
 test('429 retries are bounded and credentials are redacted',async()=>{let calls=0;const client=createKlaviyoClient({apiKey:'pk_secretsecret',revision:'2026-01-15',fetchImpl:async()=>{calls++;return response({},429)},maxRetries:2,sleep:async()=>{}});await assert.rejects(client.request('/api/metrics'),/HTTP 429/);assert.equal(calls,3);assert.equal(redactKlaviyo('Authorization: Klaviyo-API-Key pk_secretsecret'),'Authorization: Klaviyo-API-Key [REDACTED]');});
 test('metric provenance distinguishes integrations and report requires account settings',()=>{assert.deepEqual(metricCatalogue([{id:'s',attributes:{name:'Placed Order',integration:{name:'Shopify'}}},{id:'w',attributes:{name:'Placed Order - WooCommerce'}}]).map(x=>x.integration),['shopify','woocommerce']);assert.throws(()=>reportBody('campaign','s',{}),/timezone/);});
-test('report requests follow each documented report contract',()=>{
+test('campaign report request exactly follows the pinned 2026-07-15 contract',()=>{
   const campaign=reportBody('campaign','Xp9amv',{timezone:'Europe/London'});
-  const flow=reportBody('flow','Xp9amv',{timezone:'Europe/London'});
-  assert.deepEqual(campaign,{data:{type:'campaign-values-report',attributes:{statistics:['recipients','delivered','opens','opens_unique','clicks','clicks_unique','conversions','conversion_value','bounced','unsubscribes','spam_complaints'],timeframe:{start:'2026-08-01T00:00:00+01:00',end:'2026-09-01T00:00:00+01:00'},conversion_metric_id:'Xp9amv',filter:"equals(campaigns.channel,'email')"}}});
-  assert.deepEqual(flow,{data:{type:'flow-values-report',attributes:{statistics:['recipients','delivered','opens','opens_unique','clicks','clicks_unique','conversions','conversion_value','bounced','unsubscribes','spam_complaints'],timeframe:{start:'2026-08-01T00:00:00+01:00',end:'2026-09-01T00:00:00+01:00'},conversion_metric_id:'Xp9amv',filter:"equals(flow-actions.action_type,'SEND_EMAIL')"}}});
+  assert.deepEqual(campaign,{data:{type:'campaign-values-report',attributes:{statistics:['recipients','delivered','opens','opens_unique','clicks','clicks_unique','conversions','conversion_value','bounced','unsubscribes','spam_complaints'],timeframe:{start:'2026-08-01T00:00:00+01:00',end:'2026-09-01T00:00:00+01:00'},conversion_metric_id:'Xp9amv',filter:"equals(send_channel,'email')"}}});
   assert.equal(Object.hasOwn(campaign.data.attributes.timeframe,'key'),false);
+});
+test('flow report request exactly follows the pinned 2026-07-15 contract',()=>{
+  const flow=reportBody('flow','Xp9amv',{timezone:'Europe/London'});
+  assert.deepEqual(flow,{data:{type:'flow-values-report',attributes:{statistics:['recipients','delivered','opens','opens_unique','clicks','clicks_unique','conversions','conversion_value','bounced','unsubscribes','spam_complaints'],timeframe:{start:'2026-08-01T00:00:00+01:00',end:'2026-09-01T00:00:00+01:00'},conversion_metric_id:'Xp9amv',filter:"equals(send_channel,'email')"}}});
   assert.equal(Object.hasOwn(flow.data.attributes.timeframe,'key'),false);
 });
 test('JSON:API validation errors are bounded and redact request secrets',async()=>{
