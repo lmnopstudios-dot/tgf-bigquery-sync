@@ -102,7 +102,7 @@ export function createOracleToolDefinitions() {
           type: 'function',
           name: 'get_sales_by_location',
           description:
-            'Get TGF sales totals grouped by retail location for a date range.',
+            'Get legacy tax-inclusive ledger totals grouped by source-recorded sales location for one date range. For annual accountant sales and recorded-tax questions, use get_annual_sales_by_location.',
           parameters: {
             type: 'object',
             properties: {
@@ -118,6 +118,21 @@ export function createOracleToolDefinitions() {
               }
             },
             required: ['start_date', 'end_date']
+          }
+        },
+        {
+          type: 'function',
+          name: 'get_annual_sales_by_location',
+          description:
+            'Answer accountant annual sales-by-location questions from 2022 onward. Returns source-native currency, net sales excluding recorded tax, recorded sales and refund tax, net recorded tax, tax-inclusive amount, evidence coverage and yearly reconciliation. The current year is YTD through 2026-09-30. Recorded tax is evidence, not VAT liability; unavailable tax remains null.',
+          parameters: {
+            type: 'object',
+            properties: {
+              start_year: { type: 'integer', minimum: 2022, maximum: 2026 },
+              end_year: { type: 'integer', minimum: 2022, maximum: 2026 },
+              currency: { type: ['string','null'], enum: ['GBP','USD','JPY',null] }
+            },
+            required: []
           }
         },
         {
