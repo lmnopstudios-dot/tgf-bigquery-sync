@@ -8,9 +8,9 @@ The validator now uses the same `BigQueryDate` runtime values as Oracle and fail
 
 The governed exact-question route fixes the two inclusive windows at 25 September–19 November 2025 and 20 November 2025–14 January 2026. Its deterministic response requires desktop and mobile rows with all 56 covered days in both periods. It labels the two different measures `ecommerce purchases per session` and `completed-checkout sessions per session`, and refuses to emit a cross-platform percentage-point change because comparability is not established.
 
-## Confirmed NULL-date root cause and first read-only Render command
+## Suspected NULL-date path and first read-only Render command
 
-The collection path was correct through ShopifyQL (`GROUP BY day`), GraphQL `tableData.columns/rows` decoding, and normalization to the ISO `date` string. The loss occurred at the final BigQuery array-parameter boundary: rows supplied a JavaScript string while the nested struct field was declared `DATE`. Unlike the project's proven scalar date path, the writer did not wrap each row value with `BigQuery.date(...)`. Production consequently contains 1,125 device rows and 4,085 device/source rows whose physical `date` is NULL.
+Earlier production evidence established correct staged dates and funnel totals but found no rows through the stored parameter-window query. That is not, by itself, a funnel-total mismatch and does not distinguish a failed insert projection from an incorrectly bound range predicate. Historical NULL-date populations make the array-parameter boundary a suspected path, not a demonstrated cause for this run. Do not repair from that inference alone.
 
 The writer now validates the raw ShopifyQL day as a real calendar date, validates its requested range, and binds every staged row date as `BigQueryDate`. Promotion assertions run inside the same transaction as both table replacements. New tables declare `date DATE NOT NULL`; every application promotion also rejects a staged or destination NULL date.
 
@@ -28,7 +28,9 @@ After deploying, run the rollback diagnostic over the same seven-day scope:
 timeout 180s npm run backfill:shopify-conversion -- --mode diagnose --start 2025-11-20 --end 2025-11-26 --chunk-days 7 --max-chunks 1 --max-sources 40 --expected-null-device 1125 --expected-null-source 4085 --timezone Europe/London
 ```
 
-Both its schema query and diagnostic script are capped at 100 MiB (104,857,600 bytes). The script exercises the replacement and captures bounded aggregate/difference evidence, but explicitly rolls back before returning it. This diagnostic does not repair the tables, and a successful run does not establish that the underlying stored-total mismatch is fixed.
+Both its schema query and diagnostic script are capped at 100 MiB (104,857,600 bytes). The output includes the destination schema, explicit insert column/select projections, encoded `@start`/`@end` and representative encoded rows. For each table the script records `@@row_count` immediately after the insert, then compares an unfiltered post-insert inventory with both the parameter-filtered window and an independently generated `DATE`-literal window. Representative staged/stored `date` and `synced_at` values plus per-column NULL counts keep timestamp handling separate from date preservation. The script explicitly rolls back on success and in its exception handler. This diagnostic does not repair the tables.
+
+Interpret the paths before changing the writer: a correct affected-row count plus rows in the literal window but none in the parameter window demonstrates range-binding failure; affected rows that appear unfiltered with NULL or altered dates demonstrate value preservation failure; an affected-row count below the staged count demonstrates insertion failure. A NULL `synced_at` with preserved dates is separate timestamp evidence and must not be used to explain date filtering. Stop if the evidence does not select exactly one path.
 
 ## Transactional pilot and bounded resume
 
