@@ -13,7 +13,7 @@ export function plan(options){const start=options.resumeAfter?next(options.resum
 export function decode(tableData){const names=tableData?.columns?.map(c=>c.name)||[];return (tableData?.rows||[]).map(row=>Array.isArray(row)?Object.fromEntries(names.map((name,index)=>[name,row[index]])):row);}
 export async function pagedQuery({ chunk, query, withSource, pageSize = 1000, maxPages = 10 }) { const all=[]; for(let page=0;page<maxPages;page++){const data=await query(shopifyql(chunk.startDate,chunk.endDate,withSource,{limit:pageSize,offset:page*pageSize}));const rows=data?.rows||[];all.push(...rows);if(rows.length<pageSize)return{...data,rows:all,pagination:{page_size:pageSize,pages:page+1,complete:true}};}throw new Error(`ShopifyQL pagination exceeded ${maxPages} pages`); }
 export async function probeQueries({chunk,query}) { return Promise.all([false,true].map(withSource=>pagedQuery({chunk,query,withSource}))); }
-function resumeCommand(options,resumeAfter){return `npm run backfill:shopify-conversion -- --start ${options.startDate} --end ${options.endDate} --resume-after ${resumeAfter} --chunk-days ${options.chunkDays} --max-chunks ${options.maxChunks} --max-sources ${options.maxSources} --timezone ${options.timezone}`;}
+function resumeCommand(options,resumeAfter){const args=[`--mode ${options.mode}`,`--start ${options.startDate}`,`--end ${options.endDate}`];if(resumeAfter)args.push(`--resume-after ${resumeAfter}`);args.push(`--chunk-days ${options.chunkDays}`,`--max-chunks ${options.maxChunks}`,`--max-sources ${options.maxSources}`,`--timezone ${options.timezone}`);if(options.expectedNullRows){args.push(`--expected-null-device ${options.expectedNullRows.device}`,`--expected-null-source ${options.expectedNullRows.source}`);}return `npm run backfill:shopify-conversion -- ${args.join(' ')}`;}
 export function probeEvidence(tableData, chunk) { const rows=decode(tableData); return {diagnostic:'shopify_conversion_day_probe',read_only:true,range:{start:chunk.startDate,end:chunk.endDate},row_count:rows.length,days:[...new Set(rows.map(row=>row.day))].map(shopifyql_day=>({shopifyql_day,normalized_date:normalizeShopifyDay(shopifyql_day)}))}; }
 export class ShopifyConversionValidationError extends Error { constructor(report){super('Shopify conversion chunk validation failed');this.name='ShopifyConversionValidationError';this.report=report;} }
 export async function runBackfill({ options, query, bigquery }) {
@@ -29,7 +29,9 @@ export async function runBackfill({ options, query, bigquery }) {
       if(missing.device.length||missing.device_source.length) throw new Error('Incomplete Shopify conversion dates');
       await replaceChunk({bigquery,project:options.project,dataset:options.dataset,deviceRows:total,sourceRows:source,expectedNullRows:index===0?options.expectedNullRows:undefined,...chunk}); completed.push(chunk);
     } catch(error) {
-      const resumeAfter=completed.at(-1)?.endDate||options.resumeAfter||options.startDate;
+      // A cursor means "this date committed".  Never manufacture one from the
+      // requested start when the first transaction rolled back.
+      const resumeAfter=completed.at(-1)?.endDate||options.resumeAfter||null;
       throw new ShopifyConversionValidationError({diagnostic:'shopify_conversion_chunk_validation',error:error.message,committed_chunks:completed,failed_chunk:chunk,duplicate_identities:[...duplicateDiagnostics(totalRows,{timezone:options.timezone}),...duplicateDiagnostics(sourceRows,{withSource:true,maxSourcesPerDeviceDay:options.maxSources,timezone:options.timezone})],resume_after:resumeAfter,next_command:resumeCommand(options,resumeAfter)});
     }
   }
