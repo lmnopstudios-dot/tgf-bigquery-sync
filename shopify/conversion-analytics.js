@@ -131,15 +131,40 @@ ASSERT (${groupedMismatchCount('deviceRows', `\`${project}.${dataset}.session_co
 ASSERT (${groupedMismatchCount('sourceRows', `\`${project}.${dataset}.session_conversion_by_device_source\``)}) = 0 AS 'stored source date/device totals differ from ShopifyQL';
 COMMIT TRANSACTION;`,params,types:{start:'DATE',end:'DATE',deviceRows:[structType],sourceRows:[structType],purgeNulls:'BOOL',expectedNullDevice:'INT64',expectedNullSource:'INT64'}}); }
 
-const diagnosticAggregate = relation => `SELECT AS STRUCT COUNT(*) row_count, MIN(date) min_date, MAX(date) max_date, STRUCT(${COLUMNS.map(column => `COUNTIF(${column} IS NULL) ${column}`).join(', ')}) null_counts, ${FUNNEL_METRICS.map(metric => `SUM(${metric}) ${metric}`).join(', ')} FROM ${relation}`;
-const diagnosticDifferences = (parameter, destination) => `ARRAY(SELECT AS STRUCT COALESCE(staged.date,stored.date) date, COALESCE(staged.device_type,stored.device_type) device_type,
-  staged.row_count staged_row_count, stored.row_count stored_row_count,
-  ${FUNNEL_METRICS.map(metric => `staged.${metric} staged_${metric}, stored.${metric} stored_${metric}`).join(', ')},
-  ARRAY_TO_STRING(ARRAY(SELECT field FROM UNNEST([${['row_count', ...FUNNEL_METRICS].map(field => `IF(staged.${field} IS DISTINCT FROM stored.${field}, '${field}', NULL)`).join(', ')}]) field WHERE field IS NOT NULL), ',') mismatched_fields
- FROM (SELECT date,device_type,COUNT(*) row_count,${FUNNEL_METRICS.map(metric=>`SUM(${metric}) ${metric}`).join(',')} FROM UNNEST(@${parameter}) GROUP BY 1,2) staged
- FULL JOIN (SELECT date,device_type,COUNT(*) row_count,${FUNNEL_METRICS.map(metric=>`SUM(${metric}) ${metric}`).join(',')} FROM ${destination} WHERE date BETWEEN @start AND @end GROUP BY 1,2) stored USING(date,device_type)
+const diagnosticAggregate = relation => `SELECT AS STRUCT COUNT(*) AS row_count, MIN(date) AS min_date, MAX(date) AS max_date, STRUCT(${COLUMNS.map(column => `COUNTIF(${column} IS NULL) AS \`${column}\``).join(', ')}) AS null_counts, ${FUNNEL_METRICS.map(metric => `SUM(${metric}) AS ${metric}`).join(', ')} FROM ${relation}`;
+const diagnosticDifferences = (parameter, destination) => `ARRAY(SELECT AS STRUCT COALESCE(staged.date,stored.date) AS \`date\`, COALESCE(staged.device_type,stored.device_type) AS device_type,
+  staged.row_count AS staged_row_count, stored.row_count AS stored_row_count,
+  ${FUNNEL_METRICS.map(metric => `staged.${metric} AS staged_${metric}, stored.${metric} AS stored_${metric}`).join(', ')},
+  ARRAY_TO_STRING(ARRAY(SELECT field FROM UNNEST([${['row_count', ...FUNNEL_METRICS].map(field => `IF(staged.${field} IS DISTINCT FROM stored.${field}, '${field}', NULL)`).join(', ')}]) AS field WHERE field IS NOT NULL), ',') AS mismatched_fields
+ FROM (SELECT date,device_type,COUNT(*) AS row_count,${FUNNEL_METRICS.map(metric=>`SUM(${metric}) AS ${metric}`).join(',')} FROM UNNEST(@${parameter}) GROUP BY 1,2) AS staged
+ FULL JOIN (SELECT date,device_type,COUNT(*) AS row_count,${FUNNEL_METRICS.map(metric=>`SUM(${metric}) AS ${metric}`).join(',')} FROM ${destination} WHERE date BETWEEN @start AND @end GROUP BY 1,2) AS stored USING(date,device_type)
  WHERE staged.row_count IS DISTINCT FROM stored.row_count OR ${FUNNEL_METRICS.map(metric=>`staged.${metric} IS DISTINCT FROM stored.${metric}`).join(' OR ')}
  ORDER BY date,device_type LIMIT 100)`;
+
+export function rollbackDiagnosticStatements(project, dataset = 'shopify_data') {
+  safeId(project); safeId(dataset);
+  const schema=`SELECT table_name,column_name,ordinal_position,data_type,is_nullable FROM \`${project}.${dataset}.INFORMATION_SCHEMA.COLUMNS\` WHERE table_name IN UNNEST(@tables) ORDER BY table_name,ordinal_position`;
+  const device=`\`${project}.${dataset}.session_conversion_by_device\``, source=`\`${project}.${dataset}.session_conversion_by_device_source\``;
+  const rollback=`DECLARE device_evidence DEFAULT (SELECT AS STRUCT (${diagnosticAggregate('UNNEST(@deviceRows)')}) AS staged, (${diagnosticAggregate(device)}) AS stored, ${diagnosticDifferences('deviceRows',device)} AS differences);
+DECLARE source_evidence DEFAULT (SELECT AS STRUCT (${diagnosticAggregate('UNNEST(@sourceRows)')}) AS staged, (${diagnosticAggregate(source)}) AS stored, ${diagnosticDifferences('sourceRows',source)} AS differences);
+BEGIN
+BEGIN TRANSACTION;
+DELETE FROM ${device} WHERE (@purgeNulls AND date IS NULL) OR date BETWEEN @start AND @end;
+DELETE FROM ${source} WHERE (@purgeNulls AND date IS NULL) OR date BETWEEN @start AND @end;
+INSERT INTO ${device} (${INSERT_COLUMNS}) SELECT ${SELECT_FIELDS} FROM UNNEST(@deviceRows) AS row;
+INSERT INTO ${source} (${INSERT_COLUMNS}) SELECT ${SELECT_FIELDS} FROM UNNEST(@sourceRows) AS row;
+SET device_evidence = (SELECT AS STRUCT (${diagnosticAggregate('UNNEST(@deviceRows)')}) AS staged, (${diagnosticAggregate(`${device} WHERE date BETWEEN @start AND @end`)}) AS stored, ${diagnosticDifferences('deviceRows',device)} AS differences);
+SET source_evidence = (SELECT AS STRUCT (${diagnosticAggregate('UNNEST(@sourceRows)')}) AS staged, (${diagnosticAggregate(`${source} WHERE date BETWEEN @start AND @end`)}) AS stored, ${diagnosticDifferences('sourceRows',source)} AS differences);
+ROLLBACK TRANSACTION;
+EXCEPTION WHEN ERROR THEN
+  ROLLBACK TRANSACTION;
+  RAISE;
+END;
+SELECT device_evidence AS device, source_evidence AS source;`;
+  return {schema,rollback};
+}
+
+const diagnosticStageError = (stage, error) => { const failure=new Error(`Shopify conversion diagnostic ${stage} failed`); failure.name='ShopifyConversionDiagnosticError'; failure.stage=stage; failure.code=Number.isFinite(Number(error?.code))?Number(error.code):'BIGQUERY_CHECK_FAILED'; return failure; };
 
 /** Execute the real replacement inside a transaction, capture bounded evidence in
  * script variables, explicitly roll it back, and only then return the evidence. */
@@ -147,22 +172,14 @@ export async function diagnoseChunk({ bigquery, project, dataset = 'shopify_data
   safeId(project); safeId(dataset); const location=await datasetLocation(bigquery,project,dataset,{fallback:'US'});
   const structType=rowType(); const params={start:bigQueryDate(startDate),end:bigQueryDate(endDate),deviceRows:parameterRows(deviceRows,startDate,endDate),sourceRows:parameterRows(sourceRows,startDate,endDate),purgeNulls:Boolean(expectedNullRows),expectedNullDevice:expectedNullRows?.device||0,expectedNullSource:expectedNullRows?.source||0};
   const types={start:'DATE',end:'DATE',deviceRows:[structType],sourceRows:[structType],purgeNulls:'BOOL',expectedNullDevice:'INT64',expectedNullSource:'INT64'};
-  const schemaSql=`SELECT table_name,column_name,ordinal_position,data_type,is_nullable FROM \`${project}.${dataset}.INFORMATION_SCHEMA.COLUMNS\` WHERE table_name IN UNNEST(@tables) ORDER BY table_name,ordinal_position`;
-  const [schemaRows]=await bigquery.query({location,query:schemaSql,params:{tables:TABLES},types:{tables:['STRING']},maximumBytesBilled:ROLLBACK_DIAGNOSTIC_MAX_BYTES_BILLED});
-  const device=`\`${project}.${dataset}.session_conversion_by_device\``, source=`\`${project}.${dataset}.session_conversion_by_device_source\``;
-  const query=`DECLARE device_evidence DEFAULT (SELECT AS STRUCT (${diagnosticAggregate('UNNEST(@deviceRows)')}) staged, (${diagnosticAggregate(device)}) stored, ${diagnosticDifferences('deviceRows',device)} differences);
-DECLARE source_evidence DEFAULT (SELECT AS STRUCT (${diagnosticAggregate('UNNEST(@sourceRows)')}) staged, (${diagnosticAggregate(source)}) stored, ${diagnosticDifferences('sourceRows',source)} differences);
-BEGIN TRANSACTION;
-DELETE FROM ${device} WHERE (@purgeNulls AND date IS NULL) OR date BETWEEN @start AND @end;
-DELETE FROM ${source} WHERE (@purgeNulls AND date IS NULL) OR date BETWEEN @start AND @end;
-INSERT INTO ${device} (${INSERT_COLUMNS}) SELECT ${SELECT_FIELDS} FROM UNNEST(@deviceRows) row;
-INSERT INTO ${source} (${INSERT_COLUMNS}) SELECT ${SELECT_FIELDS} FROM UNNEST(@sourceRows) row;
-SET device_evidence = (SELECT AS STRUCT (${diagnosticAggregate('UNNEST(@deviceRows)')}) staged, (${diagnosticAggregate(`${device} WHERE date BETWEEN @start AND @end`)}) stored, ${diagnosticDifferences('deviceRows',device)} differences);
-SET source_evidence = (SELECT AS STRUCT (${diagnosticAggregate('UNNEST(@sourceRows)')}) staged, (${diagnosticAggregate(`${source} WHERE date BETWEEN @start AND @end`)}) stored, ${diagnosticDifferences('sourceRows',source)} differences);
-ROLLBACK TRANSACTION;
-SELECT device_evidence device, source_evidence source;`;
-  const [rows]=await bigquery.query({location,query,params,types,maximumBytesBilled:ROLLBACK_DIAGNOSTIC_MAX_BYTES_BILLED,labels:{component:'shopify_conversion_rollback_diagnostic'}});
+  const statements=rollbackDiagnosticStatements(project,dataset);
+  const schemaOptions={location,query:statements.schema,params:{tables:TABLES},types:{tables:['STRING']},useLegacySql:false,maximumBytesBilled:ROLLBACK_DIAGNOSTIC_MAX_BYTES_BILLED};
+  const rollbackOptions={location,query:statements.rollback,params,types,useLegacySql:false,maximumBytesBilled:ROLLBACK_DIAGNOSTIC_MAX_BYTES_BILLED,labels:{component:'shopify_conversion_rollback_diagnostic'}};
+  try { await bigquery.createQueryJob({...schemaOptions,dryRun:true}); } catch(error) { throw diagnosticStageError('dry_run:schema',error); }
+  try { await bigquery.createQueryJob({...rollbackOptions,dryRun:true}); } catch(error) { throw diagnosticStageError('dry_run:rollback',error); }
+  let schemaRows; try { [schemaRows]=await bigquery.query(schemaOptions); } catch(error) { throw diagnosticStageError('query:schema',error); }
+  let rows; try { [rows]=await bigquery.query(rollbackOptions); } catch(error) { throw diagnosticStageError('query:rollback',error); }
   const encode=(value,type)=>BigQuery.valueToQueryParameter_(value,type); const encodedSample=values=>values.length?encode([values[0]],[structType]):encode([],[structType]);
-  return {diagnostic:'shopify_conversion_rollback',read_only_effect:'all destination changes explicitly rolled back',range:{start:startDate,end:endDate},schema:schemaRows,parameter_encoding:{start:encode(params.start,'DATE'),end:encode(params.end,'DATE'),device_rows:{row_count:params.deviceRows.length,first_encoded_row:encodedSample(params.deviceRows)},source_rows:{row_count:params.sourceRows.length,first_encoded_row:encodedSample(params.sourceRows)}},generated_sql:{schema:schemaSql,rollback_script:query},evidence:rows[0]||null};
+  return {diagnostic:'shopify_conversion_rollback',read_only_effect:'all destination changes explicitly rolled back',range:{start:startDate,end:endDate},schema:schemaRows,parameter_encoding:{start:encode(params.start,'DATE'),end:encode(params.end,'DATE'),device_rows:{row_count:params.deviceRows.length,first_encoded_row:encodedSample(params.deviceRows)},source_rows:{row_count:params.sourceRows.length,first_encoded_row:encodedSample(params.sourceRows)}},generated_sql:{schema:statements.schema,rollback_script:statements.rollback},evidence:rows[0]||null};
 }
 export function missingDates(rows, startDate, endDate) { const observed = new Set(rows.map(row => row.date)); return datesBetween(startDate, endDate).filter(date => !observed.has(date)); }
