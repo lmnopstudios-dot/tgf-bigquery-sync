@@ -159,7 +159,12 @@ const historicalProductOpportunityService=createHistoricalProductOpportunityServ
   },
   // Fetch each approved parent explicitly. The generic inventory tool's 25 is
   // an interactive result bound, not a valid population bound for this join.
-  loadInventory:async ids=>{const pages=await mapWithConcurrency(ids,2,id=>getShopifyInventoryByLocation({query:`id:${id}`,location:'Online',limit:1}));return{products:pages.flatMap(page=>page.products)};}
+  loadInventory:async(ids)=>{
+    const batchSize=20,batches=[];for(let i=0;i<ids.length;i+=batchSize)batches.push(ids.slice(i,i+batchSize));
+    const settled=await mapWithConcurrency(batches,3,async batch=>{try{const query=batch.map(id=>`id:${id}`).join(' OR '),page=await getShopifyInventoryByLocation({query,location:'Online',limit:batch.length});return{ok:true,batch,products:page.products||[]};}catch(error){return{ok:false,batch,error_class:error?.name||'Error'};}});
+    const completed=settled.filter(x=>x.ok).flatMap(x=>x.batch),missing=settled.filter(x=>!x.ok).flatMap(x=>x.batch);
+    return{products:settled.filter(x=>x.ok).flatMap(x=>x.products),requested_count:ids.length,completed_count:completed.length,missing_ids:missing,complete:missing.length===0};
+  }
 });
 productMappingService.setup().catch(error => console.error('Product mapping storage setup failed:', redactError(error?.message || error)));
 collectionClassificationService.setup().catch(error => console.error('Collection classification storage setup failed:', redactError(error?.message || error)));
@@ -8445,7 +8450,7 @@ Important rules:
 
 } else if (item.name === 'get_historical_product_opportunities') {
 
-  result = await historicalProductOpportunityService(args);
+  result = await historicalProductOpportunityService(args,{deadlineAt,signal:cancellation.signal,onDiagnostic:timing=>console.info('Historical product opportunity stage:',{request_id:id,...timing})});
 
 } else if (item.name === 'get_shopify_customer_kpis') {
 
@@ -8522,9 +8527,11 @@ Important rules:
             output: JSON.stringify(result)
           });
           const outputBytes=Buffer.byteLength(outputs.at(-1).output,'utf8');
-          console.info('Agent tool result outcome:',{request_id:id,stage:`tool_result:${item.name}`,outcome:'validated',result_bytes:outputBytes,deadline_remaining_ms:Math.max(0,deadlineAt-Date.now())});
+          const toolOutcome=result?.success===false||result?.error?'error_result':'validated';
+          console.info('Agent tool result outcome:',{request_id:id,stage:`tool_result:${item.name}`,outcome:toolOutcome,result_bytes:outputBytes,deadline_remaining_ms:Math.max(0,deadlineAt-Date.now()),failed_stage:result?.failed_stage||null,tool_code:result?.code||null});
           inlineChart ||= buildOracleInlineChart(item.name, result);
           if (result?.success !== false && !result?.error) { successfulTools.push(item.name); completedEvidence.push({name:item.name,result}); }
+          else { if(!failedTools.includes(item.name))failedTools.push(item.name); completedEvidence.push({name:item.name,result}); }
         }
 
         stage='response_generation';

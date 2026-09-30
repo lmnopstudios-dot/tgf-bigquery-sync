@@ -38,8 +38,13 @@ function summaryLines(result){
 
 /** Build a bounded user-facing fallback from already validated aggregate output. */
 export function evidenceSummary(entries,{unavailable=[]}={}){
-  const sections=[];
+  const sections=[],hasValidatedEvidence=entries.some(entry=>entry.result?.success!==false&&!entry.result?.error);
   for(const entry of entries){
+    if(entry.result?.success===false){
+      const stage=String(entry.result.failed_stage||'evidence retrieval').replaceAll('_',' '),code=String(entry.result.code||'TOOL_FAILED').slice(0,80);
+      sections.push(`### ${LABELS[entry.name]||'Governed evidence'} unavailable\n- **Failed stage:** ${stage}.\n- **Status:** ${code}; ${entry.result.retryable?'an explicit retry is allowed.':'not retryable.'}\n- No analytical rows, zero-stock findings, or zero-opportunity conclusion were accepted from this error result.`);
+      continue;
+    }
     const rows=rowsFor(entry.result).slice(0,12), lines=summaryLines(entry.result);
     if(entry.name==='get_historical_product_opportunities'){
       const windows=entry.result?.observation_windows||{};
@@ -62,7 +67,7 @@ export function evidenceSummary(entries,{unavailable=[]}={}){
   const missing=[...new Set(unavailable)].map(name=>LABELS[name]||'A requested evidence source');
   return [
     '**Partial result — final synthesis did not complete**',
-    sections.length?'The validated figures retrieved before the failure are shown below.':'No validated figures were available to include in the response.',
+    hasValidatedEvidence?'The validated figures retrieved before the failure are shown below.':'No validated analytical figures were available; the bounded failure outcome is shown below.',
     ...sections,
     missing.length?`### Unavailable\n${missing.join(', ')} could not be incorporated into the final analysis.`:'### Unavailable\nThe final comparison and interpretation are unavailable.',
     '### Interpretation boundary\nFigures are reproduced exactly from validated aggregate tool results. No conversion rate, device/channel denominator, cross-platform equivalence, or causal migration trend has been inferred by this fallback.',
@@ -72,7 +77,8 @@ export function evidenceSummary(entries,{unavailable=[]}={}){
 }
 
 export function synthesisFailureKind(error,{deadlineAt,signal,outputBytes=0,maxOutputBytes=1_500_000}={}){
-  if(signal?.aborted||Date.now()>=deadlineAt||['AbortError','TimeoutError'].includes(error?.name))return 'deadline';
+  if(signal?.aborted||Date.now()>=deadlineAt)return 'request_deadline';
+  if(['AbortError','TimeoutError'].includes(error?.name))return 'synthesis_timeout_with_request_budget_remaining';
   const code=String(error?.status||error?.code||'').toLowerCase(),type=String(error?.type||'').toLowerCase();
   if(outputBytes>maxOutputBytes||code==='413'||/context_length|request_too_large|payload_too_large/.test(`${code} ${type}`))return 'tool_result_size';
   return 'provider_failure';
