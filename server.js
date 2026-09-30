@@ -37,6 +37,7 @@ import { answerWooDeviceConversionRequest } from './oracle/woo-device-conversion
 import { answerShopifyLaunchDeviceConversionRequest } from './oracle/shopify-launch-device-conversion-request.js';
 import { CATEGORY_SALES_MAX_BYTES, createCategorySalesService, executeCategorySalesToolCall } from './oracle/category-sales.js';
 import { createHistoricalProductOpportunityService } from './oracle/historical-product-opportunity.js';
+import { createProductViewPurchaseService, executeProductViewPurchaseToolCall } from './oracle/product-view-purchase.js';
 import { runWithShopifyThrottle, SHOPIFY_RATE_LIMIT_MESSAGE } from './oracle/shopifyql-throttle.js';
 import { createBatchedInventoryByLocation } from './shopify/inventory-by-location.js';
 import { buildOracleInlineChart } from './oracle/inline-charts.js';
@@ -150,6 +151,7 @@ const customerOrderIntervalService = createCustomerOrderIntervalService({ bigque
 const onlineCountrySalesService = createOnlineCountrySalesService({ bigquery, project: GOOGLE_PROJECT_ID });
 const deviceSourceConversionService = createDeviceSourceConversionService({ bigquery, project: GOOGLE_PROJECT_ID });
 const categorySalesService = createCategorySalesService({ bigquery, project: GOOGLE_PROJECT_ID });
+const productViewPurchaseService = createProductViewPurchaseService({bigquery});
 const loadHistoricalCandidateInventory=createBatchedInventoryByLocation({
   graphql:shopifyGraphQL,
   getToken:getShopifyAccessToken,
@@ -8230,6 +8232,7 @@ Important rules:
 - Shopify is the source of truth for online-store conversion KPIs wherever Shopify session data exists.
 - For “What was the desktop versus mobile conversion rate during the WooCommerce era?”, call get_woocommerce_device_conversion. Call it purchases per session unless purchasing-session evidence exists; disclose covered and missing dates.
 - For “Compare desktop and mobile conversion before and after the Shopify launch”, call compare_device_conversion_before_after_shopify with explicit equal windows. For “Break that comparison down by traffic source”, call compare_device_conversion_by_traffic_source and retain those windows on follow-ups. Never guess the launch boundary, mix Shopify orders with GA4 sessions, or manufacture missing GA4 purchases. Show Woo GA4 and Shopify-native definitions side by side; omit percentage-point differences unless the returned comparability permits them. Disclose Black Friday/Christmas seasonality and Shopify's September 2026 session-measurement change. Do not add cohort or order-sequence boilerplate.
+- For average products viewed before buying, call get_product_views_before_purchase with current_start 2026-01-01, current_end 2026-09-30 (the original request date), woocommerce_start 2024-11-20 and woocommerce_end 2025-11-19. Preserve these dates on follow-ups and durable jobs; the confirmed public Shopify launch is 2025-11-20. Distinguish distinct products before first purchase, view events before first purchase, and product views across all sessions. Never silently substitute one, divide aggregate views by purchases, or infer browsing from orders. Do not claim availability unless the tool establishes production session-level evidence and actual coverage. Omit cohort, order-sequence and product-classification boilerplate.
 - Shopify get_shopify_sales_kpis is the source for Online Store operational sales KPIs such as orders and AOV.
 - Use get_shopify_product_performance for historical Shopify Online Store product performance.
 - For the exact historically-strong WooCommerce / weak-Shopify / available-Online-stock question, use get_historical_product_opportunities once. Its public launch boundary is 20 November 2025 (16 November was pre-launch source evidence). Do not substitute a Shopify best-sellers list. Preserve its approved mapping/family join, source currencies, exact stocked variants, rule, windows, evidence sizes and coverage.
@@ -8395,6 +8398,7 @@ Important rules:
                 } else {
                   const deviceConversionCall = await executeDeviceSourceConversionToolCall(deviceSourceConversionService, item.name, args);
                   if (deviceConversionCall.handled) result = deviceConversionCall.result;
+                  else { const productViewCall=await executeProductViewPurchaseToolCall(productViewPurchaseService,item.name,args); if(productViewCall.handled) result=productViewCall.result;
                   else { const categorySalesCall=await executeCategorySalesToolCall(categorySalesService,item.name,args); if(categorySalesCall.handled) result=categorySalesCall.result;
                   else if (item.name === 'get_average_customer_order_interval') {
   result = await customerOrderIntervalService(args);
@@ -8492,6 +8496,7 @@ Important rules:
             result = {
               error: `Unknown tool: ${item.name}`
             };
+            }
             }
             }
             }

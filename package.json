@@ -10,6 +10,7 @@
     "diagnose:square-customer-attribution": "node diagnostics/square-customer-attribution.js",
     "diagnose:ga4-access": "node diagnostics/ga4-access.js",
     "diagnose:ga4-coverage": "node diagnostics/ga4-coverage-discovery.js",
+    "discover:product-views": "node diagnostics/product-view-purchase-discovery.js",
     "diagnose:ga4-session-reconciliation": "node diagnostics/ga4-session-reconciliation.js",
     "diagnose:ga4-device-coverage": "node diagnostics/ga4-device-coverage-probe.js",
     "diagnose:ga4-backfill-read-path": "node diagnostics/ga4-backfill-read-path.js",

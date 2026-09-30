@@ -10,7 +10,7 @@ const FIELDS = new Set([
 ]);
 const GRAINS = new Set(['day','week','month','quarter','year']);
 const CURRENCIES = new Set(['GBP','USD','JPY','EUR']);
-const METRICS = new Set(['sales','refunds','customers','products','ecommerce_performance','customer_journey','customer_order_interval']);
+const METRICS = new Set(['sales','refunds','customers','products','ecommerce_performance','customer_journey','customer_order_interval','product_views_before_purchase']);
 const MONTHS = {jan:1,january:1,feb:2,february:2,mar:3,march:3,apr:4,april:4,may:5,jun:6,june:6,jul:7,july:7,aug:8,august:8,sep:9,sept:9,september:9,oct:10,october:10,nov:11,november:11,dec:12,december:12};
 
 export const ANALYSIS_CONTEXT_FIELDS = Object.freeze([...FIELDS]);
@@ -35,7 +35,7 @@ export function validateAnalysisContext(value={}){
   out.limit=Number.isInteger(value.limit)&&value.limit>0&&value.limit<=100?value.limit:null;
   out.partial_period=Boolean(value.partial_period);
   out.unresolved_required_fields=[...new Set(value.unresolved_required_fields||[])].filter(x=>FIELDS.has(x)).slice(0,8);
-  if(value.tool_route!=null&&!['get_shopify_online_country_products','get_online_country_sales','get_average_customer_order_interval','get_governed_category_sales'].includes(value.tool_route)) throw new Error('invalid tool_route');
+  if(value.tool_route!=null&&!['get_shopify_online_country_products','get_online_country_sales','get_average_customer_order_interval','get_governed_category_sales','get_product_views_before_purchase'].includes(value.tool_route)) throw new Error('invalid tool_route');
   out.tool_route=value.tool_route??null;
   if(value.request_kind!=null&&!['advisory','knowledge_save','policy_definition'].includes(value.request_kind)) throw new Error('invalid request_kind');
   out.request_kind=value.request_kind??null;
@@ -95,12 +95,14 @@ export function transitionAnalysisContext(existing, message, {now=Date.now(),rep
     if(/\b(?:include|add).*woocommerce|\bwoocommerce\b.*\b(?:all )?online sales\b/i.test(text) && base.geography){set.tool_route='get_online_country_sales';set.platform='woo+shopify';set.channel='online';}
     const customerOrderInterval=/\b(?:average|mean|median)\b[\s\S]*\b(?:time|days?)\b[\s\S]*\bbetween\b[\s\S]*\b(?:online )?orders?\b[\s\S]*\b(?:same|each|per)\b[\s\S]*\bcustomer\b|\b(?:time|days?)\b[\s\S]*\bbetween consecutive (?:online )?orders?\b/i.test(text);
     if(customerOrderInterval){set.tool_route='get_average_customer_order_interval';set.metrics=['customer_order_interval'];set.analysis_type='customers';set.channel='online';}
+    const viewsBeforePurchase=/\b(?:average|mean)\b[\s\S]*\bproducts?\b[\s\S]*\bviews?\b[\s\S]*\b(?:before (?:buying|purchase)|before .*buys?)\b/i.test(text);
+    if(viewsBeforePurchase||base.tool_route==='get_product_views_before_purchase'&&/^(?:and |what about |show |break |compare|why|coverage)/i.test(lower)){set.tool_route='get_product_views_before_purchase';set.metrics=['product_views_before_purchase'];set.analysis_type='ecommerce';set.start_date='2026-01-01';set.end_date='2026-09-30';set.requested_end_period='2026-09-30';set.partial_period=true;set.comparison_type='last_woocommerce_year_before_migration';set.comparison_start_date='2024-11-20';set.comparison_end_date='2025-11-19';}
     const journey=/\b(?:first (?:observed )?(?:purchase|order)|bought? (?:after|next)|buy (?:after|next)|second (?:purchase|order)|third (?:purchase|order)|nth order|repeat (?:purchase )?rate|within \d+ days?|downstream|acquisition products?|customers? buy (?:after|next))\b/.test(lower);
     if(journey||base.analysis_type==='customer_journey'&&/^(?:okay[, ]+)?(?:which|what|within|on|exclude)\b/.test(lower)){set.metrics=['customer_journey'];set.analysis_type='customer_journey';set.journey_intent='purchase_sequence';const isFollowUp=base.analysis_type==='customer_journey';if(/collaboration/.test(lower)&&!isFollowUp)set.entry_product_classification='collaboration';else if(/\brings?\b/.test(lower)&&!isFollowUp)set.entry_product_classification='ring';else if(/\bclothing\b/.test(lower)&&!isFollowUp)set.entry_product_classification='clothing';if(/\bjewellery\b/.test(lower)){set.subsequent_product_classification='jewellery';set.include_unclassified_products=true}const excluded=[...lower.matchAll(/\bexclude\s+([^,.?]+?)(?=\s+(?:and|but|from|what|which)\b|[,.?]|$)/g)].map(m=>m[1].trim()).filter(Boolean);if(excluded.length)set.excluded_product_titles=[...base.excluded_product_titles,...excluded.map(x=>x.replace(/\b\w/g,c=>c.toUpperCase()))];if(/which collaboration/.test(lower))set.journey_group_by='collaboration_name';else if(/acquisition products?/.test(lower))set.journey_group_by='entry_product';else if(/each year separately|by (?:cohort )?year|annual cohorts?/.test(lower))set.journey_group_by='cohort_year_downstream_product';else if(/what|top|products?|items?/.test(lower))set.journey_group_by=base.journey_group_by==='cohort_year_downstream_product'?'cohort_year_downstream_product':'downstream_product';const seq=lower.match(/\b(second|third) (?:purchase|order)\b/);if(seq){const n=seq[1]==='second'?2:3;set.minimum_order_sequence=n;set.maximum_order_sequence=n}const days=lower.match(/\bwithin (30|60|90|365) days?\b/);if(days)set.within_days=+days[1]}
-    else if(/\brefunds?\b/.test(lower)) set.metrics=['refunds'],set.analysis_type='finance';
-    else if(/\bsales|revenue\b/.test(lower)) set.metrics=['sales'],set.analysis_type='finance';
-    else if(/\bcustomers?\b/.test(lower)) set.metrics=['customers'],set.analysis_type='customers';
-    else if(/\bproducts?\b/.test(lower)) set.metrics=['products'],set.analysis_type='products';
+    else if(!viewsBeforePurchase&&/\brefunds?\b/.test(lower)) set.metrics=['refunds'],set.analysis_type='finance';
+    else if(!viewsBeforePurchase&&/\bsales|revenue\b/.test(lower)) set.metrics=['sales'],set.analysis_type='finance';
+    else if(!viewsBeforePurchase&&/\bcustomers?\b/.test(lower)) set.metrics=['customers'],set.analysis_type='customers';
+    else if(!viewsBeforePurchase&&/\bproducts?\b/.test(lower)) set.metrics=['products'],set.analysis_type='products';
     for(const [pattern,grain] of [[/\bdaily\b/,'day'],[/\bweekly\b/,'week'],[/\bmonthly\b/,'month'],[/\bquarterly\b/,'quarter'],[/\byearly|annually\b/,'year']]) if(pattern.test(lower)) set.grain=grain;
     if(/each year separately|by (?:cohort )?year|annual cohorts?/.test(lower))set.grain='year';
     for(const currency of CURRENCIES) if(new RegExp(`\\b${currency}\\b`,'i').test(text)) set.currencies=[currency];
@@ -113,7 +115,7 @@ export function transitionAnalysisContext(existing, message, {now=Date.now(),rep
     const top=lower.match(/top\s+(\d{1,3})/);if(top){set.limit=Math.min(+top[1],100);set.sort='descending'}
     if(/exclude pos/i.test(lower)) set.filters=[...base.filters.filter(x=>x!=='exclude_pos'),'exclude_pos'];
     if(/include pos|clear (?:the )?filters?/i.test(lower)) clear.push('filters');
-    Object.assign(set,period(text,now)||{});
+    if(!viewsBeforePurchase&&set.tool_route!=='get_product_views_before_purchase')Object.assign(set,period(text,now)||{});
     if(!base.currencies.length&&!set.currencies&&set.analysis_type==='finance'&&!['get_shopify_online_country_products','get_online_country_sales','get_governed_category_sales'].includes(set.tool_route||base.tool_route)&&!advisory) set.currencies=['GBP'];
   }
   const next={...base,...set};if(next.analysis_type==='customer_journey'){next.first_order_semantic=next.first_order_semantic||'first_observed_ever';if(next.start_date){next.cohort_entry_start=next.start_date;next.cohort_entry_end=next.end_date;next.observation_end=next.end_date;}}for(const key of clear) next[key]=emptyAnalysisContext()[key];
