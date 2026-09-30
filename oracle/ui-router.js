@@ -9,6 +9,7 @@ import { governanceDiagnostic, governancePublicError, isGovernanceBusinessError 
 import { SHOPIFY_RATE_LIMIT_MESSAGE } from './shopifyql-throttle.js';
 import { requestId, stageOutcome, terminalMessage } from './request-observability.js';
 import { createAnalysisJobWorker, ownerKey, streamingInsertDiagnostic } from './analysis-jobs.js';
+import { campaignDateClarification, resolveKnowledgeDates } from './knowledge-dates.js';
 
 const json = express.json({ limit: '48kb', type: 'application/json' });
 const messageError = body => {
@@ -51,7 +52,7 @@ export function createOracleUiRouter({ knowledgeService, bigquery, project, chat
     if (!req.is('application/json')) return res.status(415).json({ success: false, error: 'application/json is required' });
     next();
   };
-  const proposalsFor = async (message, createdBy) => {
+  const proposalsFor = async (message, createdBy, suppliedTemporalContext=null) => {
     if (!needsProposalGeneration(message)) return [];
     if (!generateProposals) throw new Error('proposal generator unavailable');
     let existing = [];
@@ -62,9 +63,14 @@ export function createOracleUiRouter({ knowledgeService, bigquery, project, chat
       ]);
       existing = [...(knowledge.items || []), ...(memory.items || [])];
     } catch (error) { console.error('Oracle UI proposal context lookup failed:', safeError(error)); }
-    const candidates = await generateProposals({ message, existing, evidence: [] });
+    const temporalContext=suppliedTemporalContext||resolveKnowledgeDates(message,{timestamp:now(),timeZone:'Europe/London'});
+    const candidates = await generateProposals({ message, existing, evidence: [], temporalContext });
     return candidates.slice(0, 12).map(candidate => {
-      try { return normalizeModelProposal(candidate, { createdBy, existing }); }
+      try {
+        if(temporalContext&&!temporalContext.ambiguous&&candidate.kind==='event'&&/campaign|marketing|promotion|social/i.test(`${candidate.event_type} ${candidate.title} ${candidate.description}`))candidate={...candidate,effective_from:temporalContext.effective_start,effective_to:temporalContext.effective_end,date_precision:temporalContext.precision};
+        const wrapper=normalizeModelProposal(candidate, { createdBy, existing });
+        return temporalContext&&!temporalContext.ambiguous?{...wrapper,date_resolution:{original_wording:temporalContext.original_wording,effective_start:temporalContext.effective_start,effective_end:temporalContext.effective_end,time_zone:temporalContext.time_zone,message_timestamp:temporalContext.message_timestamp}}:wrapper;
+      }
       catch (error) { error.phase = 'proposal_validation'; logProposalError(error); return invalidProposal(candidate); }
     }).filter(proposal => proposal.validity !== 'already_known');
   };
@@ -91,7 +97,7 @@ export function createOracleUiRouter({ knowledgeService, bigquery, project, chat
       const input=job.payload_json;
       const answer=await chat(input.message,{analysisContext:input.analysis_context,transition:input.transition,recentEvidence:input.recent_evidence,requestId:job.request_id,signal,durable:true});
       let proposals=[],proposal_error=null;
-      try { proposals=await proposalsFor(input.message,input.created_by); } catch(error) { logProposalError(error);proposal_error='Knowledge proposal could not be generated.'; }
+      try { proposals=await proposalsFor(input.message,input.created_by,input.temporal_context); } catch(error) { logProposalError(error);proposal_error='Knowledge proposal could not be generated.'; }
       return {success:true,answer:answer.answer,inline_chart:answer.inline_chart||null,proposals,proposal_error,analysis_scope:analysisScope(input.analysis_context),tools:(answer.tools||[]).slice(0,20)};
     }});
     const jobStoreReady=analysisJobStore.setup();
@@ -106,7 +112,7 @@ export function createOracleUiRouter({ knowledgeService, bigquery, project, chat
       const id=requestId(req.get('x-request-id'));
       const owner=ownerKey(parseCookies(req.headers.cookie).oracle_session,sessionSecret);
       console.info('Oracle route selection:',{request_id:id,stage:'route_selection',route:'durable_job',outcome:'selected'});
-      let job;try{job=await analysisJobStore.getByRequest?.(id,owner)||await analysisJobStore.create({owner_key:owner,request_id:id,payload_json:{message:req.body.message,analysis_context:result.transition.applies_to_message?result.context:null,transition:result.transition,recent_evidence:recent,created_by:req.oracleUser.sub}});}catch(error){console.error('Oracle job enqueue failed:',{request_id:id,...streamingInsertDiagnostic(error)});return res.status(503).json({success:false,code:'ORACLE_JOB_ENQUEUE_FAILED',error:'The analysis could not be queued. Please retry.',request_id:id});}
+      let job;try{job=await analysisJobStore.getByRequest?.(id,owner)||await analysisJobStore.create({owner_key:owner,request_id:id,payload_json:{message:req.body.message,temporal_context:resolveKnowledgeDates(req.body.message,{timestamp:now(),timeZone:'Europe/London'}),analysis_context:result.transition.applies_to_message?result.context:null,transition:result.transition,recent_evidence:recent,created_by:req.oracleUser.sub}});}catch(error){console.error('Oracle job enqueue failed:',{request_id:id,...streamingInsertDiagnostic(error)});return res.status(503).json({success:false,code:'ORACLE_JOB_ENQUEUE_FAILED',error:'The analysis could not be queued. Please retry.',request_id:id});}
       res.setHeader('x-request-id',id).status(202).json({success:true,job_id:job.job_id,status:'queued'});
     });
     router.get('/jobs/request/:requestId',authenticate,async(req,res)=>{const owner=ownerKey(parseCookies(req.headers.cookie).oracle_session,sessionSecret),job=await analysisJobStore.getByRequest?.(req.params.requestId,owner);if(!job)return res.status(404).json({success:false,error:'Analysis job not found'});res.json({success:true,job_id:job.job_id,status:job.status});});
@@ -116,6 +122,7 @@ export function createOracleUiRouter({ knowledgeService, bigquery, project, chat
   router.post('/chat', authenticate, protectWrite, json, async (req, res) => {
     const id=requestId(req.get('x-request-id'));
     const requestStarted=Date.now();
+    const messageTemporalContext=resolveKnowledgeDates(req.body?.message,{timestamp:now(),timeZone:'Europe/London'});
     res.setHeader('x-request-id',id);
     const cancellation = new AbortController();
     req.once('aborted',()=>cancellation.abort(new Error('UI request aborted')));
@@ -126,7 +133,7 @@ export function createOracleUiRouter({ knowledgeService, bigquery, project, chat
       const result=transitionAnalysisContext(previous,req.body.message,{now:now(),reportContext:req.body.report_context||null});
       if(result.transition.applies_to_message) saveSessionContext(req,result.context);
       console.info('Oracle analysis context transition:',{continuation:result.transition.continuation,changed_fields:result.transition.set,cleared_fields:result.transition.clear,retained_field_names:result.transition.retain,missing_required_field_names:result.transition.missing_required_fields,ready_to_execute:result.transition.ready_to_execute});
-      const clarification=result.transition.applies_to_message?clarificationFor(result.context):null;
+      const clarification=campaignDateClarification(req.body.message,messageTemporalContext)||(result.transition.applies_to_message?clarificationFor(result.context):null);
       const key=sessionKey(req),cached=recentChatEvidence.get(key);
       const recentEvidence=cached&&cached.expires_at>now()?cached.value:null;
       const pending=unansweredIntents.get(key);
@@ -149,7 +156,7 @@ export function createOracleUiRouter({ knowledgeService, bigquery, project, chat
       else unansweredIntents.delete(key);
       let proposals = [], proposal_error = null;
       const proposalStarted=Date.now();
-      try { proposals = await proposalsFor(req.body.message, req.oracleUser.sub); console.info('Oracle UI stage outcome:',stageOutcome({id,stage:'knowledge_proposals',startedAt:proposalStarted,outcome:'success',extra:{proposal_count:proposals.length}})); }
+      try { proposals = clarification&&campaignDateClarification(req.body.message,messageTemporalContext)?[]:await proposalsFor(req.body.message, req.oracleUser.sub, messageTemporalContext); console.info('Oracle UI stage outcome:',stageOutcome({id,stage:'knowledge_proposals',startedAt:proposalStarted,outcome:'success',extra:{proposal_count:proposals.length}})); }
       catch (error) { logProposalError(error); console.error('Oracle UI stage outcome:',stageOutcome({id,stage:'knowledge_proposals',startedAt:proposalStarted,outcome:'failed',error})); proposal_error = 'Knowledge proposal could not be generated.'; }
       console.info('Oracle UI stage outcome:',stageOutcome({id,stage:'ui_response',startedAt:requestStarted,outcome:'success'}));
       res.json({ success: true, answer: answer.answer, inline_chart:answer.inline_chart||null, proposals, proposal_error, analysis_scope:analysisScope(sessionContext(req)) });
@@ -161,7 +168,8 @@ export function createOracleUiRouter({ knowledgeService, bigquery, project, chat
   router.post('/propose', authenticate, protectWrite, json, async (req, res) => {
     try {
       if (typeof req.body?.message !== 'string' || !req.body.message.trim() || req.body.message.length > 12000) return res.status(400).json({ success: false, error: 'message must be a non-empty string of at most 12000 characters' });
-      res.json({ success: true, proposals: await proposalsFor(req.body.message, req.oracleUser.sub) });
+      const temporalContext=resolveKnowledgeDates(req.body.message,{timestamp:now(),timeZone:'Europe/London'}),clarification=campaignDateClarification(req.body.message,temporalContext);
+      res.json({ success: true, proposals: clarification?[]:await proposalsFor(req.body.message, req.oracleUser.sub, temporalContext), clarification });
     } catch (error) { logProposalError(error); res.status(503).json({ success: false, error: 'Knowledge proposal could not be generated.' }); }
   });
   const approve = kindScope => async (req, res) => {

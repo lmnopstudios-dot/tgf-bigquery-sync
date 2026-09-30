@@ -207,3 +207,17 @@ test('explicit timeless-definition save request reaches chat and proposal genera
   assert.deepEqual(calls[0].conversation.analysisContext.metrics,[]);assert.deepEqual(calls[0].conversation.analysisContext.currencies,[]);assert.equal(calls[0].conversation.analysisContext.start_date,null);
   assert.equal(proposalCalls.length,1);assert.equal(body.proposals.length,1);assert.equal(body.proposals[0].kind,'definition');assert.doesNotMatch(body.answer,/date range|GBP|USD/);
 });
+
+test('natural-date campaign proposal is resolved at receipt and exposed for review',async t=>{
+  const message='This week on socials we are pushing the chunky crossbones ring and classic pieces.';
+  const seen=[];
+  const candidate={kind:'event',event_type:'marketing_campaign',title:'Social campaign',description:'Push the chunky crossbones ring and classic pieces.',date_precision:'unknown',effective_from:null,effective_to:null,status:'confirmed',source_type:'human_entered',source_reference:'Authenticated administrator assertion',tags:['marketing'],supersedes:null};
+  const knowledgeService={searchKnowledge:async()=>({items:[]}),searchMemory:async()=>({items:[]})};
+  const app=express();app.use('/api/oracle',createOracleUiRouter({knowledgeService,bigquery:{},project:'test',chat:async()=>({answer:'Prepared for review.',tools:[]}),generateProposals:async input=>{seen.push(input);return [candidate]},env,now:()=>Date.parse('2026-09-30T12:00:00Z')}));
+  const server=await new Promise(resolve=>{const value=app.listen(0,()=>resolve(value))});t.after(()=>server.close());
+  const base=`http://127.0.0.1:${server.address().port}/api/oracle`,request=(path,options={})=>fetch(base+path,options),auth=await login(request,base),headers={cookie:auth.cookie,origin:new URL(base).origin,'content-type':'application/json','x-csrf-token':auth.csrf};
+  const response=await request('/chat',{method:'POST',headers,body:JSON.stringify({message})}),body=await response.json();
+  assert.equal(response.status,200);assert.equal(body.proposals.length,1);assert.equal(body.proposals[0].proposal.effective_from,'2026-09-28');assert.equal(body.proposals[0].proposal.effective_to,'2026-10-04');
+  assert.deepEqual(body.proposals[0].date_resolution,{original_wording:'This week',effective_start:'2026-09-28',effective_end:'2026-10-04',time_zone:'Europe/London',message_timestamp:'2026-09-30T12:00:00.000Z'});
+  assert.deepEqual(seen[0].temporalContext,{...body.proposals[0].date_resolution,precision:'range'});assert.equal(body.proposals[0].persisted,false);assert.equal(body.proposals[0].approval_required,true);
+});
