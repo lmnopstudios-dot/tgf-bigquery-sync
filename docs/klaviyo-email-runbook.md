@@ -39,7 +39,7 @@ The helper records the reviewed account settings, validates the exact pilot wind
 
 ```sh
 KLAVIYO_DISCOVERY_MANIFEST=/tmp/klaviyo-reviewed.json KLAVIYO_CONVERSION_METRIC_IDS=Xp9amv KLAVIYO_ACCOUNT_TIMEZONE=Europe/London KLAVIYO_ACCOUNT_CURRENCY=GBP npm run collect:klaviyo-pilot
-node diagnostics/klaviyo-production.js
+npm run diagnose:klaviyo-production
 ```
 
 Collection is hard-coded to the August 1–September 1 exclusive report timeframe. It stages then atomically `MERGE`s on report kind, entity/message ID, window, and conversion metric ID, so retries are idempotent. A partial endpoint failure promotes nothing. Evidence has seven-year partition retention. Broad historical backfill is intentionally not implemented; approve one only after acceptance.
@@ -53,3 +53,11 @@ The production diagnostic calls the same `collectPilot` and Oracle service helpe
 ## Oracle coverage
 
 Oracle exposes bounded tools for period performance, click/purchase opportunity ranking, and Klaviyo-versus-Shopify email-referrer comparison. Results include volumes beside rates, stored coverage, metric/currency/timezone/revision/settings, and limitations. Shopify referrer traffic is side-by-side only; it cannot establish all email influence or campaign-level device/session joins. Tool results remain structured evidence if answer synthesis fails.
+
+After deployment, run this exact command in the Render Shell before considering any collection or data repair:
+
+```sh
+npm run diagnose:klaviyo-production
+```
+
+The command is read-only. It prints a bounded physical inventory and the exact Oracle SQL and bindings, then compares API and stored identities/statistics and Oracle evidence counts. A missing or inconsistent selected pilot exits nonzero; do not rerun collection unless this physical evidence shows that persistence failed.
