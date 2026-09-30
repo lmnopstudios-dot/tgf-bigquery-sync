@@ -149,12 +149,16 @@ export function rollbackDiagnosticStatements(project, dataset = 'shopify_data', 
   safeId(location);
   assertDate(startDate, 'diagnostic start'); assertDate(endDate, 'diagnostic end');
   const literalRange=`DATE '${startDate}' AND DATE '${endDate}'`;
-  const schema=`SELECT
-  SESSION_USER() AS executing_identity,
-  ARRAY(SELECT AS STRUCT table_name,table_type,creation_time,ddl FROM \`${project}.${dataset}.INFORMATION_SCHEMA.TABLES\` WHERE table_name IN UNNEST(@tables) ORDER BY table_name) AS tables,
-  ARRAY(SELECT AS STRUCT table_name,column_name,ordinal_position,data_type,is_nullable FROM \`${project}.${dataset}.INFORMATION_SCHEMA.COLUMNS\` WHERE table_name IN UNNEST(@tables) ORDER BY table_name,ordinal_position) AS columns,
-  ARRAY(SELECT AS STRUCT table_name,option_name,option_type,option_value FROM \`${project}.${dataset}.INFORMATION_SCHEMA.TABLE_OPTIONS\` WHERE table_name IN UNNEST(@tables) ORDER BY table_name,option_name) AS table_options,
-  ARRAY(SELECT AS STRUCT table_name,policy_name,grantee_list,filter_predicate FROM \`${project}.region-${location.toLowerCase()}.INFORMATION_SCHEMA.ROW_ACCESS_POLICIES\` WHERE table_schema = '${dataset}' AND table_name IN UNNEST(@tables) ORDER BY table_name,policy_name) AS row_access_policies`;
+  // Keep the metadata reads independent: destination existence and shape are
+  // required for a meaningful write reproduction, while the other views may
+  // legitimately be hidden from the diagnostic principal.
+  const metadata={
+    tables:`SELECT table_name,table_type,creation_time,ddl FROM \`${project}.${dataset}.INFORMATION_SCHEMA.TABLES\` WHERE table_name IN UNNEST(@tables) ORDER BY table_name`,
+    columns:`SELECT table_name,column_name,ordinal_position,data_type,is_nullable FROM \`${project}.${dataset}.INFORMATION_SCHEMA.COLUMNS\` WHERE table_name IN UNNEST(@tables) ORDER BY table_name,ordinal_position`,
+    identity:'SELECT SESSION_USER() AS executing_identity',
+    table_options:`SELECT table_name,option_name,option_type,option_value FROM \`${project}.${dataset}.INFORMATION_SCHEMA.TABLE_OPTIONS\` WHERE table_name IN UNNEST(@tables) ORDER BY table_name,option_name`,
+    row_access_policies:`SELECT table_name,policy_name,grantee_list,filter_predicate FROM \`${project}.region-${location.toLowerCase()}.INFORMATION_SCHEMA.ROW_ACCESS_POLICIES\` WHERE table_schema = '${dataset}' AND table_name IN UNNEST(@tables) ORDER BY table_name,policy_name`
+  };
   const device=`\`${project}.${dataset}.session_conversion_by_device\``, source=`\`${project}.${dataset}.session_conversion_by_device_source\``;
   const evidence=(parameter,destination,inserted,phase)=>`SELECT AS STRUCT
   '${phase}' AS capture_phase, GENERATE_UUID() AS evaluation_id, CURRENT_TIMESTAMP() AS evaluated_at,
@@ -201,10 +205,17 @@ SELECT device_evidence AS device, source_evidence AS source,
   STRUCT(temp_device_evidence AS device, temp_source_evidence AS source) AS temp_table_reproduction,
   STRUCT(device_evidence.capture_phase = 'set_after_insert' AND device_evidence.evaluation_id != device_initialization_evidence.evaluation_id AS device_fresh,
     source_evidence.capture_phase = 'set_after_insert' AND source_evidence.evaluation_id != source_initialization_evidence.evaluation_id AS source_fresh) AS assignment_proof;`;
-  return {schema,rollback};
+  // `schema` remains an alias for callers that recorded the old generated SQL.
+  return {schema:metadata.columns,metadata,rollback};
 }
 
-const diagnosticStageError = (stage, error) => { const failure=new Error(`Shopify conversion diagnostic ${stage} failed`); failure.name='ShopifyConversionDiagnosticError'; failure.stage=stage; failure.code=Number.isFinite(Number(error?.code))?Number(error.code):'BIGQUERY_CHECK_FAILED'; return failure; };
+const boundedDiagnosticText=(value,max=300)=>String(value??'').replace(/[\r\n\t]+/g,' ').replace(/\s+/g,' ').replace(/(Bearer|token|password|credential|secret)\s*[=:]\s*\S+/gi,'$1=[redacted]').trim().slice(0,max)||null;
+const bigQueryFailure=error=>{
+  const detail=error?.errors?.[0]||error?.response?.data?.error?.errors?.[0]||{};
+  return {reason:boundedDiagnosticText(detail.reason,80),code:Number.isFinite(Number(error?.code))?Number(error.code):'BIGQUERY_CHECK_FAILED',message:boundedDiagnosticText(detail.message||error?.message),location:boundedDiagnosticText(detail.location,160)};
+};
+const diagnosticStageError = (stage, error) => { const failure=new Error(`Shopify conversion diagnostic ${stage} failed`); failure.name='ShopifyConversionDiagnosticError'; failure.stage=stage; Object.assign(failure,bigQueryFailure(error)); return failure; };
+const unavailableMetadata=(stage,error)=>({status:'unavailable',statement:stage,error:bigQueryFailure(error)});
 
 /** Execute the real replacement inside a transaction, capture bounded evidence in
  * script variables, explicitly roll it back, and only then return the evidence. */
@@ -213,13 +224,24 @@ export async function diagnoseChunk({ bigquery, project, dataset = 'shopify_data
   const structType=rowType(); const params={start:bigQueryDate(startDate),end:bigQueryDate(endDate),deviceRows:parameterRows(deviceRows,startDate,endDate),sourceRows:parameterRows(sourceRows,startDate,endDate),purgeNulls:Boolean(expectedNullRows),expectedNullDevice:expectedNullRows?.device||0,expectedNullSource:expectedNullRows?.source||0};
   const types={start:'DATE',end:'DATE',deviceRows:[structType],sourceRows:[structType],purgeNulls:'BOOL',expectedNullDevice:'INT64',expectedNullSource:'INT64'};
   const statements=rollbackDiagnosticStatements(project,dataset,{startDate,endDate,location});
-  const schemaOptions={location,query:statements.schema,params:{tables:TABLES},types:{tables:['STRING']},useLegacySql:false,maximumBytesBilled:ROLLBACK_DIAGNOSTIC_MAX_BYTES_BILLED};
+  const metadataOptions=Object.fromEntries(Object.entries(statements.metadata).map(([name,query])=>[name,{location,query,...(name==='identity'?{}:{params:{tables:TABLES},types:{tables:['STRING']}}),useLegacySql:false,maximumBytesBilled:ROLLBACK_DIAGNOSTIC_MAX_BYTES_BILLED,labels:{component:'shopify_conversion_metadata_diagnostic'}}]));
   const rollbackOptions={location,query:statements.rollback,params,types,useLegacySql:false,maximumBytesBilled:ROLLBACK_DIAGNOSTIC_MAX_BYTES_BILLED,labels:{component:'shopify_conversion_rollback_diagnostic'}};
-  try { await bigquery.createQueryJob({...schemaOptions,dryRun:true}); } catch(error) { throw diagnosticStageError('dry_run:schema',error); }
+  const metadata={required:{},optional:{}};
+  for(const name of ['tables','columns']){
+    try { await bigquery.createQueryJob({...metadataOptions[name],dryRun:true}); } catch(error) { throw diagnosticStageError(`dry_run:metadata:${name}`,error); }
+  }
   try { await bigquery.createQueryJob({...rollbackOptions,dryRun:true}); } catch(error) { throw diagnosticStageError('dry_run:rollback',error); }
-  let schemaRows; try { [schemaRows]=await bigquery.query(schemaOptions); } catch(error) { throw diagnosticStageError('query:schema',error); }
+  for(const name of ['tables','columns']){
+    try { const [rows]=await bigquery.query(metadataOptions[name]); metadata.required[name]={status:'available',rows}; } catch(error) { throw diagnosticStageError(`query:metadata:${name}`,error); }
+  }
+  for(const name of ['identity','table_options','row_access_policies']){
+    let dryRunError=null;
+    try { await bigquery.createQueryJob({...metadataOptions[name],dryRun:true}); } catch(error) { dryRunError=error; }
+    if(dryRunError){metadata.optional[name]=unavailableMetadata(`dry_run:metadata:${name}`,dryRunError);continue;}
+    try { const [rows]=await bigquery.query(metadataOptions[name]); metadata.optional[name]={status:'available',rows}; } catch(error) { metadata.optional[name]=unavailableMetadata(`query:metadata:${name}`,error); }
+  }
   let rows; try { [rows]=await bigquery.query(rollbackOptions); } catch(error) { throw diagnosticStageError('query:rollback',error); }
   const encode=(value,type)=>BigQuery.valueToQueryParameter_(value,type); const encodedSample=values=>values.length?encode([values[0]],[structType]):encode([],[structType]);
-  return {diagnostic:'shopify_conversion_rollback',read_only_effect:'all destination changes explicitly rolled back',range:{start:startDate,end:endDate},schema:schemaRows,insert_projection:{columns:COLUMNS,select_fields:COLUMNS.map(column=>`row.${column}`)},parameter_encoding:{start:encode(params.start,'DATE'),end:encode(params.end,'DATE'),device_rows:{row_count:params.deviceRows.length,first_encoded_row:encodedSample(params.deviceRows)},source_rows:{row_count:params.sourceRows.length,first_encoded_row:encodedSample(params.sourceRows)}},generated_sql:{schema:statements.schema,rollback_script:statements.rollback},evidence:rows[0]||null};
+  return {diagnostic:'shopify_conversion_rollback',read_only_effect:'all destination changes explicitly rolled back',range:{start:startDate,end:endDate},metadata,insert_projection:{columns:COLUMNS,select_fields:COLUMNS.map(column=>`row.${column}`)},parameter_encoding:{start:encode(params.start,'DATE'),end:encode(params.end,'DATE'),device_rows:{row_count:params.deviceRows.length,first_encoded_row:encodedSample(params.deviceRows)},source_rows:{row_count:params.sourceRows.length,first_encoded_row:encodedSample(params.sourceRows)}},generated_sql:{metadata:statements.metadata,rollback_script:statements.rollback},evidence:rows[0]||null};
 }
 export function missingDates(rows, startDate, endDate) { const observed = new Set(rows.map(row => row.date)); return datesBetween(startDate, endDate).filter(date => !observed.has(date)); }
