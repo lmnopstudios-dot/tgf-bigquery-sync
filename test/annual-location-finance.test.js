@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { BigQuery } from '@google-cloud/bigquery';
 import { annualLocationFinanceQuery, createAnnualLocationFinanceService, ANNUAL_LOCATION_MAX_BYTES } from '../oracle/annual-location-finance.js';
-import { bigQueryFailureDetail, diagnose, incidentQueries, schemaEvidenceQuery } from '../diagnostics/annual-location-finance-production.js';
+import { bigQueryFailureDetail, diagnose, incidentQueries, metadataEvidenceQueries, schemaEvidenceQuery, shopifyEvidenceQueries } from '../diagnostics/annual-location-finance-production.js';
 import { bigQueryDateParameters } from '../bigquery/date-parameters.js';
 import { datasetLocation } from '../bigquery/dataset-location.js';
 import { createOracleToolDefinitions } from '../oracle/tool-registry.js';
@@ -60,9 +60,13 @@ test('Oracle registry routes annual questions and follow-up ranges to the precis
 
 test('production incident queries explain population, rounding and disputed location without customer data',()=>{
   const queries=incidentQueries('p');
-  assert.deepEqual(Object.keys(queries),['read_path_comparison','location_reconciliation','online_difference','online_cross_classification','rounding','disputed_location','source_tax_coverage']);
+  assert.deepEqual(Object.keys(queries),['read_path_comparison','location_reconciliation','online_difference','online_cross_classification','rounding','disputed_location','source_tax_coverage','component_breakdown','component_examples','location_channel_population','duplicate_representations','annual_tax_comparison']);
   for(const sql of Object.values(queries)){assert.match(sql.trim(),/^(WITH|SELECT)/);assert.doesNotMatch(sql,/email|phone|customer|INSERT|UPDATE|DELETE/i);}
   assert.match(queries.online_difference,/location_minus_channel/);assert.match(queries.rounding,/stored_component_difference/);assert.match(queries.disputed_location,/LIMIT 20/);assert.match(queries.disputed_location,/mapping_provenance/);
+  assert.match(queries.component_breakdown,/transaction_type[\s\S]+sales_location[\s\S]+sales_channel/);
+  assert.match(queries.component_examples,/ABS\(net_ex_tax-\(gross-tax\)\)>=@material_difference/);
+  assert.match(queries.location_channel_population,/bounded_transaction_ids/);
+  assert.match(queries.duplicate_representations,/HAVING COUNT\(\*\)>1/);
   const comparisonLines=queries.read_path_comparison.split('\n');
   assert.match(comparisonLines[2],/EXTRACT\(YEAR FROM date\) year[\s\S]+\) dimension[\s\S]+GROUP BY year,currency,dimension/);
   assert.match(comparisonLines[3],/EXTRACT\(YEAR FROM date\) year[\s\S]+\) dimension[\s\S]+GROUP BY year,currency,dimension/);
@@ -72,14 +76,28 @@ test('mocked diagnostic preflights every exact statement before any bounded read
   const calls=[];const bigquery={dataset:name=>({getMetadata:async()=>[{location:name==='shopify_data'?'US':'EU'}]}),query:async options=>{calls.push({kind:'query',...options});return[[]];},createQueryJob:async options=>{calls.push({kind:'dry',...options});return[{}];}};
   const result=await diagnose({bigquery,project:'p'});
   assert.equal(result.read_only,true);assert.equal(result.limitations.fulfilment_inventory_location.toLowerCase().includes('not present'),true);
-  assert.equal(calls.filter(call=>call.kind==='dry').length,5+Object.keys(incidentQueries('p')).length+1);
-  assert.equal(calls.filter(call=>call.kind==='query').length,5+Object.keys(incidentQueries('p')).length);
+  const metadataCount=5*Object.keys(metadataEvidenceQueries('p','finance')).length;
+  assert.equal(calls.filter(call=>call.kind==='dry').length,5+metadataCount+Object.keys(incidentQueries('p')).length+Object.keys(shopifyEvidenceQueries('p')).length+1);
+  assert.equal(calls.filter(call=>call.kind==='query').length,5+metadataCount+Object.keys(incidentQueries('p')).length+Object.keys(shopifyEvidenceQueries('p')).length);
   assert.equal(calls.findIndex(call=>call.kind==='query'),calls.filter(call=>call.kind==='dry').length);
   assert.ok(calls.every(call=>call.maximumBytesBilled===ANNUAL_LOCATION_MAX_BYTES));
   assert.ok(calls.filter(call=>call.kind==='dry').every(call=>call.dryRun===true));
   assert.ok(calls.filter(call=>call.kind==='dry').some(call=>call.query===annualLocationFinanceQuery('p')));
   assert.ok(calls.filter(call=>call.kind==='dry').some(call=>call.query===schemaEvidenceQuery('p','finance')));
   assert.equal(result.bindings.start_date.declared_parameter_type,'DATE');
+  assert.equal(result.retirement_status.square.confirmed_operational_end,null);
+  assert.equal(result.statement_manifest.component_examples.typed_bindings.example_limit.type,'INT64');
+  assert.equal(result.statement_manifest.shopify_collection_freshness.typed_bindings.shopify_reported_through.value,'2026-09-24');
+});
+
+test('source-native probes keep sales, fulfilment, refunds and freshness distinct',()=>{
+  const queries=shopifyEvidenceQueries('p');
+  assert.match(queries.disputed_shopify_source,/retail_location_name/);
+  assert.match(queries.disputed_shopify_source,/transactions_json/);
+  assert.doesNotMatch(queries.disputed_shopify_source,/105063874887/);
+  assert.match(queries.shopify_refund_components,/refund_shipping_tax_presentment/);
+  assert.match(queries.shopify_collection_freshness,/native_rows_after_reported_through/);
+  assert.match(metadataEvidenceQueries('p','square_data').square_data_partitions,/last_modified_time/);
 });
 
 test('mocked preflight failure is bounded, stage-specific, and prevents every read',async()=>{
