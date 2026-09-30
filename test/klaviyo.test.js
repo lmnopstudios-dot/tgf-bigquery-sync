@@ -1,12 +1,32 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createKlaviyoClient,redactKlaviyo} from '../klaviyo/client.js';
-import {metricCatalogue,reportBody} from '../klaviyo/discovery.js';
+import {discover,metricCatalogue,reportBody} from '../klaviyo/discovery.js';
 import {requireGate,normalizeReport} from '../klaviyo/sync.js';
 import {classifyKlaviyoQuestion,KLAVIYO_TOOL_DEFINITIONS,createKlaviyoEmailService} from '../oracle/klaviyo-email.js';
 
 const response=(body,status=200,headers={get:()=>null})=>({ok:status<300,status,headers,json:async()=>body});
 test('pagination follows next links and enforces its bound',async()=>{let n=0;const fetchImpl=async()=>response(n++?{data:[],links:{next:null}}:{data:[{id:'one'}],links:{next:'/api/metrics?page=2'}}),client=createKlaviyoClient({apiKey:'pk_secretsecret',revision:'2026-01-15',fetchImpl,sleep:async()=>{}});assert.equal((await client.paginate('/api/metrics')).pages,2);n=0;await assert.rejects(client.paginate('/api/metrics',{maxPages:1}),/pagination bound/);});
+test('discovery omits unsupported page size for metrics and flows and follows their next links',async()=>{
+  const requested=[];
+  const pages=new Map([
+    ['https://a.klaviyo.com/api/metrics',{data:[{id:'m1',attributes:{name:'Opened Email'}}],links:{next:'https://a.klaviyo.com/api/metrics?page%5Bcursor%5D=metric-next'}}],
+    ['https://a.klaviyo.com/api/metrics?page%5Bcursor%5D=metric-next',{data:[{id:'m2',attributes:{name:'Clicked Email'}}],links:{next:null}}],
+    ["https://a.klaviyo.com/api/campaigns?filter=equals(messages.channel,'email')&page[size]=100",{data:[{id:'c1'}],links:{next:null}}],
+    ['https://a.klaviyo.com/api/flows',{data:[{id:'f1'}],links:{next:'/api/flows?page%5Bcursor%5D=flow-next'}}],
+    ['https://a.klaviyo.com/api/flows?page%5Bcursor%5D=flow-next',{data:[{id:'f2'}],links:{next:null}}]
+  ]);
+  const fetchImpl=async(url,options)=>{requested.push({url,method:options.method});assert.ok(pages.has(url),`unexpected URL: ${url}`);return response(pages.get(url));};
+  const client=createKlaviyoClient({apiKey:'pk_secretsecret',revision:'2026-01-15',fetchImpl,sleep:async()=>{}});
+  const result=await discover({client,timezone:'Europe/London',currency:'GBP'});
+  assert.deepEqual(requested.map(({url})=>url).sort(),[...pages.keys()].sort());
+  assert.ok(requested.every(({method})=>method==='GET'));
+  assert.deepEqual(result.metrics.map(({metric_id})=>metric_id),['m1','m2']);
+  assert.equal(result.campaign_count,1);
+  assert.equal(result.flow_count,2);
+  assert.equal(result.read_only,true);
+  assert.equal(result.approved_for_pilot,false);
+});
 test('429 retries are bounded and credentials are redacted',async()=>{let calls=0;const client=createKlaviyoClient({apiKey:'pk_secretsecret',revision:'2026-01-15',fetchImpl:async()=>{calls++;return response({},429)},maxRetries:2,sleep:async()=>{}});await assert.rejects(client.request('/api/metrics'),/HTTP 429/);assert.equal(calls,3);assert.equal(redactKlaviyo('Authorization: Klaviyo-API-Key pk_secretsecret'),'Authorization: Klaviyo-API-Key [REDACTED]');});
 test('metric provenance distinguishes integrations and report requires account settings',()=>{assert.deepEqual(metricCatalogue([{id:'s',attributes:{name:'Placed Order',integration:{name:'Shopify'}}},{id:'w',attributes:{name:'Placed Order - WooCommerce'}}]).map(x=>x.integration),['shopify','woocommerce']);assert.throws(()=>reportBody('campaign','s',{}),/timezone/);});
 test('production gate blocks collection until explicit matching approval',()=>{const manifest={gate_version:1,approved_for_pilot:true,timezone:'Europe/London',currency:'GBP',attribution_settings:'dashboard recorded',probes:[{metric_id:'s',status:'available'}]};assert.equal(requireGate(manifest,{timezone:'Europe/London',currency:'GBP',metricIds:['s']}),true);assert.throws(()=>requireGate({...manifest,approved_for_pilot:false},{timezone:'Europe/London',currency:'GBP',metricIds:['s']}),/blocked/);assert.throws(()=>requireGate(manifest,{timezone:'Europe/London',currency:'USD',metricIds:['s']}),/do not match/);});
