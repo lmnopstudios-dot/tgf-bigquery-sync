@@ -3,8 +3,8 @@ const tail=value=>String(value??'').replace(/^shopify:shopify:/,'').replace(/^gi
 const productGid=value=>`gid://shopify/Product/${tail(value)}`;
 const throttled=error=>error?.errors?.find(item=>item?.extensions?.code==='THROTTLED');
 
-const PRODUCTS=`query InventoryProducts($ids:[ID!]!){nodes(ids:$ids){... on Product{id title handle status tags variants(first:100){pageInfo{hasNextPage endCursor}nodes{id title sku availableForSale inventoryItem{id}}}}}}`;
-const VARIANTS=`query InventoryVariants($id:ID!,$cursor:String!){product(id:$id){variants(first:100,after:$cursor){pageInfo{hasNextPage endCursor}nodes{id title sku availableForSale inventoryItem{id}}}}}`;
+const PRODUCTS=`query InventoryProducts($ids:[ID!]!){nodes(ids:$ids){... on Product{id title handle status tags onlineStoreUrl publishedOnCurrentPublication variants(first:100){pageInfo{hasNextPage endCursor}nodes{id title sku availableForSale inventoryPolicy inventoryItem{id}}}}}}`;
+const VARIANTS=`query InventoryVariants($id:ID!,$cursor:String!){product(id:$id){variants(first:100,after:$cursor){pageInfo{hasNextPage endCursor}nodes{id title sku availableForSale inventoryPolicy inventoryItem{id}}}}}`;
 export const LOCATIONS_QUERY=`query InventoryLocations($cursor:String){locations(first:100,after:$cursor,includeLegacy:true){pageInfo{hasNextPage endCursor}nodes{id name isActive fulfillsOnlineOrders}}}`;
 const LEVELS=`query InventoryLevels($ids:[ID!]!,$location:ID!){nodes(ids:$ids){... on InventoryItem{id inventoryLevel(locationId:$location){quantities(names:["available"]){name quantity}}}}}`;
 const locationGid=value=>{const text=String(value??'').trim();if(!text)return null;return /^gid:\/\/shopify\/Location\/\d+$/.test(text)?text:/^\d+$/.test(text)?`gid://shopify/Location/${text}`:text;};
