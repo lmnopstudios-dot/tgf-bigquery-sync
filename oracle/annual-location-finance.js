@@ -13,6 +13,19 @@ function assertDate(value, name) {
  * the query never turns absent tax into zero.
  */
 export function annualLocationFinanceQuery(project) {
+  const measures=`currency,MIN(date) earliest_evidence,MAX(date) latest_evidence,
+      COUNT(*) transaction_count,COUNTIF(transaction_type='sale') sale_transactions,
+      COUNTIF(transaction_type='refund') refund_transactions,
+      COUNTIF(recorded_tax IS NOT NULL) tax_evidence_records,
+      COUNTIF(recorded_tax IS NULL) missing_tax_records,
+      COUNTIF(net_ex_tax IS NULL) missing_ex_tax_records,
+      SUM(IF(transaction_type='sale',net_ex_tax,NULL)) sales_excluding_recorded_tax,
+      SUM(IF(transaction_type='refund',net_ex_tax,NULL)) refunds_excluding_recorded_tax,
+      SUM(net_ex_tax) observed_net_sales_excluding_recorded_tax,
+      SUM(IF(transaction_type='sale',recorded_tax,NULL)) recorded_tax_on_sales,
+      SUM(IF(transaction_type='refund',recorded_tax,NULL)) recorded_tax_reversed_on_refunds,
+      SUM(recorded_tax) observed_net_recorded_tax_after_refunds,
+      SUM(gross) net_amount_including_recorded_tax`;
   return `WITH bounded AS (
     SELECT date,LOWER(transaction_type) transaction_type,
       COALESCE(NULLIF(TRIM(location),''),'Unknown / unallocated') sales_location,
@@ -25,23 +38,16 @@ export function annualLocationFinanceQuery(project) {
       AND (@currency IS NULL OR UPPER(currency)=UPPER(@currency))
       AND LOWER(transaction_type) IN ('sale','refund')
   ), grouped AS (
-    SELECT EXTRACT(YEAR FROM date) year,
-      IF(GROUPING(sales_location)=1,'__ALL_LOCATIONS__',sales_location) sales_location,
-      currency,MIN(date) earliest_evidence,MAX(date) latest_evidence,
-      COUNT(*) transaction_count,COUNTIF(transaction_type='sale') sale_transactions,
-      COUNTIF(transaction_type='refund') refund_transactions,
-      COUNTIF(recorded_tax IS NOT NULL) tax_evidence_records,
-      COUNTIF(recorded_tax IS NULL) missing_tax_records,
-      COUNTIF(net_ex_tax IS NULL) missing_ex_tax_records,
-      SUM(IF(transaction_type='sale',net_ex_tax,NULL)) sales_excluding_recorded_tax,
-      SUM(IF(transaction_type='refund',net_ex_tax,NULL)) refunds_excluding_recorded_tax,
-      SUM(net_ex_tax) observed_net_sales_excluding_recorded_tax,
-      SUM(IF(transaction_type='sale',recorded_tax,NULL)) recorded_tax_on_sales,
-      SUM(IF(transaction_type='refund',recorded_tax,NULL)) recorded_tax_reversed_on_refunds,
-      SUM(recorded_tax) observed_net_recorded_tax_after_refunds,
-      SUM(gross) net_amount_including_recorded_tax
+    -- Keep detail and total grouping explicit. The previous GROUPING(sales_location)
+    -- expression was rejected by the production BigQuery parser as a non-groupable
+    -- argument; UNION ALL produces the same disjoint grains without reclassifying data.
+    SELECT EXTRACT(YEAR FROM date) year,sales_location,${measures}
     FROM bounded
-    GROUP BY GROUPING SETS ((EXTRACT(YEAR FROM date),sales_location,currency),(EXTRACT(YEAR FROM date),currency))
+    GROUP BY year,sales_location,currency
+    UNION ALL
+    SELECT EXTRACT(YEAR FROM date) year,'__ALL_LOCATIONS__' sales_location,${measures}
+    FROM bounded
+    GROUP BY year,currency
   ) SELECT *,
     IF(missing_ex_tax_records=0,observed_net_sales_excluding_recorded_tax,NULL) net_sales_excluding_recorded_tax,
     IF(missing_tax_records=0,observed_net_recorded_tax_after_refunds,NULL) net_recorded_tax_after_refunds,
