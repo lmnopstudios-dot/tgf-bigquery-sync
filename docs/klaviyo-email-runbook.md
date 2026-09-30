@@ -52,7 +52,7 @@ Collection is hard-coded to the August 1–September 1 exclusive report timefram
 
 For each chosen conversion metric ID independently, export/view Klaviyo campaign and flow reports with **August 1–31 2026**, the recorded timezone/currency, identical attribution window/settings, and email channel. Reconcile recipients/delivered, unique clicks, opens, bounces, unsubscribes, spam complaints, conversions and conversion value. Document dashboard export time, settings, metric ID and discrepancies. Differences must be explained as report population, message/report-window semantics, late attribution, privacy/machine opens or dashboard freshness—not forced to equal Shopify finance totals. Confirm click rate is unique clicks ÷ delivered and revenue per delivered is conversion value ÷ delivered where both compatible inputs exist.
 
-The production diagnostic calls the same `collectPilot` and Oracle service helpers, performs no writes, and reports errors rather than zeros. A local run without production credentials is **not** live verification.
+The production diagnostic uses `config/klaviyo-account.json` by default (or the same optional `KLAVIYO_ACCOUNT_CONFIG` override as refresh), calls the bounded window collector and Oracle service helpers, performs no writes, and reports errors rather than zeros. It does not require the legacy temporary discovery manifest. A local run without production credentials is **not** live verification.
 
 ## Oracle coverage
 
@@ -93,7 +93,14 @@ npm run discover:klaviyo
 npm run diagnose:klaviyo-production
 ```
 
-Then run the bounded August command above once. Do not create or activate the external schedule until the API revision, scopes, exact-window query, status table, and dashboard reconciliation are reviewed in production.
+After deployment, run the read-only diagnostic and then the bounded August refresh, in this order:
+
+```sh
+npm run diagnose:klaviyo-production
+npm run refresh:klaviyo -- --start=2026-08-01 --end=2026-08-31
+```
+
+The pinned `2026-07-15` metadata contract accepts `include=flow-actions` on the flows listing but not the previously supplied `page[size]` parameter. The client therefore follows the server's next links with page, item, call, retry, and timeout bounds rather than adding that unsupported parameter. A metadata HTTP failure reports only its safe stage and endpoint plus bounded status and JSON:API code/title/detail/source fields; it never emits credentials or a complete body. Do not create or activate the external schedule until the API revision, scopes, exact-window query, status table, and dashboard reconciliation are reviewed in production.
 
 ## Metadata, content, and knowledge boundary
 

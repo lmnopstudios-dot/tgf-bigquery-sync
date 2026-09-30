@@ -72,8 +72,8 @@ test('production diagnostic inventories physical rows and fails closed on an Ora
 });
 
 test('Klaviyo diagnostic reconciles typed and literal reads while treating live statistic drift as collection-time change',async()=>{
-  const stored={report_kind:'campaign',entity_id:'c',message_id:'m',report_start:'2026-07-31T23:00:00.000Z',report_end:'2026-08-31T23:00:00.000Z',conversion_metric_id:'Xp9amv',reporting_timezone:'Europe/London',...statistics()},live={...stored,conversion_value:99};
-  const aggregate={report_kind:'campaign',entity_id:'c',conversion_metric_id:'Xp9amv',currency:'GBP',reporting_timezone:'Europe/London',api_revision:'2026-07-15',attribution_settings:'{}',report_period_semantics:'report',recipients:1,delivered:1,unique_opens:1,unique_clicks:1,attributed_conversions:1,attributed_conversion_value:1,bounces:1,unsubscribes:1,spam_complaints:1,evidence_rows:1};
+  const stored={report_kind:'campaign',entity_id:'c',message_id:'m',report_start:'2026-07-31T23:00:00.000Z',report_end:'2026-08-31T23:00:00.000Z',conversion_metric_id:'Xp9amv',reporting_timezone:'Europe/London',...statistics({conversions:52})},live={...stored,opens_unique:2};
+  const aggregate={report_kind:'campaign',entity_id:'c',conversion_metric_id:'Xp9amv',currency:'GBP',reporting_timezone:'Europe/London',api_revision:'2026-07-15',attribution_settings:'{}',report_period_semantics:'report',recipients:1,delivered:1,unique_opens:1,unique_clicks:1,attributed_conversion_events:52,attributed_conversion_value:1,bounces:1,unsubscribes:1,spam_complaints:1,evidence_rows:1};
   const calls=[],bigquery={dataset:()=>({getMetadata:async()=>[{location:'EU'}]}),query:async options=>{calls.push(options);if(options.query===inventoryQuery('p'))return [[]];if(options.query===physicalRowsQuery('p'))return [[stored]];if(options.query===physicalRowsTimestampLiteralQuery('p',stored.report_start,stored.report_end))return [[stored]];return [[aggregate]];}};
   const result=await diagnose({bigquery,project:'p',apiRows:[live],timezone:'Europe/London',metricIds:['Xp9amv']});
   assert.equal(result.status,'read_only_diagnostic_passed');assert.equal(result.comparison.live_attribution_statistics_changed,true);assert.equal(result.comparison.identity_consistent,true);assert.equal(result.comparison.binding_control.consistent,true);assert.equal(result.comparison.oracle_statistics.consistent,true);
@@ -91,11 +91,24 @@ test('durable account config and bounded windows reject silent drift and broad h
 });
 
 test('metadata joins stable names without treating drafts as sent',async()=>{
-  const {collectMetadata,joinMetadata}=await import('../klaviyo/metadata.js');
-  const client={paginate:async path=>({data:path.includes('campaigns')?[{id:'c1',attributes:{name:'LoyaltyLion Launch',status:'Draft'}}]:[{id:'f1',attributes:{name:'Welcome',status:'live'}}],included:[]})};
+  const {collectMetadata,joinMetadata,metadataPaths}=await import('../klaviyo/metadata.js');
+  const requested=[],client={paginate:async path=>{requested.push(path);return {data:path.includes('campaigns')?[{id:'c1',attributes:{name:'LoyaltyLion Launch',status:'Draft'}}]:[{id:'f1',attributes:{name:'Welcome',status:'live'}}],included:[]}}};
   const metadata=await collectMetadata({client,retrievedAt:'2026-09-30T00:00:00Z'});
+  assert.deepEqual(requested,[metadataPaths.campaign,metadataPaths.flow]);assert.equal(metadataPaths.flow,'/api/flows?include=flow-actions');assert.doesNotMatch(metadataPaths.flow,/page/);
   assert.equal(metadata[0].is_sent,false);assert.equal(metadata[0].subject,null);
   assert.equal(joinMetadata([{report_kind:'campaign',entity_id:'c1'}],metadata)[0].entity_name,'LoyaltyLion Launch');
+});
+
+test('metadata API failure identifies its bounded request and sanitized JSON:API fields',async()=>{
+  const {collectWindow}=await import('../klaviyo/sync.js'),config=JSON.parse(await (await import('node:fs/promises')).readFile(new URL('../config/klaviyo-account.json',import.meta.url)));
+  const result={groupings:{campaign_id:'c',campaign_message_id:'m'},statistics:statistics()},flowResult={groupings:{flow_id:'f',flow_message_id:'m'},statistics:statistics()};
+  const client={request:async path=>({data:{attributes:{results:path.includes('campaign')?[result]:[flowResult],next_cursor:null}}}),paginate:async path=>{if(path.includes('campaigns'))return {data:[],included:[]};throw Object.assign(new Error('body must stay private'),{status:400,code:'invalid',validationErrors:[{code:'invalid',title:'Invalid input',detail:'page size is unsupported',source:{pointer:null,parameter:'page[size]'}}]});}};
+  await assert.rejects(collectWindow({client,config,revision:'2026-07-15',start:'2026-08-01T00:00:00',end:'2026-09-01T00:00:00'}),error=>{const failure=error.failures[0];assert.equal(error.code,'PARTIAL_FAILURE');assert.deepEqual(failure,{kind:'metadata',stage:'metadata:flow',endpoint:'/api/flows?include=flow-actions',http_status:400,code:'invalid',errors:[{code:'invalid',title:'Invalid input',detail:'page size is unsupported',source:{pointer:null,parameter:'page[size]'}}],message:'Retrieval failed; sanitized details attached'});assert.doesNotMatch(JSON.stringify(error.failures),/body must stay private/);return true;});
+});
+
+test('metadata rejects missing stable IDs instead of joining or substituting empty data',async()=>{
+  const {collectMetadata}=await import('../klaviyo/metadata.js');
+  await assert.rejects(collectMetadata({client:{paginate:async()=>({data:[{attributes:{name:'unsafe fallback'}}],included:[]})}}),/stable ID/);
 });
 
 test('exact-window Oracle contract prevents overlapping snapshot double counting',()=>{const sql=klaviyoAggregateQuery('p');assert.match(sql,/DATE\(report_start,reporting_timezone\)=@start_date/);assert.match(sql,/DATE_ADD\(@end_date,INTERVAL 1 DAY\)/);assert.match(sql,/ROW_NUMBER\(\).*retrieved_at DESC/);assert.doesNotMatch(sql,/>=@start_date/);});
