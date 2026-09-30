@@ -63,7 +63,7 @@ assertStrictToolSchema();
 export const PROPOSAL_INSTRUCTIONS = `You structure durable business assertions into a small, useful set of governed record proposals. You never save or write anything. An explicit request to save is not required: an ordinary brief may contain durable assertions worth proposing for human review.
 Return an empty proposals list for questions, comparisons, analytical requests, casual conversation, or text without new durable assertions. A persistence request strengthens intent but never authorizes a write. For mixed input, propose only assertions.
 Compare every candidate with the supplied existing governed records. Omit an equivalent existing claim. When the same subject or titled event has materially changed, propose the changed claim and set supersedes to the exact existing record ID so the UI presents a linked update.
-Preserve material dates, times, offers, exclusions, qualifications, and provenance. Prefer a campaign record plus channel/store/cutoff records when that aids future retrieval; do not make dozens of micro-records. DATE fields are YYYY-MM-DD; retain time-of-day in descriptions.
+Preserve material dates, times, offers, exclusions, qualifications, and provenance. Relative dates are resolved in the supplied temporal_context from the original message timestamp: copy those effective dates exactly and do not reinterpret them. Prefer a campaign record plus channel/store/cutoff records when that aids future retrieval; do not make dozens of micro-records. DATE fields are YYYY-MM-DD; retain time-of-day in descriptions. Campaign plans are human-entered context, never measured performance. Timeless definitions have null effective dates. Never request an analysis date range or invent a currency while proposing knowledge.
 Use business_document only when the user clearly identifies pasted email/document content, with a concise non-fabricated reference; otherwise human_entered. Never invent metadata.
 Uncertain assertions must be working hypotheses (memory kind, memory_type hypothesis) or omitted, never confirmed. Confirmed memories require governed evidence references; user attestation alone supports only working memory. Do not include chain-of-thought or raw tool output.
 Do not infer causation. In particular, chronology about made-to-order Christmas delivery is context, not a cause of sales.
@@ -114,12 +114,12 @@ export function proposalDiagnostic(error, model) {
 
 export function createProposalGenerator({ openai, model = 'gpt-5.6' }) {
   if (!openai?.responses?.create) throw new Error('an OpenAI responses client is required');
-  return async ({ message, existing = [], evidence = [] }) => {
+  return async ({ message, existing = [], evidence = [], temporalContext = null }) => {
     if (!needsProposalGeneration(message)) return [];
     const context = existing.slice(0, 20).map(item => ({ id: item.id, kind: item.kind, status: item.status, title: item.title || item.term || item.subject, content: item.content || item.description || item.definition || item.statement }));
     let response;
     try {
-      response = await openai.responses.create({ model, instructions: PROPOSAL_INSTRUCTIONS, input: JSON.stringify({ user_message: message, existing_governed_records: context, governed_evidence_references: evidence.slice(0, 20) }), tools: [PROPOSE_GOVERNED_RECORDS_TOOL], tool_choice: { type: 'function', name: 'propose_governed_records' }, parallel_tool_calls: false, max_output_tokens: 6000 });
+      response = await openai.responses.create({ model, instructions: PROPOSAL_INSTRUCTIONS, input: JSON.stringify({ user_message: message, temporal_context: temporalContext, existing_governed_records: context, governed_evidence_references: evidence.slice(0, 20) }), tools: [PROPOSE_GOVERNED_RECORDS_TOOL], tool_choice: { type: 'function', name: 'propose_governed_records' }, parallel_tool_calls: false, max_output_tokens: 6000 });
     } catch (error) { throw proposalError(error, 'openai_request'); }
     try {
       const call = response.output?.find(item => item.type === 'function_call' && item.name === 'propose_governed_records');
