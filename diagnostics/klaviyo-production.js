@@ -3,13 +3,14 @@ import {readFile} from 'node:fs/promises';
 import {pathToFileURL} from 'node:url';
 import {createBigQueryClient} from '../bigquery/client.js';
 import {createKlaviyoEmailService,klaviyoAggregateQuery} from '../oracle/klaviyo-email.js';
-import {requireGate,collectPilot} from '../klaviyo/sync.js';
+import {collectWindow} from '../klaviyo/sync.js';
 import {createKlaviyoClient,redactKlaviyo} from '../klaviyo/client.js';
-import {parseMetricIds,resolveReportWindow} from '../klaviyo/discovery.js';
+import {PILOT,resolveReportWindow} from '../klaviyo/discovery.js';
 import {datasetLocation} from '../bigquery/dataset-location.js';
 import {BigQuery} from '@google-cloud/bigquery';
 
 const MAX_BYTES=1_000_000_000;
+const CONFIG_URL=new URL('../config/klaviyo-account.json',import.meta.url);
 const stats=['recipients','delivered','opens_unique','clicks_unique','conversions','conversion_value','bounced','unsubscribes','spam_complaints'];
 const identity=row=>[row.report_kind,row.entity_id,row.message_id,row.report_start?.value??row.report_start,row.report_end?.value??row.report_end,row.conversion_metric_id].join('\u0000');
 const number=value=>Number(value?.value??value??0);
@@ -47,7 +48,7 @@ function compareRows(apiRows,storedRows){
 }
 
 function compareOracleStatistics(storedRows,oracleRows){
-  const mappings={recipients:'recipients',delivered:'delivered',opens_unique:'unique_opens',clicks_unique:'unique_clicks',conversions:'attributed_conversions',conversion_value:'attributed_conversion_value',bounced:'bounces',unsubscribes:'unsubscribes',spam_complaints:'spam_complaints'};
+  const mappings={recipients:'recipients',delivered:'delivered',opens_unique:'unique_opens',clicks_unique:'unique_clicks',conversions:'attributed_conversion_events',conversion_value:'attributed_conversion_value',bounced:'bounces',unsubscribes:'unsubscribes',spam_complaints:'spam_complaints'};
   const differences=[];
   for(const [storedField,oracleField] of Object.entries(mappings)){
     const stored=storedRows.reduce((sum,row)=>sum+number(row[storedField]),0),oracle=oracleRows.reduce((sum,row)=>sum+number(row[oracleField]),0);
@@ -71,10 +72,9 @@ export async function diagnose({bigquery,project,apiRows,timezone,metricIds}){
 }
 
 export async function main(env=process.env){
-  const manifest=JSON.parse(await readFile(env.KLAVIYO_DISCOVERY_MANIFEST,'utf8')),metricIds=parseMetricIds(env.KLAVIYO_CONVERSION_METRIC_IDS),timezone=env.KLAVIYO_ACCOUNT_TIMEZONE;
-  requireGate(manifest,{timezone,currency:env.KLAVIYO_ACCOUNT_CURRENCY,metricIds});
+  const config=JSON.parse(await readFile(env.KLAVIYO_ACCOUNT_CONFIG||CONFIG_URL,'utf8')),metricIds=config.approved_metric_ids,timezone=config.timezone;
   const client=createKlaviyoClient({apiKey:env.KLAVIYO_PRIVATE_API_KEY,revision:env.KLAVIYO_API_REVISION,maxCalls:12,timeoutMs:15000});
-  const apiRows=await collectPilot({client,manifest,revision:env.KLAVIYO_API_REVISION,timezone,currency:env.KLAVIYO_ACCOUNT_CURRENCY,metricIds}),{bigquery,project}=createBigQueryClient(env),result=await diagnose({bigquery,project,apiRows,timezone,metricIds});
+  const collected=await collectWindow({client,config,revision:env.KLAVIYO_API_REVISION,start:PILOT.start,end:PILOT.end}),apiRows=collected.rows,{bigquery,project}=createBigQueryClient(env),result=await diagnose({bigquery,project,apiRows,timezone,metricIds});
   console.log(JSON.stringify(result,null,2));if(result.status!=='read_only_diagnostic_passed')process.exitCode=1;
 }
 
