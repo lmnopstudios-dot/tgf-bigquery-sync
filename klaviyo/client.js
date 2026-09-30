@@ -6,6 +6,21 @@ export function redactKlaviyo(value) {
     .replace(/(?:pk_|sk_)[A-Za-z0-9_-]{8,}/g, '[REDACTED]');
 }
 
+const bounded = (value, secrets=[], limit=500) => {
+  let output=redactKlaviyo(value);
+  for(const secret of secrets.filter(Boolean)) output=output.split(String(secret)).join('[REDACTED]');
+  return output.length>limit?`${output.slice(0,limit)}…`:output;
+};
+export function sanitizeJsonApiErrors(payload,{secrets=[]}={}) {
+  if(!Array.isArray(payload?.errors))return [];
+  return payload.errors.slice(0,5).map(item=>({
+    code:bounded(item?.code??'',secrets,100)||null,
+    title:bounded(item?.title??'',secrets,200)||null,
+    detail:bounded(item?.detail??'',secrets)||null,
+    source:{pointer:bounded(item?.source?.pointer??'',secrets,200)||null,parameter:bounded(item?.source?.parameter??'',secrets,200)||null}
+  }));
+}
+
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 export function createKlaviyoClient({apiKey, revision, fetchImpl=fetch, timeoutMs=15_000, maxCalls=40, maxRetries=3, sleep=wait}={}) {
   if (!apiKey) throw new Error('KLAVIYO_PRIVATE_API_KEY is required');
@@ -21,8 +36,9 @@ export function createKlaviyoClient({apiKey, revision, fetchImpl=fetch, timeoutM
       clearTimeout(timer);
       if(response.ok) return response.status===204?null:response.json();
       if([429,500,502,503,504].includes(response.status)&&attempt<maxRetries){const retry=Number(response.headers?.get?.('retry-after'));await sleep(Number.isFinite(retry)?Math.min(retry*1000,10_000):250*2**attempt);continue;}
-      let code='KLAVIYO_ERROR'; try{code=(await response.json())?.errors?.[0]?.code||code}catch{}
-      throw Object.assign(new Error(`Klaviyo API returned HTTP ${response.status}; response and credentials redacted`),{code,status:response.status});
+      let errors=[];try{errors=sanitizeJsonApiErrors(await response.json(),{secrets:[apiKey,body?.data?.attributes?.conversion_metric_id]})}catch{}
+      const code=errors[0]?.code||'KLAVIYO_ERROR';
+      throw Object.assign(new Error(`Klaviyo API returned HTTP ${response.status}; response and credentials redacted`),{code,status:response.status,validationErrors:errors});
     }
   }
   async function paginate(path,{maxPages=8,maxItems=1000}={}) {
