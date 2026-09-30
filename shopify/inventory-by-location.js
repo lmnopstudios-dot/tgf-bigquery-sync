@@ -20,16 +20,26 @@ export function inventoryLocationSelector(env=process.env){
   return{type:'exact_name',value:env.SHOPIFY_INVENTORY_LOCATION_NAME?.trim()||'Online',configured_by:env.SHOPIFY_INVENTORY_LOCATION_NAME?'SHOPIFY_INVENTORY_LOCATION_NAME':'default'};
 }
 
+/** Convert an Oracle location argument into the same strict selector used by
+ * durable inventory analysis. `null` and the legacy UI label "Online" mean
+ * the configured fulfilment location; they never mean every location. */
+export function inventoryLocationSelectorForRequest(requestedLocation,configured=inventoryLocationSelector()){
+  if(requestedLocation==null||/^online$/i.test(String(requestedLocation).trim()))return configured;
+  const value=String(requestedLocation).trim();
+  if(!value)throw new Error('location must be null or a non-empty string');
+  return{type:'exact_name',value,configured_by:'request',eligibility:'active'};
+}
+
 export function resolveInventoryLocation(locations,selector=inventoryLocationSelector({})){
   const candidates=Array.isArray(locations)?locations:[];
   const identityMatches=candidates.filter(location=>selector.type==='id'?location.id===selector.value:location.name===selector.value);
-  const eligible=identityMatches.filter(location=>location.isActive&&location.fulfillsOnlineOrders===true);
-  if(eligible.length===1)return{location:eligible[0],selector,reason:'one exact configured selector match is active and eligible to fulfil online orders'};
+  const eligible=identityMatches.filter(location=>location.isActive&&(selector.eligibility==='active'||location.fulfillsOnlineOrders===true));
+  if(eligible.length===1)return{location:eligible[0],selector,reason:selector.eligibility==='active'?'one exact requested location is active':'one exact configured selector match is active and eligible to fulfil online orders'};
   let reason;
   if(!identityMatches.length)reason=`no location has the configured ${selector.type==='id'?'ID':'exact name'}`;
   else if(identityMatches.length>1)reason='configured selector is not unique';
   else if(!identityMatches[0].isActive)reason='the exact configured location is inactive';
-  else reason='the exact configured location is not eligible to fulfil online orders';
+  else reason=selector.eligibility==='active'?'the exact requested location is inactive':'the exact configured location is not eligible to fulfil online orders';
   return{location:null,selector,reason,identity_match_count:identityMatches.length};
 }
 
@@ -52,7 +62,7 @@ export async function listAndResolveInventoryLocations({call,selector=inventoryL
 export function createBatchedInventoryByLocation({graphql,getToken,locationSelector=inventoryLocationSelector(),now=Date.now,sleep=ms=>new Promise(r=>setTimeout(r,ms)),log=()=>{},parentBatchSize=20,itemBatchSize=100,concurrency=2}){
   return async(parentIds,{deadlineAt=Infinity,signal}={})=>{
     const started=now(),stats={requested_parents:parentIds.length,returned_parents:0,variants:0,network_calls:0,parent_batch_calls:0,variant_page_calls:0,inventory_batch_calls:0,location_page_calls:0,pages:0,throttle_waits:0,throttle_wait_ms:0};
-    if(!parentIds.length)return{products:[],requested_count:0,completed_count:0,missing_ids:[],complete:true,diagnostics:{...stats,duration_ms:0,complete:true},as_of:new Date().toISOString(),location:'Online'};
+    if(!parentIds.length)return{products:[],requested_count:0,completed_count:0,missing_ids:[],complete:true,diagnostics:{...stats,duration_ms:0,complete:true},as_of:new Date().toISOString(),location:null,location_id:null};
     const token=await getToken();
     const call=async(query,variables,kind)=>{for(let attempt=0;attempt<2;attempt++){if(signal?.aborted)throw Object.assign(new Error('inventory request aborted'),{name:'AbortError'});stats.network_calls++;stats[kind]++;try{return await graphql(token,query,variables);}catch(error){const detail=throttled(error);if(!detail||attempt)return Promise.reject(error);const reset=Date.parse(detail.extensions?.cost?.windowResetAt),waitMs=Number.isFinite(reset)?Math.max(0,reset-now())+350:null,remaining=Number.isFinite(deadlineAt)?deadlineAt-now():Infinity;if(waitMs===null||waitMs>30_000||waitMs+5_000>=remaining)throw Object.assign(error,{code:'INVENTORY_THROTTLE_BUDGET_EXHAUSTED'});stats.throttle_waits++;stats.throttle_wait_ms+=waitMs;await sleep(waitMs);}}};
     const resolution=await listAndResolveInventoryLocations({call,selector:locationSelector});stats.pages+=resolution.pages;
