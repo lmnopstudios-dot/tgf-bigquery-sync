@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { buildHistoricalProductOpportunity, createHistoricalProductOpportunityService, selectHistoricalInventoryCandidates, HISTORICAL_PRODUCT_QUESTION, PUBLIC_SHOPIFY_LAUNCH_DATE } from '../oracle/historical-product-opportunity.js';
 import { evidenceSummary } from '../oracle/evidence-summary.js';
 import { oracleRequestRoute } from '../public/oracle/request-routing.js';
+import {INVENTORY_PRODUCTS_QUERY} from '../shopify/inventory-by-location.js';
 
 const row=(source,store,units,sales,extra={})=>({canonical_title:'Flaming Heart Pendant',source_platform:source,source_store:store,source_product_id:source==='shopify'?'100':'10',channel:'Online',currency:store==='usd'?'USD':'GBP',units,product_sales:sales,...extra});
 test('exact production question takes durable route and public launch is 20 November',()=>{assert.equal(oracleRequestRoute(HISTORICAL_PRODUCT_QUESTION),'job');assert.equal(PUBLIC_SHOPIFY_LAUNCH_DATE,'2025-11-20');});
@@ -47,10 +48,27 @@ test('joins Product GID mapping refs to GID sales and numeric inventory parents 
   assert.equal(result.coverage.join_diagnostics.identifier_examples.inventory_variant_id[0].format,'shopify_variant_gid');
 });
 
-test('slow inventory is bounded and identifies the actual failed stage',async()=>{
+test('slow inventory is bounded, non-retryable, and preserves sales evidence',async()=>{
   const service=createHistoricalProductOpportunityService({reportProducts:async()=>({rows:[]}),loadMappings:async()=>[{source_ref:'woo:ww:10',shopify_parent_ref:'shopify:shopify:100',mapping_method:'explicit_governed_mapping',active:true}],loadInventory:async()=>new Promise(()=>{}),stageTimeouts:{woo_sales:100,shopify_sales:100,mapping_ledger:100,inventory_retrieval:15}});
   const result=await service({end_date:'2026-09-30',limit:10},{deadlineAt:Date.now()+1000});
-  assert.equal(result.success,false);assert.equal(result.code,'OPPORTUNITY_STAGE_TIMEOUT');assert.equal(result.failed_stage,'inventory_retrieval');assert.equal(result.retryable,false);assert.ok(result.stage_timings.find(x=>x.stage==='inventory_retrieval'&&x.outcome==='failed'));
+  assert.equal(result.success,true);assert.equal(result.partial,true);assert.equal(result.code,'OPPORTUNITY_STAGE_TIMEOUT');assert.equal(result.failed_stage,'inventory_retrieval');assert.equal(result.retryable,false);assert.equal(result.partial_candidates.length,0);assert.ok(result.stage_timings.find(x=>x.stage==='inventory_retrieval'&&x.outcome==='failed'));
+});
+
+test('deployed inventory query omits unsupported publication field but retains validated variant fields',()=>{
+  assert.doesNotMatch(INVENTORY_PRODUCTS_QUERY,/publishedOnCurrentPublication/);
+  assert.match(INVENTORY_PRODUCTS_QUERY,/onlineStoreUrl/);
+  assert.match(INVENTORY_PRODUCTS_QUERY,/availableForSale inventoryPolicy/);
+});
+
+test('GraphQL schema rejection retains governed identities and velocities with unknown stock',async()=>{
+  const graphqlError=Object.assign(new Error('raw response must not escape'),{name:'ShopifyGraphQLError',errors:[{message:"Field 'publishedOnCurrentPublication' doesn't exist on type 'Product'",extensions:{code:'undefinedField'}}]});
+  const mappings=[{source_ref:'woo:ww:10',shopify_parent_ref:'shopify:shopify:100',mapping_method:'explicit_governed_mapping',active:true}];
+  let inventoryCalls=0,reportCalls=0;
+  const service=createHistoricalProductOpportunityService({reportProducts:async()=>({rows:++reportCalls===1?[row('woo','ww',365,7300)]:[row('shopify','shopify',10,500)]}),loadMappings:async()=>mappings,loadInventory:async()=>{inventoryCalls++;throw graphqlError;}});
+  const result=await service({end_date:'2026-09-28',limit:10});
+  assert.equal(inventoryCalls,1);assert.equal(result.success,true);assert.equal(result.partial,true);assert.equal(result.failed_stage,'inventory_retrieval');assert.equal(result.retryable,false);assert.deepEqual(result.failure.graphql,{code:'undefinedField',field:'publishedOnCurrentPublication',type:'Product',message:"Field 'publishedOnCurrentPublication' does not exist on type 'Product'."});assert.doesNotMatch(JSON.stringify(result),/raw response/);
+  const candidate=result.partial_candidates[0];assert.equal(candidate.shopify_parent_id,'100');assert.equal(candidate.woo_units,365);assert.equal(candidate.shopify_units,10);assert.equal(candidate.woo_units_per_day,1);assert.equal(candidate.online_positive_stock,null);assert.equal(candidate.variants,null);assert.equal(candidate.made_to_order,null);assert.equal(candidate.made_to_order_purchasability.status,'unknown');
+  const answer=evidenceSummary([{name:'get_historical_product_opportunities',result}]);assert.match(answer,/Sales-qualified candidates \(inventory unavailable\)/);assert.match(answer,/Woo 365 units/);assert.match(answer,/Shopify 10 units/);assert.match(answer,/Online stock unknown/);assert.match(answer,/Failed stage:\*\* inventory retrieval/);assert.match(answer,/not automatically repeated/);
 });
 
 test('incomplete mapped-parent inventory coverage cannot become zero stock or zero opportunities',async()=>{
