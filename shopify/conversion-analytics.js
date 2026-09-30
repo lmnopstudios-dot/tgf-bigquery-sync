@@ -7,6 +7,7 @@ import { BigQuery } from '@google-cloud/bigquery';
 export const METRICS = Object.freeze(['sessions', 'sessions_that_completed_checkout', 'conversion_rate', 'sessions_with_cart_additions', 'sessions_that_reached_checkout']);
 export const SHOPIFYQL_DIMENSIONS = Object.freeze({ date: 'day', device: 'session_device_type', source: 'referrer_source' });
 export const SHOPIFY_SESSION_MEASUREMENT_CHANGE = '2026-09-01';
+export const ROLLBACK_DIAGNOSTIC_MAX_BYTES_BILLED = 100 * 1024 * 1024;
 export const SCHEMA = 'date DATE NOT NULL, device_type STRING, referrer_source STRING, sessions INT64, sessions_that_completed_checkout INT64, conversion_rate FLOAT64, sessions_with_cart_additions INT64, sessions_that_reached_checkout INT64, source_provenance STRING, reporting_timezone STRING, measurement_era STRING, source_cardinality_limited BOOL, synced_at TIMESTAMP';
 const PARAMETER_SCHEMA = SCHEMA.replace('DATE NOT NULL', 'DATE');
 const safeId = value => { if (!/^[A-Za-z0-9_-]+$/.test(value)) throw new Error('Invalid BigQuery identifier'); return value; };
@@ -147,7 +148,7 @@ export async function diagnoseChunk({ bigquery, project, dataset = 'shopify_data
   const structType=rowType(); const params={start:bigQueryDate(startDate),end:bigQueryDate(endDate),deviceRows:parameterRows(deviceRows,startDate,endDate),sourceRows:parameterRows(sourceRows,startDate,endDate),purgeNulls:Boolean(expectedNullRows),expectedNullDevice:expectedNullRows?.device||0,expectedNullSource:expectedNullRows?.source||0};
   const types={start:'DATE',end:'DATE',deviceRows:[structType],sourceRows:[structType],purgeNulls:'BOOL',expectedNullDevice:'INT64',expectedNullSource:'INT64'};
   const schemaSql=`SELECT table_name,column_name,ordinal_position,data_type,is_nullable FROM \`${project}.${dataset}.INFORMATION_SCHEMA.COLUMNS\` WHERE table_name IN UNNEST(@tables) ORDER BY table_name,ordinal_position`;
-  const [schemaRows]=await bigquery.query({location,query:schemaSql,params:{tables:TABLES},types:{tables:['STRING']},maximumBytesBilled:10_000_000});
+  const [schemaRows]=await bigquery.query({location,query:schemaSql,params:{tables:TABLES},types:{tables:['STRING']},maximumBytesBilled:ROLLBACK_DIAGNOSTIC_MAX_BYTES_BILLED});
   const device=`\`${project}.${dataset}.session_conversion_by_device\``, source=`\`${project}.${dataset}.session_conversion_by_device_source\``;
   const query=`DECLARE device_evidence DEFAULT (SELECT AS STRUCT (${diagnosticAggregate('UNNEST(@deviceRows)')}) staged, (${diagnosticAggregate(device)}) stored, ${diagnosticDifferences('deviceRows',device)} differences);
 DECLARE source_evidence DEFAULT (SELECT AS STRUCT (${diagnosticAggregate('UNNEST(@sourceRows)')}) staged, (${diagnosticAggregate(source)}) stored, ${diagnosticDifferences('sourceRows',source)} differences);
@@ -160,7 +161,7 @@ SET device_evidence = (SELECT AS STRUCT (${diagnosticAggregate('UNNEST(@deviceRo
 SET source_evidence = (SELECT AS STRUCT (${diagnosticAggregate('UNNEST(@sourceRows)')}) staged, (${diagnosticAggregate(`${source} WHERE date BETWEEN @start AND @end`)}) stored, ${diagnosticDifferences('sourceRows',source)} differences);
 ROLLBACK TRANSACTION;
 SELECT device_evidence device, source_evidence source;`;
-  const [rows]=await bigquery.query({location,query,params,types,maximumBytesBilled:1_000_000_000,labels:{component:'shopify_conversion_rollback_diagnostic'}});
+  const [rows]=await bigquery.query({location,query,params,types,maximumBytesBilled:ROLLBACK_DIAGNOSTIC_MAX_BYTES_BILLED,labels:{component:'shopify_conversion_rollback_diagnostic'}});
   const encode=(value,type)=>BigQuery.valueToQueryParameter_(value,type); const encodedSample=values=>values.length?encode([values[0]],[structType]):encode([],[structType]);
   return {diagnostic:'shopify_conversion_rollback',read_only_effect:'all destination changes explicitly rolled back',range:{start:startDate,end:endDate},schema:schemaRows,parameter_encoding:{start:encode(params.start,'DATE'),end:encode(params.end,'DATE'),device_rows:{row_count:params.deviceRows.length,first_encoded_row:encodedSample(params.deviceRows)},source_rows:{row_count:params.sourceRows.length,first_encoded_row:encodedSample(params.sourceRows)}},generated_sql:{schema:schemaSql,rollback_script:query},evidence:rows[0]||null};
 }

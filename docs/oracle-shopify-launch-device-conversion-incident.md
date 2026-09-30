@@ -22,6 +22,14 @@ timeout 120s npm run backfill:shopify-conversion -- --mode probe --start 2025-11
 
 This performs one bounded device-grain ShopifyQL read and creates no BigQuery client, schema, staging table, or write. Its JSON must say `read_only: true`, show range `2025-11-20`–`2025-11-26`, a nonzero `row_count`, and seven distinct entries whose `shopifyql_day` equals `normalized_date`. It emits no customer field and never queries or prints `referrer_source`. Stop if any date is missing, invalid, or outside the chunk.
 
+After deploying, run the rollback diagnostic over the same seven-day scope:
+
+```sh
+timeout 180s npm run backfill:shopify-conversion -- --mode diagnose --start 2025-11-20 --end 2025-11-26 --chunk-days 7 --max-chunks 1 --max-sources 40 --expected-null-device 1125 --expected-null-source 4085 --timezone Europe/London
+```
+
+Both its schema query and diagnostic script are capped at 100 MiB (104,857,600 bytes). The script exercises the replacement and captures bounded aggregate/difference evidence, but explicitly rolls back before returning it. This diagnostic does not repair the tables, and a successful run does not establish that the underlying stored-total mismatch is fixed.
+
 ## Transactional pilot and bounded resume
 
 Only after the probe passes, run the one-chunk pilot. The two expected counts are deliberate guards: the transaction aborts rather than deleting anything if the physical NULL population has changed. In the same transaction it removes exactly the known NULL-date contamination, replaces both tables for the pilot, rejects duplicate keys or any remaining NULL, and compares the ShopifyQL device session/funnel totals with the stored pilot totals.
