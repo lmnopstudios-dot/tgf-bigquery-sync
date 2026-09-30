@@ -55,6 +55,7 @@
     "validate:metorik-geography": "node diagnostics/metorik-geography-validation.js",
     "validate:report-v2-production": "node diagnostics/report-v2-production-validation.js",
     "validate:canonical-finance-production": "node diagnostics/canonical-finance-production-validation.js",
+    "diagnose:annual-location-finance": "node diagnostics/annual-location-finance-production.js",
     "validate:product-mapping-production": "node diagnostics/product-mapping-production-validation.js",
     "validate:product-mapping-review-queue-production": "node diagnostics/product-mapping-review-queue-production.js",
     "diagnose:product-mapping-candidate": "node diagnostics/product-mapping-candidate.js",

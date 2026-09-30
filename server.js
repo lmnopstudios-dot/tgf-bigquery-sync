@@ -17,6 +17,7 @@ import { createKnowledgeService, executeKnowledgeToolCall } from './oracle/knowl
 import { createOracleUiRouter } from './oracle/ui-router.js';
 import { createEcommerceReportV2 } from './oracle/ecommerce-report-v2.js';
 import { createOracleFinanceService } from './oracle/finance.js';
+import { createAnnualLocationFinanceService } from './oracle/annual-location-finance.js';
 import { createProposalGenerator } from './oracle/proposals.js';
 import { createProductMappingService, governedDecisionCtes, productFamilyCtes } from './oracle/product-mapping.js';
 import { createCollectionClassificationService } from './oracle/collection-classification.js';
@@ -147,6 +148,7 @@ const knowledgeService = createKnowledgeService({
 });
 const ecommerceReportV2 = createEcommerceReportV2({ bigquery, project: GOOGLE_PROJECT_ID, knowledgeService });
 const oracleFinance = createOracleFinanceService({ bigquery, project: GOOGLE_PROJECT_ID });
+const annualLocationFinance = createAnnualLocationFinanceService({ bigquery, project: GOOGLE_PROJECT_ID });
 const productMappingService = createProductMappingService({ bigquery, project: GOOGLE_PROJECT_ID });
 const collectionClassificationService = createCollectionClassificationService({ bigquery, project: GOOGLE_PROJECT_ID });
 const shopifyCountryProductsService = createShopifyCountryProductsService({ bigquery, project: GOOGLE_PROJECT_ID });
@@ -4462,7 +4464,14 @@ async function getSalesByLocation({
       COUNT(*) AS transaction_count,
       SUM(CASE WHEN transaction_type = 'sale' THEN gross ELSE 0 END) AS sales_gross,
       SUM(CASE WHEN transaction_type = 'refund' THEN gross ELSE 0 END) AS refunds_gross,
-      SUM(gross) AS net_gross
+      SUM(gross) AS net_gross,
+      SUM(gross) AS net_amount_including_recorded_tax,
+      SUM(IF(transaction_type = 'sale', tax, NULL)) AS recorded_tax_on_sales,
+      SUM(IF(transaction_type = 'refund', tax, NULL)) AS recorded_tax_reversed_on_refunds,
+      IF(COUNTIF(tax IS NULL) = 0, SUM(tax), NULL) AS net_recorded_tax_after_refunds,
+      SUM(tax) AS observed_net_recorded_tax_after_refunds,
+      IF(COUNTIF(net_ex_tax IS NULL) = 0, SUM(net_ex_tax), NULL) AS net_sales_excluding_recorded_tax,
+      COUNTIF(tax IS NULL) AS missing_tax_records
     FROM \`${GOOGLE_PROJECT_ID}.finance.accountant_transactions\`
     WHERE date >= @start_date
       AND date <= @end_date
@@ -8438,6 +8447,10 @@ Important rules:
 } else if (item.name === 'get_sales_by_location') {
 
   result = await getSalesByLocation(args);
+
+} else if (item.name === 'get_annual_sales_by_location') {
+
+  result = await annualLocationFinance(args);
 
 } else if (item.name === 'compare_sales_periods') {
 
