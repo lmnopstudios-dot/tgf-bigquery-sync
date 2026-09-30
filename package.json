@@ -72,6 +72,7 @@
     "diagnose:oracle-shopify-device-source": "node diagnostics/oracle-shopify-device-source-conversion.js",
     "diagnose:oracle-pageviews-per-session": "node diagnostics/oracle-pageviews-per-session.js",
     "discover:klaviyo": "node klaviyo/discovery.js",
+    "prepare:klaviyo-manifest": "node klaviyo/prepare-manifest.js",
     "collect:klaviyo-pilot": "node klaviyo/sync.js"
   },
   "engines": {

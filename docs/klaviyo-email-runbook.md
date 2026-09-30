@@ -24,15 +24,21 @@ The client redacts authorization values and never emits response bodies on error
 Run this exact first command in Render Shell (it is read-only and bounded to eight pages per listing, 1,000 items, 40 calls, three retries, and 15 seconds per call):
 
 ```sh
-npm run discover:klaviyo > /tmp/klaviyo-discovery.json
+npm run discover:klaviyo 2>&1 | tee /tmp/klaviyo-discovery.log
 ```
 
-Review metric IDs and integration provenance. Confirm August 2026 probe availability. In a protected copy of the JSON, record the dashboard's exact attribution settings in `attribution_settings` and change `approved_for_pilot` to `true`; retain reviewer/time externally or in the change record. If settings are unavailable, stop. Do not guess them. Store the approved file durably and set `KLAVIYO_DISCOVERY_MANIFEST` to its path. The fingerprint makes the original discovery evidence reviewable; editing it is an explicit approval action.
+Review metric IDs and integration provenance and confirm both campaign and flow probes for `Xp9amv`. The capture can contain npm output around the JSON, so prepare a clean manifest with the bounded parser (replace the reviewer and timestamp with the real review provenance):
+
+```sh
+npm run prepare:klaviyo-manifest -- --input=/tmp/klaviyo-discovery.log --output=/tmp/klaviyo-reviewed.json --metric-ids=Xp9amv --reviewer='REVIEWER_NAME' --reviewed-at='2026-09-30T00:00:00Z'
+```
+
+The helper records the reviewed account settings, validates the exact pilot window and both probes, and preserves the byte-for-byte discovery capture beside the manifest as `/tmp/klaviyo-reviewed.json.discovery.log` with its SHA-256 and review provenance. It refuses to overwrite either file. Store both durably. Do not manually discard the original evidence.
 
 ## Phase 2 — August pilot only
 
 ```sh
-npm run collect:klaviyo-pilot
+KLAVIYO_DISCOVERY_MANIFEST=/tmp/klaviyo-reviewed.json KLAVIYO_CONVERSION_METRIC_IDS=Xp9amv KLAVIYO_ACCOUNT_TIMEZONE=Europe/London KLAVIYO_ACCOUNT_CURRENCY=GBP npm run collect:klaviyo-pilot
 node diagnostics/klaviyo-production.js
 ```
 
