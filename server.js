@@ -35,6 +35,7 @@ import { createOnlineCountrySalesService, ONLINE_COUNTRY_MAX_BYTES } from './ora
 import { createDeviceSourceConversionService, executeDeviceSourceConversionToolCall } from './oracle/device-source-conversion.js';
 import { answerWooDeviceConversionRequest } from './oracle/woo-device-conversion-request.js';
 import { answerShopifyLaunchDeviceConversionRequest } from './oracle/shopify-launch-device-conversion-request.js';
+import { answerShopifyDeviceSourceRequest } from './oracle/shopify-device-source-conversion-request.js';
 import { CATEGORY_SALES_MAX_BYTES, createCategorySalesService, executeCategorySalesToolCall } from './oracle/category-sales.js';
 import { createHistoricalProductOpportunityService } from './oracle/historical-product-opportunity.js';
 import { createProductViewPurchaseService, executeProductViewPurchaseToolCall } from './oracle/product-view-purchase.js';
@@ -8147,7 +8148,7 @@ app.post(
       // Keep this governed aggregate out of probabilistic routing/synthesis. The
       // result validator refuses to turn persisted reportable coverage into a
       // false "no covered days" answer.
-      const governedDeviceAnswer = await answerShopifyLaunchDeviceConversionRequest(message, deviceSourceConversionService) || await answerWooDeviceConversionRequest(message, deviceSourceConversionService);
+      const governedDeviceAnswer = await answerShopifyDeviceSourceRequest(message, deviceSourceConversionService) || await answerShopifyLaunchDeviceConversionRequest(message, deviceSourceConversionService) || await answerWooDeviceConversionRequest(message, deviceSourceConversionService);
       if (governedDeviceAnswer) return res.json({
         success: true,
         answer: governedDeviceAnswer.answer,
