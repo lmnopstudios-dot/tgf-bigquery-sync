@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { BigQuery } from '@google-cloud/bigquery';
 import { annualLocationFinanceQuery, createAnnualLocationFinanceService, ANNUAL_LOCATION_MAX_BYTES } from '../oracle/annual-location-finance.js';
-import { diagnose, incidentQueries, schemaEvidenceQuery } from '../diagnostics/annual-location-finance-production.js';
+import { bigQueryFailureDetail, diagnose, incidentQueries, schemaEvidenceQuery } from '../diagnostics/annual-location-finance-production.js';
 import { bigQueryDateParameters } from '../bigquery/date-parameters.js';
 import { datasetLocation } from '../bigquery/dataset-location.js';
 import { createOracleToolDefinitions } from '../oracle/tool-registry.js';
@@ -13,7 +13,9 @@ test('annual location SQL preserves recorded components, signs, null evidence an
   assert.match(sql,/SUM\(IF\(transaction_type='refund',recorded_tax,NULL\)\) recorded_tax_reversed_on_refunds/);
   assert.match(sql,/IF\(missing_tax_records=0,observed_net_recorded_tax_after_refunds,NULL\)/);
   assert.match(sql,/Unknown \/ unallocated/);
-  assert.match(sql,/GROUPING SETS/);
+  assert.match(sql,/GROUP BY year,sales_location,currency\s+UNION ALL/);
+  assert.match(sql,/SELECT EXTRACT\(YEAR FROM date\) year,'__ALL_LOCATIONS__' sales_location/);
+  assert.doesNotMatch(sql,/GROUPING(?: SETS)?\s*\(/);
   assert.doesNotMatch(sql,/SHOPIFY_INVENTORY_LOCATION_ID|105063874887|\/\s*1\.2|\*\s*0\.2/);
 });
 
@@ -86,6 +88,28 @@ test('mocked preflight failure is bounded, stage-specific, and prevents every re
   const bigquery={dataset:()=>({getMetadata:async()=>[{location:'EU'}]}),query:async options=>{calls.push({kind:'query',...options});return[[]];},createQueryJob:async options=>{calls.push({kind:'dry',...options});if(options.labels.operation==='read_path_comparison')throw providerError;return[{}];}};
   await assert.rejects(diagnose({bigquery,project:'p'}),error=>error.stage==='dry_run:read_path_comparison'&&error.cause_code===400&&error.message==='Annual location finance diagnostic failed during dry_run:read_path_comparison'&&!error.message.includes('credential'));
   assert.equal(calls.some(call=>call.kind==='query'),false);
+});
+
+test('BigQuery failure detail is allow-listed, bounded and sanitized',()=>{
+  const providerError={code:400,errors:[{reason:'invalidQuery',location:'query',message:`Invalid grouping argument; credential=secret\n${'x'.repeat(600)}`,debugInfo:'private'}],response:{body:'complete private HTTP response'}};
+  const detail=bigQueryFailureDetail(providerError);
+  assert.deepEqual(Object.keys(detail),['reason','bigquery_message','location']);
+  assert.equal(detail.bigquery_message.length,500);
+  assert.match(detail.bigquery_message,/^Invalid grouping argument; credential=\[REDACTED\] /);
+  assert.doesNotMatch(JSON.stringify(bigQueryFailureDetail(providerError)),/secret|debugInfo|HTTP response/);
+});
+
+test('exact Oracle preflight uses generated union SQL and actual typed parameter bindings',async()=>{
+  const calls=[];
+  const providerError=Object.assign(new Error('unsafe envelope'),{code:400,errors:[{reason:'invalidQuery',message:'GROUPING function argument must be a groupable item at [29:19]',location:'query'}]});
+  const bigquery={dataset:()=>({getMetadata:async()=>[{location:'EU'}]}),query:async()=>[[]],createQueryJob:async options=>{calls.push(options);if(options.labels.operation==='oracle_exact_path')throw providerError;return[{}];}};
+  await assert.rejects(diagnose({bigquery,project:'p',start:'2022-01-01',end:'2026-09-30'}),error=>error.stage==='dry_run:oracle_exact_path'&&error.cause_code===400&&error.reason==='invalidQuery'&&error.location==='query'&&error.bigquery_message==='GROUPING function argument must be a groupable item at [29:19]'&&error.message==='Annual location finance diagnostic failed during dry_run:oracle_exact_path');
+  const exact=calls.at(-1);
+  assert.equal(exact.query,annualLocationFinanceQuery('p'));
+  assert.match(exact.query,/GROUP BY year,sales_location,currency\s+UNION ALL/);
+  assert.deepEqual(exact.params,{start_date:BigQuery.date('2022-01-01'),end_date:BigQuery.date('2026-09-30'),currency:null});
+  assert.deepEqual(exact.types,{start_date:'DATE',end_date:'DATE',currency:'STRING'});
+  assert.equal(exact.location,'EU');assert.equal(exact.dryRun,true);
 });
 
 test('actual BigQuery validation of every generated annual statement (opt-in, no data reads)',{skip:!process.env.BIGQUERY_SYNTAX_PROJECT},async()=>{

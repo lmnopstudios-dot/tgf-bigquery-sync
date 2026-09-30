@@ -12,9 +12,23 @@ export function schemaEvidenceQuery(project,dataset) {
   return `SELECT table_name,column_name,data_type FROM \`${project}.${dataset}.INFORMATION_SCHEMA.COLUMNS\` WHERE REGEXP_CONTAINS(LOWER(column_name),r'(tax|location|shipping|currency|refund)') ORDER BY table_name,ordinal_position LIMIT 1000`;
 }
 
+const ERROR_FIELD_LIMIT=500;
+
+function safeErrorField(value) {
+  if(typeof value!=='string') return undefined;
+  return value.replace(/[\u0000-\u001f\u007f]+/g,' ')
+    .replace(/(authorization|bearer|credential|api[_-]?key|access[_-]?token)(\s*[:=]\s*|\s+)[^\s,;]+/gi,'$1$2[REDACTED]')
+    .slice(0,ERROR_FIELD_LIMIT);
+}
+
+export function bigQueryFailureDetail(error) {
+  const source=Array.isArray(error?.errors)?error.errors[0]:undefined;
+  return Object.fromEntries([['reason',safeErrorField(source?.reason)],['bigquery_message',safeErrorField(source?.message)],['location',safeErrorField(source?.location)]].filter(([,value])=>value));
+}
+
 function queryFailure(stage,error) {
   const causeCode=error?.code||error?.name||'QUERY_ERROR';
-  return Object.assign(new Error(`Annual location finance diagnostic failed during ${stage}`),{stage,cause_code:causeCode});
+  return Object.assign(new Error(`Annual location finance diagnostic failed during ${stage}`),{stage,cause_code:causeCode,...bigQueryFailureDetail(error)});
 }
 
 async function dryRun(bigquery,stage,options) {
@@ -78,4 +92,4 @@ async function main(){
   const args=Object.fromEntries(process.argv.slice(2).map(value=>value.replace(/^--/,'').split('=')));
   console.log(JSON.stringify(await diagnose({bigquery:new BigQuery({projectId:project,credentials}),project,start:args.start||INCIDENT_START,end:args.end||INCIDENT_END,currency:args.currency||null,disputedLocation:args.location||'Online Ready to Ship'}),null,2));
 }
-if(import.meta.url===pathToFileURL(process.argv[1]||'').href)main().catch(error=>{console.error(JSON.stringify({error:error.message,stage:error.stage||'startup',cause_code:error.cause_code||error.code||error.name||'ERROR'}));process.exitCode=1;});
+if(import.meta.url===pathToFileURL(process.argv[1]||'').href)main().catch(error=>{console.error(JSON.stringify({error:error.message,stage:error.stage||'startup',cause_code:error.cause_code||error.code||error.name||'ERROR',...Object.fromEntries([['reason',error.reason],['message',error.bigquery_message],['location',error.location]].filter(([,value])=>value))}));process.exitCode=1;});
