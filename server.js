@@ -38,6 +38,7 @@ import { answerShopifyLaunchDeviceConversionRequest } from './oracle/shopify-lau
 import { CATEGORY_SALES_MAX_BYTES, createCategorySalesService, executeCategorySalesToolCall } from './oracle/category-sales.js';
 import { createHistoricalProductOpportunityService } from './oracle/historical-product-opportunity.js';
 import { runWithShopifyThrottle, SHOPIFY_RATE_LIMIT_MESSAGE } from './oracle/shopifyql-throttle.js';
+import { createBatchedInventoryByLocation } from './shopify/inventory-by-location.js';
 import { buildOracleInlineChart } from './oracle/inline-charts.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { createBigQueryAnalysisJobStore, ORACLE_JOB_DEFAULTS } from './oracle/analysis-jobs.js';
@@ -149,6 +150,12 @@ const customerOrderIntervalService = createCustomerOrderIntervalService({ bigque
 const onlineCountrySalesService = createOnlineCountrySalesService({ bigquery, project: GOOGLE_PROJECT_ID });
 const deviceSourceConversionService = createDeviceSourceConversionService({ bigquery, project: GOOGLE_PROJECT_ID });
 const categorySalesService = createCategorySalesService({ bigquery, project: GOOGLE_PROJECT_ID });
+const loadHistoricalCandidateInventory=createBatchedInventoryByLocation({
+  graphql:shopifyGraphQL,
+  getToken:getShopifyAccessToken,
+  concurrency:2,
+  log:diagnostic=>console.info('Historical opportunity inventory:',diagnostic)
+});
 const historicalProductOpportunityService=createHistoricalProductOpportunityService({
   reportProducts:period=>ecommerceReportV2('products',period),
   loadMappings:async()=>{
@@ -157,14 +164,7 @@ const historicalProductOpportunityService=createHistoricalProductOpportunityServ
       FROM governed_active WHERE (STARTS_WITH(left_ref,'woo:') AND STARTS_WITH(right_ref,'shopify:shopify:')) OR (STARTS_WITH(right_ref,'woo:') AND STARTS_WITH(left_ref,'shopify:shopify:'))
       UNION ALL SELECT source_ref,shopify_parent_ref,'governed_product_family',TRUE FROM family_active`,useLegacySql:false,maximumBytesBilled:'1000000000',labels:{component:'historical_product_opportunity',operation:'approved_mapping_read'}});return rows;
   },
-  // Fetch each approved parent explicitly. The generic inventory tool's 25 is
-  // an interactive result bound, not a valid population bound for this join.
-  loadInventory:async(ids)=>{
-    const batchSize=20,batches=[];for(let i=0;i<ids.length;i+=batchSize)batches.push(ids.slice(i,i+batchSize));
-    const settled=await mapWithConcurrency(batches,3,async batch=>{try{const query=batch.map(id=>`id:${id}`).join(' OR '),page=await getShopifyInventoryByLocation({query,location:'Online',limit:batch.length});return{ok:true,batch,products:page.products||[]};}catch(error){return{ok:false,batch,error_class:error?.name||'Error'};}});
-    const completed=settled.filter(x=>x.ok).flatMap(x=>x.batch),missing=settled.filter(x=>!x.ok).flatMap(x=>x.batch);
-    return{products:settled.filter(x=>x.ok).flatMap(x=>x.products),requested_count:ids.length,completed_count:completed.length,missing_ids:missing,complete:missing.length===0};
-  }
+  loadInventory:loadHistoricalCandidateInventory
 });
 productMappingService.setup().catch(error => console.error('Product mapping storage setup failed:', redactError(error?.message || error)));
 collectionClassificationService.setup().catch(error => console.error('Collection classification storage setup failed:', redactError(error?.message || error)));

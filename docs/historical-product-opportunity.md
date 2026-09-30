@@ -85,3 +85,17 @@ returns that bounded joined table; an unrelated Shopify best-sellers list is
 not an acceptable fallback. Neither mode modifies mappings or inventory. Live
 mode creates only its durable execution record; offline mode only reads the
 supplied capture.
+
+## Candidate-first batched inventory retrieval
+
+Sales and approved mappings are read first. The complete mapped Woo-sales population sets the historical top-quartile cutoff; weak Shopify sales (including candidates with no Shopify sales row, treated as observed zero sales) then select the only parents sent to live inventory. This preserves the sales ranking population while avoiding inventory calls for products that cannot be returned.
+
+The production inventory helper uses Shopify GraphQL `nodes(ids:)`: one parent request per 20 parents and one inventory-item request per 100 variants. It fully paginates variants beyond 100, locates the exact active `Online` location, bounds concurrency at two, and waits at most once per call for a reported throttle reset only when the remaining deadline permits. Its credential-free aggregate diagnostic reports duration, requested/returned parents, variants, actual network calls by kind, pages, throttle waits, and coverage. It is live data: `inventory_as_of` is emitted, and incomplete coverage produces no ranking and is non-retryable within the analysis.
+
+The exact first Render command is:
+
+```sh
+render ssh --service <oracle-service> -- npm run diagnose:historical-product-opportunity -- --url="$RENDER_EXTERNAL_URL"
+```
+
+This command exercises the same production helper through the exact Oracle question. Mocked tests prove only the batching, pagination, throttling, and failure contracts; they do not establish production success.

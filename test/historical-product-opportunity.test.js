@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildHistoricalProductOpportunity, createHistoricalProductOpportunityService, HISTORICAL_PRODUCT_QUESTION, PUBLIC_SHOPIFY_LAUNCH_DATE } from '../oracle/historical-product-opportunity.js';
+import { buildHistoricalProductOpportunity, createHistoricalProductOpportunityService, selectHistoricalInventoryCandidates, HISTORICAL_PRODUCT_QUESTION, PUBLIC_SHOPIFY_LAUNCH_DATE } from '../oracle/historical-product-opportunity.js';
 import { evidenceSummary } from '../oracle/evidence-summary.js';
 import { oracleRequestRoute } from '../public/oracle/request-routing.js';
 
@@ -50,11 +50,19 @@ test('joins Product GID mapping refs to GID sales and numeric inventory parents 
 test('slow inventory is bounded and identifies the actual failed stage',async()=>{
   const service=createHistoricalProductOpportunityService({reportProducts:async()=>({rows:[]}),loadMappings:async()=>[{source_ref:'woo:ww:10',shopify_parent_ref:'shopify:shopify:100',mapping_method:'explicit_governed_mapping',active:true}],loadInventory:async()=>new Promise(()=>{}),stageTimeouts:{woo_sales:100,shopify_sales:100,mapping_ledger:100,inventory_retrieval:15}});
   const result=await service({end_date:'2026-09-30',limit:10},{deadlineAt:Date.now()+1000});
-  assert.equal(result.success,false);assert.equal(result.code,'OPPORTUNITY_STAGE_TIMEOUT');assert.equal(result.failed_stage,'inventory_retrieval');assert.equal(result.retryable,true);assert.ok(result.stage_timings.find(x=>x.stage==='inventory_retrieval'&&x.outcome==='failed'));
+  assert.equal(result.success,false);assert.equal(result.code,'OPPORTUNITY_STAGE_TIMEOUT');assert.equal(result.failed_stage,'inventory_retrieval');assert.equal(result.retryable,false);assert.ok(result.stage_timings.find(x=>x.stage==='inventory_retrieval'&&x.outcome==='failed'));
 });
 
 test('incomplete mapped-parent inventory coverage cannot become zero stock or zero opportunities',async()=>{
   const mappings=[{source_ref:'woo:ww:10',shopify_parent_ref:'shopify:shopify:100',mapping_method:'explicit_governed_mapping',active:true},{source_ref:'woo:ww:11',shopify_parent_ref:'shopify:shopify:200',mapping_method:'explicit_governed_mapping',active:true}];
   const service=createHistoricalProductOpportunityService({reportProducts:async()=>({rows:[]}),loadMappings:async()=>mappings,loadInventory:async ids=>({products:[],requested_count:ids.length,completed_count:1,missing_ids:['200'],complete:false})});
   const result=await service({end_date:'2026-09-30',limit:10});assert.equal(result.success,false);assert.equal(result.code,'INCOMPLETE_INVENTORY_COVERAGE');assert.equal(result.retrieval.full_population,false);assert.equal(result.rows,undefined);assert.match(result.error,/no zero-stock or opportunity conclusion/i);
+});
+
+
+test('candidate selection happens before inventory and retains zero-sales parents in the full ranking population',()=>{
+  const woo=[row('woo','ww',400,1,{source_product_id:'1'}),row('woo','ww',300,1,{source_product_id:'2'}),row('woo','ww',200,1,{source_product_id:'3'}),row('woo','ww',100,1,{source_product_id:'4'})];
+  const mappings=woo.map((r,i)=>({source_ref:`woo:ww:${i+1}`,shopify_parent_ref:`shopify:shopify:${i+1}`,mapping_method:'explicit_governed_mapping',active:true}));
+  const selected=selectHistoricalInventoryCandidates({wooRows:woo,shopifyRows:[],mappingRows:mappings,wooPeriod:{start_date:'2024-11-20',end_date:'2025-11-19'},shopifyPeriod:{start_date:'2025-11-20',end_date:'2026-09-30'}});
+  assert.equal(selected.ranking_population,4);assert.deepEqual(selected.ids,['2','1']);assert.equal(selected.zero_shopify_sales_candidates,2);
 });
