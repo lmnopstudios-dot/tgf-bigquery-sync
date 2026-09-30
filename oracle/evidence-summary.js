@@ -8,7 +8,8 @@ const LABELS={
   get_shopify_sales_kpis:'Shopify Online Store sales',
   get_ecommerce_report_v2_evidence:'Governed ecommerce evidence',
   search_knowledge:'Governed business context',
-  get_historical_product_opportunities:'Joined Woo + Shopify + Online stock comparison'
+  get_historical_product_opportunities:'Joined Woo + Shopify + Online stock comparison',
+  get_governed_pageviews_per_session:'Average pageviews per session'
 };
 
 const IDENTITY_KEYS=['product_title','title','name','product','variant_title','product_variant_title'];
@@ -43,6 +44,11 @@ export function evidenceSummary(entries,{unavailable=[]}={}){
     if(entry.result?.success===false){
       const stage=String(entry.result.failed_stage||'evidence retrieval').replaceAll('_',' '),code=String(entry.result.code||'TOOL_FAILED').slice(0,80);
       sections.push(`### ${LABELS[entry.name]||'Governed evidence'} unavailable\n- **Failed stage:** ${stage}.\n- **Status:** ${code}; ${entry.result.retryable?'an explicit retry is allowed.':'not retryable.'}\n- No analytical rows, zero-stock findings, or zero-opportunity conclusion were accepted from this error result.`);
+      continue;
+    }
+    if(entry.name==='get_governed_pageviews_per_session'&&entry.result?.woo_ga4&&entry.result?.shopify_native){
+      const line=x=>`- **${x.label}:** total views ${value(x.total_views)}; sessions ${value(x.total_sessions)}; weighted views/session ${value(x.views_per_session)}; coverage ${x.coverage.actual_start_date||'none'} to ${x.coverage.actual_end_date||'none'} (${x.coverage.covered_days}/${x.requested.days} days, ${x.coverage.missing_days} missing); source ${x.source}.`;
+      sections.push(`### ${LABELS[entry.name]}\n${line(entry.result.woo_ga4)}\n${line(entry.result.shopify_native)}\n- Calculation: total views / total sessions; daily rates were not averaged. Sources remain separately labelled and are not a like-for-like platform effect.`);
       continue;
     }
     const rows=rowsFor(entry.result).slice(0,12), lines=summaryLines(entry.result);

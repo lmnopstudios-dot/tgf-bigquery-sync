@@ -67,7 +67,8 @@
     "validate:oracle-tool-schemas": "node diagnostics/oracle-tool-schema-validation.js",
     "validate:shopify-country-products-production": "node diagnostics/shopify-country-products-production.js",
     "validate:online-country-sales-production": "node diagnostics/online-country-sales-production.js --start=2022-09-24 --end=2026-09-24",
-    "diagnose:oracle-shopify-device-source": "node diagnostics/oracle-shopify-device-source-conversion.js"
+    "diagnose:oracle-shopify-device-source": "node diagnostics/oracle-shopify-device-source-conversion.js",
+    "diagnose:oracle-pageviews-per-session": "node diagnostics/oracle-pageviews-per-session.js"
   },
   "engines": {
     "node": ">=20"
