@@ -1,6 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {main,runDiscovery} from '../diagnostics/product-view-purchase-discovery.js';
+import {DISCOVERY_MAXIMUM_BYTES_BILLED,main,runDiscovery} from '../diagnostics/product-view-purchase-discovery.js';
+
+const EXPECTED_DISCOVERY_CAP=104_857_600;
+
+function assertEveryQueryIsBounded(jobs,expectedCount){
+  assert.equal(DISCOVERY_MAXIMUM_BYTES_BILLED,EXPECTED_DISCOVERY_CAP);
+  assert.equal(jobs.length,expectedCount);
+  for(const job of jobs){
+    assert.equal(job.maximumBytesBilled,EXPECTED_DISCOVERY_CAP);
+    assert.equal(job.useLegacySql,false);
+  }
+}
 
 function fakeClass(instances){
   return class FakeBigQuery{
@@ -18,7 +29,7 @@ test('discovery CLI loads configured service-account credentials and metadata lo
   assert.equal(instances.length,1);
   assert.deepEqual(instances[0].options,{projectId:'service-project',credentials});
   assert.deepEqual(instances[0].jobs.map(job=>job.location),['EU','EU','US']);
-  assert.ok(instances[0].jobs.every(job=>job.maximumBytesBilled===10_000_000&&job.useLegacySql===false));
+  assertEveryQueryIsBounded(instances[0].jobs,3);
   assert.equal(result.configuration.ga4_dataset,'analytics');
   assert.doesNotMatch(output,/private-value/);
 });
@@ -27,6 +38,7 @@ test('discovery CLI retains ADC fallback when service-account JSON is not config
   const instances=[];
   const result=await main({env:{GOOGLE_PROJECT_ID:'adc-project'},BigQueryClass:fakeClass(instances),write:()=>{}});
   assert.deepEqual(instances[0].options,{projectId:'adc-project',credentials:undefined});
+  assertEveryQueryIsBounded(instances[0].jobs,2);
   assert.deepEqual(result.configuration.missing,['GA4_SESSION_EVENTS_TABLE']);
 });
 

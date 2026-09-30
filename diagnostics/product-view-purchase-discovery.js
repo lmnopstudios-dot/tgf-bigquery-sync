@@ -3,8 +3,9 @@ import {pathToFileURL} from 'node:url';
 import {createBigQueryClient} from '../bigquery/client.js';
 import {datasetLocation} from '../bigquery/dataset-location.js';
 
-const MAXIMUM_BYTES_BILLED=10_000_000;
+export const DISCOVERY_MAXIMUM_BYTES_BILLED=104_857_600;
 const IDENTIFIER=/^[A-Za-z0-9_-]+$/;
+const DISCOVERY_QUERY_OPTIONS=Object.freeze({useLegacySql:false,maximumBytesBilled:DISCOVERY_MAXIMUM_BYTES_BILLED});
 
 function tableParts(value){
   const parts=String(value).split('.');
@@ -24,13 +25,13 @@ export async function runDiscovery({bigquery,project,rawTable,ga4Dataset='ga4',l
   const inventory=[];
   for(const name of aggregate){
     const [p,d,t]=tableParts(name);
-    const [rows]=await bigquery.query({query:`SELECT table_name,column_name,data_type FROM \`${p}.${d}.INFORMATION_SCHEMA.COLUMNS\` WHERE table_name=@table ORDER BY ordinal_position`,params:{table:t},location:locations.get(`${p}.${d}`),useLegacySql:false,maximumBytesBilled:MAXIMUM_BYTES_BILLED});
+    const [rows]=await bigquery.query({...DISCOVERY_QUERY_OPTIONS,query:`SELECT table_name,column_name,data_type FROM \`${p}.${d}.INFORMATION_SCHEMA.COLUMNS\` WHERE table_name=@table ORDER BY ordinal_position`,params:{table:t},location:locations.get(`${p}.${d}`)});
     inventory.push({table:name,columns:rows});
   }
   let session_level={configured:false,available:false,table:rawTable||null,required_columns:['event_date','event_name','event_timestamp','user_pseudo_id','ga_session_id','item_id'],missing_columns:[]};
   if(rawParts){
     const [p,d,t]=rawParts;
-    const [rows]=await bigquery.query({query:`SELECT column_name,data_type FROM \`${p}.${d}.INFORMATION_SCHEMA.COLUMNS\` WHERE table_name=@table ORDER BY ordinal_position`,params:{table:t.replace(/\*$/,'')},location:locations.get(`${p}.${d}`),useLegacySql:false,maximumBytesBilled:MAXIMUM_BYTES_BILLED});
+    const [rows]=await bigquery.query({...DISCOVERY_QUERY_OPTIONS,query:`SELECT column_name,data_type FROM \`${p}.${d}.INFORMATION_SCHEMA.COLUMNS\` WHERE table_name=@table ORDER BY ordinal_position`,params:{table:t.replace(/\*$/,'')},location:locations.get(`${p}.${d}`)});
     const names=new Set(rows.map(row=>row.column_name));
     session_level={...session_level,configured:true,available:session_level.required_columns.every(column=>names.has(column)),missing_columns:session_level.required_columns.filter(column=>!names.has(column)),columns:rows};
   }
