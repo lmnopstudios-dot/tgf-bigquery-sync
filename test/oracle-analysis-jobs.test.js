@@ -164,6 +164,15 @@ test('a request id makes repeat job submissions return one owned job',async t=>{
   const first=await (await fetch(`${base}/jobs`,{method:'POST',headers,body:JSON.stringify({message:DANIELLE_FULL_EMAIL})})).json();const second=await (await fetch(`${base}/jobs`,{method:'POST',headers,body:JSON.stringify({message:DANIELLE_FULL_EMAIL})})).json();assert.equal(second.job_id,first.job_id);assert.equal(store.jobs.size,1);const recovered=await (await fetch(`${base}/jobs/request/same-click`,{headers:{cookie:auth.cookie}})).json();assert.equal(recovered.job_id,first.job_id);
 });
 
+test('browser preserves authoritative failed-job refresh outcome and retries only explicitly',async()=>{
+  const source=await import('node:fs/promises').then(fs=>fs.readFile(new URL('../public/oracle/app.js',import.meta.url),'utf8'));
+  assert.match(source,/authoritativeJobOutcome:true/);
+  assert.match(source,/Analysis \$\{error\.jobStatus\|\|'failed'\}: \$\{error\.message\}/);
+  assert.match(source,/Retry explicitly to create a new job/);
+  assert.doesNotMatch(source,/Background analysis was not submitted again/);
+  assert.match(source,/getByRequest|requestKey/);
+});
+
 test('production smoke lifecycle targets only its marked synthetic job and retrieves completion',async()=>{
   const store=createMemoryAnalysisJobStore([{job_id:'customer-job',owner_key:'customer',request_id:'customer-request',status:'queued',payload_json:{message:'customer job'},attempts:0,cancel_requested:false},{job_id:'abandoned-smoke',owner_key:'synthetic',request_id:'oracle-smoke-failed-run',status:'queued',payload_json:{synthetic:true},attempts:0,cancel_requested:false}]);
   const result=await smokeOracleJobQueue({store,delayMs:0});

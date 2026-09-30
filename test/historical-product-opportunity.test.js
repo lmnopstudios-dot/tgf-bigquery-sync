@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildHistoricalProductOpportunity, HISTORICAL_PRODUCT_QUESTION, PUBLIC_SHOPIFY_LAUNCH_DATE } from '../oracle/historical-product-opportunity.js';
+import { buildHistoricalProductOpportunity, createHistoricalProductOpportunityService, HISTORICAL_PRODUCT_QUESTION, PUBLIC_SHOPIFY_LAUNCH_DATE } from '../oracle/historical-product-opportunity.js';
 import { evidenceSummary } from '../oracle/evidence-summary.js';
 import { oracleRequestRoute } from '../public/oracle/request-routing.js';
 
@@ -45,4 +45,16 @@ test('joins Product GID mapping refs to GID sales and numeric inventory parents 
   assert.equal(result.coverage.join_diagnostics.identifier_examples.approved_shopify_parent_reference[0].format,'governed_shopify_product_gid_ref');
   assert.equal(result.coverage.join_diagnostics.identifier_examples.shopify_sales_product_id[0].format,'shopify_product_gid');
   assert.equal(result.coverage.join_diagnostics.identifier_examples.inventory_variant_id[0].format,'shopify_variant_gid');
+});
+
+test('slow inventory is bounded and identifies the actual failed stage',async()=>{
+  const service=createHistoricalProductOpportunityService({reportProducts:async()=>({rows:[]}),loadMappings:async()=>[{source_ref:'woo:ww:10',shopify_parent_ref:'shopify:shopify:100',mapping_method:'explicit_governed_mapping',active:true}],loadInventory:async()=>new Promise(()=>{}),stageTimeouts:{woo_sales:100,shopify_sales:100,mapping_ledger:100,inventory_retrieval:15}});
+  const result=await service({end_date:'2026-09-30',limit:10},{deadlineAt:Date.now()+1000});
+  assert.equal(result.success,false);assert.equal(result.code,'OPPORTUNITY_STAGE_TIMEOUT');assert.equal(result.failed_stage,'inventory_retrieval');assert.equal(result.retryable,true);assert.ok(result.stage_timings.find(x=>x.stage==='inventory_retrieval'&&x.outcome==='failed'));
+});
+
+test('incomplete mapped-parent inventory coverage cannot become zero stock or zero opportunities',async()=>{
+  const mappings=[{source_ref:'woo:ww:10',shopify_parent_ref:'shopify:shopify:100',mapping_method:'explicit_governed_mapping',active:true},{source_ref:'woo:ww:11',shopify_parent_ref:'shopify:shopify:200',mapping_method:'explicit_governed_mapping',active:true}];
+  const service=createHistoricalProductOpportunityService({reportProducts:async()=>({rows:[]}),loadMappings:async()=>mappings,loadInventory:async ids=>({products:[],requested_count:ids.length,completed_count:1,missing_ids:['200'],complete:false})});
+  const result=await service({end_date:'2026-09-30',limit:10});assert.equal(result.success,false);assert.equal(result.code,'INCOMPLETE_INVENTORY_COVERAGE');assert.equal(result.retrieval.full_population,false);assert.equal(result.rows,undefined);assert.match(result.error,/no zero-stock or opportunity conclusion/i);
 });

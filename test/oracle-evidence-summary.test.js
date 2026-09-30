@@ -16,7 +16,8 @@ test('failed final synthesis returns readable validated figures without raw tool
 });
 
 test('synthesis diagnostics distinguish deadline, provider and oversized tool results',()=>{
-  assert.equal(synthesisFailureKind(Object.assign(new Error(),{name:'TimeoutError'}),{deadlineAt:Date.now()+1000}),'deadline');
+  assert.equal(synthesisFailureKind(Object.assign(new Error(),{name:'TimeoutError'}),{deadlineAt:Date.now()+119_000}),'synthesis_timeout_with_request_budget_remaining');
+  assert.equal(synthesisFailureKind(new Error(),{deadlineAt:Date.now()-1}),'request_deadline');
   assert.equal(synthesisFailureKind(new Error(),{deadlineAt:Date.now()+1000}),'provider_failure');
   assert.equal(synthesisFailureKind(Object.assign(new Error(),{status:413}),{deadlineAt:Date.now()+1000}),'tool_result_size');
 });

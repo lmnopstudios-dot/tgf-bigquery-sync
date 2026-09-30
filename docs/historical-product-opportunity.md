@@ -11,13 +11,37 @@ the confirmed public launch on 20 November 2025 through the stated end date,
 and current exact-variant availability at Online. It accepts only approved
 identity or reporting-family joins and excludes Matrixify representations.
 
-The first production action is read-only: run the exact acceptance question in
-Oracle, download the single tool result as `/tmp/historical-product-opportunity.json`,
-then open a Render shell and run:
+## adf458f7 incident diagnosis
+
+The former inventory implementation made one complete location-inventory API
+request per mapped parent with concurrency two and no stage timeout. The
+request-level tool timeout fired at roughly 300 seconds while that inventory
+fan-out was still running; Woo sales, Shopify sales, and the mapping ledger had
+already completed. The 162-byte value was the wrapper's tool error, not
+analytical evidence. The subsequent provider `TimeoutError` occurred with
+about 119 seconds of request budget left, so it is now classified separately
+as a synthesis timeout with request budget remaining rather than a request
+deadline.
+
+Every run now records bounded timings for `woo_sales`, `shopify_sales`,
+`mapping_ledger`, `inventory_retrieval`, and `joining_and_ranking`, including
+the timeout ceiling and a sanitized error class/reason. Inventory parents are
+requested in bounded batches with bounded concurrency. All batches are
+attempted; if any batch fails, the result discloses incomplete coverage and
+contains no ranked rows or zero-stock/zero-opportunity conclusion.
+
+The first production action is the bounded live diagnostic below. It submits
+the exact acceptance question once and polls its authoritative durable outcome
+for at most eight minutes. It never writes mappings or inventory:
 
 ```sh
-render ssh --service <oracle-service> -- npm run diagnose:historical-product-opportunity -- --result=/tmp/historical-product-opportunity.json
+render ssh --service <oracle-service> -- npm run diagnose:historical-product-opportunity -- --url="$RENDER_EXTERNAL_URL"
 ```
+
+This is the exact first Render diagnostic command. Completion proves only that
+the live production path finished, not that its analytical contents are
+correct. Capture its tool result and then use offline `--result` validation to
+reconcile the governed joins and evidence contract.
 
 Do not approve Oracle acceptance until every staged count reconciles and the
 command reports `valid: true`. The output reports WW and US independently for
@@ -58,5 +82,6 @@ Accept only `valid: true`, reconciled staged population and join coverage, separ
 source currencies, and ranked rows that retain mapping provenance and the
 positive exact variants. A synthesis failure is acceptable only when Oracle
 returns that bounded joined table; an unrelated Shopify best-sellers list is
-not an acceptable fallback. This diagnostic reads the supplied capture only;
-it does not modify mappings, inventory, or production data.
+not an acceptable fallback. Neither mode modifies mappings or inventory. Live
+mode creates only its durable execution record; offline mode only reads the
+supplied capture.
