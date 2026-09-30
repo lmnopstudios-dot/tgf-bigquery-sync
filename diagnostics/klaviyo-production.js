@@ -7,6 +7,7 @@ import {requireGate,collectPilot} from '../klaviyo/sync.js';
 import {createKlaviyoClient,redactKlaviyo} from '../klaviyo/client.js';
 import {parseMetricIds,resolveReportWindow} from '../klaviyo/discovery.js';
 import {datasetLocation} from '../bigquery/dataset-location.js';
+import {BigQuery} from '@google-cloud/bigquery';
 
 const MAX_BYTES=1_000_000_000;
 const stats=['recipients','delivered','opens_unique','clicks_unique','conversions','conversion_value','bounced','unsubscribes','spam_complaints'];
@@ -24,11 +25,25 @@ FROM \`${project}.klaviyo.message_performance\`
 WHERE report_start=@report_start AND report_end=@report_end AND reporting_timezone=@reporting_timezone AND conversion_metric_id IN UNNEST(@metric_ids)
 ORDER BY report_kind, entity_id, message_id, conversion_metric_id LIMIT 500`;}
 
+export function physicalRowsTimestampLiteralQuery(project,startInstant,endInstant){
+  for(const value of [startInstant,endInstant])if(new Date(value).toISOString()!==value)throw new Error('Invalid canonical TIMESTAMP literal');
+  return `SELECT report_kind, entity_id, message_id, report_start, report_end, conversion_metric_id, reporting_timezone, recipients, delivered, opens_unique, clicks_unique, conversions, conversion_value, bounced, unsubscribes, spam_complaints
+FROM \`${project}.klaviyo.message_performance\`
+WHERE report_start=TIMESTAMP('${startInstant}') AND report_end=TIMESTAMP('${endInstant}') AND reporting_timezone=@reporting_timezone AND conversion_metric_id IN UNNEST(@metric_ids)
+ORDER BY report_kind, entity_id, message_id, conversion_metric_id LIMIT 500`;
+}
+
+function parameterEvidence(value,declaredParameterType){
+  const array=Array.isArray(value),runtimeValueType=typeof value;
+  return {declared_parameter_type:declaredParameterType,runtime_value_type:runtimeValueType,runtime_constructor:value?.constructor?.name??null,encoded_value:array?{arrayValues:value.map(item=>({value:String(item)}))}:{value:String(value?.value??value)}};
+}
+
 function compareRows(apiRows,storedRows){
   const api=new Map(apiRows.map(row=>[identity(row),row])),stored=new Map(storedRows.map(row=>[identity({...row,report_start:instant(row.report_start),report_end:instant(row.report_end)}),row]));
   const missing=[...api.keys()].filter(key=>!stored.has(key)),unexpected=[...stored.keys()].filter(key=>!api.has(key)),statistic_mismatches=[];
   for(const [key,left] of api)if(stored.has(key))for(const field of stats)if(number(left[field])!==number(stored.get(key)[field]))statistic_mismatches.push({identity:key,field,api:number(left[field]),stored:number(stored.get(key)[field])});
-  return {consistent:missing.length===0&&unexpected.length===0&&statistic_mismatches.length===0,api_identity_count:api.size,stored_identity_count:stored.size,missing_identities:missing.slice(0,20),unexpected_identities:unexpected.slice(0,20),statistic_mismatches:statistic_mismatches.slice(0,20)};
+  const identityConsistent=missing.length===0&&unexpected.length===0;
+  return {consistent:identityConsistent&&statistic_mismatches.length===0,identity_consistent:identityConsistent,statistics_consistent:statistic_mismatches.length===0,api_identity_count:api.size,stored_identity_count:stored.size,missing_identities:missing.slice(0,20),unexpected_identities:unexpected.slice(0,20),statistic_mismatches:statistic_mismatches.slice(0,20)};
 }
 
 function compareOracleStatistics(storedRows,oracleRows){
@@ -44,12 +59,15 @@ function compareOracleStatistics(storedRows,oracleRows){
 export async function diagnose({bigquery,project,apiRows,timezone,metricIds}){
   const window=resolveReportWindow({timezone}),location=await datasetLocation(bigquery,project,'klaviyo',{fallback:'US'}),base={useLegacySql:false,maximumBytesBilled:MAX_BYTES,location,labels:{component:'klaviyo_pilot_diagnostic'}};
   const [inventory]=await bigquery.query({...base,query:inventoryQuery(project)});
-  const bindings={report_start:window.startInstant,report_end:window.endInstant,reporting_timezone:timezone,metric_ids:metricIds};
-  const [storedRows]=await bigquery.query({...base,query:physicalRowsQuery(project),params:bindings,types:{report_start:'TIMESTAMP',report_end:'TIMESTAMP',reporting_timezone:'STRING',metric_ids:['STRING']}});
+  const bindings={report_start:BigQuery.timestamp(window.startInstant),report_end:BigQuery.timestamp(window.endInstant),reporting_timezone:timezone,metric_ids:metricIds},types={report_start:'TIMESTAMP',report_end:'TIMESTAMP',reporting_timezone:'STRING',metric_ids:['STRING']};
+  const literalBindings={reporting_timezone:timezone,metric_ids:metricIds},literalTypes={reporting_timezone:'STRING',metric_ids:['STRING']},literalSql=physicalRowsTimestampLiteralQuery(project,window.startInstant,window.endInstant);
+  const [storedRows]=await bigquery.query({...base,query:physicalRowsQuery(project),params:bindings,types});
+  const [literalRows]=await bigquery.query({...base,query:literalSql,params:literalBindings,types:literalTypes});
   const oracleArgs={start_date:'2026-08-01',end_date:'2026-08-31'},oracle=await createKlaviyoEmailService({bigquery,project})('get_klaviyo_email_performance',oracleArgs),comparison=compareRows(apiRows,storedRows);
-  const oracleEvidenceRows=oracle.rows.reduce((sum,row)=>sum+number(row.evidence_rows),0),oracleStatistics=compareOracleStatistics(storedRows,oracle.rows);
-  const consistent=comparison.consistent&&oracleStatistics.consistent&&apiRows.length===storedRows.length&&storedRows.length===oracleEvidenceRows;
-  return {status:consistent?'read_only_diagnostic_passed':'read_only_diagnostic_failed',read_only:true,project,dataset:'klaviyo',table:'message_performance',location,physical_inventory:inventory,selected_window:window,selected_metric_ids:metricIds,physical_bindings:bindings,oracle_query:klaviyoAggregateQuery(project),oracle_bindings:oracleArgs,api_rows:apiRows.length,stored_rows:storedRows.length,persisted_evidence_rows:oracleEvidenceRows,oracle_result_groups:oracle.rows.length,comparison:{...comparison,oracle_statistics:oracleStatistics,consistent},note:'No data was written.'};
+  const oracleEvidenceRows=oracle.rows.reduce((sum,row)=>sum+number(row.evidence_rows),0),oracleStatistics=compareOracleStatistics(storedRows,oracle.rows),bindingControl=compareRows(storedRows,literalRows);
+  const consistent=comparison.identity_consistent&&bindingControl.consistent&&oracleStatistics.consistent&&apiRows.length===storedRows.length&&storedRows.length===literalRows.length&&storedRows.length===oracleEvidenceRows;
+  const queryBindings={parameterized:{sql:physicalRowsQuery(project),parameters:Object.fromEntries(Object.keys(types).map(name=>[name,parameterEvidence(bindings[name],types[name])]))},independent_typed_timestamp_literal:{sql:literalSql,parameters:Object.fromEntries(Object.keys(literalTypes).map(name=>[name,parameterEvidence(literalBindings[name],literalTypes[name])]))}};
+  return {status:consistent?'read_only_diagnostic_passed':'read_only_diagnostic_failed',read_only:true,project,dataset:'klaviyo',table:'message_performance',location,physical_inventory:inventory,selected_window:window,selected_metric_ids:metricIds,query_bindings:queryBindings,oracle_query:klaviyoAggregateQuery(project),oracle_bindings:oracleArgs,api_rows:apiRows.length,stored_rows:storedRows.length,literal_control_rows:literalRows.length,persisted_evidence_rows:oracleEvidenceRows,oracle_result_groups:oracle.rows.length,comparison:{...comparison,live_attribution_statistics_changed:!comparison.statistics_consistent,binding_control:bindingControl,oracle_statistics:oracleStatistics,consistent},note:'No data was written. Live API statistic changes since collection are reported but do not make the persisted read path inconsistent.'};
 }
 
 export async function main(env=process.env){
