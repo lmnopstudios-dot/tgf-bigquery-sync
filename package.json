@@ -73,7 +73,8 @@
     "diagnose:oracle-pageviews-per-session": "node diagnostics/oracle-pageviews-per-session.js",
     "discover:klaviyo": "node klaviyo/discovery.js",
     "prepare:klaviyo-manifest": "node klaviyo/prepare-manifest.js",
-    "collect:klaviyo-pilot": "node klaviyo/sync.js"
+    "collect:klaviyo-pilot": "node klaviyo/sync.js",
+    "diagnose:klaviyo-production": "node diagnostics/klaviyo-production.js"
   },
   "engines": {
     "node": ">=20"
