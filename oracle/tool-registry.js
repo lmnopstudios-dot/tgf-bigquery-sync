@@ -10,6 +10,7 @@ import { CATEGORY_SALES_TOOL_DEFINITION } from './category-sales.js';
 import { HISTORICAL_PRODUCT_OPPORTUNITY_TOOL } from './historical-product-opportunity.js';
 import { PRODUCT_VIEW_PURCHASE_TOOL } from './product-view-purchase.js';
 import { PAGEVIEWS_TOOL } from './pageviews-per-session.js';
+import { KLAVIYO_TOOL_DEFINITIONS } from './klaviyo-email.js';
 
 /** The exact OpenAI tool registry submitted by the Oracle request boundary. */
 export function createOracleToolDefinitions() {
@@ -26,6 +27,7 @@ export function createOracleToolDefinitions() {
         HISTORICAL_PRODUCT_OPPORTUNITY_TOOL,
         PRODUCT_VIEW_PURCHASE_TOOL,
         PAGEVIEWS_TOOL,
+        ...KLAVIYO_TOOL_DEFINITIONS,
         {
           type: 'function',
           name: 'get_ecommerce_management_report',
