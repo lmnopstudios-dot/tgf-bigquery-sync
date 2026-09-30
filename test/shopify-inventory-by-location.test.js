@@ -46,6 +46,14 @@ test('stable configured location ID wins without guessing from names',()=>{
   assert.equal(result.location.id,'gid://shopify/Location/42');
 });
 
+test('durable server path explicitly propagates the preferred configured location ID',async()=>{
+  const selector=inventoryLocationSelector({SHOPIFY_INVENTORY_LOCATION_ID:'gid://shopify/Location/105063874887',SHOPIFY_INVENTORY_LOCATION_NAME:'Online'});
+  assert.deepEqual(selector,{type:'id',value:'gid://shopify/Location/105063874887',configured_by:'SHOPIFY_INVENTORY_LOCATION_ID'});
+  const source=await import('node:fs/promises').then(fs=>fs.readFile(new URL('../server.js',import.meta.url),'utf8'));
+  assert.match(source,/historicalInventoryLocationSelector=inventoryLocationSelector\(process\.env\)/);
+  assert.match(source,/locationSelector:historicalInventoryLocationSelector/);
+});
+
 test('exact-name fallback is case-sensitive and never substitutes a similar location',()=>{
   const selector=inventoryLocationSelector({});
   const result=resolveInventoryLocation([{id:'L1',name:'Online Warehouse',isActive:true,fulfillsOnlineOrders:true},{id:'L2',name:'online',isActive:true,fulfillsOnlineOrders:true}],selector);

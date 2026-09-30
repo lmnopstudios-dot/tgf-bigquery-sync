@@ -40,7 +40,7 @@ import { CATEGORY_SALES_MAX_BYTES, createCategorySalesService, executeCategorySa
 import { createHistoricalProductOpportunityService } from './oracle/historical-product-opportunity.js';
 import { createProductViewPurchaseService, executeProductViewPurchaseToolCall } from './oracle/product-view-purchase.js';
 import { runWithShopifyThrottle, SHOPIFY_RATE_LIMIT_MESSAGE } from './oracle/shopifyql-throttle.js';
-import { createBatchedInventoryByLocation } from './shopify/inventory-by-location.js';
+import { createBatchedInventoryByLocation, inventoryLocationSelector } from './shopify/inventory-by-location.js';
 import { buildOracleInlineChart } from './oracle/inline-charts.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { createBigQueryAnalysisJobStore, ORACLE_JOB_DEFAULTS } from './oracle/analysis-jobs.js';
@@ -157,9 +157,15 @@ const categorySalesService = createCategorySalesService({ bigquery, project: GOO
 const productViewPurchaseService = createProductViewPurchaseService({bigquery});
 const pageviewsPerSessionService=createPageviewsPerSessionService({bigquery,project:GOOGLE_PROJECT_ID,runShopifyql:async(query,reportName)=>runShopifyqlReport(await getShopifyAccessToken(),query,reportName),getShopTimezone:async()=>{const data=await shopifyGraphQL(await getShopifyAccessToken(),'{ shop { ianaTimezone } }');if(!data?.shop?.ianaTimezone)throw new Error('Shopify reporting timezone unavailable');return data.shop.ianaTimezone;}});
 const klaviyoEmailService=createKlaviyoEmailService({bigquery,project:GOOGLE_PROJECT_ID});
+const historicalInventoryLocationSelector=inventoryLocationSelector(process.env);
+console.info('Historical opportunity inventory configuration:',{selector:historicalInventoryLocationSelector,deployed_revision:DEPLOYED_GIT_REVISION||'unavailable'});
 const loadHistoricalCandidateInventory=createBatchedInventoryByLocation({
   graphql:shopifyGraphQL,
   getToken:getShopifyAccessToken,
+  // Resolve the selector from the same process environment and contract used
+  // by diagnostics. Passing it explicitly prevents this durable path from
+  // silently falling back to the default name selector.
+  locationSelector:historicalInventoryLocationSelector,
   concurrency:2,
   log:diagnostic=>console.info('Historical opportunity inventory:',diagnostic)
 });
@@ -8550,6 +8556,10 @@ Important rules:
           inlineChart ||= buildOracleInlineChart(item.name, result);
           if (result?.success !== false && !result?.error) { successfulTools.push(item.name); completedEvidence.push({name:item.name,result}); }
           else { if(!failedTools.includes(item.name))failedTools.push(item.name); completedEvidence.push({name:item.name,result}); }
+          // A durable governed analysis must not turn a failed required
+          // inventory stage into a completed prose response. Persist the
+          // bounded tool code/stage as the job's authoritative terminal state.
+          if(req.body?.durable_job===true&&item.name==='get_historical_product_opportunities'&&(result?.success===false||result?.error))return res.status(422).json({success:false,code:result.code||'TOOL_EXECUTION_FAILED',failed_stage:result.failed_stage||'evidence_retrieval',error:'The governed inventory evidence could not be retrieved.'});
         }
 
         stage='response_generation';
@@ -8634,7 +8644,10 @@ if (process.env.ORACLE_UI_PASSWORD || process.env.ORACLE_UI_SESSION_SECRET) {
       });
       const payload = await response.json();
       if (response.status === 429 && payload.code === 'SHOPIFY_TEMPORARILY_RATE_LIMITED') return { answer: SHOPIFY_RATE_LIMIT_MESSAGE, tools: [] };
-      if (!response.ok || !payload.success) return { answer: payload.error || 'The governed analysis could not be completed; no figures were returned.', tools: [] };
+      if (!response.ok || !payload.success) {
+        if(durable)throw Object.assign(new Error(payload.error||'The governed analysis could not be completed; no figures were returned.'),{code:payload.code||'ORACLE_AGENT_TERMINAL_FAILURE',failed_stage:payload.failed_stage||'agent'});
+        return { answer: payload.error || 'The governed analysis could not be completed; no figures were returned.', tools: [] };
+      }
       return { answer: payload.answer, tools: payload.tools_used || [], inline_chart: payload.inline_chart || null };
     }
   }));
