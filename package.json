@@ -28,6 +28,8 @@
     "sync:ga4": "node ga4/sync.js",
     "backfill:ga4": "npm run diagnose:conversion-evidence && node ga4/backfill.js",
     "backfill:shopify-conversion": "node shopify/conversion-backfill.js",
+    "retention:shopify-conversion": "node shopify/conversion-retention.js --mode update",
+    "verify:shopify-conversion-retention": "node shopify/conversion-retention.js --mode verify",
     "diagnose:shopify-conversion-duplicate": "node diagnostics/shopify-conversion-duplicate.js",
     "diagnose:conversion-evidence": "node diagnostics/conversion-evidence.js",
     "validate:conversion-history": "node diagnostics/conversion-history-validation.js",

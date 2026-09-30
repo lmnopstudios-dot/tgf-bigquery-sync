@@ -14,14 +14,32 @@ npm run diagnose:ga4-purchase-compatibility -- --dates 2022-08-18
 
 The ten production-shaped probe dates are 2022-08-18, 2023-02-15, 2023-08-17, 2023-11-24, 2024-02-15, 2024-08-15, 2024-11-29, 2025-02-13, 2025-08-14, and 2025-11-19. Review signed differences in both directions as diagnostics, plus pagination and API limitation metadata; do not require an exact match.
 
-The governed public launch remains **20 November 2025**: Woo reporting ends 19 November and the existing Shopify-native pilot begins 20 November. The first native order on 16 November is pre-launch source evidence, not a public-launch session. Run the existing Shopify pilot unchanged:
+The governed public launch remains **20 November 2025**: Woo reporting ends 19 November and the existing Shopify-native pilot begins 20 November. The first native order on 16 November is pre-launch source evidence, not a public-launch session. The two historical aggregate tables must not inherit the dataset's partition retention. This narrowly scoped command changes only those two existing tables (not the dataset and not unrelated tables):
 
 ```sh
-npm run diagnose:conversion-evidence
-npm run diagnose:ga4-shopify-transition
-npm run backfill:shopify-conversion -- --start 2025-11-20 --end 2025-11-26 --chunk-days 7 --max-chunks 1 --max-sources 40 --timezone Europe/London
-npm run validate:conversion-history -- --start 2025-11-20 --end 2025-11-26
+npm run retention:shopify-conversion -- --project gf-full-data
 ```
+
+Then run the read-only production verification. It reports `partition_expiration_days` independently from `table_expiration_timestamp`, as well as the oldest and newest surviving partitions. Both rows must say `historical_partitions_retained: true`; table expiration must be reviewed separately and must not be mistaken for partition retention:
+
+```sh
+npm run verify:shopify-conversion-retention -- --project gf-full-data
+```
+
+Changing retention does **not** restore partitions that already expired. Before any write, use the rollback diagnostic below. It executes the replacement transaction and explicitly rolls it back, while exposing staged-versus-stored totals:
+
+```sh
+npm run backfill:shopify-conversion -- --mode diagnose --start 2025-11-20 --end 2025-11-26 --chunk-days 7 --max-chunks 1 --max-sources 40 --timezone Europe/London --project gf-full-data
+```
+
+Only when the diagnostic's staged and stored totals reconcile, run the seven-day repair pilot and then its read-only validation:
+
+```sh
+npm run backfill:shopify-conversion -- --mode repair --start 2025-11-20 --end 2025-11-26 --chunk-days 7 --max-chunks 1 --max-sources 40 --timezone Europe/London --project gf-full-data
+npm run validate:conversion-history -- --start 2025-11-20 --end 2025-11-26 --project gf-full-data
+```
+
+The repair readiness gate fails closed when either requested historical partition would immediately expire. Schema creation also explicitly disables partition expiration for these two tables. Strict staged/stored reconciliation, typed `DATE`/`TIMESTAMP` parameters, atomic replacement, and expected-count-guarded NULL cleanup remain mandatory.
 
 Only after a real device-level purchase report succeeds (or GA4 explicitly marks it incompatible), consider the bounded GA4 backfill. Do not resume it while the compatibility response is malformed or ambiguous:
 
