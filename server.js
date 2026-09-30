@@ -44,6 +44,7 @@ import { createBatchedInventoryByLocation } from './shopify/inventory-by-locatio
 import { buildOracleInlineChart } from './oracle/inline-charts.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { createBigQueryAnalysisJobStore, ORACLE_JOB_DEFAULTS } from './oracle/analysis-jobs.js';
+import {answerExactPageviewsRequest,createPageviewsPerSessionService,executePageviewsToolCall,PAGEVIEWS_MAX_BYTES} from './oracle/pageviews-per-session.js';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -153,6 +154,7 @@ const onlineCountrySalesService = createOnlineCountrySalesService({ bigquery, pr
 const deviceSourceConversionService = createDeviceSourceConversionService({ bigquery, project: GOOGLE_PROJECT_ID });
 const categorySalesService = createCategorySalesService({ bigquery, project: GOOGLE_PROJECT_ID });
 const productViewPurchaseService = createProductViewPurchaseService({bigquery});
+const pageviewsPerSessionService=createPageviewsPerSessionService({bigquery,project:GOOGLE_PROJECT_ID,runShopifyql:async(query,reportName)=>runShopifyqlReport(await getShopifyAccessToken(),query,reportName),getShopTimezone:async()=>{const data=await shopifyGraphQL(await getShopifyAccessToken(),'{ shop { ianaTimezone } }');if(!data?.shop?.ianaTimezone)throw new Error('Shopify reporting timezone unavailable');return data.shop.ianaTimezone;}});
 const loadHistoricalCandidateInventory=createBatchedInventoryByLocation({
   graphql:shopifyGraphQL,
   getToken:getShopifyAccessToken,
@@ -8156,6 +8158,9 @@ app.post(
         request_id: id
       });
 
+      const governedPageviewsAnswer=await answerExactPageviewsRequest(message,pageviewsPerSessionService);
+      if(governedPageviewsAnswer)return res.json({success:true,answer:governedPageviewsAnswer.answer,tools_used:[governedPageviewsAnswer.route.tool],request_id:id});
+
       const toolsUsed = new Set();
       let remainingQueryBytes = 20_000_000_000;
       let inlineChart = null;
@@ -8353,7 +8358,7 @@ Important rules:
               continue;
             }
             if (cancellation.signal.aborted) throw cancellation.signal.reason;
-            const queryCharge = item.name === 'get_online_country_sales' ? ONLINE_COUNTRY_MAX_BYTES : item.name === 'get_governed_category_sales' ? CATEGORY_SALES_MAX_BYTES : 0;
+            const queryCharge = item.name === 'get_online_country_sales' ? ONLINE_COUNTRY_MAX_BYTES : item.name === 'get_governed_category_sales' ? CATEGORY_SALES_MAX_BYTES : item.name === 'get_governed_pageviews_per_session' ? PAGEVIEWS_MAX_BYTES : 0;
             if (queryCharge > remainingQueryBytes) throw new Error('Oracle request-wide BigQuery budget exceeded');
             remainingQueryBytes -= queryCharge;
             const args = item.name==='analyze_customer_journey'
@@ -8397,7 +8402,9 @@ Important rules:
                 if (knowledgeCall.handled) {
                   result = knowledgeCall.result;
                 } else {
-                  const deviceConversionCall = await executeDeviceSourceConversionToolCall(deviceSourceConversionService, item.name, args);
+                  const pageviewsCall=await executePageviewsToolCall(pageviewsPerSessionService,item.name,args);
+                  if(pageviewsCall.handled)result=pageviewsCall.result;
+                  else { const deviceConversionCall = await executeDeviceSourceConversionToolCall(deviceSourceConversionService, item.name, args);
                   if (deviceConversionCall.handled) result = deviceConversionCall.result;
                   else { const productViewCall=await executeProductViewPurchaseToolCall(productViewPurchaseService,item.name,args); if(productViewCall.handled) result=productViewCall.result;
                   else { const categorySalesCall=await executeCategorySalesToolCall(categorySalesService,item.name,args); if(categorySalesCall.handled) result=categorySalesCall.result;
@@ -8504,6 +8511,7 @@ Important rules:
             }
             }
             }
+            }
           } catch (error) {
             const throttled = error?.code === 'THROTTLED';
             if (throttled) {
@@ -8519,9 +8527,8 @@ Important rules:
               error: throttled
                 ? 'ShopifyQL rate limit exceeded'
                 : 'The tool could not complete the request',
-              code: throttled
-                ? 'THROTTLED'
-                : 'TOOL_EXECUTION_FAILED',
+              code: throttled ? 'THROTTLED' : ['UNSUPPORTED_TOOL_CAPABILITY','RETRIEVAL_FAILED','INCOMPLETE_PAGINATION'].includes(error?.code) ? error.code : 'TOOL_EXECUTION_FAILED',
+              failed_stage: error?.code==='UNSUPPORTED_TOOL_CAPABILITY'?'capability_probe':'evidence_retrieval',
               retryable: throttled && error.retryable === true
             };
           } finally {
