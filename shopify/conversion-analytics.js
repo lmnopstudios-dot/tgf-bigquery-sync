@@ -2,6 +2,7 @@ import { assertDate, datesBetween } from '../ga4/semantic.js';
 import { datasetLocation } from '../bigquery/dataset-location.js';
 import { createHash } from 'node:crypto';
 import { bigQueryDate } from '../bigquery/date-parameters.js';
+import { BigQuery } from '@google-cloud/bigquery';
 
 export const METRICS = Object.freeze(['sessions', 'sessions_that_completed_checkout', 'conversion_rate', 'sessions_with_cart_additions', 'sessions_that_reached_checkout']);
 export const SHOPIFYQL_DIMENSIONS = Object.freeze({ date: 'day', device: 'session_device_type', source: 'referrer_source' });
@@ -91,6 +92,8 @@ const COLUMNS = PARAMETER_SCHEMA.split(', ').map(def => def.split(' ')[0]);
 const INSERT_COLUMNS = COLUMNS.join(', ');
 const SELECT_FIELDS = COLUMNS.map(column => `row.${column}`).join(', ');
 const FUNNEL_METRICS = METRICS.filter(metric => metric !== 'conversion_rate');
+const TABLES = Object.freeze(['session_conversion_by_device', 'session_conversion_by_device_source']);
+const rowType = () => Object.fromEntries(PARAMETER_SCHEMA.split(', ').map(def => { const [name,type] = def.split(' '); return [name,type]; }));
 const totals = relation => `SELECT AS STRUCT COUNT(*) AS row_count, ${FUNNEL_METRICS.map(metric => `SUM(${metric}) AS ${metric}`).join(', ')} FROM ${relation}`;
 const totalsEqual = (left, right) => FUNNEL_METRICS.map(metric => `${left}.${metric} IS NOT DISTINCT FROM ${right}.${metric}`).join(' AND ');
 const groupedMismatchCount = (parameter, destination) => `SELECT COUNTIF(staged.row_count IS DISTINCT FROM stored.row_count OR ${FUNNEL_METRICS.map(metric => `staged.${metric} IS DISTINCT FROM stored.${metric}`).join(' OR ')})
@@ -106,7 +109,7 @@ FROM (${totals(`UNNEST(@${parameter})`)}) staged CROSS JOIN (${totals(`${destina
 
 export async function ensureSchema({ bigquery, project, dataset = 'shopify_data' }) { safeId(project); safeId(dataset); const location=await datasetLocation(bigquery,project,dataset,{fallback:'US'}); await bigquery.query({ location, query: `CREATE TABLE IF NOT EXISTS \`${project}.${dataset}.session_conversion_by_device\` (${SCHEMA}) PARTITION BY date; CREATE TABLE IF NOT EXISTS \`${project}.${dataset}.session_conversion_by_device_source\` (${SCHEMA}) PARTITION BY date` }); }
 export async function replaceRange({ bigquery, project, dataset = 'shopify_data', table, rows, startDate, endDate }) { safeId(project); safeId(dataset); safeId(table); if (!['session_conversion_by_device','session_conversion_by_device_source'].includes(table)) throw new Error('Unsupported conversion table'); const location=await datasetLocation(bigquery,project,dataset,{fallback:'US'}); const bound=parameterRows(rows,startDate,endDate); await bigquery.query({ location, query: `BEGIN TRANSACTION; ASSERT (SELECT COUNTIF(date IS NULL OR date NOT BETWEEN @start AND @end) FROM UNNEST(@rows)) = 0 AS 'invalid staged date'; DELETE FROM \`${project}.${dataset}.${table}\` WHERE date BETWEEN @start AND @end; INSERT INTO \`${project}.${dataset}.${table}\` (${INSERT_COLUMNS}) SELECT ${SELECT_FIELDS} FROM UNNEST(@rows) row; ASSERT (SELECT COUNTIF(date IS NULL) FROM \`${project}.${dataset}.${table}\`) = 0 AS 'destination contains NULL dates'; COMMIT TRANSACTION;`, params: { start: bigQueryDate(startDate), end: bigQueryDate(endDate), rows:bound }, types: { start: 'DATE', end: 'DATE', rows: [Object.fromEntries(PARAMETER_SCHEMA.split(', ').map(def => { const [name,type] = def.split(' '); return [name,type]; }))] } }); }
-export async function replaceChunk({ bigquery, project, dataset = 'shopify_data', deviceRows, sourceRows, startDate, endDate, expectedNullRows }) { safeId(project); safeId(dataset); const location=await datasetLocation(bigquery,project,dataset,{fallback:'US'}); const rowType=Object.fromEntries(PARAMETER_SCHEMA.split(', ').map(def => { const [name,type]=def.split(' '); return [name,type]; })); const params={start:bigQueryDate(startDate),end:bigQueryDate(endDate),deviceRows:parameterRows(deviceRows,startDate,endDate),sourceRows:parameterRows(sourceRows,startDate,endDate),purgeNulls:Boolean(expectedNullRows),expectedNullDevice:expectedNullRows?.device||0,expectedNullSource:expectedNullRows?.source||0}; await bigquery.query({location,query:`BEGIN TRANSACTION;
+export async function replaceChunk({ bigquery, project, dataset = 'shopify_data', deviceRows, sourceRows, startDate, endDate, expectedNullRows }) { safeId(project); safeId(dataset); const location=await datasetLocation(bigquery,project,dataset,{fallback:'US'}); const structType=rowType(); const params={start:bigQueryDate(startDate),end:bigQueryDate(endDate),deviceRows:parameterRows(deviceRows,startDate,endDate),sourceRows:parameterRows(sourceRows,startDate,endDate),purgeNulls:Boolean(expectedNullRows),expectedNullDevice:expectedNullRows?.device||0,expectedNullSource:expectedNullRows?.source||0}; await bigquery.query({location,query:`BEGIN TRANSACTION;
 ASSERT (SELECT COUNTIF(date IS NULL OR date NOT BETWEEN @start AND @end) FROM UNNEST(@deviceRows)) = 0 AS 'invalid staged device date';
 ASSERT (SELECT COUNTIF(date IS NULL OR date NOT BETWEEN @start AND @end) FROM UNNEST(@sourceRows)) = 0 AS 'invalid staged source date';
 ASSERT NOT @purgeNulls OR (SELECT COUNTIF(date IS NULL) FROM \`${project}.${dataset}.session_conversion_by_device\`) = @expectedNullDevice AS 'unexpected device NULL population';
@@ -125,5 +128,40 @@ ASSERT (SELECT staged.row_count = stored.row_count AND ${totalsEqual('staged', '
 ASSERT (SELECT staged.row_count = stored.row_count AND ${totalsEqual('staged', 'stored')} FROM (${totals('UNNEST(@sourceRows)')}) staged CROSS JOIN (${totals(`\`${project}.${dataset}.session_conversion_by_device_source\` WHERE date BETWEEN @start AND @end`)}) stored) AS 'stored source totals differ from ShopifyQL';
 ASSERT (${groupedMismatchCount('deviceRows', `\`${project}.${dataset}.session_conversion_by_device\``)}) = 0 AS 'stored device date/device totals differ from ShopifyQL';
 ASSERT (${groupedMismatchCount('sourceRows', `\`${project}.${dataset}.session_conversion_by_device_source\``)}) = 0 AS 'stored source date/device totals differ from ShopifyQL';
-COMMIT TRANSACTION;`,params,types:{start:'DATE',end:'DATE',deviceRows:[rowType],sourceRows:[rowType],purgeNulls:'BOOL',expectedNullDevice:'INT64',expectedNullSource:'INT64'}}); }
+COMMIT TRANSACTION;`,params,types:{start:'DATE',end:'DATE',deviceRows:[structType],sourceRows:[structType],purgeNulls:'BOOL',expectedNullDevice:'INT64',expectedNullSource:'INT64'}}); }
+
+const diagnosticAggregate = relation => `SELECT AS STRUCT COUNT(*) row_count, MIN(date) min_date, MAX(date) max_date, STRUCT(${COLUMNS.map(column => `COUNTIF(${column} IS NULL) ${column}`).join(', ')}) null_counts, ${FUNNEL_METRICS.map(metric => `SUM(${metric}) ${metric}`).join(', ')} FROM ${relation}`;
+const diagnosticDifferences = (parameter, destination) => `ARRAY(SELECT AS STRUCT COALESCE(staged.date,stored.date) date, COALESCE(staged.device_type,stored.device_type) device_type,
+  staged.row_count staged_row_count, stored.row_count stored_row_count,
+  ${FUNNEL_METRICS.map(metric => `staged.${metric} staged_${metric}, stored.${metric} stored_${metric}`).join(', ')},
+  ARRAY_TO_STRING(ARRAY(SELECT field FROM UNNEST([${['row_count', ...FUNNEL_METRICS].map(field => `IF(staged.${field} IS DISTINCT FROM stored.${field}, '${field}', NULL)`).join(', ')}]) field WHERE field IS NOT NULL), ',') mismatched_fields
+ FROM (SELECT date,device_type,COUNT(*) row_count,${FUNNEL_METRICS.map(metric=>`SUM(${metric}) ${metric}`).join(',')} FROM UNNEST(@${parameter}) GROUP BY 1,2) staged
+ FULL JOIN (SELECT date,device_type,COUNT(*) row_count,${FUNNEL_METRICS.map(metric=>`SUM(${metric}) ${metric}`).join(',')} FROM ${destination} WHERE date BETWEEN @start AND @end GROUP BY 1,2) stored USING(date,device_type)
+ WHERE staged.row_count IS DISTINCT FROM stored.row_count OR ${FUNNEL_METRICS.map(metric=>`staged.${metric} IS DISTINCT FROM stored.${metric}`).join(' OR ')}
+ ORDER BY date,device_type LIMIT 100)`;
+
+/** Execute the real replacement inside a transaction, capture bounded evidence in
+ * script variables, explicitly roll it back, and only then return the evidence. */
+export async function diagnoseChunk({ bigquery, project, dataset = 'shopify_data', deviceRows, sourceRows, startDate, endDate, expectedNullRows }) {
+  safeId(project); safeId(dataset); const location=await datasetLocation(bigquery,project,dataset,{fallback:'US'});
+  const structType=rowType(); const params={start:bigQueryDate(startDate),end:bigQueryDate(endDate),deviceRows:parameterRows(deviceRows,startDate,endDate),sourceRows:parameterRows(sourceRows,startDate,endDate),purgeNulls:Boolean(expectedNullRows),expectedNullDevice:expectedNullRows?.device||0,expectedNullSource:expectedNullRows?.source||0};
+  const types={start:'DATE',end:'DATE',deviceRows:[structType],sourceRows:[structType],purgeNulls:'BOOL',expectedNullDevice:'INT64',expectedNullSource:'INT64'};
+  const schemaSql=`SELECT table_name,column_name,ordinal_position,data_type,is_nullable FROM \`${project}.${dataset}.INFORMATION_SCHEMA.COLUMNS\` WHERE table_name IN UNNEST(@tables) ORDER BY table_name,ordinal_position`;
+  const [schemaRows]=await bigquery.query({location,query:schemaSql,params:{tables:TABLES},types:{tables:['STRING']},maximumBytesBilled:10_000_000});
+  const device=`\`${project}.${dataset}.session_conversion_by_device\``, source=`\`${project}.${dataset}.session_conversion_by_device_source\``;
+  const query=`DECLARE device_evidence DEFAULT (SELECT AS STRUCT (${diagnosticAggregate('UNNEST(@deviceRows)')}) staged, (${diagnosticAggregate(device)}) stored, ${diagnosticDifferences('deviceRows',device)} differences);
+DECLARE source_evidence DEFAULT (SELECT AS STRUCT (${diagnosticAggregate('UNNEST(@sourceRows)')}) staged, (${diagnosticAggregate(source)}) stored, ${diagnosticDifferences('sourceRows',source)} differences);
+BEGIN TRANSACTION;
+DELETE FROM ${device} WHERE (@purgeNulls AND date IS NULL) OR date BETWEEN @start AND @end;
+DELETE FROM ${source} WHERE (@purgeNulls AND date IS NULL) OR date BETWEEN @start AND @end;
+INSERT INTO ${device} (${INSERT_COLUMNS}) SELECT ${SELECT_FIELDS} FROM UNNEST(@deviceRows) row;
+INSERT INTO ${source} (${INSERT_COLUMNS}) SELECT ${SELECT_FIELDS} FROM UNNEST(@sourceRows) row;
+SET device_evidence = (SELECT AS STRUCT (${diagnosticAggregate('UNNEST(@deviceRows)')}) staged, (${diagnosticAggregate(`${device} WHERE date BETWEEN @start AND @end`)}) stored, ${diagnosticDifferences('deviceRows',device)} differences);
+SET source_evidence = (SELECT AS STRUCT (${diagnosticAggregate('UNNEST(@sourceRows)')}) staged, (${diagnosticAggregate(`${source} WHERE date BETWEEN @start AND @end`)}) stored, ${diagnosticDifferences('sourceRows',source)} differences);
+ROLLBACK TRANSACTION;
+SELECT device_evidence device, source_evidence source;`;
+  const [rows]=await bigquery.query({location,query,params,types,maximumBytesBilled:1_000_000_000,labels:{component:'shopify_conversion_rollback_diagnostic'}});
+  const encode=(value,type)=>BigQuery.valueToQueryParameter_(value,type); const encodedSample=values=>values.length?encode([values[0]],[structType]):encode([],[structType]);
+  return {diagnostic:'shopify_conversion_rollback',read_only_effect:'all destination changes explicitly rolled back',range:{start:startDate,end:endDate},schema:schemaRows,parameter_encoding:{start:encode(params.start,'DATE'),end:encode(params.end,'DATE'),device_rows:{row_count:params.deviceRows.length,first_encoded_row:encodedSample(params.deviceRows)},source_rows:{row_count:params.sourceRows.length,first_encoded_row:encodedSample(params.sourceRows)}},generated_sql:{schema:schemaSql,rollback_script:query},evidence:rows[0]||null};
+}
 export function missingDates(rows, startDate, endDate) { const observed = new Set(rows.map(row => row.date)); return datesBetween(startDate, endDate).filter(date => !observed.has(date)); }
