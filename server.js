@@ -45,6 +45,7 @@ import { buildOracleInlineChart } from './oracle/inline-charts.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { createBigQueryAnalysisJobStore, ORACLE_JOB_DEFAULTS } from './oracle/analysis-jobs.js';
 import {answerExactPageviewsRequest,createPageviewsPerSessionService,executePageviewsToolCall,PAGEVIEWS_MAX_BYTES} from './oracle/pageviews-per-session.js';
+import {createKlaviyoEmailService,executeKlaviyoEmailToolCall} from './oracle/klaviyo-email.js';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -155,6 +156,7 @@ const deviceSourceConversionService = createDeviceSourceConversionService({ bigq
 const categorySalesService = createCategorySalesService({ bigquery, project: GOOGLE_PROJECT_ID });
 const productViewPurchaseService = createProductViewPurchaseService({bigquery});
 const pageviewsPerSessionService=createPageviewsPerSessionService({bigquery,project:GOOGLE_PROJECT_ID,runShopifyql:async(query,reportName)=>runShopifyqlReport(await getShopifyAccessToken(),query,reportName),getShopTimezone:async()=>{const data=await shopifyGraphQL(await getShopifyAccessToken(),'{ shop { ianaTimezone } }');if(!data?.shop?.ianaTimezone)throw new Error('Shopify reporting timezone unavailable');return data.shop.ianaTimezone;}});
+const klaviyoEmailService=createKlaviyoEmailService({bigquery,project:GOOGLE_PROJECT_ID});
 const loadHistoricalCandidateInventory=createBatchedInventoryByLocation({
   graphql:shopifyGraphQL,
   getToken:getShopifyAccessToken,
@@ -8404,6 +8406,8 @@ Important rules:
                 } else {
                   const pageviewsCall=await executePageviewsToolCall(pageviewsPerSessionService,item.name,args);
                   if(pageviewsCall.handled)result=pageviewsCall.result;
+                  else { const klaviyoCall=await executeKlaviyoEmailToolCall(klaviyoEmailService,item.name,args);
+                  if(klaviyoCall.handled)result=klaviyoCall.result;
                   else { const deviceConversionCall = await executeDeviceSourceConversionToolCall(deviceSourceConversionService, item.name, args);
                   if (deviceConversionCall.handled) result = deviceConversionCall.result;
                   else { const productViewCall=await executeProductViewPurchaseToolCall(productViewPurchaseService,item.name,args); if(productViewCall.handled) result=productViewCall.result;
@@ -8504,6 +8508,7 @@ Important rules:
             result = {
               error: `Unknown tool: ${item.name}`
             };
+            }
             }
             }
             }
