@@ -80,6 +80,37 @@ npm run refresh:klaviyo
 
 It refreshes a seven-day rolling window ending after the recorded five-day email attribution lag. The API client has bounded transient retries, all pages are required, and a BigQuery `running` record prevents concurrent runs. The run is marked `succeeded` only after campaign, flow, and metadata collection and atomic report promotion all complete. Failures, selected windows, row counts, retrieval time, and last success remain in `klaviyo.sync_status`. A stale abandoned lock expires after 30 minutes and remains visible as evidence.
 
+### Streaming-buffer incident and persistence guarantee
+
+The failed August attempt used this exact write order: create a report staging table; call `table.insert(rows)` (the streaming insert path) into that stage; `MERGE` the stage into `message_performance`; delete the stage; call `entity_metadata.insert(metadata)` (again the streaming insert path); then `DELETE` older metadata versions. The reported 400 names `entity_metadata`, so it was the final metadata `DELETE`, not collection or the report `MERGE`, that encountered rows just placed in that table's streaming buffer. Consequently, report promotion and the metadata streaming insert may already have completed even though `sync_status` was marked failed. That is the incident hypothesis; use the read-only verification below to establish the actual production rows rather than assuming either outcome.
+
+The replacement sends bounded rows as typed JSON query parameters, materializes query-job temporary tables, and performs the report `MERGE`, metadata `MERGE`, superseded-metadata cleanup, and `sync_status` success transition in one BigQuery transaction. There is no `table.insert` on either mutable path. Stable report IDs remain the `MERGE` key, the metadata `MERGE` changes only collected stable IDs, and cleanup retains the newest row for every metadata stable ID—including unrelated IDs. A query error rolls back both promoted tables and leaves the run non-successful; the catch path can only change a still-`running` status to `failed`.
+
+### Bounded August incident verification and recovery
+
+After deploying the fix, first run the incident verifier. It is read-only, caps each query at 10 GB, lists at most 20 attempts and 1,000 exact-window rows, correlates persisted `retrieved_at` values with each failed attempt, and reports the BigQuery `streamingBuffer` metadata for both mutable tables:
+
+```sh
+npm run verify:klaviyo-refresh -- --start=2026-08-01 --end=2026-08-31
+```
+
+Interpret `failed_report_writes` and `failed_metadata_writes` as bounded evidence of rows whose retrieval timestamp falls inside a failed run. A nonzero count demonstrates that the failed attempt changed that table; zero does not justify deleting anything. Save this JSON with the deployment record. Do **not** retry while either `message_performance_streaming_buffer` or `entity_metadata_streaming_buffer` is non-null. Re-run the read-only command to observe state; this is a state check, not a fixed sleep. Do not truncate either table and do not manually delete metadata.
+
+When both streaming-buffer fields are null, the retry is safe and idempotent:
+
+```sh
+npm run refresh:klaviyo -- --start=2026-08-01 --end=2026-08-31
+```
+
+Then verify both the attempt ledger/exact physical window and the independent API/stored/literal/Oracle reconciliation:
+
+```sh
+npm run verify:klaviyo-refresh -- --start=2026-08-01 --end=2026-08-31
+npm run diagnose:klaviyo-production
+```
+
+Accept recovery only when the latest exact-window attempt is `succeeded`, neither table reports a streaming buffer, the exact-window rows are present once at the stable grain, and `diagnose:klaviyo-production` passes. If the refresh fails, do not issue ad-hoc cleanup: rerun the verifier, retain the failed ledger entry, and correct the reported cause before making the same idempotent retry. These commands neither activate scheduling nor broaden collection.
+
 For a reviewed older period, use an inclusive end date (maximum 92 days; this is bounded collection, not a broad backfill):
 
 ```sh
@@ -93,7 +124,7 @@ npm run discover:klaviyo
 npm run diagnose:klaviyo-production
 ```
 
-After deployment, run the read-only diagnostic and then the bounded August refresh, in this order:
+For a new environment with no failed write to investigate, run the read-only diagnostic and then the bounded August refresh in this order. For this incident, use the stricter verification/recovery sequence above instead:
 
 ```sh
 npm run diagnose:klaviyo-production

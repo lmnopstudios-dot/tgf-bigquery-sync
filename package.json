@@ -76,6 +76,7 @@
     "prepare:klaviyo-manifest": "node klaviyo/prepare-manifest.js",
     "collect:klaviyo-pilot": "node klaviyo/sync.js",
     "refresh:klaviyo": "node klaviyo/refresh.js",
+    "verify:klaviyo-refresh": "node diagnostics/klaviyo-refresh-recovery.js",
     "diagnose:klaviyo-production": "node diagnostics/klaviyo-production.js"
   },
   "engines": {
