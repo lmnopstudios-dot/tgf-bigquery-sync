@@ -4,6 +4,15 @@
   "timezone": "Europe/London",
   "currency": "GBP",
   "approved_metric_ids": ["Xp9amv"],
+  "metric_definitions": [
+    {
+      "metric_id": "Xp9amv",
+      "name": "Placed Order",
+      "integration": "shopify",
+      "collection_not_before": "2026-08-01",
+      "evidence": "Verified August and September 2026 collection; this does not establish earlier applicability"
+    }
+  ],
   "attribution_settings": {
     "email_open_window_days": 5,
     "email_click_window_days": 5,
