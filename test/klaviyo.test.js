@@ -2,10 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createKlaviyoClient,redactKlaviyo} from '../klaviyo/client.js';
 import {discover,metricCatalogue,reportBody,resolveReportWindow,PILOT,REPORT_STATISTICS} from '../klaviyo/discovery.js';
-import {requireGate,normalizeReport,collectPilot,serializeAttributionSettings} from '../klaviyo/sync.js';
+import {requireGate,normalizeReport,collectPilot,serializeAttributionSettings,persist,persistenceQuery} from '../klaviyo/sync.js';
 import {extractDiscoveryJson,prepareManifest,REVIEWED_ATTRIBUTION_SETTINGS} from '../klaviyo/prepare-manifest.js';
 import {classifyKlaviyoQuestion,KLAVIYO_TOOL_DEFINITIONS,createKlaviyoEmailService,klaviyoAggregateQuery} from '../oracle/klaviyo-email.js';
 import {diagnose,inventoryQuery,physicalRowsQuery,physicalRowsTimestampLiteralQuery} from '../diagnostics/klaviyo-production.js';
+import {recoveryQueries,verifyRecovery} from '../diagnostics/klaviyo-refresh-recovery.js';
 
 const response=(body,status=200,headers={get:()=>null})=>({ok:status<300,status,headers,json:async()=>body});
 test('pagination follows next links and enforces its bound',async()=>{let n=0;const fetchImpl=async()=>response(n++?{data:[],links:{next:null}}:{data:[{id:'one'}],links:{next:'/api/metrics?page=2'}}),client=createKlaviyoClient({apiKey:'pk_secretsecret',revision:'2026-01-15',fetchImpl,sleep:async()=>{}});assert.equal((await client.paginate('/api/metrics')).pages,2);n=0;await assert.rejects(client.paginate('/api/metrics',{maxPages:1}),/pagination bound/);});
@@ -118,4 +119,30 @@ test('refresh records failed status and can never report partial collection as s
   const bigquery={query:async o=>{queries.push(o);return [[]]}};
   await assert.rejects(runRefresh({client:{request:async()=>{throw new Error('no')}},bigquery,project:'p',config:{...JSON.parse(await (await import('node:fs/promises')).readFile(new URL('../config/klaviyo-account.json',import.meta.url))),refresh_policy:{rolling_days:7,attribution_lag_days:5,maximum_manual_days:92}},revision:'2026-07-15',args:['--start=2026-08-01','--end=2026-08-31']}));
   assert.equal(queries.length,2);assert.match(queries[1].query,/status='failed'/);assert.doesNotMatch(queries[1].query,/succeeded/);
+});
+
+test('persistence uses query parameters rather than streaming inserts and atomically promotes both tables and status',async()=>{
+  const calls=[],bigquery={query:async options=>{calls.push(options);return [[]]},dataset:()=>assert.fail('Storage Write API staging must not be used')};
+  const row={report_kind:'campaign',channel:'email',entity_id:'c',entity_name:'Campaign',message_id:'m',report_start:'2026-07-31T23:00:00.000Z',report_end:'2026-08-31T23:00:00.000Z',report_period_semantics:'exact',conversion_metric_id:'s',metric_provenance:'stable',currency:'GBP',reporting_timezone:'Europe/London',api_revision:'2026-07-15',attribution_settings:'{}',...statistics(),retrieved_at:'2026-10-01T00:00:00Z'};
+  const metadata={entity_kind:'campaign',entity_id:'c',entity_name:'Campaign',status:'sent',send_time:null,send_time_semantics:'source',message_ids:'["m"]',subject:null,preview_text:null,destination_links:'[]',source_endpoint:'/api/campaigns',retrieved_at:row.retrieved_at,is_sent:true};
+  const result=await persist({bigquery,project:'p',rows:[row],metadata:[metadata],runId:'run-1',retrievedAt:row.retrieved_at});
+  assert.equal(result.mode,'transactional_query_upsert');assert.equal(calls.length,2);
+  const promotion=calls[1];assert.deepEqual(JSON.parse(promotion.params.report_payload),[row]);assert.deepEqual(JSON.parse(promotion.params.metadata_payload),[metadata]);
+  assert.match(promotion.query,/CREATE TEMP TABLE incoming_reports/);assert.match(promotion.query,/BEGIN TRANSACTION/);assert.match(promotion.query,/MERGE `p\.klaviyo\.message_performance`/);assert.match(promotion.query,/MERGE `p\.klaviyo\.entity_metadata`/);assert.match(promotion.query,/DELETE FROM `p\.klaviyo\.entity_metadata`/);assert.match(promotion.query,/status='succeeded'/);assert.match(promotion.query,/ASSERT @@row_count=1/);assert.match(promotion.query,/COMMIT TRANSACTION/);
+});
+
+test('retry SQL preserves the stable report grain and unrelated metadata without streaming writes',()=>{
+  const sql=persistenceQuery('p','klaviyo',{promoteStatus:true});
+  assert.match(sql,/T\.report_kind=S\.report_kind AND T\.entity_id=S\.entity_id AND T\.message_id=S\.message_id AND T\.report_start=S\.report_start AND T\.report_end=S\.report_end AND T\.conversion_metric_id=S\.conversion_metric_id/);
+  assert.match(sql,/T\.entity_kind=S\.entity_kind AND T\.entity_id=S\.entity_id/);
+  assert.doesNotMatch(sql,/table\.insert|INSERTALL|TRUNCATE/i);
+  assert.ok(sql.indexOf('BEGIN TRANSACTION')<sql.indexOf('message_performance` T'));
+  assert.ok(sql.indexOf('entity_metadata` T')<sql.indexOf("status='succeeded'"));
+});
+
+test('August recovery verification is bounded and read-only and exposes streaming-buffer state',async()=>{
+  const queries=[],bigquery={dataset:()=>({table:name=>({getMetadata:async()=>[{streamingBuffer:name==='entity_metadata'?{estimatedRows:'2'}:undefined}]})}),query:async options=>{queries.push(options);return [[]]}};
+  const result=await verifyRecovery({bigquery,project:'p'});
+  assert.equal(result.status,'read_only');assert.equal(result.checks.message_performance_streaming_buffer,null);assert.deepEqual(result.checks.entity_metadata_streaming_buffer,{estimatedRows:'2'});assert.equal(queries.length,4);assert.ok(queries.every(x=>x.maximumBytesBilled==='10000000000'&&x.useLegacySql===false));
+  for(const sql of Object.values(recoveryQueries('p'))){assert.match(sql,/SELECT/);assert.doesNotMatch(sql,/\b(INSERT|UPDATE|DELETE|MERGE|TRUNCATE|CREATE|DROP)\b/i);}
 });
