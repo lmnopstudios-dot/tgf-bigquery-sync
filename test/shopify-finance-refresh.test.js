@@ -25,11 +25,14 @@ test('explicit incident window is half-open and scheduled mode needs no dates',(
   assert.equal(parseArgs(['--mode','scheduled']).mode,'scheduled');
 });
 
-test('preflight generates the special INFORMATION_SCHEMA qualification instead of a quoted four-part table path',()=>{
-  const statements=preflightStatements('gf-full-data','shopify_data');
-  assert.match(statements.destination_tables,/FROM `gf-full-data`\.shopify_data\.INFORMATION_SCHEMA\.TABLE_STORAGE/);
+test('preflight gives each INFORMATION_SCHEMA view its documented metadata scope and columns',()=>{
+  const statements=preflightStatements('gf-full-data','shopify_data','US');
+  assert.match(statements.destination_tables,/SELECT table_name, total_rows AS row_count\nFROM `gf-full-data`\.`region-us`\.INFORMATION_SCHEMA\.TABLE_STORAGE/);
+  assert.match(statements.destination_tables,/WHERE table_schema = @dataset/);
+  assert.match(statements.destination_tables,/AND deleted = FALSE/);
   assert.match(statements.finance_dependencies,/FROM `gf-full-data`\.finance\.INFORMATION_SCHEMA\.TABLES/);
-  assert.doesNotMatch(statements.destination_tables,/`gf-full-data\.shopify_data\.INFORMATION_SCHEMA/);
+  assert.doesNotMatch(statements.destination_tables,/shopify_data\.INFORMATION_SCHEMA\.TABLE_STORAGE/);
+  assert.doesNotMatch(statements.destination_tables,/SELECT table_name,\s*row_count\b/);
   assert.doesNotMatch(statements.finance_dependencies,/`gf-full-data\.finance\.INFORMATION_SCHEMA/);
 });
 
@@ -45,6 +48,8 @@ test('preflight resolves both dataset locations and dry-runs the exact generated
   assert.equal(result.read_only,true);assert.equal(result.dry_run,true);
   assert.deepEqual(jobs.map(x=>[x.query,x.location,x.dryRun]),queries.map(x=>[x.query,x.location,true]));
   assert.ok([...jobs,...queries].every(x=>/^SELECT\b/.test(x.query)));
+  assert.deepEqual(jobs[0].params,{dataset:'shopify_data',tables:['order_locations','order_financials','order_refunds']});
+  assert.equal(jobs[0].location,'US');assert.match(jobs[0].query,/`region-us`/);
 });
 
 test('preflight reports a bounded stage and corrected statement when a live dry-run fails',async()=>{
@@ -55,7 +60,7 @@ test('preflight reports a bounded stage and corrected statement when a live dry-
   };
   await assert.rejects(preflight({bigquery,project:'gf-full-data'}),error=>{
     assert.equal(error.stage,'preflight:dry_run:destination_tables');assert.equal(error.reason,'notFound');assert.equal(error.code,404);
-    assert.match(error.statement,/`gf-full-data`\.shopify_data\.INFORMATION_SCHEMA\.TABLE_STORAGE/);
+    assert.match(error.statement,/`gf-full-data`\.`region-us`\.INFORMATION_SCHEMA\.TABLE_STORAGE/);
     assert.doesNotMatch(error.message,/credential=abc/);assert.ok(error.message.length<400);return true;
   });
 });
