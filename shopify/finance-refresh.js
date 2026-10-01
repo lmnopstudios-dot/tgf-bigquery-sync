@@ -53,19 +53,17 @@ const fq=(p,d,t)=>`\`${p}.${d}.${t}\``;
 async function rows(bigquery,query,options={}){const [r]=await bigquery.query({query,useLegacySql:false,...options});return r}
 export async function ensureControlTables(bigquery,project,dataset){await rows(bigquery,`CREATE TABLE IF NOT EXISTS ${fq(project,dataset,RUNS)} (run_id STRING, mode STRING, window_start TIMESTAMP, window_end TIMESTAMP, status STRING, order_count INT64, refund_count INT64, page_count INT64, error STRING, started_at TIMESTAMP, finished_at TIMESTAMP); CREATE TABLE IF NOT EXISTS ${fq(project,dataset,STATE)} (collector STRING, successful_watermark TIMESTAMP, run_id STRING, updated_at TIMESTAMP)`)}
 
-// INFORMATION_SCHEMA scopes are view-specific. TABLES is dataset-scoped, while
-// TABLE_STORAGE is region-scoped and must be filtered back to the destination
-// dataset. Quoting the whole path would also change how BigQuery parses it.
 const datasetInformationSchema=(project,dataset,view)=>{assertDatasetIdentifier(project);assertDatasetIdentifier(dataset);return `\`${project}\`.${dataset}.INFORMATION_SCHEMA.${view}`};
-const regionInformationSchema=(project,location,view)=>{assertDatasetIdentifier(project);if(!location)throw new Error('BigQuery dataset location is required for region-scoped INFORMATION_SCHEMA');const region=`region-${String(location).toLowerCase()}`;assertDatasetIdentifier(region);return `\`${project}\`.\`${region}\`.INFORMATION_SCHEMA.${view}`};
-export function preflightStatements(project,dataset=DATASET,destinationLocation){return {
-  destination_tables:`SELECT table_name, total_rows AS row_count
-FROM ${regionInformationSchema(project,destinationLocation,'TABLE_STORAGE')}
-WHERE table_schema = @dataset
-  AND table_name IN UNNEST(@tables)
-  AND deleted = FALSE`,
+export function preflightStatements(project){return {
   finance_dependencies:`SELECT table_name,table_type,ddl FROM ${datasetInformationSchema(project,'finance','TABLES')} WHERE REGEXP_CONTAINS(LOWER(COALESCE(ddl,'')),r'shopify_data|order_financials|order_refunds|order_locations')`
 }}
+
+const fields=(spec)=>spec.split(' ').map(value=>{const [name,type,mode]=value.split(':');return {name,type,mode:mode||'NULLABLE'}});
+const DESTINATION_SCHEMAS=Object.freeze({
+  order_locations:fields('order_id:STRING:REQUIRED order_name:STRING created_at:TIMESTAMP updated_at:TIMESTAMP order_source:STRING source_app_id:STRING retail_location_id:STRING retail_location_name:STRING synced_at:TIMESTAMP'),
+  order_financials:fields('order_id:STRING:REQUIRED order_name:STRING created_at:TIMESTAMP processed_at:TIMESTAMP updated_at:TIMESTAMP cancelled_at:TIMESTAMP order_source:STRING shop_currency:STRING presentment_currency:STRING original_total_shop:NUMERIC original_total_presentment:NUMERIC original_subtotal_shop:NUMERIC original_subtotal_presentment:NUMERIC original_tax_shop:NUMERIC original_tax_presentment:NUMERIC original_discounts_shop:NUMERIC original_discounts_presentment:NUMERIC original_shipping_shop:NUMERIC original_shipping_presentment:NUMERIC total_refunded_shop:NUMERIC total_refunded_presentment:NUMERIC total_received_shop:NUMERIC total_received_presentment:NUMERIC payment_gateway_names_json:STRING transactions_json:STRING synced_at:TIMESTAMP'),
+  order_refunds:fields('refund_id:STRING:REQUIRED order_id:STRING:REQUIRED order_name:STRING refund_created_at:TIMESTAMP refund_processed_at:TIMESTAMP refund_updated_at:TIMESTAMP shop_currency:STRING presentment_currency:STRING refund_total_shop:NUMERIC refund_total_presentment:NUMERIC refund_line_subtotal_shop:NUMERIC refund_line_subtotal_presentment:NUMERIC refund_shipping_subtotal_shop:NUMERIC refund_shipping_subtotal_presentment:NUMERIC refund_line_tax_shop:NUMERIC refund_line_tax_presentment:NUMERIC refund_shipping_tax_shop:NUMERIC refund_shipping_tax_presentment:NUMERIC refund_adjustment_tax_shop:NUMERIC refund_adjustment_tax_presentment:NUMERIC refund_tax_shop:NUMERIC refund_tax_presentment:NUMERIC successful_transaction_shop:NUMERIC successful_transaction_presentment:NUMERIC has_successful_refund_transaction:BOOL note:STRING refund_line_items_json:STRING refund_shipping_lines_json:STRING order_adjustments_json:STRING transactions_json:STRING synced_at:TIMESTAMP')
+});
 const bounded=(value,max=220)=>String(value??'QUERY_ERROR').replace(/(token|credential|password|secret)\s*=\s*[^\s,;]+/gi,'$1=[redacted]').replace(/\s+/g,' ').slice(0,max);
 function preflightError(stage,statement,error){
   const detail=error?.errors?.[0]||error||{};
@@ -79,12 +77,28 @@ async function inspectPreflightStatement({bigquery,stage,statement,location,para
   try{await bigquery.createQueryJob({...options,dryRun:true})}catch(error){throw preflightError(`dry_run:${stage}`,statement,error)}
   try{return await rows(bigquery,statement,{location,...(params?{params}:{})})}catch(error){throw preflightError(`query:${stage}`,statement,error)}
 }
+async function inspectDestinationTable({bigquery,project,dataset,tableName,datasetLocation:location}){
+  const operation=`table metadata lookup: ${project}.${dataset}.${tableName}`;let metadata;
+  try{[metadata]=await bigquery.dataset(dataset,{projectId:project}).table(tableName).getMetadata()}catch(error){throw preflightError(`metadata:destination_tables:${tableName}`,operation,error)}
+  const canonicalType=value=>({BOOL:'BOOLEAN'}[String(value||'').toUpperCase()]||String(value||'').toUpperCase());
+  const actual=new Map((metadata?.schema?.fields||[]).map(field=>[field.name,{type:canonicalType(field.type),mode:String(field.mode||'NULLABLE').toUpperCase()}]));
+  const missing=[],incompatible=[];
+  for(const expected of DESTINATION_SCHEMAS[tableName]){const found=actual.get(expected.name),expectedType=canonicalType(expected.type);if(!found)missing.push(expected.name);else if(found.type!==expectedType||found.mode!==expected.mode)incompatible.push({column:expected.name,expected:{type:expectedType,mode:expected.mode},actual:found})}
+  const type=String(metadata?.type||'').toUpperCase(),tableLocation=String(metadata?.location||location).toUpperCase();
+  if(type!=='TABLE'||tableLocation!==location||missing.length||incompatible.length||metadata?.streamingBuffer){
+    const reason=type!=='TABLE'?'destination is not a physical TABLE':tableLocation!==location?'table location differs from its dataset':missing.length||incompatible.length?'destination schema is incompatible':'destination has an active streaming buffer';
+    throw preflightError(`write_readiness:destination_tables:${tableName}`,operation,Object.assign(new Error(reason),{code:'DESTINATION_NOT_WRITE_READY'}));
+  }
+  const rowCountAvailable=metadata?.numRows!==undefined&&metadata?.numRows!==null;
+  return {table_name:tableName,exists:true,type,location:tableLocation,schema:{compatible:true,fields:metadata.schema.fields},streaming_buffer:null,write_ready:true,row_count_metadata:{available:rowCountAvailable,value:rowCountAvailable?String(metadata.numRows):null,exact_reconciliation_evidence:false}};
+}
 export async function preflight({bigquery,project,dataset=DATASET}){
   let shopifyLocation,financeLocation;
   try{shopifyLocation=await datasetLocation(bigquery,project,dataset)}catch(error){throw preflightError('location:destination_tables','dataset metadata lookup',error)}
   try{financeLocation=await datasetLocation(bigquery,project,'finance')}catch(error){throw preflightError('location:finance_dependencies','dataset metadata lookup',error)}
-  const statements=preflightStatements(project,dataset,shopifyLocation);
-  const tableRows=await inspectPreflightStatement({bigquery,stage:'destination_tables',statement:statements.destination_tables,location:shopifyLocation,params:{dataset,tables:Object.values(TABLES)}});
+  const statements=preflightStatements(project);
+  const tableRows=[];
+  for(const tableName of Object.values(TABLES))tableRows.push(await inspectDestinationTable({bigquery,project,dataset,tableName,datasetLocation:shopifyLocation}));
   const dependencies=await inspectPreflightStatement({bigquery,stage:'finance_dependencies',statement:statements.finance_dependencies,location:financeLocation});
   return {read_only:true,dataset_locations:{[dataset]:shopifyLocation,finance:financeLocation},dry_run:true,statements,destination_tables:tableRows,finance_dependencies:dependencies,decision:'Finance views/materialized views are dependencies only; no rebuild is issued. BigQuery views reflect promoted source rows and materialized views refresh under their existing policy.',square_warning:'The unresolved historical Square component issue remains visible. This collector does not read or change Square tax and does not reactivate Square collection.'}
 }

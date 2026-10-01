@@ -6,7 +6,7 @@ The collector stages `order_locations`, `order_financials`, and `order_refunds`,
 
 ## Deployment and incident refresh
 
-Use the same service-account and Shopify client-credentials environment variables as the application. First deploy the committed revision normally. Preflight is read-only and inventories destination storage plus finance objects:
+Use the same service-account and Shopify client-credentials environment variables as the application. First deploy the committed revision normally. Preflight is read-only and inventories destination table metadata plus finance objects:
 
 ```bash
 npm run refresh:shopify-finance -- --mode preflight --project gf-full-data
@@ -24,7 +24,7 @@ Only after it reports `status: succeeded`, reconcile source and the finance proj
 npm run refresh:shopify-finance -- --mode reconcile --start 2026-09-25T00:00:00Z --end 2026-10-01T00:00:00Z --project gf-full-data
 ```
 
-The preflight deliberately does not rewrite finance objects. It obtains each dataset's location from BigQuery metadata, runs the destination `TABLE_STORAGE` inventory in that region with `table_schema = @dataset`, and runs the dataset-scoped finance `TABLES` inventory in the finance dataset's own location. Every exact statement is dry-run before its read-only execution. Logical views immediately see the atomic source promotion; materialized views retain their configured refresh policy. Review the dependency inventory and reconciliation rather than issuing an unnecessary rebuild.
+The preflight deliberately does not rewrite finance objects. It obtains each dataset's location and inspects only the three explicitly named destination tables through BigQuery's dataset/table metadata API. Existence, schema compatibility, physical table type, location, streaming-buffer write readiness, and available metadata row counts are reported; an unavailable row count is distinct from zero, and metadata counts are never exact reconciliation evidence. Finance dependency inspection remains a dataset-scoped `TABLES` query in the finance dataset's own location, with the exact statement dry-run before read-only execution. Logical views immediately see the atomic source promotion; materialized views retain their configured refresh policy. Review the dependency inventory and reconciliation rather than issuing an unnecessary rebuild.
 
 ## Scheduling (prepare only; do not activate here)
 
