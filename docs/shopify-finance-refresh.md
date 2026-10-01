@@ -14,6 +14,14 @@ npm run refresh:shopify-finance -- --mode preflight --project gf-full-data
 
 The exact collection for **25–30 September 2026 inclusive** uses an exclusive 1 October bound:
 
+Before retrying the failed production attempt, capture bounded, read-only evidence. This reports matching attempts, the current watermark, and timestamp-correlated destination rows without claiming that a failed transaction rolled back or committed:
+
+```bash
+npm run verify:shopify-finance-refresh -- --start=2026-09-25T00:00:00Z --end=2026-10-01T00:00:00Z --project=gf-full-data
+```
+
+Do not reset the watermark or delete any reported rows. After reviewing that evidence and deploying this fix, the exact idempotent retry is:
+
 ```bash
 npm run refresh:shopify-finance -- --mode collect --start 2026-09-25T00:00:00Z --end 2026-10-01T00:00:00Z --project gf-full-data
 ```

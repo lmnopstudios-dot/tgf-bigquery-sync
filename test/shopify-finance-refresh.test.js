@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { fetchUpdatedOrders, parseArgs, preflight, preflightStatements, promotionSql, transform } from '../shopify/finance-refresh.js';
+import { fetchUpdatedOrders, parseArgs, preflight, preflightStatements, promote, promotionSql, run, transform } from '../shopify/finance-refresh.js';
+import {recoveryQueries,verifyRecovery} from '../diagnostics/shopify-finance-refresh-recovery.js';
 
 const order=(id,updatedAt,refunds=[])=>({id,name:`#${id}`,createdAt:'2026-01-01T00:00:00Z',updatedAt,app:{id:'native',name:'Online Store'},retailLocation:{id:'loc',name:'London'},totalPriceSet:{shopMoney:{amount:'12',currencyCode:'GBP'},presentmentMoney:{amount:'15',currencyCode:'USD'}},transactions:[{id:'tx-1'}],refunds});
 const refund={id:'refund-old-order',createdAt:'2026-09-26T12:00:00Z',totalRefundedSet:{shopMoney:{amount:'2',currencyCode:'GBP'},presentmentMoney:{amount:'2.5',currencyCode:'USD'}},refundLineItems:{nodes:[]},refundShippingLines:{nodes:[]},orderAdjustments:{nodes:[]},transactions:{nodes:[{id:'refund-tx',kind:'REFUND',status:'SUCCESS',amountSet:{shopMoney:{amount:'2'},presentmentMoney:{amount:'2.5'}}}]}};
@@ -18,6 +19,34 @@ test('incomplete pagination fails rather than promoting a partial result',async(
 test('promotion is atomic, idempotently replaces selected identities, and never truncates history',()=>{
   const sql=promotionSql('p','d',{orders:'so',financials:'sf',refunds:'sr'});
   assert.match(sql,/BEGIN TRANSACTION/);assert.match(sql,/DELETE FROM `p\.d\.order_financials` WHERE order_id IN/);assert.match(sql,/successful_watermark/);assert.doesNotMatch(sql,/TRUNCATE/i);assert.doesNotMatch(sql,/DELETE FROM `p\.d\.order_financials`\s*;/);
+  assert.match(sql,/UPDATE `p\.d\.finance_refresh_runs` SET status='succeeded'.*MERGE `p\.d\.finance_refresh_state`.*COMMIT TRANSACTION/);
+  assert.match(sql,/CAST\(@end AS TIMESTAMP\) successful_watermark/);
+});
+
+const emptyData={orders:[],financials:[],refunds:[]};
+const fakeTables=()=>({insert:async()=>{},delete:async()=>{}});
+
+test('run and watermark writes use actual BigQueryTimestamp values and explicit types',async()=>{
+  const calls=[],bigquery={query:async options=>{calls.push(options);return[[]]},dataset:()=>({table:fakeTables})};
+  await run({options:{mode:'collect',project:'p',dataset:'d',start:'2026-09-25T00:00:00.000Z',end:'2026-10-01T00:00:00.000Z',maxPages:2},bigquery,graphql:async()=>({orders:{nodes:[],pageInfo:{hasNextPage:false,endCursor:null}}})});
+  const insert=calls.find(x=>x.query.startsWith('INSERT INTO `p.d.finance_refresh_runs`'));
+  assert.equal(insert.params.start.constructor.name,'BigQueryTimestamp');assert.equal(insert.params.end.constructor.name,'BigQueryTimestamp');assert.deepEqual(insert.types,{runId:'STRING',mode:'STRING',start:'TIMESTAMP',end:'TIMESTAMP'});
+  const promotion=calls.find(x=>x.query.startsWith('BEGIN TRANSACTION'));
+  assert.equal(promotion.params.end.constructor.name,'BigQueryTimestamp');assert.equal(promotion.params.end.value,'2026-10-01T00:00:00.000Z');assert.deepEqual(promotion.types,{runId:'STRING',end:'TIMESTAMP'});
+});
+
+test('watermark advancement failure leaves promotion and success status rolled back',async()=>{
+  const state={destination:['unrelated'],status:'running',watermark:'2026-09-25T00:00:00.000Z'},calls=[];
+  const bigquery={dataset:()=>({table:fakeTables}),query:async options=>{calls.push(options);if(options.query.startsWith('BEGIN TRANSACTION')){const before=structuredClone(state);state.destination=['selected'];state.status='succeeded';try{throw new Error('watermark advancement failed')}catch(error){Object.assign(state,before);throw error}}if(options.query.includes("SET status='failed'"))state.status='failed';return[[]]}};
+  await assert.rejects(promote({bigquery,project:'p',dataset:'d',runId:'run-1',start:'2026-09-25T00:00:00.000Z',end:'2026-10-01T00:00:00.000Z',data:emptyData,pages:1,mode:'collect',runRecorded:true}),/watermark advancement failed/);
+  assert.deepEqual(state,{destination:['unrelated'],status:'failed',watermark:'2026-09-25T00:00:00.000Z'});assert.equal(calls.filter(x=>x.query.startsWith('BEGIN TRANSACTION')).length,1);
+});
+
+test('recovery check is bounded, read-only, and explicitly typed',async()=>{
+  const calls=[],bigquery={query:async options=>{calls.push(options);return[[]]}};
+  const result=await verifyRecovery({bigquery,project:'p',start:'2026-09-25T00:00:00Z',end:'2026-10-01T00:00:00Z'});
+  assert.equal(result.read_only,true);assert.equal(result.recovery_claimed,false);assert.ok(calls.every(x=>x.params.start.constructor.name==='BigQueryTimestamp'&&x.types.start==='TIMESTAMP'&&x.maximumBytesBilled==='10000000000'));
+  assert.ok(Object.values(recoveryQueries('p')).every(sql=>/^SELECT|^WITH/.test(sql)&&!/(INSERT|UPDATE|DELETE|MERGE|TRUNCATE)\s/i.test(sql)));
 });
 
 test('explicit incident window is half-open and scheduled mode needs no dates',()=>{
