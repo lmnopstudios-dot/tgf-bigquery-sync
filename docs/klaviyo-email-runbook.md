@@ -66,19 +66,48 @@ npm run diagnose:klaviyo-production
 
 The command is read-only. It prints a bounded physical inventory and the exact Oracle SQL and bindings, then compares API and stored identities/statistics and Oracle evidence counts. A missing or inconsistent selected pilot exits nonzero; do not rerun collection unless this physical evidence shows that persistence failed.
 
-## Incremental refresh contract (not yet activated)
+## Historical discovery, backfill, and coverage
+
+The account usage start is unknown. Keep it distinct from both the earliest dated object returned by bounded listing pagination and the months successfully promoted into `window_coverage`. Discovery never writes and never turns an inaccessible month into zero. In Render Shell, choose a defensible lower bound rather than inventing an account start:
+
+```sh
+KLAVIYO_MAX_API_CALLS=80 npm run discover:klaviyo-history -- --from=2025-10 --through=2026-09 --max-months=6 2>&1 | tee /tmp/klaviyo-history-discovery.json
+```
+
+The output distinguishes accessible zero-row probes, unsupported/failed probes, earliest accessible dated metadata, and unknown account start. Follow its exact `resume_command`. Review every metric's integration provenance and commit any historical WooCommerce metric and evidenced applicability period in `metric_definitions`. `Xp9amv` is Shopify and is currently evidenced only from August 2026; the collector refuses earlier months rather than substituting it.
+
+After review, collect bounded exact Europe/London months:
+
+```sh
+KLAVIYO_MAX_API_CALLS=80 npm run backfill:klaviyo -- --from=2026-08 --through=2026-09 --max-months=2 --max-duration-ms=1200000
+```
+
+Each successful month uses the existing run lock and one atomic transaction for reports, dated metadata, success status, and coverage. The output's exact `resume_command` starts after the last committed month. Stable keys make retries idempotent. A successful empty report is `collected` with `row_count=0`; missing, unsupported, and failed periods are not manufactured. Calls, listing/report pages, duration, and months are bounded.
+
+Verify physical coverage and Oracle behaviour after every batch:
+
+```sh
+npm run verify:klaviyo-refresh -- --start=2026-09-01 --end=2026-09-30
+npm run diagnose:klaviyo-production
+```
+
+History may be limited by endpoint retention, scopes, revision, pagination/call bounds, deleted objects, and metric/integration lifetime. Never promise “all data.” Stored current attribution settings describe report retrieval; they do not prove those settings applied historically.
+
+## Incremental refresh contract and Render schedule (not yet activated)
 
 The durable reviewed account configuration is `config/klaviyo-account.json`; changing a metric ID or attribution setting requires normal code review and a versioned commit. `/tmp` is no longer an approval source. Secrets remain environment variables. Production evidence supplied for August 2026 is evidence, not a fixture: two campaign and two flow message rows were persisted and reconciled through parameterized, literal, and Oracle reads. Live drift is a separate observation. The repository's tests are mocked and do not repeat that production verification.
 
 `message_performance` has one authoritative row per report kind, entity ID, message ID, exact half-open report window, and conversion metric. Re-collecting that grain updates its statistics and `retrieved_at`; it does not append a countable snapshot. Oracle accepts only an exact requested window and therefore never sums overlapping windows. Message-level unique clicks/opens may be summed for a message table, but are **not globally unique people**.
 
-The scheduled command is designed for the existing external authenticated Render scheduling infrastructure, but this change does not activate a schedule:
+The scheduled command is designed for the existing external authenticated Render scheduling infrastructure, but this change does not activate or verify a schedule:
 
 ```sh
-npm run refresh:klaviyo
+npm run schedule:klaviyo
 ```
 
-It refreshes a seven-day rolling window ending after the recorded five-day email attribution lag. The API client has bounded transient retries, all pages are required, and a BigQuery `running` record prevents concurrent runs. The run is marked `succeeded` only after campaign, flow, and metadata collection and atomic report promotion all complete. Failures, selected windows, row counts, retrieval time, and last success remain in `klaviyo.sync_status`. A stale abandoned lock expires after 30 minutes and remains visible as evidence.
+It refreshes the previous and current exact calendar months every day, capturing late attribution and month-boundary corrections. In October this recollects September after the five-day attribution period. The current month is partial and a recent window is provisional. The API client has bounded retries, all pages are required, and a BigQuery `running` record prevents concurrent runs. Success is recorded only after campaign, flow, metadata, status, and coverage promote atomically. Failures and last success remain visible; a stale lock expires after 30 minutes but remains evidence.
+
+In the existing authenticated Render scheduling service, create a **daily 06:15 UTC** cron job with command `npm run schedule:klaviyo`, the deployed branch/repository, and the same secret environment group. Set `KLAVIYO_MAX_API_CALLS=80`. Keep overlapping deploy/start triggers disabled. Run it manually once, inspect Render logs, and verify both monthly ledger/coverage records using the commands above. Only then describe automation as active; before that it is configured but unverified.
 
 ### Streaming-buffer incident and persistence guarantee
 
@@ -138,6 +167,8 @@ The pinned `2026-07-15` metadata contract accepts `include=flow-actions` on the 
 ## Metadata, content, and knowledge boundary
 
 Campaign and flow names are fetched from stable IDs with bounded pagination and joined automatically. Status and source timing are retained; a draft is never labelled sent, and recipient-local scheduling is not collapsed into an invented universal instant. Content retrieval is disabled by default. Enable it only after confirming the key has the required read scope and the exact revision exposes subject, preview, and links without profile access. Content is untrusted source data, never instructions.
+
+The pinned reporting/listing contract currently establishes only `campaigns:read`, `flows:read`, and `metrics:read`; it does not establish a content/template endpoint contract. Official documentation lookup was unavailable in the implementation environment, so subject, preview, and content retrieval remains disabled (`includeContent=false`). Do not add template/profile scopes or enable content until official documentation for the deployed revision is captured and reviewed. Profile access, message sending, and account mutation remain prohibited.
 
 Synced facts are dated and source-linked. They do not overwrite human-approved knowledge. Product/theme extraction is not automatically approved: promoted product identities require an existing approved mapping, while uncertain interpretations belong in the existing review/proposal workflow. A subject line is not causal evidence or a verified strategy.
 

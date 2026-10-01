@@ -64,11 +64,11 @@ test('attribution settings structure is exact',()=>{assert.equal(typeof serializ
 test('manifest preparation extracts JSON from npm output and records provenance',()=>{const source={gate_version:1,pilot:PILOT,timezone:'Europe/London',currency:'GBP',probes:probes('Xp9amv'),approved_for_pilot:false};const raw=`npm notice something\n${JSON.stringify(source,null,2)}\nnpm notice done\n`;assert.deepEqual(extractDiscoveryJson(raw),source);const manifest=prepareManifest(raw,{reviewer:'A Reviewer',reviewedAt:'2026-09-30T12:00:00Z',metricIds:'Xp9amv',evidencePath:'/safe/evidence.log'});assert.equal(manifest.approved_for_pilot,true);assert.equal(manifest.review.source_evidence,'/safe/evidence.log');assert.equal(manifest.review.source_sha256.length,64);});
 test('exact Oracle routes cover all requested questions',()=>{assert.equal(classifyKlaviyoQuestion('How did email campaigns and automated flows perform in August 2026?'),'get_klaviyo_email_performance');assert.equal(classifyKlaviyoQuestion('Which campaigns had strong clicks but weak attributed purchases?'),'get_klaviyo_click_purchase_opportunities');assert.equal(classifyKlaviyoQuestion('Compare Klaviyo with Shopify email-referrer traffic'),'compare_klaviyo_email_with_shopify_referrer');assert.equal(KLAVIYO_TOOL_DEFINITIONS.length,3);});
 test('Oracle retrieval failure remains an error and never fallback zero figures',async()=>{const service=createKlaviyoEmailService({project:'p',bigquery:{query:async()=>{throw new Error('missing')},getDatasets:async()=>[]}});await assert.rejects(service('get_klaviyo_email_performance',{start_date:'2026-08-01',end_date:'2026-08-31'}),e=>e.code==='KLAVIYO_RETRIEVAL_FAILED'&&!/zero performance$/.test(e.message));});
-test('Oracle interprets stored report boundaries in their recorded timezone',()=>{const query=klaviyoAggregateQuery('p');assert.match(query,/DATE\(report_start,reporting_timezone\)=@start_date/);assert.match(query,/MIN\(DATE\(report_start,reporting_timezone\)\)/);assert.doesNotMatch(query,/DATE\(report_start\)>=/);});
+test('Oracle interprets non-overlapping monthly boundaries in their recorded timezone',()=>{const query=klaviyoAggregateQuery('p');assert.match(query,/DATE\(report_start,reporting_timezone\)=DATE_TRUNC/);assert.match(query,/DATE\(report_end,reporting_timezone\)=DATE_ADD\(DATE\(report_start,reporting_timezone\),INTERVAL 1 MONTH\)/);assert.match(query,/MIN\(DATE\(report_start,reporting_timezone\)\)/);assert.doesNotMatch(query,/DATE\(report_start\)>=/);});
 test('production diagnostic inventories physical rows and fails closed on an Oracle contradiction',async()=>{
   const row={report_kind:'campaign',entity_id:'c',message_id:'m',report_start:'2026-07-31T23:00:00.000Z',report_end:'2026-08-31T23:00:00.000Z',conversion_metric_id:'s',reporting_timezone:'Europe/London',...statistics()};let reads=0;
   const bigquery={dataset:()=>({getMetadata:async()=>[{location:'US'}]}),query:async options=>{reads++;if(options.query===inventoryQuery('p'))return [[{report_kind:'campaign',conversion_metric_id:'s',report_start:row.report_start,report_end:row.report_end,reporting_timezone:'Europe/London',row_count:1}]];if(options.query===physicalRowsQuery('p')||options.query===physicalRowsTimestampLiteralQuery('p',row.report_start,row.report_end))return [[row]];return [[[]]];}};
-  const result=await diagnose({bigquery,project:'p',apiRows:[row],timezone:'Europe/London',metricIds:['s']});assert.equal(reads,4);assert.equal(result.status,'read_only_diagnostic_failed');assert.equal(result.stored_rows,1);assert.equal(result.literal_control_rows,1);assert.equal(result.persisted_evidence_rows,0);assert.equal(result.comparison.consistent,false);assert.deepEqual(result.oracle_bindings,{start_date:'2026-08-01',end_date:'2026-08-31'});
+  const result=await diagnose({bigquery,project:'p',apiRows:[row],timezone:'Europe/London',metricIds:['s']});assert.equal(reads,5);assert.equal(result.status,'read_only_diagnostic_failed');assert.equal(result.stored_rows,1);assert.equal(result.literal_control_rows,1);assert.equal(result.persisted_evidence_rows,0);assert.equal(result.comparison.consistent,false);assert.deepEqual(result.oracle_bindings,{start_date:'2026-08-01',end_date:'2026-08-31'});
   const timestamp=result.query_bindings.parameterized.parameters.report_start;assert.equal(timestamp.declared_parameter_type,'TIMESTAMP');assert.equal(timestamp.runtime_constructor,'BigQueryTimestamp');assert.deepEqual(timestamp.encoded_value,{value:row.report_start});assert.match(result.query_bindings.independent_typed_timestamp_literal.sql,/report_start=TIMESTAMP\('2026-07-31T23:00:00\.000Z'\)/);
 });
 
@@ -113,7 +113,7 @@ test('metadata rejects missing stable IDs instead of joining or substituting emp
   await assert.rejects(collectMetadata({client:{paginate:async()=>({data:[{attributes:{name:'unsafe fallback'}}],included:[]})}}),/stable ID/);
 });
 
-test('exact-window Oracle contract prevents overlapping snapshot double counting',()=>{const sql=klaviyoAggregateQuery('p');assert.match(sql,/DATE\(report_start,reporting_timezone\)=@start_date/);assert.match(sql,/DATE_ADD\(@end_date,INTERVAL 1 DAY\)/);assert.match(sql,/ROW_NUMBER\(\).*retrieved_at DESC/);assert.doesNotMatch(sql,/>=@start_date/);});
+test('monthly Oracle contract prevents rolling or overlapping snapshot double counting',()=>{const sql=klaviyoAggregateQuery('p');assert.match(sql,/DATE_TRUNC\(@start_date,MONTH\)/);assert.match(sql,/INTERVAL 1 MONTH/);assert.match(sql,/ROW_NUMBER\(\).*retrieved_at DESC/);assert.match(sql,/DATE\(report_start,reporting_timezone\)=DATE_TRUNC/);});
 
 test('refresh records failed status and can never report partial collection as success',async()=>{
   const {runRefresh}=await import('../klaviyo/refresh.js');const queries=[];
@@ -154,3 +154,22 @@ test('August recovery verification is bounded and read-only and exposes streamin
 test('buffer readiness blocks promotion without bypassing or issuing DML',async()=>{const calls=[],bigquery={dataset:()=>({table:name=>({getMetadata:async()=>[{streamingBuffer:name==='entity_metadata'?{estimatedRows:'122'}:undefined}]})}),query:async options=>{calls.push(options)}};await assert.rejects(assertBuffersReady({bigquery,project:'p'}),error=>error.code==='KLAVIYO_STREAMING_BUFFER_BLOCKED'&&error.recovery_status==='waiting_for_streaming_buffers'&&error.buffers.entity_metadata.estimatedRows==='122');assert.equal(calls.length,0);});
 
 test('generated promotion line 47 is the entity metadata MERGE and all effects share one transaction',()=>{const lines=persistenceQuery('p','klaviyo',{promoteStatus:true}).split('\n');assert.match(lines[46],/^MERGE `p\.klaviyo\.entity_metadata`/);assert.ok(lines.indexOf('BEGIN TRANSACTION;')<46);assert.ok(lines.findIndex(line=>line.includes("status='succeeded'"))<lines.indexOf('COMMIT TRANSACTION;'));});
+
+
+test('historical month planning is bounded and refuses unreviewed pre-Shopify substitution',async()=>{
+  const {backfillPlan,applicableMetrics}=await import('../klaviyo/backfill.js');
+  const config=JSON.parse(await (await import('node:fs/promises')).readFile(new URL('../config/klaviyo-account.json',import.meta.url)));
+  assert.deepEqual(backfillPlan({args:['--from=2026-08','--through=2027-01','--max-months=2'],config}).months,['2026-08','2026-09']);
+  assert.deepEqual(applicableMetrics(config,'2026-07'),[]);assert.equal(applicableMetrics(config,'2026-08')[0].integration,'shopify');
+});
+
+test('daily schedule refreshes previous and current London calendar months',async()=>{
+  const {scheduledMonths}=await import('../klaviyo/scheduled-refresh.js');
+  assert.deepEqual(scheduledMonths(new Date('2026-10-01T12:00:00Z')),['2026-09','2026-10']);
+});
+
+test('coverage and successful zero activity promote in the same transaction',()=>{
+  const sql=persistenceQuery('p','klaviyo',{promoteStatus:true,promoteCoverage:true});
+  assert.match(sql,/MERGE `p\.klaviyo\.window_coverage`/);assert.match(sql,/status='collected'/);assert.match(sql,/@report_count row_count/);
+  assert.ok(sql.indexOf('window_coverage')<sql.indexOf('COMMIT TRANSACTION;'));
+});
