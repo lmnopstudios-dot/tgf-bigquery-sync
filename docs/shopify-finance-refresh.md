@@ -24,7 +24,7 @@ Only after it reports `status: succeeded`, reconcile source and the finance proj
 npm run refresh:shopify-finance -- --mode reconcile --start 2026-09-25T00:00:00Z --end 2026-10-01T00:00:00Z --project gf-full-data
 ```
 
-The preflight deliberately does not rewrite finance objects. Logical views immediately see the atomic source promotion; materialized views retain their configured refresh policy. Review the dependency inventory and reconciliation rather than issuing an unnecessary rebuild.
+The preflight deliberately does not rewrite finance objects. It obtains each dataset's location from BigQuery metadata, runs the destination `TABLE_STORAGE` inventory in that region with `table_schema = @dataset`, and runs the dataset-scoped finance `TABLES` inventory in the finance dataset's own location. Every exact statement is dry-run before its read-only execution. Logical views immediately see the atomic source promotion; materialized views retain their configured refresh policy. Review the dependency inventory and reconciliation rather than issuing an unnecessary rebuild.
 
 ## Scheduling (prepare only; do not activate here)
 

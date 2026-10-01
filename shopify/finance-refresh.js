@@ -53,12 +53,18 @@ const fq=(p,d,t)=>`\`${p}.${d}.${t}\``;
 async function rows(bigquery,query,options={}){const [r]=await bigquery.query({query,useLegacySql:false,...options});return r}
 export async function ensureControlTables(bigquery,project,dataset){await rows(bigquery,`CREATE TABLE IF NOT EXISTS ${fq(project,dataset,RUNS)} (run_id STRING, mode STRING, window_start TIMESTAMP, window_end TIMESTAMP, status STRING, order_count INT64, refund_count INT64, page_count INT64, error STRING, started_at TIMESTAMP, finished_at TIMESTAMP); CREATE TABLE IF NOT EXISTS ${fq(project,dataset,STATE)} (collector STRING, successful_watermark TIMESTAMP, run_id STRING, updated_at TIMESTAMP)`)}
 
-// INFORMATION_SCHEMA has a special four-part grammar. Quoting the entire path
-// makes BigQuery interpret "dataset.INFORMATION_SCHEMA" as the dataset name.
-const informationSchema=(project,dataset,view)=>{assertDatasetIdentifier(project);assertDatasetIdentifier(dataset);return `\`${project}\`.${dataset}.INFORMATION_SCHEMA.${view}`};
-export function preflightStatements(project,dataset=DATASET){return {
-  destination_tables:`SELECT table_name,row_count FROM ${informationSchema(project,dataset,'TABLE_STORAGE')} WHERE table_name IN UNNEST(@tables)`,
-  finance_dependencies:`SELECT table_name,table_type,ddl FROM ${informationSchema(project,'finance','TABLES')} WHERE REGEXP_CONTAINS(LOWER(COALESCE(ddl,'')),r'shopify_data|order_financials|order_refunds|order_locations')`
+// INFORMATION_SCHEMA scopes are view-specific. TABLES is dataset-scoped, while
+// TABLE_STORAGE is region-scoped and must be filtered back to the destination
+// dataset. Quoting the whole path would also change how BigQuery parses it.
+const datasetInformationSchema=(project,dataset,view)=>{assertDatasetIdentifier(project);assertDatasetIdentifier(dataset);return `\`${project}\`.${dataset}.INFORMATION_SCHEMA.${view}`};
+const regionInformationSchema=(project,location,view)=>{assertDatasetIdentifier(project);if(!location)throw new Error('BigQuery dataset location is required for region-scoped INFORMATION_SCHEMA');const region=`region-${String(location).toLowerCase()}`;assertDatasetIdentifier(region);return `\`${project}\`.\`${region}\`.INFORMATION_SCHEMA.${view}`};
+export function preflightStatements(project,dataset=DATASET,destinationLocation){return {
+  destination_tables:`SELECT table_name, total_rows AS row_count
+FROM ${regionInformationSchema(project,destinationLocation,'TABLE_STORAGE')}
+WHERE table_schema = @dataset
+  AND table_name IN UNNEST(@tables)
+  AND deleted = FALSE`,
+  finance_dependencies:`SELECT table_name,table_type,ddl FROM ${datasetInformationSchema(project,'finance','TABLES')} WHERE REGEXP_CONTAINS(LOWER(COALESCE(ddl,'')),r'shopify_data|order_financials|order_refunds|order_locations')`
 }}
 const bounded=(value,max=220)=>String(value??'QUERY_ERROR').replace(/(token|credential|password|secret)\s*=\s*[^\s,;]+/gi,'$1=[redacted]').replace(/\s+/g,' ').slice(0,max);
 function preflightError(stage,statement,error){
@@ -74,10 +80,11 @@ async function inspectPreflightStatement({bigquery,stage,statement,location,para
   try{return await rows(bigquery,statement,{location,...(params?{params}:{})})}catch(error){throw preflightError(`query:${stage}`,statement,error)}
 }
 export async function preflight({bigquery,project,dataset=DATASET}){
-  const statements=preflightStatements(project,dataset); let shopifyLocation,financeLocation;
-  try{shopifyLocation=await datasetLocation(bigquery,project,dataset)}catch(error){throw preflightError('location:destination_tables',statements.destination_tables,error)}
-  try{financeLocation=await datasetLocation(bigquery,project,'finance')}catch(error){throw preflightError('location:finance_dependencies',statements.finance_dependencies,error)}
-  const tableRows=await inspectPreflightStatement({bigquery,stage:'destination_tables',statement:statements.destination_tables,location:shopifyLocation,params:{tables:Object.values(TABLES)}});
+  let shopifyLocation,financeLocation;
+  try{shopifyLocation=await datasetLocation(bigquery,project,dataset)}catch(error){throw preflightError('location:destination_tables','dataset metadata lookup',error)}
+  try{financeLocation=await datasetLocation(bigquery,project,'finance')}catch(error){throw preflightError('location:finance_dependencies','dataset metadata lookup',error)}
+  const statements=preflightStatements(project,dataset,shopifyLocation);
+  const tableRows=await inspectPreflightStatement({bigquery,stage:'destination_tables',statement:statements.destination_tables,location:shopifyLocation,params:{dataset,tables:Object.values(TABLES)}});
   const dependencies=await inspectPreflightStatement({bigquery,stage:'finance_dependencies',statement:statements.finance_dependencies,location:financeLocation});
   return {read_only:true,dataset_locations:{[dataset]:shopifyLocation,finance:financeLocation},dry_run:true,statements,destination_tables:tableRows,finance_dependencies:dependencies,decision:'Finance views/materialized views are dependencies only; no rebuild is issued. BigQuery views reflect promoted source rows and materialized views refresh under their existing policy.',square_warning:'The unresolved historical Square component issue remains visible. This collector does not read or change Square tax and does not reactivate Square collection.'}
 }
