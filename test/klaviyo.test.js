@@ -7,7 +7,7 @@ import {extractDiscoveryJson,prepareManifest,REVIEWED_ATTRIBUTION_SETTINGS} from
 import {classifyKlaviyoQuestion,KLAVIYO_TOOL_DEFINITIONS,createKlaviyoEmailService,klaviyoAggregateQuery} from '../oracle/klaviyo-email.js';
 import {diagnose,inventoryQuery,physicalRowsQuery,physicalRowsTimestampLiteralQuery} from '../diagnostics/klaviyo-production.js';
 import {recoveryQueries,verifyRecovery} from '../diagnostics/klaviyo-refresh-recovery.js';
-import {repairAuditQuery,repairPromotionQuery,repairWindows,HISTORY_MONTHS} from '../diagnostics/klaviyo-coverage-repair.js';
+import {repairAuditQuery,repairPromotionQuery,repairWindows,repairCoverage,HISTORY_MONTHS} from '../diagnostics/klaviyo-coverage-repair.js';
 
 const response=(body,status=200,headers={get:()=>null})=>({ok:status<300,status,headers,json:async()=>body});
 test('pagination follows next links and enforces its bound',async()=>{let n=0;const fetchImpl=async()=>response(n++?{data:[],links:{next:null}}:{data:[{id:'one'}],links:{next:'/api/metrics?page=2'}}),client=createKlaviyoClient({apiKey:'pk_secretsecret',revision:'2026-01-15',fetchImpl,sleep:async()=>{}});assert.equal((await client.paginate('/api/metrics')).pages,2);n=0;await assert.rejects(client.paginate('/api/metrics',{maxPages:1}),/pagination bound/);});
@@ -246,6 +246,9 @@ test('August and September coverage repair requires correlated completeness evid
   assert.match(audit,/r\.report_kinds=\['campaign','flow'\]/);assert.match(audit,/r\.metric_ids=@metric_ids/);
   assert.match(audit,/r\.row_count=s\.row_count/);assert.match(audit,/r\.min_retrieved_at=s\.retrieved_at/);
   assert.match(audit,/identity_count/);assert.match(audit,/refresh_required_settings_mismatch/);
+  assert.match(audit,/SELECT w\.month,s\.run_id,s\.started_at,s\.completed_at,s\.retrieved_at,s\.row_count/);
+  assert.match(audit,/JOIN reports r ON r\.month=w\.month JOIN coverage c ON c\.month=w\.month/);
+  assert.doesNotMatch(audit,/\bUSING\s*\(/i);assert.doesNotMatch(audit,/s\.\*/);
   assert.equal(HISTORY_MONTHS.length,11);
 });
 
@@ -254,4 +257,23 @@ test('coverage-only repair is guarded, atomic and never rewrites reports',()=>{
   assert.match(sql,/BEGIN TRANSACTION/);assert.match(sql,/ASSERT .*COUNT\(\*\)=2/);
   assert.match(sql,/KLAVIYO_REPAIR_REQUIRES_BOUNDED_REFRESH/);assert.match(sql,/MERGE `p\.klaviyo\.window_coverage`/);
   assert.match(sql,/COMMIT TRANSACTION/);assert.doesNotMatch(sql,/MERGE `p\.klaviyo\.message_performance`/);
+});
+
+test('coverage repair dry-runs every read and validates the transaction with identical typed bindings',async()=>{
+  const dryRuns=[],queries=[];
+  const bigquery={dataset:()=>({getMetadata:async()=>[{location:'EU'}]}),createQueryJob:async options=>{dryRuns.push(options);return [{}];},query:async options=>{queries.push(options);return options.query.startsWith('SELECT FORMAT_DATE')?[[]]:[[{month:'2026-08',disposition:'already_collected'},{month:'2026-09',disposition:'already_collected'}]];}};
+  const config={timezone:'Europe/London',currency:'GBP',approved_metric_ids:['Xp9amv'],attribution_settings:REVIEWED_ATTRIBUTION_SETTINGS};
+  await repairCoverage({bigquery,project:'p',config});
+  assert.equal(dryRuns.length,3);assert.equal(queries.length,2);
+  assert.deepEqual(dryRuns.map(x=>x.query),[repairAuditQuery('p'),repairPromotionQuery('p'),queries[1].query]);
+  assert.ok(dryRuns.every(x=>x.dryRun&&x.location==='EU'&&x.useLegacySql===false));
+  assert.deepEqual(dryRuns[0].params,queries[0].params);assert.deepEqual(dryRuns[0].types,queries[0].types);
+  assert.equal(queries.some(x=>x.query.startsWith('BEGIN TRANSACTION')),false);
+});
+
+test('coverage repair returns bounded stage errors and never queries after failed preflight',async()=>{
+  let queried=false;const bigquery={dataset:()=>({getMetadata:async()=>[{location:'US'}]}),createQueryJob:async()=>{throw Object.assign(new Error('sensitive '.repeat(100)),{code:400,reason:'invalidQuery'});},query:async()=>{queried=true;}};
+  const config={timezone:'Europe/London',currency:'GBP',approved_metric_ids:['Xp9amv'],attribution_settings:REVIEWED_ATTRIBUTION_SETTINGS};
+  await assert.rejects(repairCoverage({bigquery,project:'p',config}),error=>error.stage==='dry_run:before_audit'&&error.reason==='invalidQuery'&&error.message.length<100);
+  assert.equal(queried,false);
 });
