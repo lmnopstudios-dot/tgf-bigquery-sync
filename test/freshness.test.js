@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {freshnessAssessment,ORACLE_SOURCE_CONTRACTS} from '../oracle/freshness.js';
 import {plannedCommand} from '../ops/collector-runner.js';
-import {dependencyAudit,retiredCoverageSql} from '../ops/freshness-inventory.js';
+import {catchUp,dependencyAudit,retiredCoverageSql} from '../ops/freshness-inventory.js';
 import {sourceInspections} from '../ops/collector-runner.js';
 
 test('freshness distinguishes query time, source success, coverage, and provisional periods',()=>{
@@ -62,6 +62,11 @@ test('freshness contracts use physical Klaviyo tables and inspect classification
   const klaviyo=sourceInspections('project-id','klaviyo').map(x=>x.query).join('\n');
   assert.match(klaviyo,/message_performance/);assert.match(klaviyo,/window_coverage/);assert.match(klaviyo,/sync_status/);
   assert.doesNotMatch(klaviyo,/email_metric_daily|email_campaign_daily/);
+  const window=sourceInspections('project-id','klaviyo').find(x=>x.table==='window_coverage');
+  assert.match(window.query,/AS report_start/);
+  assert.match(window.query,/AS report_end/);
+  assert.deepEqual(window.params,{expected_reporting_timezone:'Europe/London',audit_as_of:'2026-10-02'});
+  assert.deepEqual(window.types,{expected_reporting_timezone:'STRING',audit_as_of:'DATE'});
   const classifications=sourceInspections('project-id','product_classifications');
   assert.ok(classifications.every(x=>x.kind==='snapshot'));
   assert.doesNotMatch(classifications.map(x=>x.query).join('\n'),/updated_at/);
@@ -69,6 +74,28 @@ test('freshness contracts use physical Klaviyo tables and inspect classification
 
 test('all freshness tool dependencies exist in the Oracle implementation registry',()=>{
   for(const [source,result] of Object.entries(dependencyAudit()))assert.deepEqual(result.missing_implementations,[],source);
+  assert.ok(!ORACLE_SOURCE_CONTRACTS.shopify_conversion.tools.includes('get_klaviyo_email_performance'));
+  assert.ok(ORACLE_SOURCE_CONTRACTS.shopify_conversion.tools.includes('compare_klaviyo_email_with_shopify_referrer'));
+});
+
+test('daily inspections expose exact absent dates and keep GA4 ecommerce horizons separate',()=>{
+  const ga4=sourceInspections('project-id','ga4');
+  assert.ok(ga4.filter(x=>x.role==='current').every(x=>/missing_dates/.test(x.query)));
+  assert.ok(ga4.filter(x=>x.role==='ecommerce_instrumentation').every(x=>/missing_dates/.test(x.query)));
+  assert.match(ga4.find(x=>x.table==='conversion_coverage').query,/instrumentation_status_boundaries/);
+  const canonical=sourceInspections('project-id','search_console').find(x=>x.table==='canonical_daily');
+  assert.match(canonical.query,/coverage_status='unavailable'/);
+  assert.match(canonical.query,/observed_zero_or_unavailable_dates/);
+});
+
+test('GA4 catch-up uses current reporting tables and ignores historical ecommerce endpoints',()=>{
+  const tables=[
+    {table:'daily',kind:'daily',role:'current',status:'inspected',coverage_end:'2026-09-24'},
+    {table:'acquisition',kind:'daily',role:'current',status:'inspected',coverage_end:'2026-09-24'},
+    {table:'conversion_device',kind:'daily',role:'ecommerce_instrumentation',status:'inspected',coverage_end:'2025-11-19'},
+    {table:'conversion_coverage',kind:'daily',role:'ecommerce_instrumentation',status:'inspected',coverage_end:'2025-11-19'}
+  ];
+  assert.deepEqual(catchUp('ga4',tables,new Date('2026-10-02T12:00:00Z')),['npm run sync:ga4 -- --start 2026-09-18 --end 2026-10-01']);
 });
 
 test('freshness states keep readable data distinct from an absent schedule and failed inspection',()=>{
@@ -78,4 +105,8 @@ test('freshness states keep readable data distinct from an absent schedule and f
   assert.equal(inspected.availability,'inspection_failed');
   const manual=freshnessAssessment({source:'shopify_finance',storedDataAvailable:true,lastSuccess:'2026-10-01T00:00:00Z',scheduleVerified:false,now:new Date('2026-10-01T01:00:00Z')});
   assert.equal(manual.availability,'verified_schedule_missing');
+  const snapshot=freshnessAssessment({source:'shopify_catalogue',storedDataAvailable:true,sourceEvidenceAt:'2026-09-23T12:00:00Z',now:new Date('2026-09-24T00:00:00Z')});
+  assert.equal(snapshot.availability,'source_freshness_verified_schedule_unknown');
+  assert.equal(snapshot.last_successful_source_collection,null);
+  assert.equal(snapshot.latest_verified_source_evidence_at,'2026-09-23T12:00:00.000Z');
 });
