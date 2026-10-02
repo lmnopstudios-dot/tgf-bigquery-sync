@@ -243,7 +243,8 @@ test('August and September coverage repair requires correlated completeness evid
   ]);
   const audit=repairAuditQuery('p');
   assert.match(audit,/status='succeeded'/);assert.match(audit,/completed_at IS NOT NULL/);
-  assert.match(audit,/r\.report_kinds=\['campaign','flow'\]/);assert.match(audit,/r\.metric_ids=@metric_ids/);
+  assert.match(audit,/TO_JSON_STRING\(r\.report_kinds\)=TO_JSON_STRING\(\['campaign','flow'\]\)/);assert.match(audit,/TO_JSON_STRING\(r\.metric_ids\)=TO_JSON_STRING\(@metric_ids\)/);
+  assert.doesNotMatch(audit,/r\.(?:report_kinds|metric_ids|currencies|timezones|attribution_settings)\s*!?=/);
   assert.match(audit,/r\.row_count=s\.row_count/);assert.match(audit,/r\.min_retrieved_at=s\.retrieved_at/);
   assert.match(audit,/identity_count/);assert.match(audit,/refresh_required_settings_mismatch/);
   assert.match(audit,/SELECT w\.month,s\.run_id,s\.started_at,s\.completed_at,s\.retrieved_at,s\.row_count/);
@@ -272,8 +273,8 @@ test('coverage repair dry-runs every read and validates the transaction with ide
 });
 
 test('coverage repair returns bounded stage errors and never queries after failed preflight',async()=>{
-  let queried=false;const bigquery={dataset:()=>({getMetadata:async()=>[{location:'US'}]}),createQueryJob:async()=>{throw Object.assign(new Error('sensitive '.repeat(100)),{code:400,reason:'invalidQuery'});},query:async()=>{queried=true;}};
+  let queried=false;const first={reason:'invalidQuery',message:`Syntax error at https://example.test?q=secret ${'detail '.repeat(100)}`,location:'[27:19]'};const bigquery={dataset:()=>({getMetadata:async()=>[{location:'US'}]}),createQueryJob:async()=>{throw Object.assign(new Error('generic wrapper'),{code:400,errors:[first,{reason:'ignored',message:'ignored'}]});},query:async()=>{queried=true;}};
   const config={timezone:'Europe/London',currency:'GBP',approved_metric_ids:['Xp9amv'],attribution_settings:REVIEWED_ATTRIBUTION_SETTINGS};
-  await assert.rejects(repairCoverage({bigquery,project:'p',config}),error=>error.stage==='dry_run:before_audit'&&error.reason==='invalidQuery'&&error.message.length<100);
+  await assert.rejects(repairCoverage({bigquery,project:'p',config}),error=>error.stage==='dry_run:before_audit'&&error.reason==='invalidQuery'&&error.message.length===500&&error.location==='[27:19]'&&error.statement===repairAuditQuery('p')&&error.parameter_types.metric_ids[0]==='STRING');
   assert.equal(queried,false);
 });
