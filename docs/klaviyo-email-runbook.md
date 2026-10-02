@@ -71,10 +71,21 @@ The command is read-only. It prints a bounded physical inventory and the exact O
 The account usage start is unknown. Keep it distinct from both the earliest dated object returned by bounded listing pagination and the months successfully promoted into `window_coverage`. Discovery never writes and never turns an inaccessible month into zero. In Render Shell, choose a defensible lower bound rather than inventing an account start:
 
 ```sh
-KLAVIYO_MAX_API_CALLS=80 npm run discover:klaviyo-history -- --from=2025-10 --through=2026-09 --max-months=6 --metric-ids=Xp9amv 2>&1 | tee /tmp/klaviyo-history-discovery.json
+KLAVIYO_MAX_API_CALLS=80 KLAVIYO_MAX_ELAPSED_MS=1200000 npm run discover:klaviyo-history -- --from=2025-11 --through=2026-05 --max-months=7 --metric-ids=Xp9amv > /tmp/klaviyo-history-discovery.json
+KLAVIYO_MAX_API_CALLS=80 KLAVIYO_MAX_ELAPSED_MS=1200000 npm run discover:klaviyo-history -- --from=2025-11 --through=2026-05 --max-months=7 --metric-ids=Xp9amv --evidence=/tmp/klaviyo-history-discovery.json 2>&1 | tee /tmp/klaviyo-history-resume.log
 ```
 
-The output lists the full metric catalogue with integration provenance, but probes only the explicit `--metric-ids` selection (default `Xp9amv`). Potential WooCommerce purchase metrics are shown as review-only candidates and are not probed automatically. It distinguishes successful probes, successful zero-row responses, request failures, tasks not attempted because of the call limit, earliest accessible dated metadata, and unknown account start. Follow its exact `resume_command`, which restarts at the first unfinished month/metric/report-kind task. Review and commit any historical WooCommerce metric and evidenced applicability period in `metric_definitions` before selecting it. `Xp9amv` is Shopify and is currently approved for collection only from August 2026; an earlier read-only availability probe does not extend that approval, and the collector refuses earlier months rather than substituting it.
+The first command creates the original evidence capture; do not rerun it or redirect another command to that path. The second consumes that capture and writes a separate log. `--evidence` carries forward successful and successful-zero tasks, retries only failed or unattempted tasks in plan order, and then progresses; a failed metadata refresh is recorded separately and cannot erase earlier task evidence. Subsequent resumes must extract the JSON result from the latest resume log to a new, uniquely named evidence file rather than overwriting either capture, and pass that new file to `--evidence`.
+
+The reporting endpoints in the pinned API revision are XS tier (steady 15 requests/minute). Historical discovery and backfill therefore serialize API attempts at least four seconds apart. A 429 honors both delta-seconds and HTTP-date `Retry-After` values without shortening the server delay. Retries still consume the API-call cap, and a delay that would exceed `KLAVIYO_MAX_ELAPSED_MS` (or collection `--max-duration-ms`) fails explicitly instead of sleeping beyond the bound.
+
+The output lists the full metric catalogue with integration provenance, but probes only the explicit `--metric-ids` selection (default `Xp9amv`). Potential WooCommerce purchase metrics are shown as review-only candidates and are not probed automatically. It distinguishes successful probes, successful zero-row responses, request failures, tasks not attempted because of the call limit, earliest accessible dated metadata, and unknown account start. Review and commit any historical WooCommerce metric and evidenced applicability period in `metric_definitions` before selecting it. `Xp9amv` remains approved for collection only from August 2026; the November 2025–May 2026 read-only evidence does not itself change that gate.
+
+After a reviewer accepts the captured Shopify provenance and demonstrated applicability, the concrete reviewed configuration change is to change `metric_definitions[metric_id="Xp9amv"].collection_not_before` from `2026-08-01` to `2025-11-01`, replace its `evidence` text with the durable paths/hash and reviewed November 2025–May 2026 discovery result, and update `review.reviewed_at` and `review.basis` in the same reviewed commit. Do not change `approved_metric_ids`, infer October availability, add a WooCommerce metric, or collect until that separate review is committed. Then the bounded collection command is:
+
+```sh
+KLAVIYO_MAX_API_CALLS=80 npm run backfill:klaviyo -- --from=2025-11 --through=2026-05 --max-months=3 --max-duration-ms=1200000
+```
 
 After review, collect bounded exact Europe/London months:
 
