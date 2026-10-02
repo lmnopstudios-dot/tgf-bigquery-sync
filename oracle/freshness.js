@@ -1,7 +1,7 @@
 export const ORACLE_SOURCE_CONTRACTS=Object.freeze({
   shopify_finance:{dataset:'shopify_data',tables:['order_locations','order_financials','order_refunds'],tools:['get_sales_summary','get_sales_by_location','get_annual_sales_by_location','compare_sales_periods','get_sales_by_month','get_sales_by_channel','get_ecommerce_management_report','get_ecommerce_report_v2_evidence','search_orders'],cadence_minutes:120,late_change_overlap_days:7,availability_lag_days:0},
   shopify_geography:{dataset:'shopify_data',tables:['order_shipping_geography'],tools:['get_shopify_online_country_products','search_orders','get_ecommerce_report_v2_evidence'],cadence_minutes:1440,late_change_overlap_days:1,availability_lag_days:0},
-  shopify_conversion:{dataset:'shopify_data',tables:['session_conversion_by_device','session_conversion_by_device_source'],tools:['get_shopify_device_conversion_by_traffic_source','compare_device_conversion_before_after_shopify','compare_device_conversion_by_traffic_source','get_klaviyo_email_performance'],cadence_minutes:1440,late_change_overlap_days:7,availability_lag_days:1},
+  shopify_conversion:{dataset:'shopify_data',tables:['session_conversion_by_device','session_conversion_by_device_source'],tools:['get_shopify_device_conversion_by_traffic_source','compare_device_conversion_before_after_shopify','compare_device_conversion_by_traffic_source','compare_klaviyo_email_with_shopify_referrer'],cadence_minutes:1440,late_change_overlap_days:7,availability_lag_days:1},
   shopify_catalogue:{dataset:'shopify_catalogue',tables:['products','collections','product_collections'],tools:['get_governed_category_sales','get_shopify_online_country_products','get_ecommerce_report_v2_evidence','get_historical_product_opportunities'],cadence_minutes:1440,late_change_overlap_days:0,availability_lag_days:0},
   product_classifications:{dataset:'commerce',tables:['product_classifications','collection_classifications'],tools:['get_governed_category_sales','analyze_customer_journey','get_ecommerce_report_v2_evidence','get_historical_product_opportunities'],cadence_minutes:1440,late_change_overlap_days:0,availability_lag_days:0},
   ga4:{dataset:'ga4',tables:['daily','acquisition','landing_pages','device_geo','conversion_device','conversion_breakdown','conversion_coverage','ecommerce_funnel'],tools:['get_woocommerce_device_conversion','compare_device_conversion_before_after_shopify','compare_device_conversion_by_traffic_source','get_governed_pageviews_per_session','get_product_views_before_purchase','get_ecommerce_report_v2_evidence'],cadence_minutes:1440,late_change_overlap_days:7,availability_lag_days:1},
@@ -13,23 +13,24 @@ export const ORACLE_SOURCE_CONTRACTS=Object.freeze({
 
 const day=value=>value==null?null:String(value?.value||value).slice(0,10);
 const instant=value=>value==null?null:new Date(value?.value||value).toISOString();
-export function freshnessAssessment({source,requestedStart,requestedEnd,coverageStart,coverageEnd,lastSuccess,status='unknown',storedDataAvailable=false,scheduleVerified=null,inspectionFailed=false,now=new Date()}){
+export function freshnessAssessment({source,requestedStart,requestedEnd,coverageStart,coverageEnd,lastSuccess,sourceEvidenceAt,status='unknown',storedDataAvailable=false,scheduleVerified=null,inspectionFailed=false,now=new Date()}){
   const contract=ORACLE_SOURCE_CONTRACTS[source];if(!contract)throw new Error(`Unknown Oracle freshness source: ${source}`);
   const actual={start_date:day(coverageStart),end_date:day(coverageEnd)};
   const requested={start_date:day(requestedStart),end_date:day(requestedEnd)};
-  const last=instant(lastSuccess),age=last?Math.floor((now-new Date(last))/60000):null;
+  const last=instant(lastSuccess),sourceEvidence=instant(sourceEvidenceAt),effectiveFreshness=last||sourceEvidence,age=effectiveFreshness?Math.floor((now-new Date(effectiveFreshness))/60000):null;
   const overdue=!contract.retired&&contract.cadence_minutes!=null&&(age==null||age>contract.cadence_minutes*2);
   const covers=Boolean(actual.start_date&&actual.end_date&&requested.start_date&&requested.end_date&&actual.start_date<=requested.start_date&&actual.end_date>=requested.end_date);
   storedDataAvailable=storedDataAvailable||Boolean(actual.start_date||actual.end_date);
   let classification,message;
   if(contract.retired){classification='retired_historical_only';message=contract.retirement_message;}
   else if(inspectionFailed){classification='inspection_failed';message='Freshness inspection failed; no absence or freshness conclusion is inferred.';}
-  else if(last&&overdue){classification='stale';message=`${source} is stale: its last successful source collection is overdue.`;}
+  else if(effectiveFreshness&&overdue){classification='stale';message=`${source} is stale: its latest verified source-freshness evidence is overdue.`;}
+  else if(!last&&sourceEvidence){classification='source_freshness_verified_schedule_unknown';message='A persisted source snapshot timestamp establishes freshness; no successful run or scheduled execution is inferred.';}
   else if(!last&&storedDataAvailable){classification='collection_freshness_unknown';message='Stored data is readable, but no successful collection timestamp is established.';}
   else if(!storedDataAvailable){classification='stored_data_unavailable';message='No readable stored rows were observed.';}
   else if(scheduleVerified===false){classification='verified_schedule_missing';message='Collection succeeded, but scheduled execution has not been verified.';}
   else classification=covers||!requested.start_date?'available':'partial',message=covers?'Collected coverage contains the requested period.':'Stored evidence exists, but complete requested coverage is not established.';
-  return {source,requested_period:requested,actual_collected_coverage:actual,last_successful_source_collection:last,query_executed_at:now.toISOString(),coverage_complete:covers,provisional:contract.retired?false:requested.end_date?requested.end_date>=new Date(now.valueOf()-contract.availability_lag_days*86400000).toISOString().slice(0,10):false,overdue,stored_data_available:Boolean(storedDataAvailable),schedule_verified:Boolean(scheduleVerified),availability:classification,message,contract:{cadence_minutes:contract.cadence_minutes,late_change_overlap_days:contract.late_change_overlap_days,availability_lag_days:contract.availability_lag_days}};
+  return {source,requested_period:requested,actual_collected_coverage:actual,last_successful_source_collection:last,latest_verified_source_evidence_at:sourceEvidence,query_executed_at:now.toISOString(),coverage_complete:covers,provisional:contract.retired?false:requested.end_date?requested.end_date>=new Date(now.valueOf()-contract.availability_lag_days*86400000).toISOString().slice(0,10):false,overdue,stored_data_available:Boolean(storedDataAvailable),schedule_verified:Boolean(scheduleVerified),availability:classification,message,contract:{cadence_minutes:contract.cadence_minutes,late_change_overlap_days:contract.late_change_overlap_days,availability_lag_days:contract.availability_lag_days}};
 }
 
 export function attachFreshness(result,assessments){return {...result,freshness:{sources:assessments,all_requested_periods_covered:assessments.every(x=>x.coverage_complete||x.availability==='retired_historical_only'),checked_at:assessments[0]?.query_executed_at||new Date().toISOString(),warning:'Query execution time is not source collection time.'}};}
