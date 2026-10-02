@@ -47,6 +47,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { createBigQueryAnalysisJobStore, ORACLE_JOB_DEFAULTS } from './oracle/analysis-jobs.js';
 import {answerExactPageviewsRequest,createPageviewsPerSessionService,executePageviewsToolCall,PAGEVIEWS_MAX_BYTES} from './oracle/pageviews-per-session.js';
 import {createKlaviyoEmailService,executeKlaviyoEmailToolCall} from './oracle/klaviyo-email.js';
+import {createBaselineOverviewService} from './oracle/baseline-overview.js';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -159,6 +160,7 @@ const categorySalesService = createCategorySalesService({ bigquery, project: GOO
 const productViewPurchaseService = createProductViewPurchaseService({bigquery});
 const pageviewsPerSessionService=createPageviewsPerSessionService({bigquery,project:GOOGLE_PROJECT_ID,runShopifyql:async(query,reportName)=>runShopifyqlReport(await getShopifyAccessToken(),query,reportName),getShopTimezone:async()=>{const data=await shopifyGraphQL(await getShopifyAccessToken(),'{ shop { ianaTimezone } }');if(!data?.shop?.ianaTimezone)throw new Error('Shopify reporting timezone unavailable');return data.shop.ianaTimezone;}});
 const klaviyoEmailService=createKlaviyoEmailService({bigquery,project:GOOGLE_PROJECT_ID});
+const baselineOverview=createBaselineOverviewService({finance:getSalesSummary,shopifyConversion:getShopifyConversionKpis,shopifySales:getShopifySalesKpis,shopifyDevice:deviceSourceConversionService,klaviyo:klaviyoEmailService});
 const oracleInventoryLocationSelector=inventoryLocationSelector(process.env);
 console.info('Oracle inventory configuration:',{selector:oracleInventoryLocationSelector,deployed_revision:DEPLOYED_GIT_REVISION||'unavailable'});
 const loadHistoricalCandidateInventory=createBatchedInventoryByLocation({
@@ -8178,6 +8180,12 @@ app.post(
         });
       }
 
+      // This broad KPI request has a governed deterministic evidence plan. It
+      // must not enter model-selected inventory tooling or let one optional
+      // source failure erase independent successful sections.
+      const baselineAnswer=await baselineOverview(message);
+      if(baselineAnswer)return res.json({success:true,answer:baselineAnswer.answer,tools_used:baselineAnswer.tools,request_id:id});
+
       const currentDate = new Date()
         .toISOString()
         .slice(0, 10);
@@ -8657,6 +8665,7 @@ if (process.env.ORACLE_UI_PASSWORD || process.env.ORACLE_UI_SESSION_SECRET) {
     analysisJobStore: process.env.ORACLE_ANALYSIS_JOBS_ENABLED === 'true'
       ? createBigQueryAnalysisJobStore({bigquery,project:GOOGLE_PROJECT_ID,dataset:process.env.ORACLE_JOB_DATASET||ORACLE_JOB_DEFAULTS.dataset,table:process.env.ORACLE_JOB_TABLE||ORACLE_JOB_DEFAULTS.table,location:process.env.ORACLE_JOB_DATASET_LOCATION||ORACLE_JOB_DEFAULTS.location})
       : null,
+    baselineOverview,
     env: process.env,
     generateProposals: createProposalGenerator({ openai, model: process.env.ORACLE_PROPOSAL_MODEL || 'gpt-5.6' }),
     chat: async (message, conversation = {}) => {
