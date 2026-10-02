@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createKlaviyoClient,redactKlaviyo} from '../klaviyo/client.js';
+import {createKlaviyoClient,parseRetryAfter,redactKlaviyo} from '../klaviyo/client.js';
 import {discover,metricCatalogue,reportBody,resolveReportWindow,PILOT,REPORT_STATISTICS} from '../klaviyo/discovery.js';
 import {requireGate,normalizeReport,collectPilot,serializeAttributionSettings,persist,persistenceQuery,assertBuffersReady} from '../klaviyo/sync.js';
 import {extractDiscoveryJson,prepareManifest,REVIEWED_ATTRIBUTION_SETTINGS} from '../klaviyo/prepare-manifest.js';
@@ -31,6 +31,14 @@ test('discovery omits unsupported page size for metrics and flows and follows th
   assert.equal(result.approved_for_pilot,false);
 });
 test('429 retries are bounded and credentials are redacted',async()=>{let calls=0;const client=createKlaviyoClient({apiKey:'pk_secretsecret',revision:'2026-01-15',fetchImpl:async()=>{calls++;return response({},429)},maxRetries:2,sleep:async()=>{}});await assert.rejects(client.request('/api/metrics'),/HTTP 429/);assert.equal(calls,3);assert.equal(redactKlaviyo('Authorization: Klaviyo-API-Key pk_secretsecret'),'Authorization: Klaviyo-API-Key [REDACTED]');});
+test('historical pacing is serialized and Retry-After is honored without an unsafe ten-second cap',async()=>{
+  let clock=Date.parse('2026-10-02T00:00:00Z');const sleeps=[],seen=[];
+  const client=createKlaviyoClient({apiKey:'pk_secretsecret',revision:'2026-07-15',minRequestIntervalMs:4000,maxElapsedMs:30000,now:()=>clock,sleep:async ms=>{sleeps.push(ms);clock+=ms;},fetchImpl:async()=>{seen.push(clock);return seen.length===1?response({},429,{get:name=>name.toLowerCase()==='retry-after'?'12':null}):response({data:[]});}});
+  await client.request('/api/metrics');await client.request('/api/flows');
+  assert.deepEqual(seen.map((value,index)=>index?value-seen[index-1]:0),[0,12000,4000]);assert.ok(sleeps.includes(12000));
+  assert.equal(parseRetryAfter('Fri, 02 Oct 2026 00:00:20 GMT',Date.parse('2026-10-02T00:00:00Z')),20000);
+});
+test('Retry-After cannot push work beyond the elapsed-time bound',async()=>{const client=createKlaviyoClient({apiKey:'pk_secretsecret',revision:'2026-07-15',maxElapsedMs:5000,fetchImpl:async()=>response({},429,{get:()=> '6'}),sleep:async()=>{}});await assert.rejects(client.request('/api/metrics'),error=>error.code==='ELAPSED_BOUND');});
 test('metric provenance distinguishes integrations and report requires account settings',()=>{assert.deepEqual(metricCatalogue([{id:'s',attributes:{name:'Placed Order',integration:{name:'Shopify'}}},{id:'w',attributes:{name:'Placed Order - WooCommerce'}}]).map(x=>x.integration),['shopify','woocommerce']);assert.throws(()=>reportBody('campaign','s',{}),/timezone/);});
 test('campaign report request exactly follows the pinned 2026-07-15 contract',()=>{
   const campaign=reportBody('campaign','Xp9amv',{timezone:'Europe/London'});
@@ -199,6 +207,21 @@ test('historical discovery resumes at the exact unfinished task without skipping
   assert.deepEqual(requested,['/api/flow-values-reports','/api/campaign-values-reports','/api/flow-values-reports']);
   assert.deepEqual(result.evidence.map(x=>[x.month,x.kind]),[['2026-03','flow'],['2026-04','campaign'],['2026-04','flow']]);
   assert.equal(result.resume_command,null);
+});
+
+test('evidence resume preserves successes and zeros and retries only unfinished tasks',async()=>{
+  const {discoverHistory}=await import('../klaviyo/historical-discovery.js');
+  const prior={read_only:true,earliest_accessible_dated_metadata:{kind:'campaign',id:'old',date:'2025-11-02T10:00:00Z'},metrics:[{metric_id:'Xp9amv',name:'Placed Order',integration:'shopify'}],evidence:[
+    {month:'2026-02',metric_id:'Xp9amv',kind:'campaign',integration:'shopify',status:'request_failed',http_status:429,code:'KLAVIYO_ERROR'},
+    {month:'2026-02',metric_id:'Xp9amv',kind:'flow',integration:'shopify',status:'zero_rows',row_count:0},
+    {month:'2026-03',metric_id:'Xp9amv',kind:'campaign',integration:'shopify',status:'successful',row_count:5},
+    {month:'2026-03',metric_id:'Xp9amv',kind:'flow',integration:'shopify',status:'zero_rows',row_count:0}
+  ]};
+  const requested=[];const client={paginate:async path=>{if(path==='/api/metrics')throw Object.assign(new Error('refresh limited'),{status:429,code:'RATE_LIMITED'});return {data:[]};},request:async path=>{requested.push(path);return {data:{attributes:{results:[{}]}}};}};
+  const result=await discoverHistory({client,timezone:'Europe/London',currency:'GBP',args:['--from=2026-02','--through=2026-03','--max-months=2'],previousEvidence:prior});
+  assert.deepEqual(requested,['/api/campaign-values-reports']);
+  assert.deepEqual(result.evidence.map(x=>[x.month,x.kind,x.status,x.row_count]),[['2026-02','campaign','successful',1],['2026-02','flow','zero_rows',0],['2026-03','campaign','successful',5],['2026-03','flow','zero_rows',0]]);
+  assert.deepEqual(result.metadata_refresh.metrics,{status:'request_failed',http_status:429,code:'RATE_LIMITED'});assert.equal(result.earliest_accessible_dated_metadata.id,'old');assert.equal(result.resume_command,null);
 });
 
 test('daily schedule refreshes previous and current London calendar months',async()=>{

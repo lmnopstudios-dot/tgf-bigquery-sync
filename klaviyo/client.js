@@ -22,20 +22,32 @@ export function sanitizeJsonApiErrors(payload,{secrets=[]}={}) {
 }
 
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
-export function createKlaviyoClient({apiKey, revision, fetchImpl=fetch, timeoutMs=15_000, maxCalls=40, maxRetries=3, sleep=wait}={}) {
+export function parseRetryAfter(value,now=Date.now()) {
+  if(value===null||value===undefined||String(value).trim()==='')return null;
+  const seconds=Number(value);
+  if(Number.isFinite(seconds)&&seconds>=0)return seconds*1000;
+  const date=Date.parse(value);
+  return Number.isFinite(date)?Math.max(0,date-now):null;
+}
+export function createKlaviyoClient({apiKey, revision, fetchImpl=fetch, timeoutMs=15_000, maxCalls=40, maxRetries=3, minRequestIntervalMs=0, maxElapsedMs=1_200_000, sleep=wait,now=Date.now}={}) {
   if (!apiKey) throw new Error('KLAVIYO_PRIVATE_API_KEY is required');
   if (!/^\d{4}-\d{2}-\d{2}$/.test(revision || '')) throw new Error('KLAVIYO_API_REVISION must be an explicit YYYY-MM-DD revision');
-  let calls=0;
+  if(!Number.isFinite(minRequestIntervalMs)||minRequestIntervalMs<0)throw new Error('Klaviyo request interval must be non-negative');
+  if(!Number.isFinite(maxElapsedMs)||maxElapsedMs<1)throw new Error('Klaviyo elapsed-time bound must be positive');
+  let calls=0,nextRequestAt=0;const started=now();
+  async function boundedSleep(ms){const remaining=maxElapsedMs-(now()-started);if(ms>remaining)throw Object.assign(new Error(`Klaviyo elapsed-time bound exceeded (${maxElapsedMs}ms)`),{code:'ELAPSED_BOUND'});if(ms>0)await sleep(ms);}
+  async function pace(){const current=now(),slot=Math.max(current,nextRequestAt);nextRequestAt=slot+minRequestIntervalMs;await boundedSleep(slot-current);}
   async function request(path,{method='GET',body}={}) {
     for(let attempt=0;;attempt++) {
+      await pace();
       if (++calls > maxCalls) throw Object.assign(new Error(`Klaviyo API call bound exceeded (${maxCalls})`),{code:'CALL_BOUND'});
       const controller=new AbortController(), timer=setTimeout(()=>controller.abort(),timeoutMs);
       let response;
       try { response=await fetchImpl(`${KLAVIYO_ORIGIN}${path}`,{method,headers:{Authorization:`Klaviyo-API-Key ${apiKey}`,revision,'content-type':'application/vnd.api+json',accept:'application/vnd.api+json'},body:body?JSON.stringify(body):undefined,signal:controller.signal}); }
-      catch(error) { clearTimeout(timer); if(attempt<maxRetries && error?.name!=='AbortError'){await sleep(250*2**attempt);continue;} throw Object.assign(new Error(error?.name==='AbortError'?'Klaviyo request timed out':'Klaviyo request failed; detail redacted'),{code:error?.name==='AbortError'?'TIMEOUT':'NETWORK'}); }
+      catch(error) { clearTimeout(timer); if(attempt<maxRetries && error?.name!=='AbortError'){await boundedSleep(250*2**attempt);continue;} throw Object.assign(new Error(error?.name==='AbortError'?'Klaviyo request timed out':'Klaviyo request failed; detail redacted'),{code:error?.name==='AbortError'?'TIMEOUT':'NETWORK'}); }
       clearTimeout(timer);
       if(response.ok) return response.status===204?null:response.json();
-      if([429,500,502,503,504].includes(response.status)&&attempt<maxRetries){const retry=Number(response.headers?.get?.('retry-after'));await sleep(Number.isFinite(retry)?Math.min(retry*1000,10_000):250*2**attempt);continue;}
+      if([429,500,502,503,504].includes(response.status)&&attempt<maxRetries){const retry=parseRetryAfter(response.headers?.get?.('retry-after'),now());await boundedSleep(retry??250*2**attempt);continue;}
       let errors=[];try{errors=sanitizeJsonApiErrors(await response.json(),{secrets:[apiKey,body?.data?.attributes?.conversion_metric_id]})}catch{}
       const code=errors[0]?.code||'KLAVIYO_ERROR';
       throw Object.assign(new Error(`Klaviyo API returned HTTP ${response.status}; response and credentials redacted`),{code,status:response.status,validationErrors:errors});
