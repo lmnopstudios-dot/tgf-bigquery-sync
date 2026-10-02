@@ -3,6 +3,7 @@ import {spawn} from 'node:child_process';
 import {randomUUID} from 'node:crypto';
 import {BigQuery,BigQueryTimestamp} from '@google-cloud/bigquery';
 import {ORACLE_SOURCE_CONTRACTS} from '../oracle/freshness.js';
+import {ensureGoogleAdsSchema} from '../google-ads/storage.js';
 
 export const CONTROL_DATASET='oracle_ops';
 const safe=value=>{if(!/^[A-Za-z0-9_-]+$/.test(value))throw new Error('Invalid identifier');return value};
@@ -18,6 +19,7 @@ export function plannedCommand(source,{now=new Date(),coverageEnd=null}={}){
   if(source==='shopify_catalogue')return ['npm',['run','sync:shopify-catalogue']];
   if(source==='product_classifications')return ['npm',['run','sync:product-classifications']];
   if(source==='klaviyo')return ['npm',['run','schedule:klaviyo']];
+  if(source==='google_ads')return ['npm',['run','schedule:google-ads']];
   throw new Error(`${source} is not an active warehouse collector`);
 }
 const daily=(project,dataset,table,column,{observedStatus=null,role='current',evidenceSelect=''}={})=>({table,kind:'daily',role,query:`WITH coverage AS (SELECT MIN(${column}) coverage_start,MAX(${column}) coverage_end,COUNT(*) row_count,COUNT(DISTINCT ${column}) covered_days FROM \`${project}.${dataset}.${table}\`), missing AS (SELECT ARRAY_AGG(CAST(day AS STRING) ORDER BY day) missing_dates FROM coverage,UNNEST(IF(coverage_start IS NULL,ARRAY<DATE>[],GENERATE_DATE_ARRAY(coverage_start,coverage_end))) day LEFT JOIN (SELECT DISTINCT ${column} observed_date FROM \`${project}.${dataset}.${table}\`) observed ON observed.observed_date=day WHERE observed.observed_date IS NULL) SELECT CAST(coverage_start AS STRING) coverage_start,CAST(coverage_end AS STRING) coverage_end,row_count,covered_days,ARRAY_LENGTH(COALESCE(missing_dates,[])) internal_gap_days,COALESCE(missing_dates,[]) missing_dates${observedStatus?`,(SELECT ARRAY_AGG(CAST(${column} AS STRING) ORDER BY ${column}) FROM \`${project}.${dataset}.${table}\` WHERE ${observedStatus}) observed_zero_or_unavailable_dates`:''}${evidenceSelect} FROM coverage CROSS JOIN missing`});
@@ -31,6 +33,7 @@ export function sourceInspections(project,source){safe(project);const q={
   shopify_catalogue:['products','collections','product_collections'].map(t=>snapshot(project,'shopify_catalogue',t,'catalogue_synced_at')),
   product_classifications:['product_classifications','collection_classifications'].map(t=>snapshot(project,'commerce',t)),
   klaviyo:[snapshot(project,'klaviyo','message_performance','retrieved_at'),{table:'window_coverage',kind:'window',query:`WITH w AS (SELECT report_start,report_end,reporting_timezone,status,row_count,retrieved_at FROM \`${project}.klaviyo.window_coverage\`) SELECT CAST(MIN(report_start) AS STRING) AS coverage_start,CAST(MAX(report_end) AS STRING) AS coverage_end,COUNTIF(status='collected') AS row_count,MAX(retrieved_at) AS actual_retrieved_at,ARRAY_AGG(STRUCT(CAST(report_start AS STRING) AS report_start,CAST(report_end AS STRING) AS report_end,reporting_timezone AS reporting_timezone,status AS status,row_count AS row_count,CAST(retrieved_at AS STRING) AS retrieved_at) ORDER BY report_start) AS windows,@expected_reporting_timezone AS expected_reporting_timezone,@audit_as_of AS audit_as_of FROM w`,params:{expected_reporting_timezone:'Europe/London',audit_as_of:'2026-10-02'},types:{expected_reporting_timezone:'STRING',audit_as_of:'DATE'}} ,snapshot(project,'klaviyo','sync_status','retrieved_at')]
+  ,google_ads:[{table:'coverage',kind:'window',query:`SELECT CAST(MIN(window_start) AS STRING) coverage_start,CAST(MAX(window_end) AS STRING) coverage_end,COUNTIF(status='collected') row_count,MAX(retrieved_at) actual_retrieved_at,COUNTIF(status='failed') failed_windows,COUNTIF(scheduled_execution) scheduled_windows FROM \`${project}.google_ads.coverage\``},snapshot(project,'google_ads','campaign_daily','retrieved_at')]
 };return q[source]||[];}
 export function coverageSql(project,source){const inspection=sourceInspections(project,source)[0];if(!inspection)throw new Error(`No coverage contract for ${source}`);return inspection.query;}
 const parameterContract=(params={},types={})=>Object.fromEntries(Object.keys(params).sort().map(name=>[name,types[name]||'INFERRED']));
@@ -55,7 +58,7 @@ export function execute(command,args,{env=process.env}={}){return new Promise((r
 export async function recoveryCheck(bigquery,project,source){const [rows]=await collectorQuery(bigquery,'recovery_check',{query:`SELECT run_id,status,started_at,finished_at,window_start,window_end,status='running' AND started_at>TIMESTAMP_SUB(CURRENT_TIMESTAMP(),INTERVAL 6 HOUR) AS active_lock FROM \`${project}.${CONTROL_DATASET}.collector_runs\` WHERE source=@source ORDER BY started_at DESC LIMIT 10`,params:{source},types:{source:'STRING'}});return {source,read_only:true,runs:rows};}
 export async function runCollector({source,bigquery,project,now=new Date(),executeCommand=execute}){
   if(!ORACLE_SOURCE_CONTRACTS[source]||ORACLE_SOURCE_CONTRACTS[source].retired)throw new Error(`${source} has no scheduled collector`);
-  await ensureControl(bigquery,project);const runId=randomUUID();await acquire(bigquery,project,source,runId,{now});
+  await ensureControl(bigquery,project);if(source==='google_ads')await ensureGoogleAdsSchema(bigquery,project);const runId=randomUUID();await acquire(bigquery,project,source,runId,{now});
   try{
     const [coverage]=await collectorQuery(bigquery,'coverage_before',{query:coverageSql(project,source)});const before=coverage[0]?.coverage_end||null;
     const [command,args]=plannedCommand(source,{now,coverageEnd:before});const output=await executeCommand(command,args);

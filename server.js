@@ -47,6 +47,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { createBigQueryAnalysisJobStore, ORACLE_JOB_DEFAULTS } from './oracle/analysis-jobs.js';
 import {answerExactPageviewsRequest,createPageviewsPerSessionService,executePageviewsToolCall,PAGEVIEWS_MAX_BYTES} from './oracle/pageviews-per-session.js';
 import {createKlaviyoEmailService,executeKlaviyoEmailToolCall} from './oracle/klaviyo-email.js';
+import {createGoogleAdsService,executeGoogleAdsToolCall} from './oracle/google-ads.js';
 import {createBaselineOverviewService} from './oracle/baseline-overview.js';
 
 const app = express();
@@ -160,7 +161,8 @@ const categorySalesService = createCategorySalesService({ bigquery, project: GOO
 const productViewPurchaseService = createProductViewPurchaseService({bigquery});
 const pageviewsPerSessionService=createPageviewsPerSessionService({bigquery,project:GOOGLE_PROJECT_ID,runShopifyql:async(query,reportName)=>runShopifyqlReport(await getShopifyAccessToken(),query,reportName),getShopTimezone:async()=>{const data=await shopifyGraphQL(await getShopifyAccessToken(),'{ shop { ianaTimezone } }');if(!data?.shop?.ianaTimezone)throw new Error('Shopify reporting timezone unavailable');return data.shop.ianaTimezone;}});
 const klaviyoEmailService=createKlaviyoEmailService({bigquery,project:GOOGLE_PROJECT_ID});
-const baselineOverview=createBaselineOverviewService({finance:getSalesSummary,shopifyConversion:getShopifyConversionKpis,shopifySales:getShopifySalesKpis,shopifyDevice:deviceSourceConversionService,klaviyo:klaviyoEmailService});
+const googleAdsService=createGoogleAdsService({bigquery,project:GOOGLE_PROJECT_ID});
+const baselineOverview=createBaselineOverviewService({finance:getSalesSummary,shopifyConversion:getShopifyConversionKpis,shopifySales:getShopifySalesKpis,shopifyDevice:deviceSourceConversionService,klaviyo:klaviyoEmailService,paidAdvertising:()=>googleAdsService('get_google_ads_performance',{...(()=>{const end=new Date(),start=new Date(end);start.setUTCDate(start.getUTCDate()-29);return{start_date:start.toISOString().slice(0,10),end_date:end.toISOString().slice(0,10)}})(),customer_id:null})});
 const oracleInventoryLocationSelector=inventoryLocationSelector(process.env);
 console.info('Oracle inventory configuration:',{selector:oracleInventoryLocationSelector,deployed_revision:DEPLOYED_GIT_REVISION||'unavailable'});
 const loadHistoricalCandidateInventory=createBatchedInventoryByLocation({
@@ -8452,6 +8454,8 @@ Important rules:
                   if(pageviewsCall.handled)result=pageviewsCall.result;
                   else { const klaviyoCall=await executeKlaviyoEmailToolCall(klaviyoEmailService,item.name,args);
                   if(klaviyoCall.handled)result=klaviyoCall.result;
+                  else { const googleAdsCall=await executeGoogleAdsToolCall(googleAdsService,item.name,args);
+                  if(googleAdsCall.handled)result=googleAdsCall.result;
                   else { const deviceConversionCall = await executeDeviceSourceConversionToolCall(deviceSourceConversionService, item.name, args);
                   if (deviceConversionCall.handled) result = deviceConversionCall.result;
                   else { const productViewCall=await executeProductViewPurchaseToolCall(productViewPurchaseService,item.name,args); if(productViewCall.handled) result=productViewCall.result;
@@ -8556,6 +8560,7 @@ Important rules:
             result = {
               error: `Unknown tool: ${item.name}`
             };
+            }
             }
             }
             }

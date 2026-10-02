@@ -3,7 +3,7 @@ services:
     name: oracle-shopify-finance
     runtime: node
     schedule: "17 */2 * * *"
-    buildCommand: npm ci
+    buildCommand: npm install
     startCommand: npm run collect:freshness -- shopify_finance
     envVars: &collector-env
       - key: GOOGLE_PROJECT_ID
@@ -28,52 +28,67 @@ services:
         sync: false
       - key: KLAVIYO_CONVERSION_METRIC_IDS
         sync: false
+      - key: GOOGLE_ADS_ACCOUNTS_JSON
+        sync: false
+      - key: GOOGLE_ADS_AUTH_PROJECT_ID
+        sync: false
+      - key: GOOGLE_ADS_SERVICE_ACCOUNT_JSON
+        sync: false
+      - key: GOOGLE_ADS_API_VERSION
+        value: v22
   - type: cron
     name: oracle-ga4
     runtime: node
     schedule: "15 5 * * *"
-    buildCommand: npm ci
+    buildCommand: npm install
     startCommand: npm run collect:freshness -- ga4
     envVars: *collector-env
   - type: cron
     name: oracle-search-console
     runtime: node
     schedule: "15 6 * * *"
-    buildCommand: npm ci
+    buildCommand: npm install
     startCommand: npm run collect:freshness -- search_console
     envVars: *collector-env
   - type: cron
     name: oracle-shopify-catalogue
     runtime: node
     schedule: "15 3 * * *"
-    buildCommand: npm ci
+    buildCommand: npm install
     startCommand: npm run collect:freshness -- shopify_catalogue
     envVars: *collector-env
   - type: cron
     name: oracle-shopify-geography
     runtime: node
     schedule: "35 2 * * *"
-    buildCommand: npm ci
+    buildCommand: npm install
     startCommand: npm run collect:freshness -- shopify_geography
     envVars: *collector-env
   - type: cron
     name: oracle-shopify-conversion
     runtime: node
     schedule: "45 5 * * *"
-    buildCommand: npm ci
+    buildCommand: npm install
     startCommand: npm run collect:freshness -- shopify_conversion
     envVars: *collector-env
   - type: cron
     name: oracle-product-classifications
     runtime: node
     schedule: "45 3 * * *"
-    buildCommand: npm ci
+    buildCommand: npm install
     startCommand: npm run collect:freshness -- product_classifications
     envVars: *collector-env
   - type: cron
     name: oracle-klaviyo
     runtime: node
     schedule: "15 4 * * *"
-    buildCommand: npm ci
+    buildCommand: npm install
     startCommand: npm run collect:freshness -- klaviyo
+    envVars: *collector-env
+  - type: cron
+    name: oracle-google-ads
+    runtime: node
+    schedule: "30 4 * * *"
+    buildCommand: npm install
+    startCommand: npm run collect:freshness -- google_ads
     envVars: *collector-env
