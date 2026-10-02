@@ -9,8 +9,8 @@
       "metric_id": "Xp9amv",
       "name": "Placed Order",
       "integration": "shopify",
-      "collection_not_before": "2026-08-01",
-      "evidence": "Verified August and September 2026 collection; this does not establish earlier applicability"
+      "collection_not_before": "2025-11-01",
+      "evidence": "Reviewed production discovery for November 2025 through July 2026 at evidence/klaviyo/xp9amv-history-discovery-2025-11-through-2026-07.json (SHA-256 cd46177c2e56d63c3443df4e0b49d3c91881ccd817a6d0365dd49af59ff13012), plus verified August and September 2026 collection"
     }
   ],
   "attribution_settings": {
@@ -24,8 +24,9 @@
     "exclude_apple_mpp_opens": false
   },
   "review": {
-    "reviewed_at": "2026-09-30T00:00:00.000Z",
-    "basis": "August 2026 production pilot and recorded Klaviyo account settings",
+    "reviewer": "Stuart Hughes",
+    "reviewed_at": "2026-10-02T10:59:23.567Z",
+    "basis": "Production discovery for Shopify metric Xp9amv in GBP: November 2025–May 2026 campaign row counts 5, 5, 3, 1, 5, 1, 11; June and July 2026 campaign row counts 3 and 3; every monthly flow probe returned zero_rows; no failed or unfinished tasks and the call budget was not exhausted. Durable capture: evidence/klaviyo/xp9amv-history-discovery-2025-11-through-2026-07.json; SHA-256 cd46177c2e56d63c3443df4e0b49d3c91881ccd817a6d0365dd49af59ff13012. August–September 2026 were already collected. Historical report attribution settings describe settings used at retrieval, not proven historical settings.",
     "change_policy": "A reviewed commit is required for metric or attribution-setting changes"
   },
   "refresh_policy": {

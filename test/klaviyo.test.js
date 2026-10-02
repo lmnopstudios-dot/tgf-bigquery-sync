@@ -168,7 +168,7 @@ test('historical month planning is bounded and refuses unreviewed pre-Shopify su
   const {backfillPlan,applicableMetrics}=await import('../klaviyo/backfill.js');
   const config=JSON.parse(await (await import('node:fs/promises')).readFile(new URL('../config/klaviyo-account.json',import.meta.url)));
   assert.deepEqual(backfillPlan({args:['--from=2026-08','--through=2027-01','--max-months=2'],config}).months,['2026-08','2026-09']);
-  assert.deepEqual(applicableMetrics(config,'2026-07'),[]);assert.equal(applicableMetrics(config,'2026-08')[0].integration,'shopify');
+  assert.deepEqual(applicableMetrics(config,'2025-10'),[]);assert.equal(applicableMetrics(config,'2025-11')[0].integration,'shopify');assert.equal(applicableMetrics(config,'2026-07')[0].integration,'shopify');
 });
 
 test('historical discovery catalogues provenance but probes only explicitly selected metrics',async()=>{

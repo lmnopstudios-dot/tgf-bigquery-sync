@@ -79,28 +79,34 @@ The first command creates the original evidence capture; do not rerun it or redi
 
 The reporting endpoints in the pinned API revision are XS tier (steady 15 requests/minute). Historical discovery and backfill therefore serialize API attempts at least four seconds apart. A 429 honors both delta-seconds and HTTP-date `Retry-After` values without shortening the server delay. Retries still consume the API-call cap, and a delay that would exceed `KLAVIYO_MAX_ELAPSED_MS` (or collection `--max-duration-ms`) fails explicitly instead of sleeping beyond the bound.
 
-The output lists the full metric catalogue with integration provenance, but probes only the explicit `--metric-ids` selection (default `Xp9amv`). Potential WooCommerce purchase metrics are shown as review-only candidates and are not probed automatically. It distinguishes successful probes, successful zero-row responses, request failures, tasks not attempted because of the call limit, earliest accessible dated metadata, and unknown account start. Review and commit any historical WooCommerce metric and evidenced applicability period in `metric_definitions` before selecting it. `Xp9amv` remains approved for collection only from August 2026; the November 2025–May 2026 read-only evidence does not itself change that gate.
+The output lists the full metric catalogue with integration provenance, but probes only the explicit `--metric-ids` selection (default `Xp9amv`). Potential WooCommerce purchase metrics are shown as review-only candidates and are not probed automatically. It distinguishes successful probes, successful zero-row responses, request failures, tasks not attempted because of the call limit, earliest accessible dated metadata, and unknown account start. Review and commit any historical WooCommerce metric and evidenced applicability period in `metric_definitions` before selecting it. `Xp9amv` is approved for collection from November 2025. The reviewed production discovery capture for November 2025–July 2026 is stored at `evidence/klaviyo/xp9amv-history-discovery-2025-11-through-2026-07.json`; its sibling `.sha256` file verifies the durable capture. This is a transcription of reviewer-supplied production results, not a claim that this checkout read a remote Render `/tmp` file.
 
-After a reviewer accepts the captured Shopify provenance and demonstrated applicability, the concrete reviewed configuration change is to change `metric_definitions[metric_id="Xp9amv"].collection_not_before` from `2026-08-01` to `2025-11-01`, replace its `evidence` text with the durable paths/hash and reviewed November 2025–May 2026 discovery result, and update `review.reviewed_at` and `review.basis` in the same reviewed commit. Do not change `approved_metric_ids`, infer October availability, add a WooCommerce metric, or collect until that separate review is committed. Then the bounded collection command is:
+Stuart Hughes reviewed the captured Shopify provenance and demonstrated applicability for November 2025–July 2026. The reviewed configuration sets `metric_definitions[metric_id="Xp9amv"].collection_not_before` to `2025-11-01`; it does not change `approved_metric_ids`, infer October availability, or add a WooCommerce metric. After deployment of the reviewed commit, run the first bounded batch below. Each successful invocation prints an exact `resume_command`; compare it with the next command shown here before continuing. Stop on any failure or unfinished month:
 
 ```sh
-KLAVIYO_MAX_API_CALLS=80 npm run backfill:klaviyo -- --from=2025-11 --through=2026-05 --max-months=3 --max-duration-ms=1200000
+KLAVIYO_MAX_API_CALLS=80 npm run backfill:klaviyo -- --from=2025-11 --through=2026-07 --max-months=3 --max-duration-ms=1200000
+KLAVIYO_MAX_API_CALLS=80 npm run backfill:klaviyo -- --from=2026-02 --through=2026-07 --max-months=3 --max-duration-ms=1200000
+KLAVIYO_MAX_API_CALLS=80 npm run backfill:klaviyo -- --from=2026-05 --through=2026-07 --max-months=3 --max-duration-ms=1200000
 ```
 
-After review, collect bounded exact Europe/London months:
+These batches cover November–January, February–April, and May–July respectively. They are manual commands only; this review does not run collection or activate scheduling. August and September are already collected and are not part of this backfill.
+
+Verify every exact Europe/London month after its batch (all commands are read-only):
 
 ```sh
-KLAVIYO_MAX_API_CALLS=80 npm run backfill:klaviyo -- --from=2026-08 --through=2026-09 --max-months=2 --max-duration-ms=1200000
+npm run verify:klaviyo-refresh -- --start=2025-11-01 --end=2025-11-30
+npm run verify:klaviyo-refresh -- --start=2025-12-01 --end=2025-12-31
+npm run verify:klaviyo-refresh -- --start=2026-01-01 --end=2026-01-31
+npm run verify:klaviyo-refresh -- --start=2026-02-01 --end=2026-02-28
+npm run verify:klaviyo-refresh -- --start=2026-03-01 --end=2026-03-31
+npm run verify:klaviyo-refresh -- --start=2026-04-01 --end=2026-04-30
+npm run verify:klaviyo-refresh -- --start=2026-05-01 --end=2026-05-31
+npm run verify:klaviyo-refresh -- --start=2026-06-01 --end=2026-06-30
+npm run verify:klaviyo-refresh -- --start=2026-07-01 --end=2026-07-31
+npm run diagnose:klaviyo-production
 ```
 
 Each successful month uses the existing run lock and one atomic transaction for reports, dated metadata, success status, and coverage. The output's exact `resume_command` starts after the last committed month. Stable keys make retries idempotent. A successful empty report is `collected` with `row_count=0`; missing, unsupported, and failed periods are not manufactured. Calls, listing/report pages, duration, and months are bounded.
-
-Verify physical coverage and Oracle behaviour after every batch:
-
-```sh
-npm run verify:klaviyo-refresh -- --start=2026-09-01 --end=2026-09-30
-npm run diagnose:klaviyo-production
-```
 
 History may be limited by endpoint retention, scopes, revision, pagination/call bounds, deleted objects, and metric/integration lifetime. Never promise “all data.” Stored current attribution settings describe report retrieval; they do not prove those settings applied historically.
 
