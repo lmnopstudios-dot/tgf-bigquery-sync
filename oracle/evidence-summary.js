@@ -39,7 +39,7 @@ function summaryLines(result){
 
 /** Build a bounded user-facing fallback from already validated aggregate output. */
 export function evidenceSummary(entries,{unavailable=[]}={}){
-  const sections=[],hasValidatedEvidence=entries.some(entry=>entry.result?.success!==false&&(!entry.result?.error||entry.result?.partial_candidates?.length));
+  const sections=[];
   for(const entry of entries){
     if(entry.result?.success===false){
       const stage=String(entry.result.failed_stage||'evidence retrieval').replaceAll('_',' '),code=String(entry.result.code||'TOOL_FAILED').slice(0,80);
@@ -75,6 +75,9 @@ export function evidenceSummary(entries,{unavailable=[]}={}){
     sections.push(`### ${LABELS[entry.name]||'Governed evidence'}${dates}\n${lines.join('\n')}`);
   }
   const missing=[...new Set(unavailable)].map(name=>LABELS[name]||'A requested evidence source');
+  // A successful tool call is not necessarily usable evidence. Only claim that
+  // figures exist when this renderer actually produced a visible section.
+  const hasValidatedEvidence=sections.length>0;
   return [
     '**Partial result — final synthesis did not complete**',
     hasValidatedEvidence?'The validated figures retrieved before the failure are shown below.':'No validated analytical figures were available; the bounded failure outcome is shown below.',

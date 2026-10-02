@@ -162,7 +162,7 @@ const productViewPurchaseService = createProductViewPurchaseService({bigquery});
 const pageviewsPerSessionService=createPageviewsPerSessionService({bigquery,project:GOOGLE_PROJECT_ID,runShopifyql:async(query,reportName)=>runShopifyqlReport(await getShopifyAccessToken(),query,reportName),getShopTimezone:async()=>{const data=await shopifyGraphQL(await getShopifyAccessToken(),'{ shop { ianaTimezone } }');if(!data?.shop?.ianaTimezone)throw new Error('Shopify reporting timezone unavailable');return data.shop.ianaTimezone;}});
 const klaviyoEmailService=createKlaviyoEmailService({bigquery,project:GOOGLE_PROJECT_ID});
 const googleAdsService=createGoogleAdsService({bigquery,project:GOOGLE_PROJECT_ID});
-const baselineOverview=createBaselineOverviewService({finance:getSalesSummary,shopifyConversion:getShopifyConversionKpis,shopifySales:getShopifySalesKpis,shopifyDevice:deviceSourceConversionService,klaviyo:klaviyoEmailService,paidAdvertising:()=>googleAdsService('get_google_ads_performance',{...(()=>{const end=new Date(),start=new Date(end);start.setUTCDate(start.getUTCDate()-29);return{start_date:start.toISOString().slice(0,10),end_date:end.toISOString().slice(0,10)}})(),customer_id:null})});
+let baselineOverview;
 const oracleInventoryLocationSelector=inventoryLocationSelector(process.env);
 console.info('Oracle inventory configuration:',{selector:oracleInventoryLocationSelector,deployed_revision:DEPLOYED_GIT_REVISION||'unavailable'});
 const loadHistoricalCandidateInventory=createBatchedInventoryByLocation({
@@ -4477,6 +4477,26 @@ const getEcommerceManagementReport = createEcommerceManagementReportService({
   getHistoricalEcommerce: getMetorikEcommerceEvidence
 });
 
+// The deterministic baseline is constructed only after every governed service
+// it uses exists.  Its bounded plan deliberately has no inventory dependency.
+baselineOverview=createBaselineOverviewService({
+  managementReport:getEcommerceManagementReport,
+  onlineCountrySales:onlineCountrySalesService,
+  shopifyDevice:deviceSourceConversionService,
+  klaviyo:klaviyoEmailService,
+  organicReport:periods=>ecommerceReportV2('organic',{
+    start_date:periods.current.start_date,end_date:periods.current.end_date,
+    comparison:'custom',comparison_start:periods.prior_year.start_date,
+    comparison_end:periods.prior_year.end_date
+  }),
+  salesReport:periods=>ecommerceReportV2('sales',{
+    start_date:periods.current.start_date,end_date:periods.current.end_date,
+    comparison:'custom',comparison_start:periods.prior_year.start_date,
+    comparison_end:periods.prior_year.end_date
+  }),
+  locationFinance:getSalesByLocation
+});
+
 async function getSalesByLocation({
   start_date,
   end_date,
@@ -8186,7 +8206,7 @@ app.post(
       // must not enter model-selected inventory tooling or let one optional
       // source failure erase independent successful sections.
       const baselineAnswer=await baselineOverview(message);
-      if(baselineAnswer)return res.json({success:true,answer:baselineAnswer.answer,tools_used:baselineAnswer.tools,request_id:id});
+      if(baselineAnswer)return res.json({success:true,answer:baselineAnswer.answer,evidence:baselineAnswer.evidence,tools_used:baselineAnswer.tools,request_id:id});
 
       const currentDate = new Date()
         .toISOString()
