@@ -3,7 +3,7 @@ import {datasetLocation} from '../bigquery/dataset-location.js';
 
 const dates={type:'object',additionalProperties:false,properties:{start_date:{type:'string'},end_date:{type:'string'}},required:['start_date','end_date']};
 export const KLAVIYO_TOOL_DEFINITIONS=[
-  {type:'function',name:'get_klaviyo_email_performance',description:'Return governed Klaviyo email campaign and flow performance, volumes, rates, coverage, metric IDs and attribution limitations. Reporting windows retain Klaviyo report semantics and are not order-occurrence cohorts.',strict:true,parameters:dates},
+  {type:'function',name:'get_klaviyo_email_performance',description:'Return governed Klaviyo email campaign and flow performance, volumes, rates, coverage, metric IDs and attribution limitations.',strict:true,parameters:dates},
   {type:'function',name:'get_klaviyo_click_purchase_opportunities',description:'Rank Klaviyo email campaigns with unique clicks but comparatively weak attributed conversions, without asserting causality or statistical significance.',strict:true,parameters:dates},
   {type:'function',name:'compare_klaviyo_email_with_shopify_referrer',description:'Show Klaviyo email-attributed conversion value beside Shopify-native email-referrer sessions and completed-checkout sessions. The populations are separate and values are not finance sales.',strict:true,parameters:dates}
 ];

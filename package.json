@@ -82,6 +82,7 @@
     "collect:klaviyo-pilot": "node klaviyo/sync.js",
     "refresh:klaviyo": "node klaviyo/refresh.js",
     "verify:klaviyo-refresh": "node diagnostics/klaviyo-refresh-recovery.js",
+    "repair:klaviyo-coverage": "node diagnostics/klaviyo-coverage-repair.js",
     "diagnose:klaviyo-production": "node diagnostics/klaviyo-production.js"
     ,"collect:freshness": "node ops/collector-runner.js"
     ,"audit:freshness": "node ops/freshness-inventory.js"
