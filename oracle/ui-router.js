@@ -98,7 +98,7 @@ export function createOracleUiRouter({ knowledgeService, bigquery, project, chat
       const answer=await baselineOverview?.(input.message)||await chat(input.message,{analysisContext:input.analysis_context,transition:input.transition,recentEvidence:input.recent_evidence,requestId:job.request_id,signal,durable:true});
       let proposals=[],proposal_error=null;
       try { proposals=await proposalsFor(input.message,input.created_by,input.temporal_context); } catch(error) { logProposalError(error);proposal_error='Knowledge proposal could not be generated.'; }
-      return {success:true,answer:answer.answer,inline_chart:answer.inline_chart||null,proposals,proposal_error,analysis_scope:analysisScope(input.analysis_context),tools:(answer.tools||[]).slice(0,20)};
+      return {success:true,answer:answer.answer,evidence:answer.evidence||null,inline_chart:answer.inline_chart||null,proposals,proposal_error,analysis_scope:analysisScope(input.analysis_context),tools:(answer.tools||[]).slice(0,20)};
     }});
     const jobStoreReady=analysisJobStore.setup();
     jobStoreReady.then(()=>worker.start()).catch(error=>console.error('Oracle job storage setup failed:',{error_class:error?.name||'Error'}));
@@ -159,7 +159,7 @@ export function createOracleUiRouter({ knowledgeService, bigquery, project, chat
       try { proposals = clarification&&campaignDateClarification(req.body.message,messageTemporalContext)?[]:await proposalsFor(req.body.message, req.oracleUser.sub, messageTemporalContext); console.info('Oracle UI stage outcome:',stageOutcome({id,stage:'knowledge_proposals',startedAt:proposalStarted,outcome:'success',extra:{proposal_count:proposals.length}})); }
       catch (error) { logProposalError(error); console.error('Oracle UI stage outcome:',stageOutcome({id,stage:'knowledge_proposals',startedAt:proposalStarted,outcome:'failed',error})); proposal_error = 'Knowledge proposal could not be generated.'; }
       console.info('Oracle UI stage outcome:',stageOutcome({id,stage:'ui_response',startedAt:requestStarted,outcome:'success'}));
-      res.json({ success: true, answer: answer.answer, inline_chart:answer.inline_chart||null, proposals, proposal_error, analysis_scope:analysisScope(sessionContext(req)) });
+      res.json({ success: true, answer: answer.answer, evidence:answer.evidence||null, inline_chart:answer.inline_chart||null, proposals, proposal_error, analysis_scope:analysisScope(sessionContext(req)) });
     } catch (error) {
       if (error?.code === 'THROTTLED') return res.status(429).json({ success: false, code: 'SHOPIFY_TEMPORARILY_RATE_LIMITED', error: SHOPIFY_RATE_LIMIT_MESSAGE });
       console.error('Oracle UI stage outcome:',stageOutcome({id,stage:'ui_response',startedAt:requestStarted,outcome:'failed',error})); res.status(500).json({ success: false, code:'ORACLE_UI_RESPONSE_FAILED',error:'The response could not be prepared. No figures were returned; please retry.',request_id:id });

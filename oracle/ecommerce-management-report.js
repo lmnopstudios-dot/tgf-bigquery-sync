@@ -247,7 +247,12 @@ export function createEcommerceManagementReportService({
       calls.push(getHistoricalEcommerce(period));
     }
     calls.push(getProductPerformance({ ...periods.current, limit: 10, sort_by: 'net_sales' }));
-    const results = await Promise.allSettled(calls);
+    // Keep provider pressure bounded. A broad report must isolate failures, but
+    // must not fan thirteen Shopify/BigQuery calls out without a limit.
+    const results = [];
+    for (let offset = 0; offset < calls.length; offset += 2) {
+      results.push(...await Promise.allSettled(calls.slice(offset, offset + 2)));
+    }
     const [finance, conversion, customers, historical] = [0, 1, 2, 3].map(offset =>
       periodList.map((_, index) => fulfilled(results[index * 4 + offset]))
     );
