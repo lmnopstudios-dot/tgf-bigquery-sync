@@ -10,7 +10,7 @@
       "name": "Placed Order",
       "integration": "shopify",
       "collection_not_before": "2025-11-01",
-      "evidence": "Reviewed production discovery for November 2025 through July 2026 at evidence/klaviyo/xp9amv-history-discovery-2025-11-through-2026-07.json (SHA-256 cd46177c2e56d63c3443df4e0b49d3c91881ccd817a6d0365dd49af59ff13012), plus verified August and September 2026 collection"
+      "evidence": "Reviewed production discovery for November 2025 through July 2026 at evidence/klaviyo/xp9amv-history-discovery-2025-11-through-2026-07.json (SHA-256 cd46177c2e56d63c3443df4e0b49d3c91881ccd817a6d0365dd49af59ff13012), plus persisted August and September 2026 exact-window reports pending coverage repair verification"
     }
   ],
   "attribution_settings": {
@@ -26,7 +26,7 @@
   "review": {
     "reviewer": "Stuart Hughes",
     "reviewed_at": "2026-10-02T10:59:23.567Z",
-    "basis": "Production discovery for Shopify metric Xp9amv in GBP: November 2025–May 2026 campaign row counts 5, 5, 3, 1, 5, 1, 11; June and July 2026 campaign row counts 3 and 3; every monthly flow probe returned zero_rows; no failed or unfinished tasks and the call budget was not exhausted. Durable capture: evidence/klaviyo/xp9amv-history-discovery-2025-11-through-2026-07.json; SHA-256 cd46177c2e56d63c3443df4e0b49d3c91881ccd817a6d0365dd49af59ff13012. August–September 2026 were already collected. Historical report attribution settings describe settings used at retrieval, not proven historical settings.",
+    "basis": "Production discovery for Shopify metric Xp9amv in GBP: November 2025–May 2026 campaign row counts 5, 5, 3, 1, 5, 1, 11; June and July 2026 campaign row counts 3 and 3; every monthly flow probe returned zero_rows; no failed or unfinished tasks and the call budget was not exhausted. Durable capture: evidence/klaviyo/xp9amv-history-discovery-2025-11-through-2026-07.json; SHA-256 cd46177c2e56d63c3443df4e0b49d3c91881ccd817a6d0365dd49af59ff13012. August–September 2026 have persisted exact-window reports but require successful-run and settings evidence before missing coverage can be repaired. Historical report attribution settings describe settings used at retrieval, not proven historical settings.",
     "change_policy": "A reviewed commit is required for metric or attribution-setting changes"
   },
   "refresh_policy": {

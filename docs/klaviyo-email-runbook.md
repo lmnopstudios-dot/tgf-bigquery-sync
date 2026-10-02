@@ -89,7 +89,36 @@ KLAVIYO_MAX_API_CALLS=80 npm run backfill:klaviyo -- --from=2026-02 --through=20
 KLAVIYO_MAX_API_CALLS=80 npm run backfill:klaviyo -- --from=2026-05 --through=2026-07 --max-months=3 --max-duration-ms=1200000
 ```
 
-These batches cover November–January, February–April, and May–July respectively. They are manual commands only; this review does not run collection or activate scheduling. August and September are already collected and are not part of this backfill.
+These batches cover November–January, February–April, and May–July respectively. They are manual commands only; this review does not run collection or activate scheduling. August and September have persisted reports but their missing coverage records must be handled by the bounded repair below; report rows alone are not collection-completeness evidence.
+
+### Bounded August–September coverage repair
+
+After deploying this commit, run the read-only audit in Render Shell:
+
+```sh
+npm run repair:klaviyo-coverage
+```
+
+The audit is fixed to August and September 2026. For each exact Europe/London month it requires a completed `succeeded` run, a matching run ID/retrieval timestamp and row count, unique stable report identities, both campaign and flow report kinds, and the reviewed metric ID, GBP currency, timezone, and serialized attribution settings. Existing report rows without all that evidence are explicitly insufficient. It also inventories November 2025–September 2026 coverage and does not write.
+
+If both months say `eligible_for_coverage_repair` (or one is already collected), run the guarded transaction and then repeat the audit:
+
+```sh
+npm run repair:klaviyo-coverage -- --apply
+npm run repair:klaviyo-coverage
+```
+
+The transaction repeats every assertion before its idempotent coverage `MERGE`; it does not update report rows or identities. If either month reports `refresh_required_*`, do not use `--apply`. Run only the exact refresh command(s) emitted by the audit, one at a time, followed by the audit. The supported fallback commands are:
+
+```sh
+npm run refresh:klaviyo -- --start=2026-08-01 --end=2026-08-31
+npm run refresh:klaviyo -- --start=2026-09-01 --end=2026-09-30
+npm run repair:klaviyo-coverage
+```
+
+Each refresh uses the normal atomic, stable-key upsert, so it preserves report identity and cannot create a second row at the report grain. Accept collection completeness only when the final audit reports all 11 expected months, November 2025 through September 2026, in `collected_months`, with `missing_months: []` and `complete: true`. September's `attribution_provisional` flag is reported independently and does not change collection completeness. Stored current attribution settings remain retrieval-time settings and do not establish what settings applied historically.
+
+These are manual Render Shell commands. This repository change neither executes them, demonstrates production acceptance, nor activates the schedule.
 
 Verify every exact Europe/London month after its batch (all commands are read-only):
 

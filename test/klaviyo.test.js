@@ -7,6 +7,7 @@ import {extractDiscoveryJson,prepareManifest,REVIEWED_ATTRIBUTION_SETTINGS} from
 import {classifyKlaviyoQuestion,KLAVIYO_TOOL_DEFINITIONS,createKlaviyoEmailService,klaviyoAggregateQuery} from '../oracle/klaviyo-email.js';
 import {diagnose,inventoryQuery,physicalRowsQuery,physicalRowsTimestampLiteralQuery} from '../diagnostics/klaviyo-production.js';
 import {recoveryQueries,verifyRecovery} from '../diagnostics/klaviyo-refresh-recovery.js';
+import {repairAuditQuery,repairPromotionQuery,repairWindows,HISTORY_MONTHS} from '../diagnostics/klaviyo-coverage-repair.js';
 
 const response=(body,status=200,headers={get:()=>null})=>({ok:status<300,status,headers,json:async()=>body});
 test('pagination follows next links and enforces its bound',async()=>{let n=0;const fetchImpl=async()=>response(n++?{data:[],links:{next:null}}:{data:[{id:'one'}],links:{next:'/api/metrics?page=2'}}),client=createKlaviyoClient({apiKey:'pk_secretsecret',revision:'2026-01-15',fetchImpl,sleep:async()=>{}});assert.equal((await client.paginate('/api/metrics')).pages,2);n=0;await assert.rejects(client.paginate('/api/metrics',{maxPages:1}),/pagination bound/);});
@@ -233,4 +234,24 @@ test('coverage and successful zero activity promote in the same transaction',()=
   const sql=persistenceQuery('p','klaviyo',{promoteStatus:true,promoteCoverage:true});
   assert.match(sql,/MERGE `p\.klaviyo\.window_coverage`/);assert.match(sql,/status='collected'/);assert.match(sql,/@report_count row_count/);
   assert.ok(sql.indexOf('window_coverage')<sql.indexOf('COMMIT TRANSACTION;'));
+});
+
+test('August and September coverage repair requires correlated completeness evidence',()=>{
+  assert.deepEqual(repairWindows('Europe/London'),[
+    {month:'2026-08',report_start:'2026-07-31T23:00:00.000Z',report_end:'2026-08-31T23:00:00.000Z'},
+    {month:'2026-09',report_start:'2026-08-31T23:00:00.000Z',report_end:'2026-09-30T23:00:00.000Z'}
+  ]);
+  const audit=repairAuditQuery('p');
+  assert.match(audit,/status='succeeded'/);assert.match(audit,/completed_at IS NOT NULL/);
+  assert.match(audit,/r\.report_kinds=\['campaign','flow'\]/);assert.match(audit,/r\.metric_ids=@metric_ids/);
+  assert.match(audit,/r\.row_count=s\.row_count/);assert.match(audit,/r\.min_retrieved_at=s\.retrieved_at/);
+  assert.match(audit,/identity_count/);assert.match(audit,/refresh_required_settings_mismatch/);
+  assert.equal(HISTORY_MONTHS.length,11);
+});
+
+test('coverage-only repair is guarded, atomic and never rewrites reports',()=>{
+  const sql=repairPromotionQuery('p');
+  assert.match(sql,/BEGIN TRANSACTION/);assert.match(sql,/ASSERT .*COUNT\(\*\)=2/);
+  assert.match(sql,/KLAVIYO_REPAIR_REQUIRES_BOUNDED_REFRESH/);assert.match(sql,/MERGE `p\.klaviyo\.window_coverage`/);
+  assert.match(sql,/COMMIT TRANSACTION/);assert.doesNotMatch(sql,/MERGE `p\.klaviyo\.message_performance`/);
 });
