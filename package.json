@@ -83,6 +83,8 @@
     "refresh:klaviyo": "node klaviyo/refresh.js",
     "verify:klaviyo-refresh": "node diagnostics/klaviyo-refresh-recovery.js",
     "diagnose:klaviyo-production": "node diagnostics/klaviyo-production.js"
+    ,"collect:freshness": "node ops/collector-runner.js"
+    ,"audit:freshness": "node ops/freshness-inventory.js"
   },
   "engines": {
     "node": ">=20"
