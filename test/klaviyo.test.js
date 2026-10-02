@@ -163,6 +163,44 @@ test('historical month planning is bounded and refuses unreviewed pre-Shopify su
   assert.deepEqual(applicableMetrics(config,'2026-07'),[]);assert.equal(applicableMetrics(config,'2026-08')[0].integration,'shopify');
 });
 
+test('historical discovery catalogues provenance but probes only explicitly selected metrics',async()=>{
+  const {discoverHistory}=await import('../klaviyo/historical-discovery.js');
+  const requested=[];
+  const metrics=[
+    {id:'Xp9amv',attributes:{name:'Placed Order',integration:{name:'Shopify'}}},
+    {id:'woo-order',attributes:{name:'Order Placed',integration:{name:'WooCommerce'}}},
+    {id:'form',attributes:{name:'Submitted Form',integration:{name:'Klaviyo'}}}
+  ];
+  const client={paginate:async path=>({data:path==='/api/metrics'?metrics:[]}),request:async(path,{body})=>{requested.push({path,metric:body.data.attributes.conversion_metric_id});return {data:{attributes:{results:[]}}};}};
+  const result=await discoverHistory({client,timezone:'Europe/London',currency:'GBP',args:['--from=2026-03','--through=2026-03','--max-months=1']});
+  assert.deepEqual(result.metrics.map(x=>x.metric_id),['Xp9amv','woo-order','form']);
+  assert.deepEqual(result.selected_conversion_metric_ids,['Xp9amv']);
+  assert.deepEqual(requested.map(x=>x.metric),['Xp9amv','Xp9amv']);
+  assert.deepEqual(result.potential_woocommerce_purchase_metrics.map(x=>x.metric_id),['woo-order']);
+  assert.ok(result.evidence.every(x=>x.status==='zero_rows'));
+});
+
+test('historical discovery stops at the call bound and identifies every unattempted task',async()=>{
+  const {discoverHistory}=await import('../klaviyo/historical-discovery.js');
+  let requests=0;
+  const client={paginate:async path=>({data:path==='/api/metrics'?[{id:'Xp9amv',attributes:{name:'Placed Order',integration:{name:'Shopify'}}}]:[]}),request:async()=>{requests++;if(requests===2)throw Object.assign(new Error('bound'),{code:'CALL_BOUND'});return {data:{attributes:{results:[{}]}}};}};
+  const result=await discoverHistory({client,timezone:'Europe/London',currency:'GBP',args:['--from=2026-03','--through=2026-04','--max-months=2']});
+  assert.equal(requests,2);
+  assert.deepEqual(result.evidence.map(x=>x.status),['successful','not_attempted_limit','not_attempted_limit','not_attempted_limit']);
+  assert.deepEqual(result.first_unfinished_task,{month:'2026-03',metric_id:'Xp9amv',kind:'flow'});
+  assert.match(result.resume_command,/--from=2026-03 .*--resume-month=2026-03 --resume-metric-id=Xp9amv --resume-report-kind=flow$/);
+});
+
+test('historical discovery resumes at the exact unfinished task without skipping it',async()=>{
+  const {discoverHistory}=await import('../klaviyo/historical-discovery.js');
+  const requested=[];
+  const client={paginate:async path=>({data:path==='/api/metrics'?[{id:'Xp9amv',attributes:{name:'Placed Order',integration:{name:'Shopify'}}}]:[]}),request:async path=>{requested.push(path);return {data:{attributes:{results:[{}]}}};}};
+  const result=await discoverHistory({client,timezone:'Europe/London',currency:'GBP',args:['--from=2026-03','--through=2026-04','--max-months=2','--metric-ids=Xp9amv','--resume-month=2026-03','--resume-metric-id=Xp9amv','--resume-report-kind=flow']});
+  assert.deepEqual(requested,['/api/flow-values-reports','/api/campaign-values-reports','/api/flow-values-reports']);
+  assert.deepEqual(result.evidence.map(x=>[x.month,x.kind]),[['2026-03','flow'],['2026-04','campaign'],['2026-04','flow']]);
+  assert.equal(result.resume_command,null);
+});
+
 test('daily schedule refreshes previous and current London calendar months',async()=>{
   const {scheduledMonths}=await import('../klaviyo/scheduled-refresh.js');
   assert.deepEqual(scheduledMonths(new Date('2026-10-01T12:00:00Z')),['2026-09','2026-10']);

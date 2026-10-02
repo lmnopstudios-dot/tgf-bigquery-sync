@@ -71,10 +71,10 @@ The command is read-only. It prints a bounded physical inventory and the exact O
 The account usage start is unknown. Keep it distinct from both the earliest dated object returned by bounded listing pagination and the months successfully promoted into `window_coverage`. Discovery never writes and never turns an inaccessible month into zero. In Render Shell, choose a defensible lower bound rather than inventing an account start:
 
 ```sh
-KLAVIYO_MAX_API_CALLS=80 npm run discover:klaviyo-history -- --from=2025-10 --through=2026-09 --max-months=6 2>&1 | tee /tmp/klaviyo-history-discovery.json
+KLAVIYO_MAX_API_CALLS=80 npm run discover:klaviyo-history -- --from=2025-10 --through=2026-09 --max-months=6 --metric-ids=Xp9amv 2>&1 | tee /tmp/klaviyo-history-discovery.json
 ```
 
-The output distinguishes accessible zero-row probes, unsupported/failed probes, earliest accessible dated metadata, and unknown account start. Follow its exact `resume_command`. Review every metric's integration provenance and commit any historical WooCommerce metric and evidenced applicability period in `metric_definitions`. `Xp9amv` is Shopify and is currently evidenced only from August 2026; the collector refuses earlier months rather than substituting it.
+The output lists the full metric catalogue with integration provenance, but probes only the explicit `--metric-ids` selection (default `Xp9amv`). Potential WooCommerce purchase metrics are shown as review-only candidates and are not probed automatically. It distinguishes successful probes, successful zero-row responses, request failures, tasks not attempted because of the call limit, earliest accessible dated metadata, and unknown account start. Follow its exact `resume_command`, which restarts at the first unfinished month/metric/report-kind task. Review and commit any historical WooCommerce metric and evidenced applicability period in `metric_definitions` before selecting it. `Xp9amv` is Shopify and is currently approved for collection only from August 2026; an earlier read-only availability probe does not extend that approval, and the collector refuses earlier months rather than substituting it.
 
 After review, collect bounded exact Europe/London months:
 
