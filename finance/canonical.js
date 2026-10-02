@@ -32,6 +32,10 @@ export function canonicalFinanceCtes(project) {
     JOIN \`${project}.shopify_data.order_locations\` l USING(order_id)
     WHERE (l.source_app_id IS NULL OR l.source_app_id!=@matrixify_app_id)
       AND COALESCE(f.original_total_presentment,0)>0
+      AND f.cancelled_at IS NULL
+      AND EXISTS (SELECT 1 FROM UNNEST(IFNULL(JSON_QUERY_ARRAY(SAFE.PARSE_JSON(f.transactions_json)),[])) transaction
+        WHERE JSON_VALUE(transaction,'$.status')='SUCCESS'
+          AND JSON_VALUE(transaction,'$.kind') IN ('SALE','CAPTURE'))
   ), native_shopify_refunds AS (
     SELECT DATE(r.refund_created_at),'refund','Shopify',
       IF(l.retail_location_id IS NULL,'Online','POS'),
@@ -45,6 +49,7 @@ export function canonicalFinanceCtes(project) {
     JOIN \`${project}.shopify_data.order_financials\` f USING(order_id)
     WHERE (l.source_app_id IS NULL OR l.source_app_id!=@matrixify_app_id)
       AND r.refund_created_at IS NOT NULL AND COALESCE(r.refund_total_presentment,0)>0
+      AND r.has_successful_refund_transaction
   ), canonical_transactions AS (
     SELECT * FROM legacy_non_shopify UNION ALL
     SELECT * FROM native_shopify_sales UNION ALL
@@ -86,5 +91,6 @@ export const FINANCE_SEMANTICS=Object.freeze({
   refund_count:'refund_events counts distinct persisted Shopify refund IDs (and one governed legacy ledger refund row per event); distinct_refunded_orders is also exposed.',
   refund_date:'Shopify refunds use refund_created_at, never the underlying order date.',
   sign:'Canonical refunds are negative ledger values; presentation may show ABS(amount) only when labelled as a magnitude.',
-  currency:'Shopify sales and refunds use presentment currency and amounts. Currencies are never converted or combined.'
+  currency:'Shopify sales and refunds use presentment currency and amounts. Currencies are never converted or combined.',
+  status:'Shopify sales require a successful SALE or CAPTURE transaction and must not be cancelled. Refunds require a successful REFUND transaction.'
 });

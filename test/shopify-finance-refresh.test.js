@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { fetchUpdatedOrders, parseArgs, preflight, preflightStatements, promote, promotionSql, run, transform } from '../shopify/finance-refresh.js';
 import {recoveryQueries,verifyRecovery} from '../diagnostics/shopify-finance-refresh-recovery.js';
+import {acceptanceChecks,reconciliationQueries,reconcileProduction} from '../diagnostics/shopify-finance-reconciliation.js';
 
 const order=(id,updatedAt,refunds=[])=>({id,name:`#${id}`,createdAt:'2026-01-01T00:00:00Z',updatedAt,app:{id:'native',name:'Online Store'},retailLocation:{id:'loc',name:'London'},totalPriceSet:{shopMoney:{amount:'12',currencyCode:'GBP'},presentmentMoney:{amount:'15',currencyCode:'USD'}},transactions:[{id:'tx-1'}],refunds});
 const refund={id:'refund-old-order',createdAt:'2026-09-26T12:00:00Z',totalRefundedSet:{shopMoney:{amount:'2',currencyCode:'GBP'},presentmentMoney:{amount:'2.5',currencyCode:'USD'}},refundLineItems:{nodes:[]},refundShippingLines:{nodes:[]},orderAdjustments:{nodes:[]},transactions:{nodes:[{id:'refund-tx',kind:'REFUND',status:'SUCCESS',amountSet:{shopMoney:{amount:'2'},presentmentMoney:{amount:'2.5'}}}]}};
@@ -47,6 +48,26 @@ test('recovery check is bounded, read-only, and explicitly typed',async()=>{
   const result=await verifyRecovery({bigquery,project:'p',start:'2026-09-25T00:00:00Z',end:'2026-10-01T00:00:00Z'});
   assert.equal(result.read_only,true);assert.equal(result.recovery_claimed,false);assert.ok(calls.every(x=>x.params.start.constructor.name==='BigQueryTimestamp'&&x.types.start==='TIMESTAMP'&&x.maximumBytesBilled==='10000000000'));
   assert.ok(Object.values(recoveryQueries('p')).every(sql=>/^SELECT|^WITH/.test(sql)&&!/(INSERT|UPDATE|DELETE|MERGE|TRUNCATE)\s/i.test(sql)));
+});
+
+test('finance reconciliation is read-only, occurrence-scoped, currency-separated and checks Oracle canonical SQL',()=>{
+  const queries=reconciliationQueries('p');
+  assert.deepEqual(Object.keys(queries),['run','collected_scope','currency_bridge','identity_bridge']);
+  for(const sql of Object.values(queries)){assert.match(sql,/^(SELECT|WITH)/);assert.doesNotMatch(sql,/\b(INSERT|UPDATE|DELETE|MERGE|TRUNCATE|CREATE|DROP)\b/i);}
+  assert.match(queries.collected_scope,/updated_at>=@collection_start/);
+  assert.match(queries.collected_scope,/refund_created_at>=@report_start/);
+  assert.match(queries.currency_bridge,/canonical_transactions/);
+  assert.match(queries.currency_bridge,/has_successful_refund_transaction/);
+  assert.match(queries.currency_bridge,/source_app_id!=@matrixify_app_id/);
+  assert.match(queries.identity_bridge,/outside_reporting_period/);
+  assert.match(queries.identity_bridge,/LIMIT 500/);
+});
+
+test('finance reconciliation emits explicit failures rather than accepting side-by-side totals',async()=>{
+  let call=0;const bigquery={query:async()=>{call++;if(call===1)return [[{run_id:'r',status:'succeeded',window_start:{value:'2026-09-25T00:00:00.000Z'},window_end:{value:'2026-10-01T00:00:00.000Z'},successful_watermark:{value:'2026-10-01T00:00:00.000Z'},watermark_owned_by_run:true,order_count:225,refund_count:7}]];if(call===2)return [[{component:'sale',currency:'GBP',collected_identities:225},{component:'refund',currency:'GBP',collected_identities:7}]];if(call===3)return [[{component:'sale',currency:'GBP',identity_difference:0,oracle_amount_difference:0,legacy_amount_difference:-1172.43}]];return [[]];}};
+  const result=await reconcileProduction({bigquery,project:'p',runId:'r',start:'2026-09-25',end:'2026-10-01'});
+  assert.equal(result.acceptance.passed,true);assert.equal(result.read_only,true);assert.equal(result.collection_scope.basis,'updated_at half-open window');assert.equal(result.reporting_scope.basis,'sale created_at and refund_created_at half-open occurrence windows');
+  const failed=acceptanceChecks({run:{status:'failed'},scope:[],bridge:[]});assert.equal(failed.passed,false);assert.ok(failed.checks.every(check=>typeof check.pass==='boolean'));
 });
 
 test('explicit incident window is half-open and scheduled mode needs no dates',()=>{
