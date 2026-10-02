@@ -1,0 +1,79 @@
+services:
+  - type: cron
+    name: oracle-shopify-finance
+    runtime: node
+    schedule: "17 */2 * * *"
+    buildCommand: npm ci
+    startCommand: npm run collect:freshness -- shopify_finance
+    envVars: &collector-env
+      - key: GOOGLE_PROJECT_ID
+        sync: false
+      - key: GOOGLE_SERVICE_ACCOUNT_JSON
+        sync: false
+      - key: SHOPIFY_SHOP
+        sync: false
+      - key: SHOPIFY_ACCESS_TOKEN
+        sync: false
+      - key: SHOPIFY_CLIENT_ID
+        sync: false
+      - key: SHOPIFY_CLIENT_SECRET
+        sync: false
+      - key: SHOPIFY_REPORTING_TIMEZONE
+        sync: false
+      - key: GA4_PROPERTY_ID
+        sync: false
+      - key: KLAVIYO_PRIVATE_API_KEY
+        sync: false
+      - key: KLAVIYO_ACCOUNT_CONFIG
+        sync: false
+      - key: KLAVIYO_CONVERSION_METRIC_IDS
+        sync: false
+  - type: cron
+    name: oracle-ga4
+    runtime: node
+    schedule: "15 5 * * *"
+    buildCommand: npm ci
+    startCommand: npm run collect:freshness -- ga4
+    envVars: *collector-env
+  - type: cron
+    name: oracle-search-console
+    runtime: node
+    schedule: "15 6 * * *"
+    buildCommand: npm ci
+    startCommand: npm run collect:freshness -- search_console
+    envVars: *collector-env
+  - type: cron
+    name: oracle-shopify-catalogue
+    runtime: node
+    schedule: "15 3 * * *"
+    buildCommand: npm ci
+    startCommand: npm run collect:freshness -- shopify_catalogue
+    envVars: *collector-env
+  - type: cron
+    name: oracle-shopify-geography
+    runtime: node
+    schedule: "35 2 * * *"
+    buildCommand: npm ci
+    startCommand: npm run collect:freshness -- shopify_geography
+    envVars: *collector-env
+  - type: cron
+    name: oracle-shopify-conversion
+    runtime: node
+    schedule: "45 5 * * *"
+    buildCommand: npm ci
+    startCommand: npm run collect:freshness -- shopify_conversion
+    envVars: *collector-env
+  - type: cron
+    name: oracle-product-classifications
+    runtime: node
+    schedule: "45 3 * * *"
+    buildCommand: npm ci
+    startCommand: npm run collect:freshness -- product_classifications
+    envVars: *collector-env
+  - type: cron
+    name: oracle-klaviyo
+    runtime: node
+    schedule: "15 4 * * *"
+    buildCommand: npm ci
+    startCommand: npm run collect:freshness -- klaviyo
+    envVars: *collector-env
