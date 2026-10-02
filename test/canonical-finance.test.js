@@ -34,6 +34,16 @@ test('Matrixify is excluded, Online and POS are distinct, and residual Woo has n
   assert.equal(MATRIXIFY_APP_ID,'gid://shopify/App/1758145');
 });
 
+test('Shopify canonical finance requires successful native transactions and excludes cancelled sales',()=>{
+  const sql=canonicalFinanceCtes('p');
+  assert.match(sql,/SAFE\.PARSE_JSON\(f\.transactions_json\)/);
+  assert.match(sql,/JSON_VALUE\(transaction,'\$\.status'\)='SUCCESS'/);
+  assert.match(sql,/JSON_VALUE\(transaction,'\$\.kind'\) IN \('SALE','CAPTURE'\)/);
+  assert.match(sql,/f\.cancelled_at IS NULL/);
+  assert.match(sql,/r\.has_successful_refund_transaction/);
+  assert.match(FINANCE_SEMANTICS.status,/successful SALE or CAPTURE/);
+});
+
 test('aggregation supports daily weekly monthly grains, filters, counts and currency separation',()=>{
   for(const grain of ['day','week','month']){
     const sql=buildCanonicalFinanceQuery('p',{grain,dimensions:['currency','source','channel','transaction_type']});
