@@ -1,5 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {BigQuery} from '@google-cloud/bigquery';
+import {datasetLocation} from '../bigquery/dataset-location.js';
 import { fetchUpdatedOrders, parseArgs, preflight, preflightStatements, promote, promotionSql, run, transform } from '../shopify/finance-refresh.js';
 import {recoveryQueries,verifyRecovery} from '../diagnostics/shopify-finance-refresh-recovery.js';
 import {acceptanceChecks,reconciliationQueries,reconcileProduction} from '../diagnostics/shopify-finance-reconciliation.js';
@@ -63,11 +65,37 @@ test('finance reconciliation is read-only, occurrence-scoped, currency-separated
   assert.match(queries.identity_bridge,/LIMIT 500/);
 });
 
+test('reconciliation UNION branches project currency before grouping by the alias',()=>{
+  const queries=reconciliationQueries('gf-full-data');
+  assert.match(queries.collected_scope,/UNION ALL SELECT 'refund' component,UPPER\(presentment_currency\) currency,/);
+  assert.match(queries.currency_bridge,/UNION ALL SELECT 'refund' component,UPPER\(COALESCE\(r\.presentment_currency,f\.presentment_currency\)\) currency,/);
+});
+
+test('actual BigQuery syntax validation of every reconciliation statement (opt-in, dry-run only)',{skip:!process.env.BIGQUERY_SYNTAX_PROJECT},async()=>{
+  const project=process.env.BIGQUERY_SYNTAX_PROJECT,bigquery=new BigQuery({projectId:project});
+  const location=await datasetLocation(bigquery,project,'shopify_data');
+  const queries=reconciliationQueries(project),base={run_id:'syntax-validation',report_start:BigQuery.timestamp('2026-09-25T00:00:00Z'),report_end:BigQuery.timestamp('2026-10-01T00:00:00Z'),matrixify_app_id:'gid://shopify/App/1758145'},types={run_id:'STRING',report_start:'TIMESTAMP',report_end:'TIMESTAMP',matrixify_app_id:'STRING'};
+  const scoped={...base,collection_start:BigQuery.timestamp('2026-09-25T00:00:00Z'),collection_end:BigQuery.timestamp('2026-10-01T00:00:00Z')},scopedTypes={...types,collection_start:'TIMESTAMP',collection_end:'TIMESTAMP'};
+  for(const [statement,query] of Object.entries(queries)) await bigquery.createQueryJob({query,location,dryRun:true,useLegacySql:false,maximumBytesBilled:'10000000000',params:statement==='run'?{run_id:base.run_id}:statement==='currency_bridge'?base:scoped,types:statement==='run'?{run_id:'STRING'}:statement==='currency_bridge'?types:scopedTypes});
+});
+
 test('finance reconciliation emits explicit failures rather than accepting side-by-side totals',async()=>{
-  let call=0;const bigquery={query:async()=>{call++;if(call===1)return [[{run_id:'r',status:'succeeded',window_start:{value:'2026-09-25T00:00:00.000Z'},window_end:{value:'2026-10-01T00:00:00.000Z'},successful_watermark:{value:'2026-10-01T00:00:00.000Z'},watermark_owned_by_run:true,order_count:225,refund_count:7}]];if(call===2)return [[{component:'sale',currency:'GBP',collected_identities:225},{component:'refund',currency:'GBP',collected_identities:7}]];if(call===3)return [[{component:'sale',currency:'GBP',identity_difference:0,oracle_amount_difference:0,legacy_amount_difference:-1172.43}]];return [[]];}};
+  let call=0;const jobs=[],reads=[];const bigquery={dataset:()=>({getMetadata:async()=>[{location:'EU'}]}),createQueryJob:async options=>{jobs.push(options);return[{}]},query:async options=>{reads.push(options);call++;if(call===1)return [[{run_id:'r',status:'succeeded',window_start:{value:'2026-09-25T00:00:00.000Z'},window_end:{value:'2026-10-01T00:00:00.000Z'},successful_watermark:{value:'2026-10-01T00:00:00.000Z'},watermark_owned_by_run:true,order_count:225,refund_count:7}]];if(call===2)return [[{component:'sale',currency:'GBP',collected_identities:225},{component:'refund',currency:'GBP',collected_identities:7}]];if(call===3)return [[{component:'sale',currency:'GBP',identity_difference:0,oracle_amount_difference:0,legacy_amount_difference:-1172.43}]];return [[]];}};
   const result=await reconcileProduction({bigquery,project:'p',runId:'r',start:'2026-09-25',end:'2026-10-01'});
   assert.equal(result.acceptance.passed,true);assert.equal(result.read_only,true);assert.equal(result.collection_scope.basis,'updated_at half-open window');assert.equal(result.reporting_scope.basis,'sale created_at and refund_created_at half-open occurrence windows');
+  assert.equal(jobs.length,4);assert.equal(reads.length,4);
+  assert.deepEqual(jobs.map(({query,params,types,location})=>({query,params,types,location})),reads.map(({query,params,types,location})=>({query,params,types,location})));
+  assert.ok(jobs.every(job=>job.dryRun===true&&job.location==='EU'));
+  assert.ok(jobs.slice(1).every(job=>job.params.report_start.constructor.name==='BigQueryTimestamp'&&job.types.report_start==='TIMESTAMP'));
   const failed=acceptanceChecks({run:{status:'failed'},scope:[],bridge:[]});assert.equal(failed.passed,false);assert.ok(failed.checks.every(check=>typeof check.pass==='boolean'));
+});
+
+test('reconciliation stops before a read and sanitizes a stage-specific dry-run error',async()=>{
+  const reads=[];const bigquery={dataset:()=>({getMetadata:async()=>[{location:'US'}]}),createQueryJob:async()=>{throw Object.assign(new Error('bad\nsecret'),{errors:[{reason:'invalidQuery',message:'Unrecognized name: currency\nquery text',location:'1:1492'}]})},query:async options=>{reads.push(options);return[[]]}};
+  await assert.rejects(reconcileProduction({bigquery,project:'p',runId:'r',start:'2026-09-25',end:'2026-10-01'}),error=>{
+    assert.equal(error.stage,'dry_run:run');assert.equal(error.statement,'run');assert.equal(error.code,'invalidQuery');assert.equal(error.location,'1:1492');assert.equal(error.message,'Unrecognized name: currency query text');return true;
+  });
+  assert.equal(reads.length,0);
 });
 
 test('explicit incident window is half-open and scheduled mode needs no dates',()=>{
