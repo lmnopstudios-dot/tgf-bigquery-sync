@@ -1,0 +1,41 @@
+{
+  "record_type": "reviewer_supplied_production_discovery_capture",
+  "capture_provenance": "Transcribed from the production discovery results supplied by the reviewer; this repository change did not read a Render /tmp file or rerun discovery.",
+  "read_only": true,
+  "scope": {
+    "from": "2025-11",
+    "through": "2026-07",
+    "timezone": "Europe/London",
+    "currency": "GBP",
+    "metric_id": "Xp9amv",
+    "metric_name": "Placed Order",
+    "integration": "shopify"
+  },
+  "evidence": [
+    {"month":"2025-11","kind":"campaign","status":"successful","row_count":5},
+    {"month":"2025-11","kind":"flow","status":"zero_rows","row_count":0},
+    {"month":"2025-12","kind":"campaign","status":"successful","row_count":5},
+    {"month":"2025-12","kind":"flow","status":"zero_rows","row_count":0},
+    {"month":"2026-01","kind":"campaign","status":"successful","row_count":3},
+    {"month":"2026-01","kind":"flow","status":"zero_rows","row_count":0},
+    {"month":"2026-02","kind":"campaign","status":"successful","row_count":1},
+    {"month":"2026-02","kind":"flow","status":"zero_rows","row_count":0},
+    {"month":"2026-03","kind":"campaign","status":"successful","row_count":5},
+    {"month":"2026-03","kind":"flow","status":"zero_rows","row_count":0},
+    {"month":"2026-04","kind":"campaign","status":"successful","row_count":1},
+    {"month":"2026-04","kind":"flow","status":"zero_rows","row_count":0},
+    {"month":"2026-05","kind":"campaign","status":"successful","row_count":11},
+    {"month":"2026-05","kind":"flow","status":"zero_rows","row_count":0},
+    {"month":"2026-06","kind":"campaign","status":"successful","row_count":3},
+    {"month":"2026-06","kind":"flow","status":"zero_rows","row_count":0},
+    {"month":"2026-07","kind":"campaign","status":"successful","row_count":3},
+    {"month":"2026-07","kind":"flow","status":"zero_rows","row_count":0}
+  ],
+  "call_budget_exhausted": false,
+  "first_unfinished_task": null,
+  "resume_command": null,
+  "limitations": [
+    "Successful discovery probes establish endpoint accessibility for the stated metric and windows; they are not persisted collection coverage.",
+    "The attribution settings recorded in historical reports are the settings used at retrieval and are not proven historical settings."
+  ]
+}
