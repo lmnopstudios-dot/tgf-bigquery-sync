@@ -19,7 +19,7 @@ const messageError = body => {
 };
 const allowedOrigins = request => new Set([`${request.protocol}://${request.get('host')}`, process.env.ORACLE_UI_ORIGIN].filter(Boolean));
 
-export function createOracleUiRouter({ knowledgeService, bigquery, project, chat, generateProposals, reportService, productMappingService, collectionClassificationService, analysisJobStore, env = process.env, now = () => Date.now() }) {
+export function createOracleUiRouter({ knowledgeService, bigquery, project, chat, baselineOverview=null, generateProposals, reportService, productMappingService, collectionClassificationService, analysisJobStore, env = process.env, now = () => Date.now() }) {
   const router = express.Router();
   const password = env.ORACLE_UI_PASSWORD;
   const sessionSecret = env.ORACLE_UI_SESSION_SECRET;
@@ -95,7 +95,7 @@ export function createOracleUiRouter({ knowledgeService, bigquery, project, chat
   if (analysisJobStore && env.ORACLE_ANALYSIS_JOBS_ENABLED === 'true') {
     const worker=createAnalysisJobWorker({store:analysisJobStore,runtimeMs:Number(env.ORACLE_JOB_RUNTIME_MS)||8*60_000,run:async(job,signal)=>{
       const input=job.payload_json;
-      const answer=await chat(input.message,{analysisContext:input.analysis_context,transition:input.transition,recentEvidence:input.recent_evidence,requestId:job.request_id,signal,durable:true});
+      const answer=await baselineOverview?.(input.message)||await chat(input.message,{analysisContext:input.analysis_context,transition:input.transition,recentEvidence:input.recent_evidence,requestId:job.request_id,signal,durable:true});
       let proposals=[],proposal_error=null;
       try { proposals=await proposalsFor(input.message,input.created_by,input.temporal_context); } catch(error) { logProposalError(error);proposal_error='Knowledge proposal could not be generated.'; }
       return {success:true,answer:answer.answer,inline_chart:answer.inline_chart||null,proposals,proposal_error,analysis_scope:analysisScope(input.analysis_context),tools:(answer.tools||[]).slice(0,20)};
@@ -141,7 +141,7 @@ export function createOracleUiRouter({ knowledgeService, bigquery, project, chat
       const chatStarted=Date.now();
       let answer;
       try {
-        answer=clarification?{answer:clarification,tools:[]}:await chat(effectiveMessage,{analysisContext:result.transition.applies_to_message?result.context:null,transition:result.transition,recentEvidence,pendingIntent:pending?.message||null,requestId:id,signal:cancellation.signal});
+        answer=clarification?{answer:clarification,tools:[]}:(await baselineOverview?.(effectiveMessage)||await chat(effectiveMessage,{analysisContext:result.transition.applies_to_message?result.context:null,transition:result.transition,recentEvidence,pendingIntent:pending?.message||null,requestId:id,signal:cancellation.signal}));
         console.info('Oracle UI stage outcome:',stageOutcome({id,stage:'agent_request',startedAt:chatStarted,outcome:'success',extra:{tool_count:(answer.tools||[]).length}}));
       } catch(error) {
         console.error('Oracle UI stage outcome:',stageOutcome({id,stage:'agent_request',startedAt:chatStarted,outcome:'failed',error}));
