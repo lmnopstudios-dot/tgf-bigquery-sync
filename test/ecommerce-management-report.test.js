@@ -29,6 +29,16 @@ test('comparison leaves a zero denominator percentage undefined', () => {
   });
 });
 
+test('honours caller-resolved comparison periods and dispatches lazily with bounded concurrency', async () => {
+  const seen=[];let active=0,maxActive=0;
+  const call=kind=>async period=>{seen.push([kind,period.start_date]);active++;maxActive=Math.max(maxActive,active);await new Promise(resolve=>setImmediate(resolve));active--;return kind==='conversion'?{metrics:{sessions:1}}:kind==='customers'?{overall:{customers:1}}:kind==='products'?{products:[]} : kind==='history'?{sources:[]}:[]};
+  const service=createEcommerceManagementReportService({getFinanceReport:call('finance'),getConversionKpis:call('conversion'),getCustomerKpis:call('customers'),getProductPerformance:call('products'),getHistoricalEcommerce:call('history')});
+  const report=await service({start_date:'2026-09-01',end_date:'2026-09-30',comparison_periods:{previous_period:{start_date:'2026-08-01',end_date:'2026-08-31'},prior_year:{start_date:'2025-09-01',end_date:'2025-09-30'}}});
+  assert.deepEqual(report.comparison_periods.previous_period,{start_date:'2026-08-01',end_date:'2026-08-31',days:31});
+  assert.ok(seen.some(([,date])=>date==='2025-09-01'));
+  assert.equal(maxActive,2);
+});
+
 test('builds a versioned report without combining currencies', async () => {
   const financePeriods = [
     [{ currency: 'GBP', sales_transaction_count: 10, refund_transaction_count: 1, gross_sales: 100, refunds: -10, net_gross: 90, tax: 15, net_ex_tax: 75 },

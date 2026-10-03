@@ -98,6 +98,27 @@ to the migration.
 
 ## Read-only post-deployment verification
 
+Set `ORACLE_DIAGNOSTIC_URL` to the deployed read-only `/agent` endpoint and, if
+required, set `ORACLE_DIAGNOSTIC_TOKEN`. The diagnostic prints only bounded
+scope/status/row-count metadata and sanitized failure codes; it does not print
+provider payloads, PII or credentials:
+
+```sh
+npm run diagnose:oracle-ecommerce-baseline
+npm run diagnose:oracle-platform-comparison
+npm run diagnose:oracle-products
+npm run diagnose:oracle-product-comparison
+```
+
+These commands perform reads only. They do not collect, refresh, backfill,
+change schedules or watermarks, reactivate retired sources, or request
+inventory. Shopify product evidence uses the exact ShopifyQL date bindings and
+an authoritative shop-currency lookup. BigQuery-backed constituent services
+retain typed date parameters, metadata-derived dataset locations, row limits
+and maximum-bytes-billed controls where their service contracts expose them.
+Production access was unavailable during implementation, so live evidence and
+dry-run acceptance remain pending after deployment.
+
 1. Submit each supported example to direct `/agent`, interactive chat, and an
    enabled durable job using the normal authenticated interfaces and a fixed
    request ID. Do not invoke sync, refresh, backfill, watermark, or schedule

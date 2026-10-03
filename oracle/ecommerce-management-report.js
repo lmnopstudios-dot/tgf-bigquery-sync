@@ -236,22 +236,33 @@ export function createEcommerceManagementReportService({
   getProductPerformance,
   getHistoricalEcommerce = async () => ({ sources: [] })
 }) {
-  return async function getEcommerceManagementReport({ start_date, end_date }) {
-    const periods = deriveReportPeriods(start_date, end_date);
+  return async function getEcommerceManagementReport({ start_date, end_date, comparison_periods = null }) {
+    const derived = deriveReportPeriods(start_date, end_date);
+    const periods = comparison_periods ? {
+      current: derived.current,
+      previous_period: comparison_periods.previous_period || derived.previous_period,
+      prior_year: comparison_periods.prior_year || derived.prior_year
+    } : derived;
+    for (const [name, period] of Object.entries(periods)) {
+      parseDate(period.start_date, `${name}.start_date`);
+      parseDate(period.end_date, `${name}.end_date`);
+      if (period.start_date > period.end_date) throw new Error(`${name} start_date must be on or before end_date`);
+      period.days ??= Math.round((parseDate(period.end_date, `${name}.end_date`) - parseDate(period.start_date, `${name}.start_date`)) / 86400000) + 1;
+    }
     const periodList = [periods.current, periods.previous_period, periods.prior_year];
     const calls = [];
     for (const period of periodList) {
-      calls.push(getFinanceReport(period));
-      calls.push(getConversionKpis({ ...period, timeseries: 'none' }));
-      calls.push(getCustomerKpis({ ...period, timeseries: 'none' }));
-      calls.push(getHistoricalEcommerce(period));
+      calls.push(() => getFinanceReport(period));
+      calls.push(() => getConversionKpis({ ...period, timeseries: 'none' }));
+      calls.push(() => getCustomerKpis({ ...period, timeseries: 'none' }));
+      calls.push(() => getHistoricalEcommerce(period));
     }
-    calls.push(getProductPerformance({ ...periods.current, limit: 10, sort_by: 'net_sales' }));
+    calls.push(() => getProductPerformance({ ...periods.current, limit: 10, sort_by: 'net_sales' }));
     // Keep provider pressure bounded. A broad report must isolate failures, but
     // must not fan thirteen Shopify/BigQuery calls out without a limit.
     const results = [];
     for (let offset = 0; offset < calls.length; offset += 2) {
-      results.push(...await Promise.allSettled(calls.slice(offset, offset + 2)));
+      results.push(...await Promise.allSettled(calls.slice(offset, offset + 2).map(call => call())));
     }
     const [finance, conversion, customers, historical] = [0, 1, 2, 3].map(offset =>
       periodList.map((_, index) => fulfilled(results[index * 4 + offset]))
