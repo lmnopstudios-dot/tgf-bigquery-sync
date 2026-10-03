@@ -49,6 +49,7 @@ import {answerExactPageviewsRequest,createPageviewsPerSessionService,executePage
 import {createKlaviyoEmailService,executeKlaviyoEmailToolCall} from './oracle/klaviyo-email.js';
 import {createGoogleAdsService,executeGoogleAdsToolCall} from './oracle/google-ads.js';
 import {createBaselineOverviewService} from './oracle/baseline-overview.js';
+import {createProductEvidenceReportService} from './oracle/product-report.js';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -761,6 +762,12 @@ LIMIT ${limit}`;
     shopifyql,
     'product performance'
   );
+  // ShopifyQL monetary product metrics are denominated in shop currency but
+  // do not include a currency column. Resolve that authoritative metadata
+  // rather than rendering an unknown currency or assuming GBP.
+  const shopData=await shopifyGraphQL(token,'{ shop { currencyCode } }');
+  const currency=shopData?.shop?.currencyCode||null;
+  for(const row of rows)row.currency=currency;
 
   for (const row of rows) {
     if (
@@ -788,6 +795,8 @@ LIMIT ${limit}`;
     sales_channel: 'Online Store',
     sort_by,
     limit,
+    currency,
+    currency_basis:'Authoritative Shopify shop currency metadata.',
     products: rows
   };
 }
@@ -4479,7 +4488,7 @@ const getEcommerceManagementReport = createEcommerceManagementReportService({
 
 // The deterministic baseline is constructed only after every governed service
 // it uses exists.  Its bounded plan deliberately has no inventory dependency.
-baselineOverview=createBaselineOverviewService({
+const ecommerceBaselineOverview=createBaselineOverviewService({
   managementReport:getEcommerceManagementReport,
   onlineCountrySales:onlineCountrySalesService,
   shopifyDevice:deviceSourceConversionService,
@@ -4496,6 +4505,14 @@ baselineOverview=createBaselineOverviewService({
   }),
   locationFinance:getSalesByLocation
 });
+const productEvidenceReport=createProductEvidenceReportService({
+  getProductPerformance:getShopifyProductPerformance,
+  getShopCurrency:async()=>{
+    const data=await shopifyGraphQL(await getShopifyAccessToken(),'{ shop { currencyCode } }');
+    return data?.shop?.currencyCode||null;
+  }
+});
+baselineOverview=async message=>await ecommerceBaselineOverview(message)||await productEvidenceReport(message);
 
 async function getSalesByLocation({
   start_date,

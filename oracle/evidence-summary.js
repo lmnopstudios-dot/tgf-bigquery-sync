@@ -40,6 +40,7 @@ function summaryLines(result){
 /** Build a bounded user-facing fallback from already validated aggregate output. */
 export function evidenceSummary(entries,{unavailable=[]}={}){
   const sections=[];
+  let validatedSectionCount=0;
   for(const entry of entries){
     if(entry.result?.success===false){
       const stage=String(entry.result.failed_stage||'evidence retrieval').replaceAll('_',' '),code=String(entry.result.code||'TOOL_FAILED').slice(0,80);
@@ -49,6 +50,7 @@ export function evidenceSummary(entries,{unavailable=[]}={}){
     if(entry.name==='get_governed_pageviews_per_session'&&entry.result?.woo_ga4&&entry.result?.shopify_native){
       const line=x=>`- **${x.label}:** total views ${value(x.total_views)}; sessions ${value(x.total_sessions)}; weighted views/session ${value(x.views_per_session)}; coverage ${x.coverage.actual_start_date||'none'} to ${x.coverage.actual_end_date||'none'} (${x.coverage.covered_days}/${x.requested.days} days, ${x.coverage.missing_days} missing); source ${x.source}.`;
       sections.push(`### ${LABELS[entry.name]}\n${line(entry.result.woo_ga4)}\n${line(entry.result.shopify_native)}\n- Calculation: total views / total sessions; daily rates were not averaged. Sources remain separately labelled and are not a like-for-like platform effect.`);
+      validatedSectionCount++;
       continue;
     }
     const rows=rowsFor(entry.result).slice(0,12), lines=summaryLines(entry.result);
@@ -62,6 +64,7 @@ export function evidenceSummary(entries,{unavailable=[]}={}){
       if(partial.length){lines.push('#### Sales-qualified candidates (inventory unavailable)');for(const row of partial)lines.push(`- **${row.shopify_parent_id}:** Woo ${value(row.woo_units)} units / ${value(row.woo_observation_days)} days = ${value(row.woo_units_per_day)}/day; Shopify ${value(row.shopify_units)} units / ${value(row.shopify_observation_days)} days = ${value(row.shopify_units_per_day)}/day; mapping ${JSON.stringify(row.mapping_provenance||[])}; Online stock unknown; made-to-order unknown.`);lines.push(`- **Failed stage:** ${String(entry.result.failed_stage||'inventory_retrieval').replaceAll('_',' ')} (${entry.result.code||'OPPORTUNITY_STAGE_FAILED'}; not retryable).`);}
       lines.push(`- **Result count:** ${rows.length} positive-stock opportunities; ${excluded.length} displayed excluded candidates. Candidate inventory coverage complete: ${entry.result.coverage?.retrieval?.candidate_inventory_complete===true?'yes':'not established'}.`);
       sections.push(`### ${LABELS[entry.name]}\n${lines.join('\n')}`);
+      validatedSectionCount++;
       continue;
     }
     for(const row of rows){
@@ -73,11 +76,12 @@ export function evidenceSummary(entries,{unavailable=[]}={}){
     if(!lines.length)continue;
     const dates=entry.result?.start_date&&entry.result?.end_date?` (${entry.result.start_date} to ${entry.result.end_date})`:'';
     sections.push(`### ${LABELS[entry.name]||'Governed evidence'}${dates}\n${lines.join('\n')}`);
+    validatedSectionCount++;
   }
   const missing=[...new Set(unavailable)].map(name=>LABELS[name]||'A requested evidence source');
   // A successful tool call is not necessarily usable evidence. Only claim that
   // figures exist when this renderer actually produced a visible section.
-  const hasValidatedEvidence=sections.length>0;
+  const hasValidatedEvidence=validatedSectionCount>0;
   return [
     '**Partial result — final synthesis did not complete**',
     hasValidatedEvidence?'The validated figures retrieved before the failure are shown below.':'No validated analytical figures were available; the bounded failure outcome is shown below.',
