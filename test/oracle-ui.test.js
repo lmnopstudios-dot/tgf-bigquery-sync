@@ -6,7 +6,8 @@ import { createOracleUiRouter } from '../oracle/ui-router.js';
 import { assertStrictToolSchema, createProposalGenerator, needsProposalGeneration, normalizeModelProposal, proposalDiagnostic, PROPOSAL_INSTRUCTIONS, PROPOSE_GOVERNED_RECORDS_TOOL } from '../oracle/proposals.js';
 import { redactError } from '../oracle/ui-security.js';
 import { ShopifyThrottleError, SHOPIFY_RATE_LIMIT_MESSAGE } from '../oracle/shopifyql-throttle.js';
-import { affinityJustified, partialAnswer, requestId, terminalMessage } from '../oracle/request-observability.js';
+import { affinityJustified, partialAnswer, requestId, serverFailureDiagnostic, terminalMessage } from '../oracle/request-observability.js';
+import { createMemoryAnalysisJobStore } from '../oracle/analysis-jobs.js';
 
 const env={ORACLE_UI_PASSWORD:'test-password',ORACLE_UI_SESSION_SECRET:'12345678901234567890123456789012',ORACLE_UI_ADMIN_NAME:'test-admin'};
 async function fixture(generateProposals=async()=>[]){
@@ -80,6 +81,27 @@ test('request IDs and terminal messages are bounded and safe',()=>{
   assert.match(requestId('customer name=Danielle / SQL'),/^[0-9a-f-]{36}$/);
   assert.match(terminalMessage('response_generation'),/final answer could not be generated/);
   assert.doesNotMatch(terminalMessage('response_generation'),/SQL|customer/i);
+});
+
+test('server failure diagnostics retain operational frames but never exception text',()=>{
+  const error=new TypeError('Bearer secret-token customer=Danielle body={"password":"hidden"}');error.code='INVALID_JOB_CONFIG';
+  error.stack=`TypeError: ${error.message}\n    at submit (file:///workspace/tgf-bigquery-sync/oracle/ui-router.js:123:45)\n    at /tmp/customer-private.js:2:3`;
+  const diagnostic=serverFailureDiagnostic({id:'baseline-123',path:'/api/oracle/jobs?prompt=private',stage:'job_creation',error});
+  assert.deepEqual(diagnostic,{request_id:'baseline-123',request_path:'/api/oracle/jobs',failure_stage:'job_creation',error_class:'TypeError',error_code:'INVALID_JOB_CONFIG',message:'Oracle request failed during job_creation.',stack:['submit (oracle/ui-router.js:123:45)']});
+  assert.doesNotMatch(JSON.stringify(diagnostic),/secret-token|Danielle|password|customer-private|prompt/);
+});
+
+test('exact August and September sales baseline submits idempotently and delivers durable evidence',async t=>{
+  const prompt='Establish my ecommerce starting baseline for August 2026 and September 2026, reporting Shopify Online Store separately from POS. Retrieve only governed sales evidence. Return a metric table showing orders, gross sales, discounts, returns, net sales, shipping, recorded tax, total sales, net units sold, units per order and Shopify-reported average order value wherever supported. Keep currencies separate. For each metric show its source-native metric name, definition, applied channel filter, date coverage and actual source collection timestamp where available. Do not substitute canonical finance or order-level totals for Shopify operational measures. Do not calculate units per order unless numerator and denominator are compatible. Mark unsupported metrics unavailable and preserve successful evidence if another metric fails. Return tables without requiring interpretation. Do not retrieve inventory or unrelated sources.';
+  const store=createMemoryAnalysisJobStore();let creates=0;const originalCreate=store.create.bind(store);store.create=async input=>{creates++;return originalCreate(input)};
+  const jobEnv={...env,ORACLE_ANALYSIS_JOBS_ENABLED:'true',ORACLE_JOB_RUNTIME_MS:'10000'};
+  const baselineOverview=async message=>message===prompt?{answer:'August and September evidence delivered.',evidence:{selected_intent:'sales_baseline',services_invoked:['get_shopify_sales_kpis'],sections:[{period:{start_date:'2026-08-01',end_date:'2026-08-31'},channel:'Online Store',status:'fulfilled'},{period:{start_date:'2026-08-01',end_date:'2026-08-31'},channel:'Point of Sale',status:'fulfilled'},{period:{start_date:'2026-09-01',end_date:'2026-09-30'},channel:'Online Store',status:'fulfilled'},{period:{start_date:'2026-09-01',end_date:'2026-09-30'},channel:'Point of Sale',status:'fulfilled'}],metric_rows:[{metric:'orders',value:1}]},tools:['get_shopify_sales_kpis']}:null;
+  const app=express();app.use('/api/oracle',createOracleUiRouter({knowledgeService:{searchKnowledge:async()=>({items:[]}),searchMemory:async()=>({items:[]})},bigquery:{},project:'test',chat:async()=>({answer:'wrong'}),baselineOverview,analysisJobStore:store,generateProposals:async()=>[],env:jobEnv}));
+  const server=await new Promise(resolve=>{const value=app.listen(0,()=>resolve(value))});t.after(()=>server.close());const base=`http://127.0.0.1:${server.address().port}/api/oracle`,request=(path,options={})=>fetch(base+path,options),auth=await login(request,base),headers={cookie:auth.cookie,origin:new URL(base).origin,'content-type':'application/json','x-csrf-token':auth.csrf,'x-request-id':'sales-baseline-aug-sep'};
+  const direct=await request('/chat',{method:'POST',headers,body:JSON.stringify({message:prompt})}),directBody=await direct.json();assert.equal(direct.status,200);assert.equal(directBody.evidence.selected_intent,'sales_baseline');
+  const first=await request('/jobs',{method:'POST',headers,body:JSON.stringify({message:prompt})}),firstBody=await first.json();assert.equal(first.status,202);assert.equal(firstBody.request_id,'sales-baseline-aug-sep');
+  const retry=await request('/jobs',{method:'POST',headers,body:JSON.stringify({message:prompt})}),retryBody=await retry.json();assert.equal(retryBody.job_id,firstBody.job_id);assert.equal(creates,1);
+  let completed;for(let attempt=0;attempt<30;attempt++){await new Promise(resolve=>setTimeout(resolve,50));const response=await request(`/jobs/${firstBody.job_id}`,{headers:{cookie:auth.cookie}});completed=await response.json();if(completed.status==='completed')break}assert.equal(completed.status,'completed');assert.equal(completed.evidence.selected_intent,'sales_baseline');assert.equal(completed.evidence.sections.length,4);
 });
 
 test('safe proposal diagnostics distinguish API failures without secrets or payloads',async()=>{

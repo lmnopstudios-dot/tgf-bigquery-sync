@@ -12,6 +12,35 @@ export function errorClass(error) {
   return String(error?.constructor?.name || 'Error').slice(0, 80);
 }
 
+const SAFE_CODE = /^[A-Z][A-Z0-9_]{0,63}$/;
+const SAFE_STAGE = /^[a-z][a-z0-9_]{0,63}$/;
+
+/**
+ * Produces an operationally useful diagnostic without reflecting exception
+ * text. Exception messages frequently contain SQL parameter values, prompts,
+ * upstream response bodies, or credentials, so only a fixed message and
+ * stack-frame locations from this application are eligible for logs.
+ */
+export function serverFailureDiagnostic({id,path,stage,error}) {
+  const code=SAFE_CODE.test(String(error?.code||''))?String(error.code):'ORACLE_INTERNAL_ERROR';
+  const safeStage=SAFE_STAGE.test(String(stage||''))?String(stage):'request_dispatch';
+  const frames=String(error?.stack||'').split('\n').slice(1,9).map(line=>{
+    const match=line.match(/(?:at\s+([^\s(]+)\s+)?\(?((?:file:\/\/)?[^\s():]*oracle\/[^\s():]+|(?:file:\/\/)?[^\s():]*server\.js):(\d+):(\d+)\)?/);
+    if(!match)return null;
+    const file=match[2].replace(/^file:\/\//,'').replace(/^.*\/(oracle\/)/,'$1').replace(/^.*\/(server\.js)$/,'$1');
+    return `${match[1]||'<anonymous>'} (${file}:${match[3]}:${match[4]})`;
+  }).filter(Boolean);
+  return {
+    request_id:requestId(id),
+    request_path:String(path||'unknown').split('?')[0].slice(0,160),
+    failure_stage:safeStage,
+    error_class:errorClass(error),
+    error_code:code,
+    message:`Oracle request failed during ${safeStage}.`,
+    stack:frames.length?frames:['unavailable']
+  };
+}
+
 export function stageOutcome({ id, stage, startedAt, outcome, error, extra = {} }) {
   return {
     request_id: id,
