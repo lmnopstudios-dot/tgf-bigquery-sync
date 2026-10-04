@@ -6,7 +6,7 @@ export const SHOPIFY_NATIVE_HISTORY_START = '2025-11-16';
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 
 export function validateOnlineCountrySalesInput(input = {}) {
-  const { start_date, end_date, currency = null } = input;
+  const { start_date, end_date, currency = null, platform = null } = input;
   for (const [field, value] of Object.entries({ start_date, end_date })) {
     if (typeof value !== 'string' || !DATE.test(value) || new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) !== value) {
       throw new Error(`${field} must be a valid YYYY-MM-DD date`);
@@ -16,7 +16,8 @@ export function validateOnlineCountrySalesInput(input = {}) {
   if (currency !== null && (typeof currency !== 'string' || !/^[A-Za-z]{3}$/.test(currency))) {
     throw new Error('currency must be null or a three-letter currency code');
   }
-  return { start_date, end_date, currency: currency?.toUpperCase() || null };
+  if(platform!==null&&!['shopify','woo'].includes(platform))throw new Error('platform must be null, shopify, or woo');
+  return { start_date, end_date, currency: currency?.toUpperCase() || null, platform };
 }
 
 /**
@@ -47,16 +48,24 @@ export function onlineCountrySalesSql(project) {
   ), woo_orders AS (
     SELECT * FROM woo_orders_raw
     QUALIFY ROW_NUMBER() OVER(PARTITION BY source_store,source_order_id ORDER BY order_date DESC)=1
+  ), shopify_financials AS (
+    SELECT * FROM \`${project}.shopify_data.order_financials\`
+    QUALIFY ROW_NUMBER() OVER(PARTITION BY order_id ORDER BY updated_at DESC,synced_at DESC)=1
+  ), shopify_locations AS (
+    SELECT * FROM \`${project}.shopify_data.order_locations\`
+    QUALIFY ROW_NUMBER() OVER(PARTITION BY order_id ORDER BY updated_at DESC,synced_at DESC)=1
+  ), shopify_customers AS (
+    SELECT * FROM \`${project}.shopify_data.order_customers\`
+    QUALIFY ROW_NUMBER() OVER(PARTITION BY order_id ORDER BY synced_at DESC)=1
   ), shopify_orders AS (
     SELECT 'shopify' source_platform,'shopify' source_store,f.order_id source_order_id,
       DATE(f.created_at) order_date,UPPER(f.presentment_currency) currency,c.display_financial_status status,
       CAST(f.original_total_presentment-COALESCE(f.total_refunded_presentment,0) AS NUMERIC) operational_net_sales
-    FROM \`${project}.shopify_data.order_financials\` f
-    JOIN \`${project}.shopify_data.order_locations\` l USING(order_id)
-    JOIN \`${project}.shopify_data.order_customers\` c USING(order_id)
+    FROM shopify_financials f
+    JOIN shopify_locations l USING(order_id)
+    JOIN shopify_customers c USING(order_id)
     WHERE l.retail_location_id IS NULL AND c.cancelled_at IS NULL
       AND (l.source_app_id IS NULL OR l.source_app_id!=@matrixify_app_id)
-    QUALIFY ROW_NUMBER() OVER(PARTITION BY f.order_id ORDER BY f.created_at DESC)=1
   ), eligible AS (
     SELECT o.source_platform,o.source_store,o.source_order_id,o.order_date,o.currency,o.operational_net_sales,
       IF(g.geography_status='observed' AND REGEXP_CONTAINS(g.country_code,r'^[A-Z]{2}$'),g.country_code,NULL) country_code
@@ -64,6 +73,7 @@ export function onlineCountrySalesSql(project) {
     WHERE LOWER(o.status) IN ('completed','processing')
       AND o.order_date BETWEEN DATE(@start_date) AND DATE(@end_date)
       AND (@currency IS NULL OR o.currency=UPPER(@currency))
+      AND (@platform IS NULL OR o.source_platform=@platform)
     UNION ALL
     SELECT o.source_platform,o.source_store,o.source_order_id,o.order_date,o.currency,o.operational_net_sales,
       IF(g.geography_status='valid' AND REGEXP_CONTAINS(g.country_code,r'^[A-Z]{2}$'),g.country_code,NULL)
@@ -71,6 +81,7 @@ export function onlineCountrySalesSql(project) {
     WHERE LOWER(o.status) IN ('paid','partially_paid','partially_refunded')
       AND o.order_date BETWEEN DATE(@start_date) AND DATE(@end_date)
       AND (@currency IS NULL OR o.currency=UPPER(@currency))
+      AND (@platform IS NULL OR o.source_platform=@platform)
   ), source_coverage AS (
     SELECT source_platform,source_store,currency,COUNT(*) eligible_orders,
       COUNTIF(country_code IS NULL) unknown_country_orders,SUM(operational_net_sales) eligible_sales,
@@ -107,11 +118,11 @@ export function createOnlineCountrySalesService({ bigquery, project }) {
   return async input => {
     const params = validateOnlineCountrySalesInput(input);
     const [rows] = await bigquery.query({ query: onlineCountrySalesSql(project),
-      params: { ...params, matrixify_app_id: MATRIXIFY_APP_ID }, types: { currency: 'STRING' },
+      params: { ...params, matrixify_app_id: MATRIXIFY_APP_ID }, types: { currency: 'STRING',platform:'STRING' },
       useLegacySql: false, maximumBytesBilled: String(ONLINE_COUNTRY_MAX_BYTES),
       labels: { component: 'oracle', operation: 'online_country_sales' } });
     return { period: { start_date: params.start_date, end_date: params.end_date }, currency_filter: params.currency,
-      rows: JSON.parse(JSON.stringify(rows)), source_scope: ['woo','shopify'],
+      rows: JSON.parse(JSON.stringify(rows)), source_scope: params.platform?[params.platform]:['woo','shopify'],
       shopify_native_history: { known_start: SHOPIFY_NATIVE_HISTORY_START,
         warning: `Native Shopify history starts ${SHOPIFY_NATIVE_HISTORY_START}; do not describe Shopify as covering the whole requested period.` },
       semantics: {

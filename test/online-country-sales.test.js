@@ -4,13 +4,16 @@ import fs from 'node:fs';
 import { createOnlineCountrySalesService, ONLINE_COUNTRY_SALES_TOOL_DEFINITION, onlineCountrySalesSql } from '../oracle/online-country-sales.js';
 import { transitionAnalysisContext } from '../oracle/analysis-context.js';
 import { validateOnlineCountrySales } from '../diagnostics/online-country-sales-production.js';
+import {runScopeCardinality,scopeCardinalitySql} from '../diagnostics/ecommerce-scope-cardinality.js';
 
 const FOLLOW_UP='Include WooCommerce as well — I want this data for all online sales from the last 4 years.';
 
 test('cross-platform aggregate deduplicates before direct geography joins and keeps currency/source coverage',()=>{
   const sql=onlineCountrySalesSql('p');
   assert.match(sql,/woo_orders AS[\s\S]*ROW_NUMBER\(\) OVER\(PARTITION BY source_store,source_order_id/);
-  assert.match(sql,/shopify_orders AS[\s\S]*ROW_NUMBER\(\) OVER\(PARTITION BY f\.order_id/);
+  assert.match(sql,/shopify_financials AS[\s\S]*ROW_NUMBER\(\) OVER\(PARTITION BY order_id/);
+  assert.match(sql,/shopify_locations AS[\s\S]*ROW_NUMBER\(\) OVER\(PARTITION BY order_id/);
+  assert.match(sql,/shopify_customers AS[\s\S]*ROW_NUMBER\(\) OVER\(PARTITION BY order_id/);
   assert.ok(sql.indexOf('woo_orders AS')<sql.indexOf('LEFT JOIN woo_geography'));
   assert.match(sql,/source_coverage/);assert.match(sql,/unknown_country_orders/);
   assert.match(sql,/PARTITION BY currency ORDER BY operational_net_sales/);
@@ -48,6 +51,8 @@ test('production validator is read-only and catches duplicate joins while reconc
   let count=0;const duplicate={query:async()=>++count===1?[[row]]:[[{currency:'GBP',eligible_orders:9,source_coverage_rows:2,returned_countries:2,distinct_country_rows:1,unknown_country_orders:1}]]};
   await assert.rejects(()=>validateOnlineCountrySales({bigquery:duplicate,project:'p',input:{start_date:'2022-09-24',end_date:'2026-09-24',currency:null}}),/duplicate country join detected/);
 });
+
+test('scope/cardinality acceptance diagnostic exposes exact bindings and actual populations read-only',async()=>{let call;const rows=[{population:'eligible_after_predicates',joined_rows:522,distinct_orders:522,joined_net_sales:100}];const result=await runScopeCardinality({project:'p',start_date:'2026-09-01',end_date:'2026-09-30',currency:'GBP',bigquery:{query:async value=>{call=value;return[rows]}}});assert.deepEqual(result.requested_bindings,{start_date:'2026-09-01',end_date:'2026-09-30',currency:'GBP',matrixify_app_id:'gid://shopify/App/1758145'});assert.deepEqual(result.populations,rows);assert.equal(call.maximumBytesBilled,'10000000000');const sql=scopeCardinalitySql('p');assert.match(sql,/COUNT\(DISTINCT order_id\)/);assert.match(sql,/MIN\(order_date\).*MAX\(order_date\)/s);assert.doesNotMatch(sql,/\b(?:INSERT|UPDATE|DELETE|MERGE|CREATE|DROP|ALTER|TRUNCATE)\b/i);});
 
 test('agent enforces request-wide deadline/budget and remaining failure is actionable',()=>{
   const server=fs.readFileSync(new URL('../server.js',import.meta.url),'utf8');

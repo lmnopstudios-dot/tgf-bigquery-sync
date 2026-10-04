@@ -10,7 +10,7 @@ const FIELDS = new Set([
 ]);
 const GRAINS = new Set(['day','week','month','quarter','year']);
 const CURRENCIES = new Set(['GBP','USD','JPY','EUR']);
-const METRICS = new Set(['sales','refunds','customers','products','ecommerce_performance','customer_journey','customer_order_interval','product_views_before_purchase']);
+const METRICS = new Set(['sales','refunds','customers','products','search_console','shipping_countries','ecommerce_performance','customer_journey','customer_order_interval','product_views_before_purchase']);
 const MONTHS = {jan:1,january:1,feb:2,february:2,mar:3,march:3,apr:4,april:4,may:5,jun:6,june:6,jul:7,july:7,aug:8,august:8,sep:9,sept:9,september:9,oct:10,october:10,nov:11,november:11,dec:12,december:12};
 
 export const ANALYSIS_CONTEXT_FIELDS = Object.freeze([...FIELDS]);
@@ -86,6 +86,10 @@ export function transitionAnalysisContext(existing, message, {now=Date.now(),rep
   const continuation=!unrelated&&!explicitNew&&(base.metrics.length>0||/\b(refunds?|sales|customers?|products?|ecommerce)\b/i.test(lower));
   if(explicitNew) base=emptyAnalysisContext();
   if(!unrelated&&!nonTemporalKind){
+    // A named evidence subject is a replacement, not a continuation of an
+    // incompatible platform comparison. Keep reusable dates/currency only.
+    const explicitSubject=/\b(?:shipping|delivery)\s+(?:countries|country|destinations?)\b/i.test(text)?'shipping_countries':/\bsearch\s+console\b|\borganic\s+(?:search|clicks?|impressions?)\b/i.test(text)?'search_console':/\bcustomers?\b/i.test(text)?'customers':null;
+    if(explicitSubject){for(const key of ['tool_route','platform','comparison_type','comparison_start_date','comparison_end_date','geography','customer_segment','product_ref','report_section','advisory_topic','journey_intent','entry_product_classification','subsequent_product_classification'])clear.push(key);set.metrics=[explicitSubject];set.analysis_type=explicitSubject==='customers'?'customers':'ecommerce';if(explicitSubject==='shipping_countries'){set.geography='direct_shipping_country';set.channel='online';}}
     const advisory=isStockClearanceAdvisory(text,base);
     if(advisory){set.request_kind='advisory';set.advisory_topic='stock_clearance';}
     const countryProducts=/\b(?:top\s+(?:ten|10)\s+)?(?:locations?|countries)\b[\s\S]*\bonline sales\b[\s\S]*\b(?:top\s+(?:ten|10)\s+)?products?\b|\bonline sales\b[\s\S]*\b(?:locations?|countries)\b[\s\S]*\bproducts?\b/i.test(text);
