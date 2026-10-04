@@ -12,15 +12,18 @@ const FIELDS = new Set([
 const GRAINS = new Set(['day','week','month','quarter','year']);
 const CURRENCIES = new Set(['GBP','USD','JPY','EUR']);
 const METRICS = new Set(['sales','refunds','customers','products','search_console','shipping_countries','ecommerce_performance','customer_journey','customer_order_interval','product_views_before_purchase']);
+const TOOL_ROUTES = new Set(['get_shopify_online_country_products','get_online_country_sales','get_average_customer_order_interval','get_governed_category_sales','get_product_views_before_purchase','compare_historical_events','get_shopify_operational_sales_baseline']);
 const MONTHS = {jan:1,january:1,feb:2,february:2,mar:3,march:3,apr:4,april:4,may:5,jun:6,june:6,jul:7,july:7,aug:8,august:8,sep:9,sept:9,september:9,oct:10,october:10,nov:11,november:11,dec:12,december:12};
 
 export const ANALYSIS_CONTEXT_FIELDS = Object.freeze([...FIELDS]);
 export function emptyAnalysisContext(){return {analysis_type:null,metrics:[],start_date:null,end_date:null,requested_end_period:null,grain:null,comparison_type:null,comparison_start_date:null,comparison_end_date:null,currencies:[],channel:null,channel_breakdown:false,location:null,platform:null,geography:null,customer_segment:null,product_ref:null,filters:[],sort:null,limit:null,report_section:null,output_preference:null,partial_period:false,unresolved_required_fields:[],tool_route:null,request_kind:null,advisory_topic:null,journey_intent:null,entry_product_classification:null,subsequent_product_classification:null,excluded_product_titles:[],include_unclassified_products:false,first_order_semantic:null,cohort_entry_start:null,cohort_entry_end:null,observation_end:null,minimum_order_sequence:null,maximum_order_sequence:null,within_days:null,journey_group_by:null,event_name:null,event_count:null}}
 
+function contextValidationError(field,rule,message=`invalid ${field}`){const error=Object.assign(new Error(message),{code:'INVALID_ANALYSIS_CONTEXT',validation_field:field,validation_rule:rule});return error}
+
 const iso = value => /^\d{4}-\d{2}-\d{2}$/.test(String(value||'')) ? value : null;
 export function validateAnalysisContext(value={}){
   if(!value||typeof value!=='object'||Array.isArray(value)) throw new Error('analysis context must be an object');
-  for(const key of Object.keys(value)) if(!FIELDS.has(key)) throw new Error(`invalid analysis context field: ${key}`);
+  for(const key of Object.keys(value)) if(!FIELDS.has(key)) throw contextValidationError('unknown_field','recognized_field',`invalid analysis context field: ${key}`);
   const out={...emptyAnalysisContext()};
   if(value.analysis_type!=null&&!['finance','customers','products','ecommerce','customer_journey'].includes(value.analysis_type)) throw new Error('invalid analysis_type');
   out.analysis_type=value.analysis_type??null;
@@ -36,7 +39,7 @@ export function validateAnalysisContext(value={}){
   out.limit=Number.isInteger(value.limit)&&value.limit>0&&value.limit<=100?value.limit:null;
   out.partial_period=Boolean(value.partial_period);
   out.unresolved_required_fields=[...new Set(value.unresolved_required_fields||[])].filter(x=>FIELDS.has(x)).slice(0,8);
-  if(value.tool_route!=null&&!['get_shopify_online_country_products','get_online_country_sales','get_average_customer_order_interval','get_governed_category_sales','get_product_views_before_purchase','compare_historical_events'].includes(value.tool_route)) throw new Error('invalid tool_route');
+  if(value.tool_route!=null&&!TOOL_ROUTES.has(value.tool_route)) throw contextValidationError('tool_route','allowed_route');
   out.tool_route=value.tool_route??null;
   if(value.request_kind!=null&&!['advisory','knowledge_save','policy_definition'].includes(value.request_kind)) throw new Error('invalid request_kind');
   out.request_kind=value.request_kind??null;
@@ -80,7 +83,8 @@ export function transitionAnalysisContext(existing, message, {now=Date.now(),rep
   // Definitions and policy hypotheticals can contain words such as "product" or
   // "stock", but they are not historical product analyses. Classify them before
   // the broad metric keyword rules so they never acquire a date or currency.
-  const knowledgeSave=/\b(?:save|record|remember|store|add)\b[\s\S]*\b(?:definition|policy|rule|knowledge)\b|\b(?:propose|create|write)\b[\s\S]*\b(?:timeless|operational|governed)\s+definition\b/i.test(text);
+  const explicitSalesBaseline=/\b(?:sales\s+(?:starting\s+)?baseline|ecommerce\s+starting\s+baseline)\b|\bestablish\b[\s\S]{0,80}\b(?:sales|ecommerce)\b[\s\S]{0,40}\bbaseline\b/i.test(text);
+  const knowledgeSave=!explicitSalesBaseline&&(/\b(?:save|record|remember|store|add)\b[\s\S]*\b(?:definition|policy|rule|knowledge)\b|\b(?:propose|create|write)\b[\s\S]*\b(?:timeless|operational|governed)\s+definition\b/i.test(text));
   const policyDefinition=/\b(?:made[ -]to[ -]order|ready to ship)\b/i.test(text)&&/\b(?:if|when|without|tag(?:ged)?|definition|policy|rule|available|availability|stock|units?|size)\b/i.test(text);
   const nonTemporalKind=knowledgeSave?'knowledge_save':policyDefinition?'policy_definition':null;
   if(nonTemporalKind){base=emptyAnalysisContext();set.request_kind=nonTemporalKind;}
@@ -91,9 +95,8 @@ export function transitionAnalysisContext(existing, message, {now=Date.now(),rep
   if(!unrelated&&!nonTemporalKind){
     // A named evidence subject is a replacement, not a continuation of an
     // incompatible platform comparison. Keep reusable dates/currency only.
-    const explicitSalesBaseline=/\b(?:sales\s+(?:starting\s+)?baseline|ecommerce\s+starting\s+baseline)\b|\bestablish\b[\s\S]{0,80}\b(?:sales|ecommerce)\b[\s\S]{0,40}\bbaseline\b/i.test(text);
     const explicitSubject=explicitSalesBaseline?'sales':/\b(?:shipping|delivery)\s+(?:countries|country|destinations?)\b/i.test(text)?'shipping_countries':/\bsearch\s+console\b|\borganic\s+(?:search|clicks?|impressions?)\b/i.test(text)?'search_console':/\bcustomers?\b/i.test(text)?'customers':null;
-    if(explicitSubject){for(const key of ['tool_route','platform','comparison_type','comparison_start_date','comparison_end_date','geography','customer_segment','product_ref','report_section','advisory_topic','journey_intent','entry_product_classification','subsequent_product_classification','event_name','event_count'])clear.push(key);set.metrics=[explicitSubject];set.analysis_type=explicitSubject==='customers'?'customers':'ecommerce';if(explicitSalesBaseline){set.tool_route='get_shopify_operational_sales_baseline';set.channel_breakdown=true;clear.push('channel');}else if(explicitSubject==='shipping_countries'){set.geography='direct_shipping_country';set.channel='online';}}
+    if(explicitSubject){for(const key of ['tool_route','platform','comparison_type','comparison_start_date','comparison_end_date','geography','customer_segment','product_ref','report_section','advisory_topic','journey_intent','entry_product_classification','subsequent_product_classification','event_name','event_count'])clear.push(key);set.metrics=[explicitSubject];set.analysis_type=explicitSubject==='customers'?'customers':'ecommerce';if(explicitSalesBaseline){set.tool_route='get_shopify_operational_sales_baseline';set.channel_breakdown=true;clear.push('channel','currencies');}else if(explicitSubject==='shipping_countries'){set.geography='direct_shipping_country';set.channel='online';}}
     const historicalEvent=/\bblack\s+friday\b/i.test(text)&&/\b(?:last|previous|recent|compare|comparison|overview|sales?|years?)\b/i.test(text);
     if(historicalEvent){const count=lower.match(/\blast\s+(\d{1,2})\s+(?:black\s+friday\s+)?(?:sales?|years?)\b/);set.event_name='Black Friday';set.event_count=Math.max(1,Math.min(Number(count?.[1]||3),5));set.tool_route='compare_historical_events';set.metrics=['sales','refunds','customers','products','ecommerce_performance'];set.analysis_type='ecommerce';set.channel='online';clear.push('start_date','end_date','requested_end_period','comparison_start_date','comparison_end_date');}
     else if(base.tool_route==='compare_historical_events'&&/\blast\s+(\d{1,2})\s+years?\b/i.test(text)){set.event_count=Math.max(1,Math.min(Number(text.match(/\blast\s+(\d{1,2})\s+years?\b/i)[1]),5));}
@@ -127,7 +130,7 @@ export function transitionAnalysisContext(existing, message, {now=Date.now(),rep
     if(/exclude pos/i.test(lower)) set.filters=[...base.filters.filter(x=>x!=='exclude_pos'),'exclude_pos'];
     if(/include pos|clear (?:the )?filters?/i.test(lower)) clear.push('filters');
     if(!viewsBeforePurchase&&!['get_product_views_before_purchase','compare_historical_events'].includes(set.tool_route))Object.assign(set,period(text,now)||{});
-    if(!base.currencies.length&&!set.currencies&&set.analysis_type==='finance'&&!['get_shopify_online_country_products','get_online_country_sales','get_governed_category_sales'].includes(set.tool_route||base.tool_route)&&!advisory) set.currencies=['GBP'];
+    if(!base.currencies.length&&!set.currencies&&set.analysis_type==='finance'&&!['get_shopify_online_country_products','get_online_country_sales','get_governed_category_sales','get_shopify_operational_sales_baseline'].includes(set.tool_route||base.tool_route)&&!advisory) set.currencies=['GBP'];
   }
   const effectiveClear=clear.filter(key=>!Object.hasOwn(set,key));const next={...base,...set};if(next.analysis_type==='customer_journey'){next.first_order_semantic=next.first_order_semantic||'first_observed_ever';if(next.start_date){next.cohort_entry_start=next.start_date;next.cohort_entry_end=next.end_date;next.observation_end=next.end_date;}}for(const key of effectiveClear) next[key]=emptyAnalysisContext()[key];
   const missing=[];if(next.metrics.length&&!next.start_date&&next.tool_route!=='compare_historical_events'&&!['advisory','knowledge_save','policy_definition'].includes(next.request_kind)) missing.push('start_date','end_date');

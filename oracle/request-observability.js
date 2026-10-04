@@ -14,6 +14,7 @@ export function errorClass(error) {
 
 const SAFE_CODE = /^[A-Z][A-Z0-9_]{0,63}$/;
 const SAFE_STAGE = /^[a-z][a-z0-9_]{0,63}$/;
+const SAFE_VALIDATION_TOKEN = /^[a-z][a-z0-9_]{0,63}$/;
 
 /**
  * Produces an operationally useful diagnostic without reflecting exception
@@ -30,6 +31,8 @@ export function serverFailureDiagnostic({id,path,stage,error}) {
     const file=match[2].replace(/^file:\/\//,'').replace(/^.*\/(oracle\/)/,'$1').replace(/^.*\/(server\.js)$/,'$1');
     return `${match[1]||'<anonymous>'} (${file}:${match[3]}:${match[4]})`;
   }).filter(Boolean);
+  const validationField=SAFE_VALIDATION_TOKEN.test(String(error?.validation_field||''))?String(error.validation_field):null;
+  const validationRule=SAFE_VALIDATION_TOKEN.test(String(error?.validation_rule||''))?String(error.validation_rule):null;
   return {
     request_id:requestId(id),
     request_path:String(path||'unknown').split('?')[0].slice(0,160),
@@ -37,7 +40,8 @@ export function serverFailureDiagnostic({id,path,stage,error}) {
     error_class:errorClass(error),
     error_code:code,
     message:`Oracle request failed during ${safeStage}.`,
-    stack:frames.length?frames:['unavailable']
+    stack:frames.length?frames:['unavailable'],
+    ...(validationField&&validationRule?{validation_field:validationField,validation_rule:validationRule}:{})
   };
 }
 

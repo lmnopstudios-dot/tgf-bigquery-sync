@@ -4,6 +4,12 @@ import { analysisScope, clarificationFor, emptyAnalysisContext, initializeFromRe
 
 const NOW=Date.parse('2026-09-22T12:00:00Z');
 const apply=(context,message)=>transitionAnalysisContext(context,message,{now:NOW});
+const SALES_BASELINE_PROMPT='Establish my ecommerce starting baseline for August 2026 and September 2026, reporting Shopify Online Store separately from POS. Retrieve only governed sales evidence. Return a metric table showing orders, gross sales, discounts, returns, net sales, shipping, recorded tax, total sales, net units sold, units per order and Shopify-reported average order value wherever supported. Keep currencies separate. For each metric show its source-native metric name, definition, applied channel filter, date coverage and actual source collection timestamp where available. Do not substitute canonical finance or order-level totals for Shopify operational measures. Do not calculate units per order unless numerator and denominator are compatible. Mark unsupported metrics unavailable and preserve successful evidence if another metric fails. Return tables without requiring interpretation. Do not retrieve inventory or unrelated sources.';
+
+test('exact sales baseline is a strict valid context in fresh, customer, and Woo conversations',()=>{
+  const preceding=[null,apply(null,'Compare August and September 2026 customers').context,apply(null,'Compare September 2026 native Shopify with September 2025 WooCommerce sales').context];
+  for(const prior of preceding){const result=apply(prior,SALES_BASELINE_PROMPT);assert.equal(result.context.tool_route,'get_shopify_operational_sales_baseline');assert.equal(result.context.analysis_type,'finance');assert.deepEqual(result.context.metrics,['sales']);assert.deepEqual(result.context.currencies,[]);assert.deepEqual([result.context.start_date,result.context.end_date],['2026-08-01','2026-09-22']);assert.equal(result.context.channel_breakdown,true);assert.equal(result.context.channel,null);assert.equal(result.context.request_kind,null);assert.equal(result.transition.ready_to_execute,true);assert.deepEqual(validateAnalysisContext(result.context),result.context);}
+});
 
 test('metric, grain and GBP default survive date clarification and execute when complete',()=>{
   let result=apply(emptyAnalysisContext(),'monthly refunds');
@@ -105,6 +111,8 @@ test('schema rejects arbitrary fields, bounds values and excludes PII-shaped fil
   const context=validateAnalysisContext({filters:['channel=online','email=user@example.test','customer_id=123'],limit:999,metrics:['refunds','made_up'],currencies:['GBP','BTC']});
   assert.deepEqual(context.filters,['channel=online']);assert.equal(context.limit,null);assert.deepEqual(context.metrics,['refunds']);assert.deepEqual(context.currencies,['GBP']);assert.equal('raw_tool_response' in context,false);
 });
+
+test('strict context errors expose only a bounded invalid field and rule',()=>{let error;try{validateAnalysisContext({tool_route:'private prompt or credential'})}catch(value){error=value}assert.equal(error.code,'INVALID_ANALYSIS_CONTEXT');assert.equal(error.validation_field,'tool_route');assert.equal(error.validation_rule,'allowed_route');assert.doesNotMatch(JSON.stringify(error),/private prompt|credential/);});
 
 test('scope is transparent but contains only bounded analytical values',()=>{
   const context=apply(emptyAnalysisContext(),'monthly refunds Jan 2023 to Sep 2026').context;
