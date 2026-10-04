@@ -4520,7 +4520,13 @@ const ecommerceBaselineOverview=createBaselineOverviewService({
 });
 const historicalEventComparison=createHistoricalEventComparisonService({
   knowledgeService,
-  collectEvent:event=>getEcommerceManagementReport({start_date:event.start_date,end_date:event.end_date})
+  collectEvent:async event=>{
+    const [online_sales,management]=await Promise.all([
+      onlineCountrySalesService({start_date:event.start_date,end_date:event.end_date,currency:null,platform:null}),
+      getEcommerceManagementReport({start_date:event.start_date,end_date:event.end_date})
+    ]);
+    return{online_sales,conversion:management.conversion};
+  }
 });
 const productEvidenceReport=createProductEvidenceReportService({
   getProductPerformance:getShopifyProductPerformance,
