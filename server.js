@@ -335,7 +335,8 @@ const SHOPIFY_SALES_METRICS = [
   'returns',
   'net_sales',
   'total_sales',
-  'average_order_value'
+  'average_order_value',
+  'net_items_sold'
 ];
 
 const SHOPIFY_PRODUCT_PERFORMANCE_METRICS = [
@@ -660,7 +661,8 @@ ORDER BY ${timeseries} ASC`;
 async function getShopifySalesKpis({
   start_date,
   end_date,
-  timeseries = 'none'
+  timeseries = 'none',
+  sales_channel = 'Online Store'
 }) {
   validateShopifyReportDate(start_date, 'start_date');
   validateShopifyReportDate(end_date, 'end_date');
@@ -680,17 +682,18 @@ async function getShopifySalesKpis({
       'timeseries must be one of: none, day, week, month'
     );
   }
+  if (!['Online Store','Point of Sale'].includes(sales_channel)) throw new Error('sales_channel must be one of: Online Store, Point of Sale');
 
   const dateRange =
     `SINCE ${start_date} UNTIL ${end_date}`;
   const shopifyql = timeseries === 'none'
     ? `FROM sales
 SHOW ${SHOPIFY_SALES_METRICS.join(', ')}
-WHERE sales_channel = 'Online Store'
+WHERE sales_channel = '${sales_channel}'
 ${dateRange}`
     : `FROM sales
 SHOW ${SHOPIFY_SALES_METRICS.join(', ')}
-WHERE sales_channel = 'Online Store'
+WHERE sales_channel = '${sales_channel}'
 TIMESERIES ${timeseries}
 ${dateRange}
 ORDER BY ${timeseries} ASC`;
@@ -700,11 +703,18 @@ ORDER BY ${timeseries} ASC`;
     shopifyql,
     'sales KPI'
   );
+  const shopData=await shopifyGraphQL(token,'{ shop { currencyCode } }');
+  const currency=shopData?.shop?.currencyCode||null;
 
   return {
     start_date,
     end_date,
     timeseries,
+    sales_channel,
+    currency,
+    currency_basis:'Authoritative Shopify shop currency metadata.',
+    source_collected_at:null,
+    coverage:null,
     ...(timeseries === 'none'
       ? { metrics: rows[0] ?? null }
       : { periods: rows })
@@ -4505,6 +4515,7 @@ const ecommerceBaselineOverview=createBaselineOverviewService({
     comparison:'custom',comparison_start:periods.prior_year.start_date,
     comparison_end:periods.prior_year.end_date
   }),
+  shopifySales:getShopifySalesKpis,
   locationFinance:getSalesByLocation
 });
 const historicalEventComparison=createHistoricalEventComparisonService({
