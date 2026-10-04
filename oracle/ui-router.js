@@ -7,7 +7,7 @@ import { reportCsv, reportPdf, reportWorkbook } from './report-export.js';
 import { analysisScope, clarificationFor, emptyAnalysisContext, transitionAnalysisContext } from './analysis-context.js';
 import { governanceDiagnostic, governancePublicError, isGovernanceBusinessError } from './governance-diagnostics.js';
 import { SHOPIFY_RATE_LIMIT_MESSAGE } from './shopifyql-throttle.js';
-import { requestId, stageOutcome, terminalMessage } from './request-observability.js';
+import { requestId, serverFailureDiagnostic, stageOutcome, terminalMessage } from './request-observability.js';
 import { createAnalysisJobWorker, ownerKey, streamingInsertDiagnostic } from './analysis-jobs.js';
 import { campaignDateClarification, resolveKnowledgeDates } from './knowledge-dates.js';
 
@@ -32,6 +32,7 @@ export function createOracleUiRouter({ knowledgeService, bigquery, project, chat
   const mappingLimit=Math.max(1,Math.min(Number(env.ORACLE_MAPPING_CONCURRENCY)||1,2));
   const mappingQueueLimit=Math.max(0,Math.min(Number(env.ORACLE_MAPPING_QUEUE_LIMIT)||2,10));
   let activeMappingReads=0;const mappingWaiters=[];
+  router.use((req,res,next)=>{req.oracleRequestId=requestId(req.get('x-request-id'));req.oracleFailureStage='request_dispatch';res.setHeader('x-request-id',req.oracleRequestId);next();});
   const acquireMappingRead=req=>new Promise((resolve,reject)=>{
     if(activeMappingReads<mappingLimit){activeMappingReads++;return resolve();}
     if(mappingWaiters.length>=mappingQueueLimit)return reject(Object.assign(new Error('Product mapping is busy; retry shortly.'),{code:'MAPPING_BUSY'}));
@@ -105,19 +106,23 @@ export function createOracleUiRouter({ knowledgeService, bigquery, project, chat
     jobStoreReady.then(()=>worker.start()).catch(error=>console.error('Oracle job storage setup failed:',{error_class:error?.name||'Error'}));
     const owned=(req,id)=>analysisJobStore.get(id,ownerKey(parseCookies(req.headers.cookie).oracle_session,sessionSecret));
     router.post('/jobs',authenticate,protectWrite,json,async(req,res)=>{
-      try { await jobStoreReady; } catch { return res.status(503).json({success:false,error:'Analysis jobs are temporarily unavailable'}); }
-      const invalid=messageError(req.body);if(invalid)return res.status(invalid.status).json({success:false,code:invalid.code,error:invalid.error});
+      const id=req.oracleRequestId;
+      req.oracleFailureStage='job_storage_readiness';
+      try { await jobStoreReady; } catch(error) { console.error('Oracle job submission failed:',serverFailureDiagnostic({id,path:req.originalUrl,stage:req.oracleFailureStage,error}));return res.status(503).json({success:false,code:'ORACLE_JOB_STORAGE_UNAVAILABLE',error:'Analysis job storage is unavailable. Ask an administrator to run the Oracle job-readiness check, then retry explicitly.',request_id:id}); }
+      req.oracleFailureStage='job_request_validation';
+      const invalid=messageError(req.body);if(invalid)return res.status(invalid.status).json({success:false,code:invalid.code,error:invalid.error,request_id:id});
+      req.oracleFailureStage='job_context_resolution';
       const previous=sessionContext(req),result=transitionAnalysisContext(previous,req.body.message,{now:now(),reportContext:req.body.report_context||null});
       if(result.transition.applies_to_message)saveSessionContext(req,result.context);
       const cached=recentChatEvidence.get(sessionKey(req)),recent=cached&&cached.expires_at>now()?cached.value:null;
-      const id=requestId(req.get('x-request-id'));
       const owner=ownerKey(parseCookies(req.headers.cookie).oracle_session,sessionSecret);
       console.info('Oracle route selection:',{request_id:id,stage:'route_selection',route:'durable_job',outcome:'selected'});
-      let job;try{job=await analysisJobStore.getByRequest?.(id,owner)||await analysisJobStore.create({owner_key:owner,request_id:id,payload_json:{message:req.body.message,temporal_context:resolveKnowledgeDates(req.body.message,{timestamp:now(),timeZone:'Europe/London'}),analysis_context:result.transition.applies_to_message?result.context:null,transition:result.transition,recent_evidence:recent,created_by:req.oracleUser.sub}});}catch(error){console.error('Oracle job enqueue failed:',{request_id:id,...streamingInsertDiagnostic(error)});return res.status(503).json({success:false,code:'ORACLE_JOB_ENQUEUE_FAILED',error:'The analysis could not be queued. Please retry.',request_id:id});}
-      res.setHeader('x-request-id',id).status(202).json({success:true,job_id:job.job_id,status:'queued'});
+      let job;try{req.oracleFailureStage='job_idempotency_lookup';job=await analysisJobStore.getByRequest?.(id,owner);if(!job){req.oracleFailureStage='job_creation';job=await analysisJobStore.create({owner_key:owner,request_id:id,payload_json:{message:req.body.message,temporal_context:resolveKnowledgeDates(req.body.message,{timestamp:now(),timeZone:'Europe/London'}),analysis_context:result.transition.applies_to_message?result.context:null,transition:result.transition,recent_evidence:recent,created_by:req.oracleUser.sub}});}}catch(error){console.error('Oracle job enqueue failed:',{...serverFailureDiagnostic({id,path:req.originalUrl,stage:req.oracleFailureStage,error}),storage:streamingInsertDiagnostic(error)});return res.status(503).json({success:false,code:'ORACLE_JOB_ENQUEUE_FAILED',error:'The analysis could not be queued. Retry explicitly with the same correlation ID; Oracle will check for an existing job first.',request_id:id});}
+      if(!job?.job_id){const error=Object.assign(new Error('job store returned no job identifier'),{code:'JOB_RESULT_INVALID'});console.error('Oracle job enqueue failed:',serverFailureDiagnostic({id,path:req.originalUrl,stage:'job_creation_result',error}));return res.status(503).json({success:false,code:'ORACLE_JOB_RESULT_INVALID',error:'The job store did not confirm submission. Retry explicitly with the same correlation ID.',request_id:id});}
+      res.status(202).json({success:true,job_id:job.job_id,status:job.status||'queued',request_id:id});
     });
-    router.get('/jobs/request/:requestId',authenticate,async(req,res)=>{const owner=ownerKey(parseCookies(req.headers.cookie).oracle_session,sessionSecret),job=await analysisJobStore.getByRequest?.(req.params.requestId,owner);if(!job)return res.status(404).json({success:false,error:'Analysis job not found'});res.json({success:true,job_id:job.job_id,status:job.status});});
-    router.get('/jobs/:id',authenticate,async(req,res)=>{const job=await owned(req,req.params.id);if(!job)return res.status(404).json({success:false,error:'Analysis job not found'});const publicJob={success:true,job_id:job.job_id,status:job.status,progress:job.status==='queued'?'Analysis queued':job.status==='running'?'Running governed analysis':job.status==='completed'?'Analysis complete':job.status==='cancelled'?'Analysis cancelled':'Analysis failed'};if(job.status==='completed'){const {tools=[], ...result}=job.result_json;Object.assign(publicJob,result);recentChatEvidence.set(sessionKey(req),{expires_at:now()+15*60*1000,value:{as_of:job.updated_at,answer:String(result.answer||'').slice(0,6000),tools}});}if(job.status==='failed'){publicJob.error=job.error_code==='WORKER_RESTARTED'?'The worker restarted during analysis; no partial answer was returned. Please retry.':'The analysis could not be completed; no partial answer was returned.';publicJob.code=job.error_code||'ANALYSIS_FAILED';if(job.result_json?.failed_stage)publicJob.failed_stage=job.result_json.failed_stage;}res.json(publicJob);});
+    router.get('/jobs/request/:requestId',authenticate,async(req,res,next)=>{try{req.oracleFailureStage='job_idempotency_lookup';const owner=ownerKey(parseCookies(req.headers.cookie).oracle_session,sessionSecret),job=await analysisJobStore.getByRequest?.(requestId(req.params.requestId),owner);if(!job)return res.status(404).json({success:false,code:'ANALYSIS_JOB_NOT_FOUND',error:'No analysis job was found for this correlation ID.',request_id:req.oracleRequestId});res.json({success:true,job_id:job.job_id,status:job.status,request_id:req.oracleRequestId});}catch(error){next(error)}});
+    router.get('/jobs/:id',authenticate,async(req,res,next)=>{try{req.oracleFailureStage='job_status_lookup';const job=await owned(req,req.params.id);if(!job)return res.status(404).json({success:false,error:'Analysis job not found',request_id:req.oracleRequestId});const publicJob={success:true,job_id:job.job_id,status:job.status,progress:job.status==='queued'?'Analysis queued':job.status==='running'?'Running governed analysis':job.status==='completed'?'Analysis complete':job.status==='cancelled'?'Analysis cancelled':'Analysis failed',request_id:req.oracleRequestId};if(job.status==='completed'){const {tools=[], ...result}=job.result_json;Object.assign(publicJob,result);recentChatEvidence.set(sessionKey(req),{expires_at:now()+15*60*1000,value:{as_of:job.updated_at,answer:String(result.answer||'').slice(0,6000),tools}});}if(job.status==='failed'){publicJob.error=job.error_code==='WORKER_RESTARTED'?'The worker restarted during analysis; no partial answer was returned. Please retry.':'The analysis could not be completed; no partial answer was returned.';publicJob.code=job.error_code||'ANALYSIS_FAILED';if(job.result_json?.failed_stage)publicJob.failed_stage=job.result_json.failed_stage;}res.json(publicJob);}catch(error){next(error)}});
     router.post('/jobs/:id/cancel',authenticate,protectWrite,json,async(req,res)=>{const job=await owned(req,req.params.id);if(!job)return res.status(404).json({success:false,error:'Analysis job not found'});await analysisJobStore.cancel(job.job_id,ownerKey(parseCookies(req.headers.cookie).oracle_session,sessionSecret));res.json({success:true,job_id:job.job_id,status:['completed','failed'].includes(job.status)?job.status:'cancelled'});});
   }
   router.post('/chat', authenticate, protectWrite, json, async (req, res) => {
@@ -247,13 +252,14 @@ export function createOracleUiRouter({ knowledgeService, bigquery, project, chat
       res.status(400).json({ success: false, error: 'format must be pdf, xlsx, or csv' });
     } catch (error) { res.status(503).json({ success: false, error: safeError(error) }); }
   });
-  router.use((error, _req, res, _next) => {
+  router.use((error, req, res, _next) => {
     const tooLarge = error?.type === 'entity.too.large';
     const invalidJson = error instanceof SyntaxError && error?.type === 'entity.parse.failed';
     if (tooLarge) return res.status(413).json({ success: false, code: 'REQUEST_TOO_LARGE', error: 'Request body exceeds the 48 KB limit' });
     if (invalidJson) return res.status(400).json({ success: false, code: 'INVALID_JSON', error: 'Invalid JSON request' });
-    console.error('Oracle UI unhandled request failure:',{error_class:error?.name||'Error'});
-    res.status(500).json({success:false,code:'ORACLE_REQUEST_FAILED',error:'The Oracle request could not be completed. Please retry.'});
+    const id=req.oracleRequestId||requestId(req.get('x-request-id'));
+    console.error('Oracle UI unhandled request failure:',serverFailureDiagnostic({id,path:req.originalUrl,stage:req.oracleFailureStage,error}));
+    res.status(500).json({success:false,code:'ORACLE_REQUEST_FAILED',error:'The Oracle request could not be completed. Retry explicitly; if it repeats, give an administrator the correlation ID.',request_id:id});
   });
   return router;
 }

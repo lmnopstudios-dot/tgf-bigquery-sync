@@ -33,7 +33,7 @@ test('jobs endpoint accepts the real UI JSON shape and distinguishes invalid req
   }
   let response=await submit('{"message":');assert.equal(response.status,400);assert.deepEqual(await response.json(),{success:false,code:'INVALID_JSON',error:'Invalid JSON request'});
   response=await submit(JSON.stringify({message:'x'.repeat(50*1024)}));assert.equal(response.status,413);assert.deepEqual(await response.json(),{success:false,code:'REQUEST_TOO_LARGE',error:'Request body exceeds the 48 KB limit'});
-  response=await submit(JSON.stringify({prompt:'old client shape'}));assert.equal(response.status,409);assert.deepEqual(await response.json(),{success:false,code:'ORACLE_CLIENT_UPDATE_REQUIRED',error:'This Oracle client is out of date. Refresh the page and submit again.'});
+  response=await submit(JSON.stringify({prompt:'old client shape'}));assert.equal(response.status,409);const outdated=await response.json();assert.equal(outdated.success,false);assert.equal(outdated.code,'ORACLE_CLIENT_UPDATE_REQUIRED');assert.equal(outdated.error,'This Oracle client is out of date. Refresh the page and submit again.');assert.match(outdated.request_id,/^[0-9a-f-]{36}$/);
   response=await submit(JSON.stringify({message:'   '}));assert.equal(response.status,422);assert.equal((await response.json()).code,'INVALID_MESSAGE');
   store.create=async()=>{throw new Error('private durable-store detail')};response=await submit(JSON.stringify({message:'valid but queue unavailable'}));assert.equal(response.status,503);const unavailable=await response.json();assert.equal(unavailable.code,'ORACLE_JOB_ENQUEUE_FAILED');assert.doesNotMatch(JSON.stringify(unavailable),/private durable-store detail/);
 });
@@ -189,7 +189,7 @@ test('browser preserves authoritative failed-job refresh outcome and retries onl
   const source=await import('node:fs/promises').then(fs=>fs.readFile(new URL('../public/oracle/app.js',import.meta.url),'utf8'));
   assert.match(source,/authoritativeJobOutcome:true/);
   assert.match(source,/Analysis \$\{error\.jobStatus\|\|'failed'\}: \$\{error\.message\}/);
-  assert.match(source,/Retry explicitly to create a new job/);
+  assert.match(source,/Retry explicitly; the same submission ID will be checked before any new job is created/);
   assert.doesNotMatch(source,/Background analysis was not submitted again/);
   assert.match(source,/getByRequest|requestKey/);
 });
