@@ -87,6 +87,7 @@
     "repair:klaviyo-coverage": "node diagnostics/klaviyo-coverage-repair.js",
     "diagnose:klaviyo-production": "node diagnostics/klaviyo-production.js",
     "diagnose:oracle-ecommerce-baseline": "node diagnostics/oracle-ecommerce-evidence.js baseline",
+    "diagnose:black-friday-scope": "node diagnostics/black-friday-event-scope.js --as-of=2026-10-04",
     "diagnose:oracle-platform-comparison": "node diagnostics/oracle-ecommerce-evidence.js platforms",
     "diagnose:oracle-products": "node diagnostics/oracle-ecommerce-evidence.js products",
     "diagnose:oracle-product-comparison": "node diagnostics/oracle-ecommerce-evidence.js product-comparison",

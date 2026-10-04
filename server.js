@@ -50,6 +50,7 @@ import {createKlaviyoEmailService,executeKlaviyoEmailToolCall} from './oracle/kl
 import {createGoogleAdsService,executeGoogleAdsToolCall} from './oracle/google-ads.js';
 import {createBaselineOverviewService} from './oracle/baseline-overview.js';
 import {createProductEvidenceReportService} from './oracle/product-report.js';
+import {createHistoricalEventComparisonService} from './oracle/historical-event-comparison.js';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -4506,6 +4507,10 @@ const ecommerceBaselineOverview=createBaselineOverviewService({
   }),
   locationFinance:getSalesByLocation
 });
+const historicalEventComparison=createHistoricalEventComparisonService({
+  knowledgeService,
+  collectEvent:event=>getEcommerceManagementReport({start_date:event.start_date,end_date:event.end_date})
+});
 const productEvidenceReport=createProductEvidenceReportService({
   getProductPerformance:getShopifyProductPerformance,
   getShopCurrency:async()=>{
@@ -4513,7 +4518,7 @@ const productEvidenceReport=createProductEvidenceReportService({
     return data?.shop?.currencyCode||null;
   }
 });
-baselineOverview=async message=>await ecommerceBaselineOverview(message)||await productEvidenceReport(message);
+baselineOverview=async message=>await historicalEventComparison(message)||await ecommerceBaselineOverview(message)||await productEvidenceReport(message);
 
 async function getSalesByLocation({
   start_date,
@@ -8211,7 +8216,7 @@ app.post(
     return requestBudget.run({ deadlineAt, requestId:id, signal:cancellation.signal }, async () => {
     let stage='validation';
     try {
-      const message = req.body?.message;
+      let message = req.body?.message;
 
       if (!message) {
         return res.status(400).json({
@@ -8219,6 +8224,8 @@ app.post(
           error: 'message is required'
         });
       }
+      const suppliedContext=req.body?.analysis_context;
+      if(suppliedContext?.tool_route==='compare_historical_events'&&!/black\s+friday/i.test(message))message=`Compare the last ${suppliedContext.event_count||3} ${suppliedContext.event_name||'Black Friday'} sales. User follow-up: ${message}`;
 
       // This broad KPI request has a governed deterministic evidence plan. It
       // must not enter model-selected inventory tooling or let one optional

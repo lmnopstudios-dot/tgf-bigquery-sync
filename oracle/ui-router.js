@@ -87,6 +87,7 @@ export function createOracleUiRouter({ knowledgeService, bigquery, project, chat
   const sessionKey=req=>crypto.createHash('sha256').update(parseCookies(req.headers.cookie).oracle_session||'').digest('hex');
   const sessionContext=req=>{const key=sessionKey(req),entry=analysisSessions.get(key);if(!entry||entry.expires_at<=Date.now()){analysisSessions.delete(key);return emptyAnalysisContext()}return entry.context};
   const saveSessionContext=(req,context)=>analysisSessions.set(sessionKey(req),{context,expires_at:req.oracleUser.exp*1000});
+  const scopedMessage=(message,context)=>context?.tool_route==='compare_historical_events'&&!/black\s+friday/i.test(message)?`Compare the last ${context.event_count||3} ${context.event_name||'Black Friday'} sales. User follow-up: ${message}`:message;
   router.post('/auth/logout', authenticate, protectWrite, (req, res) => { const key=sessionKey(req);analysisSessions.delete(key);recentChatEvidence.delete(key);unansweredIntents.delete(key);res.setHeader('Set-Cookie', ['oracle_session=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0', 'oracle_csrf=; Path=/; SameSite=Strict; Max-Age=0']); res.json({ success: true }); });
   router.get('/session', authenticate, (req, res) => res.json({ success: true, user: req.oracleUser.sub, role: req.oracleUser.role, analysis_scope:analysisScope(sessionContext(req)), deep_analysis_enabled:Boolean(analysisJobStore&&env.ORACLE_ANALYSIS_JOBS_ENABLED==='true') }));
   router.post('/analysis/clear',authenticate,protectWrite,json,(req,res)=>{analysisSessions.delete(sessionKey(req));res.json({success:true,analysis_scope:null})});
@@ -95,7 +96,7 @@ export function createOracleUiRouter({ knowledgeService, bigquery, project, chat
   if (analysisJobStore && env.ORACLE_ANALYSIS_JOBS_ENABLED === 'true') {
     const worker=createAnalysisJobWorker({store:analysisJobStore,runtimeMs:Number(env.ORACLE_JOB_RUNTIME_MS)||8*60_000,run:async(job,signal)=>{
       const input=job.payload_json;
-      const answer=await baselineOverview?.(input.message)||await chat(input.message,{analysisContext:input.analysis_context,transition:input.transition,recentEvidence:input.recent_evidence,requestId:job.request_id,signal,durable:true});
+      const effective=scopedMessage(input.message,input.analysis_context);const answer=await baselineOverview?.(effective)||await chat(effective,{analysisContext:input.analysis_context,transition:input.transition,recentEvidence:input.recent_evidence,requestId:job.request_id,signal,durable:true});
       let proposals=[],proposal_error=null;
       try { proposals=await proposalsFor(input.message,input.created_by,input.temporal_context); } catch(error) { logProposalError(error);proposal_error='Knowledge proposal could not be generated.'; }
       return {success:true,answer:answer.answer,evidence:answer.evidence||null,inline_chart:answer.inline_chart||null,proposals,proposal_error,analysis_scope:analysisScope(input.analysis_context),tools:(answer.tools||[]).slice(0,20)};
@@ -137,7 +138,7 @@ export function createOracleUiRouter({ knowledgeService, bigquery, project, chat
       const key=sessionKey(req),cached=recentChatEvidence.get(key);
       const recentEvidence=cached&&cached.expires_at>now()?cached.value:null;
       const pending=unansweredIntents.get(key);
-      const effectiveMessage=pending?`${pending.message}\n\nUser follow-up: ${req.body.message}`:req.body.message;
+      const effectiveMessage=pending?`${pending.message}\n\nUser follow-up: ${req.body.message}`:scopedMessage(req.body.message,result.context);
       const chatStarted=Date.now();
       let answer;
       try {
