@@ -2,35 +2,37 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createHistoricalEventComparisonService,resolveHistoricalEvents} from '../oracle/historical-event-comparison.js';
 
-const event=(year,start,end,extra={})=>({kind:'event',id:`ev_${year}0000-0000-4000-8000-000000000000`,title:`Black Friday Sale ${year}`,status:'confirmed',effective_from:start,effective_to:end,date_precision:'range',tags:['black-friday'],source_type:'human_entered',source_reference:`reviewed sale calendar ${year}`,recorded_at:`${year}-10-01T00:00:00Z`,...extra});
-const records=[event(2023,'2023-11-17','2023-11-27'),event(2024,'2024-11-22','2024-12-02'),event(2025,'2025-11-21','2025-12-01'),event(2026,'2026-11-20','2026-11-30')];
+const event=(year,start,end,extra={})=>({kind:'event',id:`ev_${year}0000-0000-4000-8000-000000000000`,title:`Black Friday Sale ${year}`,status:'confirmed',effective_from:start,effective_to:end,date_precision:'range',tags:['black-friday'],source_type:'business_document',source_reference:`reviewed sale calendar ${year}`,recorded_at:`${year}-10-01T00:00:00Z`,...extra});
+const vip=event(2025,'2025-11-27','2025-11-27',{id:'ev_2523cea3-5058-481e-9ac0-f6d4520603d6',title:'Black Friday VIP early access'});
+const publicPhase=event(2025,'2025-11-28','2025-11-30',{id:'ev_f9521f60-1aaf-41f6-a540-4e4bf00082dd',title:'Black Friday public campaign'});
 
-test('selects latest three completed reviewed sales, not nominal dates or a future event',()=>{
-  const result=resolveHistoricalEvents(records,{asOf:new Date('2026-10-04T12:00:00Z'),count:3});
-  assert.deepEqual(result.events.map(x=>[x.year,x.start_date,x.end_date,x.duration_days]),[[2025,'2025-11-21','2025-12-01',11],[2024,'2024-11-22','2024-12-02',11],[2023,'2023-11-17','2023-11-27',11]]);
-  assert.ok(!result.events.some(x=>x.year===2026));
+test('preserves reviewed public and VIP records as separate phases of one full campaign',()=>{
+  const result=resolveHistoricalEvents([vip,publicPhase,event(2024,'2024-11-22','2024-12-02'),event(2023,'2023-11-17','2023-11-27')],{asOf:'2026-10-04',count:3});
+  assert.equal(result.complete,true);assert.deepEqual(result.events.map(x=>[x.year,x.start_date,x.end_date,x.duration_days]),[[2025,'2025-11-27','2025-11-30',4],[2024,'2024-11-22','2024-12-02',11],[2023,'2023-11-17','2023-11-27',11]]);
+  assert.deepEqual(result.events[0].phases.map(x=>[x.id,x.phase,x.start_date,x.end_date]),[[vip.id,'vip_early_access','2025-11-27','2025-11-27'],[publicPhase.id,'public','2025-11-28','2025-11-30']]);
+  assert.equal(result.events[0].relationship_provenance.type,'explicit_reviewed_mapping');assert.equal(result.conflicts.length,0);
 });
 
-test('conflicting and missing reviewed dates are named while independent years continue',()=>{
-  const conflicting=event(2024,'2024-11-23','2024-12-01',{id:'ev_conflict-0000-4000-8000-000000000000'});
-  const missing=event(2022,null,null);
-  const result=resolveHistoricalEvents([...records.slice(0,3),conflicting,missing],{asOf:'2026-10-04',count:3});
-  assert.equal(result.conflicts[0].year,2024);assert.match(result.conflicts[0].reason,/conflicting/);
-  assert.equal(result.invalid[0].id,missing.id);assert.deepEqual(result.events.map(x=>x.year),[2025,2023]);
+test('reports genuine same-phase conflicts without treating different phases as conflicts',()=>{
+  const duplicatePublic={...publicPhase,id:'ev_f9521f60-1aaf-41f6-a540-4e4bf00082dd',effective_from:'2025-11-29'};
+  const result=resolveHistoricalEvents([vip,publicPhase,duplicatePublic],{asOf:'2026-10-04',count:1});
+  assert.equal(result.conflicts.length,1);assert.equal(result.conflicts[0].phase,'public');assert.match(result.conflicts[0].reason,/same campaign phase/);
 });
 
-test('different durations, separate currencies, zero denominators and unavailable conversion render honestly',async()=>{
-  const items=[event(2023,'2023-11-20','2023-11-26'),event(2024,'2024-11-22','2024-12-02'),event(2025,'2025-11-21','2025-12-01')];
-  const calls=[];const service=createHistoricalEventComparisonService({now:()=>new Date('2026-10-04T12:00:00Z'),knowledgeService:{searchKnowledge:async args=>(calls.push(args),{items})},collectEvent:async ev=>({finance:{current:[{currency:'GBP',sales_transaction_count:ev.year===2023?0:10,net_gross:100,refunds:-5},{currency:'USD',sales_transaction_count:2,net_gross:20,refunds:0}]},conversion:{current:null},customers:{current:null,historical:{current:[{source:'woo',available:true}]}},products:{current:null,historical:{current:[]}}})});
-  const result=await service('Can you give me an overview of the last 3 Black Friday sales?');
-  assert.deepEqual(calls[0],{text:null,knowledge_type:'event',start_date:null,end_date:null,status:'confirmed',tags:['black-friday'],limit:50});
-  assert.match(result.answer,/2023-11-20 to 2023-11-26 \(7 days\)/);assert.match(result.answer,/GBP/);assert.match(result.answer,/USD/);assert.match(result.answer,/value per eligible sale transaction unavailable/);assert.match(result.answer,/Historical behaviour.*unavailable/);assert.match(result.answer,/nominal Friday–Monday dates were not substituted/);
-  assert.equal(result.evidence.sections.length,3);assert.ok(result.evidence.sections.every(x=>x.query_started_at&&x.query_completed_at));
+test('diagnoses missing, unconfirmed, unmatched and invalid records independently',()=>{
+  const result=resolveHistoricalEvents([vip,publicPhase,event(2024,'2024-11-20','2024-11-22',{status:'working'}),event(2023,'2023-11-20','2023-11-22',{phase:'vip'}) ,event(2022,null,null)],{asOf:'2026-10-04',count:3});
+  assert.deepEqual(result.unconfirmed.map(x=>x.year),[2024]);assert.deepEqual(result.unmatched.map(x=>x.year),[2023]);assert.equal(result.invalid.length,1);assert.deepEqual(result.missing,[]);
 });
 
-test('one event source failure and synthesis independence preserve other structured evidence',async()=>{
-  const service=createHistoricalEventComparisonService({now:()=>new Date('2026-10-04T12:00:00Z'),knowledgeService:{searchKnowledge:async()=>({items:records})},collectEvent:async ev=>{if(ev.year===2024)throw Object.assign(new Error('secret backend detail'),{code:'BQ_TIMEOUT'});return{finance:{current:[{currency:'GBP',sales_transaction_count:2,net_gross:50}]},conversion:{current:{sessions:100,sessions_that_completed_checkout:2,conversion_rate:.02}},customers:{current:null,historical:{current:[]}},products:{current:[]}};}});
+test('requests online-only unfiltered campaign totals and renders currencies and daily rates separately',async()=>{
+  const calls=[];const items=[vip,publicPhase,event(2024,'2024-11-22','2024-12-02'),event(2023,'2023-11-17','2023-11-27')];
+  const service=createHistoricalEventComparisonService({now:()=>new Date('2026-10-04T12:00:00Z'),knowledgeService:{searchKnowledge:async args=>(calls.push(args),{items})},collectEvent:async(event,scope)=>(calls.push(scope),{online_sales:{rows:[{currency:'GBP',source_coverage:[{source_platform:'shopify',source_store:'shopify',eligible_orders:8,eligible_sales:400}]},{currency:'USD',source_coverage:[{source_platform:'woo',source_store:'usd',eligible_orders:2,eligible_sales:100}]}]},conversion:{current:{sessions:100,conversion_rate:.08},compatible:false}})});
   const result=await service('overview of last 3 Black Friday sales');
-  assert.match(result.answer,/BQ_TIMEOUT/);assert.doesNotMatch(result.answer,/secret backend/);assert.match(result.answer,/GBP 50/);assert.equal(result.evidence.sections.find(x=>x.event.year===2024).status,'rejected');
-  assert.equal(result.evidence.version,'historical_event_comparison.v1');
+  assert.equal(calls[0].status,null);assert.deepEqual(calls[1],{channel:'online',exclude_pos:true,exclude_matrixify:true,currency_policy:'separate',product_eligibility_filter:false});
+  assert.match(result.answer,/VIP early access.*2025-11-27/);assert.match(result.answer,/Public campaign.*2025-11-28 to 2025-11-30/);assert.match(result.answer,/shopify\/shopify · GBP/);assert.match(result.answer,/woo\/usd · USD/);assert.match(result.answer,/sales\/day/);assert.match(result.answer,/Conversion:.*unavailable/);assert.match(result.answer,/context only/);assert.equal(result.evidence.version,'historical_event_comparison.v2');
+});
+
+test('one campaign source failure preserves other deterministic structured evidence',async()=>{
+  const service=createHistoricalEventComparisonService({now:()=>new Date('2026-10-04T12:00:00Z'),knowledgeService:{searchKnowledge:async()=>({items:[vip,publicPhase,event(2024,'2024-11-22','2024-12-02'),event(2023,'2023-11-17','2023-11-27')]})},collectEvent:async ev=>{if(ev.year===2024)throw Object.assign(new Error('secret backend detail'),{code:'BQ_TIMEOUT'});return{online_sales:{rows:[]}};}});
+  const result=await service('overview of last 3 Black Friday sales');assert.match(result.answer,/BQ_TIMEOUT/);assert.doesNotMatch(result.answer,/secret backend/);assert.equal(result.evidence.sections.find(x=>x.event.year===2024).status,'rejected');
 });
