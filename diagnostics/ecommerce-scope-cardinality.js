@@ -43,7 +43,7 @@ staged AS (
     AND (source_app_id IS NULL OR source_app_id!=@matrixify_app_id)
     AND status IN ('paid','partially_paid','partially_refunded')
 )
-SELECT population,COUNT(*) rows,COUNT(DISTINCT order_id) distinct_orders,SUM(net_sales) net_sales,
+SELECT population,COUNT(*) row_count,COUNT(DISTINCT order_id) distinct_orders,SUM(net_sales) net_sales,
   MIN(order_date) first_evidence_date,MAX(order_date) last_evidence_date,
   COUNTIF(COALESCE(financial_rows,0)>1) rows_with_duplicate_financial_identity,
   COUNTIF(COALESCE(location_rows,0)>1) rows_with_duplicate_location_identity,
@@ -60,7 +60,7 @@ export function scopeCardinalityLiteralSql(project,startDate,endDate){
 
 const normalize=rows=>JSON.parse(JSON.stringify(rows));
 const byPopulation=rows=>Object.fromEntries(rows.map(row=>[row.population,row]));
-const comparable=rows=>rows.map(({population,rows:rowCount,distinct_orders,net_sales,first_evidence_date,last_evidence_date,...rest})=>({population,rows:rowCount,distinct_orders,net_sales,first_evidence_date,last_evidence_date,...rest}));
+const comparable=rows=>rows.map(({population,row_count,distinct_orders,net_sales,first_evidence_date,last_evidence_date,...rest})=>({population,row_count,distinct_orders,net_sales,first_evidence_date,last_evidence_date,...rest}));
 
 export async function runScopeCardinality({bigquery,project,start_date,end_date,currency='GBP'}){
   const input=validateOnlineCountrySalesInput({start_date,end_date,currency});

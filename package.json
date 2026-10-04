@@ -64,6 +64,8 @@
     "sync:product-classifications": "node product-classifications/sync.js",
     "sync:shopify-catalogue": "node shopify/catalogue.js",
     "refresh:shopify-finance": "node shopify/finance-refresh.js",
+    "repair:shopify-customers": "node shopify/customer-recovery.js",
+    "verify:september-platforms": "node diagnostics/september-platform-comparison.js",
     "verify:shopify-finance-refresh": "node diagnostics/shopify-finance-refresh-recovery.js",
     "reconcile:shopify-finance": "node diagnostics/shopify-finance-reconciliation.js",
     "validate:shopify-catalogue-write-contract-production": "node diagnostics/shopify-catalogue-write-contract-production.js",
