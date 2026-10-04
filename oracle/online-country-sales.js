@@ -57,6 +57,19 @@ export function onlineCountrySalesSql(project) {
   ), shopify_customers AS (
     SELECT * FROM \`${project}.shopify_data.order_customers\`
     QUALIFY ROW_NUMBER() OVER(PARTITION BY order_id ORDER BY synced_at DESC)=1
+  ), shopify_population AS (
+    SELECT f.order_id,DATE(f.created_at) order_date,UPPER(f.presentment_currency) currency,
+      l.order_id IS NOT NULL location_matched,c.order_id IS NOT NULL customer_matched
+    FROM shopify_financials f LEFT JOIN shopify_locations l USING(order_id) LEFT JOIN shopify_customers c USING(order_id)
+  ), shopify_required_coverage AS (
+    SELECT currency,COUNT(*) financial_orders,COUNTIF(location_matched) location_matched_orders,
+      COUNTIF(NOT location_matched) location_unmatched_orders,COUNTIF(customer_matched) customer_matched_orders,
+      COUNTIF(NOT customer_matched) customer_unmatched_orders,COUNTIF(location_matched AND customer_matched) fully_joined_orders,
+      MIN(order_date) first_financial_date,MAX(order_date) last_financial_date
+    FROM shopify_population
+    WHERE order_date BETWEEN DATE(@start_date) AND DATE(@end_date)
+      AND (@currency IS NULL OR currency=UPPER(@currency)) AND (@platform IS NULL OR @platform='shopify')
+    GROUP BY currency
   ), shopify_orders AS (
     SELECT 'shopify' source_platform,'shopify' source_store,f.order_id source_order_id,
       DATE(f.created_at) order_date,UPPER(f.presentment_currency) currency,c.display_financial_status status,
@@ -107,9 +120,15 @@ export function onlineCountrySalesSql(project) {
   )
   SELECT c.currency,r.country_rank,r.country_code,r.orders,r.operational_net_sales,r.sources,
     c.eligible_orders,c.unknown_country_orders,c.eligible_sales,c.unknown_country_sales,c.source_coverage,
+    sc.financial_orders shopify_financial_orders,sc.location_matched_orders shopify_location_matched_orders,
+    sc.location_unmatched_orders shopify_location_unmatched_orders,sc.customer_matched_orders shopify_customer_matched_orders,
+    sc.customer_unmatched_orders shopify_customer_unmatched_orders,sc.fully_joined_orders shopify_fully_joined_orders,
+    SAFE_DIVIDE(sc.fully_joined_orders,sc.financial_orders) shopify_fully_joined_order_share,
+    sc.first_financial_date shopify_first_financial_date,sc.last_financial_date shopify_last_financial_date,
     SAFE_DIVIDE(c.unknown_country_orders,c.eligible_orders) unknown_order_share,
     SAFE_DIVIDE(c.unknown_country_sales,c.eligible_sales) unknown_sales_share
   FROM coverage c LEFT JOIN ranked r ON r.currency=c.currency AND r.country_rank<=${ONLINE_COUNTRY_LIMIT}
+  LEFT JOIN shopify_required_coverage sc USING(currency)
   ORDER BY currency,country_rank LIMIT 100`;
 }
 
@@ -130,7 +149,8 @@ export function createOnlineCountrySalesService({ bigquery, project }) {
         comparability: 'Woo and Shopify operational totals and refund capture come from different source systems. Combined country totals are directional, not canonical accounting revenue; use source breakdowns when comparing performance.',
         geography: 'Direct shipping-country evidence only. Unknown country is reported in coverage and excluded from named-country ranking.',
         currency: 'Ranked independently by source currency; no conversion or cross-currency addition.',
-        deduplication: 'Orders are deduplicated before latest geography is joined; Matrixify Shopify representations are excluded.' },
+        deduplication: 'Orders are deduplicated before latest geography is joined; Matrixify Shopify representations are excluded.',
+        eligibility_coverage: 'Shopify financial, location, customer and fully joined populations are returned explicitly. Financial orders without required customer evidence are excluded and reported, never assumed eligible; cancellation and financial status genuinely require the contemporaneous customer row.' },
       contract: { read_only: true, aggregate_only: true, pii_free: true, maximum_rows: 100 } };
   };
 }
