@@ -4491,12 +4491,13 @@ const getEcommerceManagementReport = createEcommerceManagementReportService({
 const ecommerceBaselineOverview=createBaselineOverviewService({
   managementReport:getEcommerceManagementReport,
   onlineCountrySales:onlineCountrySalesService,
+  customerReport:getShopifyCustomerKpis,
   shopifyDevice:deviceSourceConversionService,
   klaviyo:klaviyoEmailService,
   organicReport:periods=>ecommerceReportV2('organic',{
     start_date:periods.current.start_date,end_date:periods.current.end_date,
-    comparison:'custom',comparison_start:periods.prior_year.start_date,
-    comparison_end:periods.prior_year.end_date
+    comparison:'custom',comparison_start:(periods.comparison_period||periods.prior_year).start_date,
+    comparison_end:(periods.comparison_period||periods.prior_year).end_date
   }),
   salesReport:periods=>ecommerceReportV2('sales',{
     start_date:periods.current.start_date,end_date:periods.current.end_date,

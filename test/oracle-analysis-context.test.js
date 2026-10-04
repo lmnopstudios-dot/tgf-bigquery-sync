@@ -117,6 +117,8 @@ test('independent sessions do not share analytical state',()=>{
   assert.deepEqual(sessionA.metrics,['refunds']);assert.deepEqual(sessionB.metrics,['products']);assert.equal(sessionA.limit,null);assert.equal(sessionB.limit,10);
 });
 
+test('Woo comparison followed by focused subjects replaces incompatible intent in sequence and fresh sessions',()=>{const prompts=['Compare September 2026 Shopify shipping countries with August 2026','Compare September 2026 Shopify customers with August 2026','Compare September 2026 Search Console with August 2026'];let context=apply(null,'Compare September 2026 native Shopify with September 2025 WooCommerce sales').context;for(const prompt of prompts){const sequential=apply(context,prompt),fresh=apply(null,prompt);assert.deepEqual(sequential.context.metrics,fresh.context.metrics);assert.equal(sequential.context.platform,null);assert.equal(sequential.context.tool_route,null);assert.ok(sequential.transition.clear.includes('platform'));context=sequential.context;}});
+
 test('safe transition diagnostics contain field names, not filter values or messages',()=>{
   const result=apply(apply(emptyAnalysisContext(),'monthly refunds Jan 2023 to Sep 2026').context,'exclude POS');
   const diagnostic={continuation:result.transition.continuation,changed_fields:result.transition.set,cleared_fields:result.transition.clear,retained_field_names:result.transition.retain,missing_required_field_names:result.transition.missing_required_fields,ready_to_execute:result.transition.ready_to_execute};
