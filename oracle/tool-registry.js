@@ -360,7 +360,7 @@ export function createOracleToolDefinitions() {
   type: 'function',
   name: 'get_shopify_sales_kpis',
   description:
-    'Get Shopify Online Store operational sales KPIs over an explicit date range, optionally as a daily, weekly or monthly timeseries.',
+    'Get Shopify operational sales KPIs for an explicitly selected Online Store or Point of Sale channel over an explicit date range.',
   parameters: {
     type: 'object',
     properties: {
@@ -378,6 +378,12 @@ export function createOracleToolDefinitions() {
         default: 'none',
         description:
           'Return one total or metrics grouped by this period.'
+      },
+      sales_channel: {
+        type: 'string',
+        enum: ['Online Store', 'Point of Sale'],
+        default: 'Online Store',
+        description: 'Exact Shopify sales_channel predicate.'
       }
     },
     required: ['start_date', 'end_date']

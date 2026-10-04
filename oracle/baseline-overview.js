@@ -1,6 +1,7 @@
 const LEGACY_BASELINE=/^can you give me an overview of current baseline kpis[?.!\s]*$/i;
 const COMPREHENSIVE=/\b(?:comprehensive\s+)?ecommerce baseline\b/i;
 const PLATFORM_COMPARISON=/\b(?:compare|comparison|versus|vs\.?|trend)\b[\s\S]*\b(?:woocommerce|woo)\b[\s\S]*\bshopify\b|\bshopify\b[\s\S]*\b(?:versus|vs\.?|with)\b[\s\S]*\b(?:woocommerce|woo)\b/i;
+const SALES_BASELINE=/\b(?:sales\s+(?:starting\s+)?baseline|ecommerce\s+starting\s+baseline)\b|\bestablish\b[\s\S]{0,80}\b(?:sales|ecommerce)\b[\s\S]{0,40}\bbaseline\b/i;
 const SUBJECTS=Object.freeze({
   shipping:/\b(?:shipping|delivery)\s+(?:countries|country|destinations?)\b|\b(?:countries|country|destinations?)\b[\s\S]{0,40}\b(?:shipping|delivery)\b/i,
   customers:/\bcustomers?\b/i,
@@ -15,7 +16,7 @@ const percent=value=>value==null?'undefined':`${(Number(value)*100).toFixed(2)}%
 const periodLabel=p=>`${p.start_date} to ${p.end_date}`;
 const finite=value=>value!==null&&value!==undefined&&value!==''&&Number.isFinite(Number(value))?Number(value):null;
 
-export function evidenceSubject(message){const text=String(message||'');for(const [subject,pattern] of Object.entries(SUBJECTS))if(pattern.test(text))return subject;return PLATFORM_COMPARISON.test(text)?'platform_comparison':null;}
+export function evidenceSubject(message){const text=String(message||'');if(SALES_BASELINE.test(text))return 'sales_baseline';for(const [subject,pattern] of Object.entries(SUBJECTS))if(pattern.test(text))return subject;return PLATFORM_COMPARISON.test(text)?'platform_comparison':null;}
 export const isBaselineOverviewRequest=message=>LEGACY_BASELINE.test(String(message||'').trim())||COMPREHENSIVE.test(String(message||''))||evidenceSubject(message)!=null;
 
 function localDateParts(now,timeZone){
@@ -70,6 +71,18 @@ export function createBaselineOverviewService({managementReport,onlineCountrySal
     const broad=LEGACY_BASELINE.test(String(message||'').trim())||COMPREHENSIVE.test(String(message||''));
     const subject=broad?null:evidenceSubject(message);
     const focused=subject==='platform_comparison';
+    if(subject==='sales_baseline'){
+      if(!shopifySales)return null;
+      const requested=explicitMonths(message);if(!requested.length)return null;
+      const channels=[{label:'Online Store',predicate:"sales_channel = 'Online Store'"},{label:'Point of Sale',predicate:"sales_channel = 'Point of Sale'"}],sections=[];
+      for(const period of requested)for(const channel of channels){const queryExecutedAt=iso(now());try{const result=await shopifySales({...period,timeseries:'none',sales_channel:channel.label});sections.push({status:'fulfilled',period,channel:channel.label,applied_channel_predicate:channel.predicate,query_executed_at:queryExecutedAt,result});}catch(error){sections.push({status:'rejected',period,channel:channel.label,applied_channel_predicate:channel.predicate,query_executed_at:queryExecutedAt,error_code:safeCode(error)});}}
+      const definitions={orders:'Shopify-reported orders.',gross_sales:'Shopify-reported gross sales.',discounts:'Shopify-reported discounts.',returns:'Shopify-reported returns.',net_sales:'Shopify-reported net sales.',shipping:'Unsupported by the implemented Shopify sales KPI provider.',recorded_tax:'Unsupported by the implemented Shopify sales KPI provider.',total_sales:'Shopify-reported total sales.',net_items_sold:'Shopify-reported net items sold.',units_per_order:'Computed only from compatible Shopify net_items_sold and orders in this same row.',average_order_value:'Shopify-reported average order value; not recomputed.'};
+      const metricNames=['orders','gross_sales','discounts','returns','net_sales','shipping','recorded_tax','total_sales','net_items_sold','units_per_order','average_order_value'],rows=[];
+      for(const section of sections)for(const metric of metricNames){const m=section.result?.metrics||{},currency=section.result?.currency??null;let value=null,reason=null,unit=['orders','net_items_sold'].includes(metric)?'count':metric==='units_per_order'?'items/order':'money';if(section.status==='rejected')reason=`Provider call failed (${section.error_code}); missing evidence is not zero.`;else if(metric==='units_per_order'){if(m.net_items_sold!==null&&m.net_items_sold!==undefined&&m.orders!==null&&m.orders!==undefined&&Number.isFinite(Number(m.net_items_sold))&&Number.isFinite(Number(m.orders))&&Number(m.orders)>0)value=Number(m.net_items_sold)/Number(m.orders);else reason='Compatible net_items_sold and positive orders were not both available for the same period, channel, currency and population.';}else if(['shipping','recorded_tax'].includes(metric))reason=definitions[metric];else if(m[metric]!==null&&m[metric]!==undefined)value=m[metric];else reason=`${metric} was not returned by the Shopify provider.`;if(unit==='money'&&!currency&&value!==null){reason='Authoritative Shopify currency was unavailable; monetary value is withheld.';value=null;}rows.push({period:section.period,channel:section.channel,metric,source_native_metric:metric==='units_per_order'?null:metric,definition:definitions[metric],unit,currency:unit==='money'?currency:null,value,status:value===null?'unavailable':'available',unavailable_reason:value===null?reason:null,applied_channel_predicate:section.applied_channel_predicate,requested_start_date:section.period.start_date,requested_end_date:section.period.end_date,actual_coverage:section.result?.coverage||null,source_collected_at:section.result?.source_collected_at||null,query_executed_at:section.query_executed_at});}
+      const lines=['# Shopify operational sales baseline','Source collection timestamps below are persisted-source timestamps, not live query times. “Unavailable” is never zero.','| Period | Channel | Metric (source-native) | Value | Currency/unit | Definition | Applied channel filter | Actual coverage | Source collected at |','|---|---|---|---:|---|---|---|---|---|'];
+      for(const row of rows){const shown=row.status==='available'?number(row.value):`Unavailable — ${row.unavailable_reason}`,native=row.source_native_metric||'derived: units_per_order';lines.push(`| ${periodLabel(row.period)} | ${row.channel} | ${native} | ${shown} | ${row.currency||row.unit} | ${row.definition} | \`${row.applied_channel_predicate}\` | ${row.actual_coverage?JSON.stringify(row.actual_coverage):'Unavailable; requested dates do not prove collection completeness'} | ${row.source_collected_at||'Unavailable'} |`);}
+      return{answer:lines.join('\n'),tools:['get_shopify_sales_kpis'],attempted_tools:sections.map(()=> 'get_shopify_sales_kpis'),evidence:{kind:'shopify_operational_sales_baseline',selected_intent:'sales_baseline',requested_periods:requested,services_invoked:['get_shopify_sales_kpis'],sections,metric_rows:rows}};
+    }
     if(subject==='shipping'){
       if(!onlineCountrySales)return null;const selected=[periods.current,periods.previous_period],items=[];
       for(const period of selected){const result=await onlineCountrySales({...period,currency:null,platform:'shopify'});items.push({period,result,query_executed_at:iso(now())});}
