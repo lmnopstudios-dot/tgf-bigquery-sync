@@ -1,0 +1,2 @@
+import test from 'node:test';import assert from 'node:assert/strict';import {wooSql} from '../diagnostics/september-platform-comparison.js';
+test('Woo verification independently checks dates identities statuses and currencies',()=>{const sql=wooSql('p');assert.match(sql,/COUNT\(DISTINCT order_id\)/);assert.match(sql,/duplicate_identities/);assert.match(sql,/currencies/);assert.match(sql,/statuses/);assert.match(sql,/@start/);assert.doesNotMatch(sql,/\b(?:MERGE|INSERT|UPDATE|DELETE|TRUNCATE)\b/)})
