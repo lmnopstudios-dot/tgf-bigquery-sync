@@ -124,3 +124,10 @@ test('safe transition diagnostics contain field names, not filter values or mess
   const diagnostic={continuation:result.transition.continuation,changed_fields:result.transition.set,cleared_fields:result.transition.clear,retained_field_names:result.transition.retain,missing_required_field_names:result.transition.missing_required_fields,ready_to_execute:result.transition.ready_to_execute};
   assert.match(JSON.stringify(diagnostic),/changed_fields/);assert.doesNotMatch(JSON.stringify(diagnostic),/exclude_pos|monthly refunds/);
 });
+
+test('Black Friday intent survives a year-count follow-up and incompatible subjects clear it',()=>{
+  let result=apply(null,'Can you please give me an overview of the last 3 Black Friday sales? I would like to compare sales, conversion rates and products.');
+  assert.equal(result.context.tool_route,'compare_historical_events');assert.equal(result.context.event_name,'Black Friday');assert.equal(result.context.event_count,3);assert.equal(clarificationFor(result.context),null);assert.equal(result.transition.ready_to_execute,true);
+  result=apply(result.context,'The last 3 years.');assert.equal(result.context.tool_route,'compare_historical_events');assert.equal(result.context.event_count,3);assert.deepEqual(result.context.currencies,['GBP']);
+  for(const prompt of ['Show customers instead','What about shipping countries?','Compare Search Console instead']){const changed=apply(result.context,prompt);assert.equal(changed.context.event_name,null);assert.equal(changed.context.event_count,null);assert.notEqual(changed.context.tool_route,'compare_historical_events');}
+});
