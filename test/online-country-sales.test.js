@@ -20,8 +20,19 @@ test('cross-platform aggregate deduplicates before direct geography joins and ke
   assert.match(sql,/source_coverage/);assert.match(sql,/unknown_country_orders/);
   assert.match(sql,/PARTITION BY currency ORDER BY operational_net_sales/);
   assert.match(sql,/source_app_id!=@matrixify_app_id/);
+  assert.match(sql,/LEFT JOIN shopify_required_coverage sc ON sc\.currency=c\.currency/);
+  assert.doesNotMatch(sql,/shopify_required_coverage sc USING\(currency\)/);
   assert.doesNotMatch(sql,/exchange|conversion_rate|converted_/i);
   assert.match(sql,/LIMIT 100$/);
+});
+
+test('provider query failures retain sanitized BigQuery stage, reason and statement location',async()=>{
+  const service=createOnlineCountrySalesService({project:'p',bigquery:{query:async()=>{throw Object.assign(new Error('query text and values'),{code:400,errors:[{reason:'invalidQuery',location:'query;line:91,column:3',message:'private SQL'}]});}}});
+  await assert.rejects(()=>service({start_date:'2026-01-01',end_date:'2026-10-05',currency:null,platform:'shopify'}),error=>{
+    assert.equal(error.code,'ONLINE_COUNTRY_QUERY_FAILED');assert.equal(error.stage,'provider_query');
+    assert.deepEqual(error.diagnostic,{stage:'provider_query',reason:'invalidQuery',code:'400',location:'queryline:91column:3'});
+    assert.doesNotMatch(error.message,/private|query text/);return true;
+  });
 });
 
 test('service retains exact four-year dates, both sources, no FX, bounded result and history caveat',async()=>{
