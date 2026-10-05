@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import express from 'express';
 import { createOracleUiRouter } from '../oracle/ui-router.js';
 import { BigQuery } from '@google-cloud/bigquery';
-import { bigQueryErrorDiagnostic, createAnalysisJobWorker, createBigQueryAnalysisJobStore, createMemoryAnalysisJobStore, streamingInsertDiagnostic } from '../oracle/analysis-jobs.js';
+import { bigQueryErrorDiagnostic, createAnalysisJobWorker, createBigQueryAnalysisJobStore, createMemoryAnalysisJobStore, isConcurrentUpdateAbort, streamingInsertDiagnostic } from '../oracle/analysis-jobs.js';
 import { smokeOracleJobQueue } from '../diagnostics/oracle-job-queue-smoke.js';
 import { diagnoseOrdinaryClaim } from '../diagnostics/oracle-ordinary-claim.js';
 import { oracleRequestRoute } from '../public/oracle/request-routing.js';
@@ -66,16 +66,16 @@ test('disabled queue cannot take down ordinary interactive chat',async t=>{
   assert.equal(response.status,200);assert.equal(body.answer,'interactive:dafuk');assert.equal((await fetch(`${base}/jobs`,{method:'POST',headers,body:'{"message":"not enabled"}'})).status,404);
 });
 
-test('BigQuery enqueue uses committed query DML with JSON binding and can be claimed immediately',async()=>{
+test('BigQuery enqueue uses idempotent committed DML with JSON binding and can be claimed immediately',async()=>{
   const calls=[];const dataset={getMetadata:async()=>[{location:'EU'}]};
-  const bigquery={dataset:()=>dataset,query:async options=>{calls.push(options);return options.query.startsWith('INSERT INTO')?[[]]:[[{job_id:options.params.job_id,status:'running',attempts:1,payload_json:options.params.payload_json}]]}};
+  const bigquery={dataset:()=>dataset,query:async options=>{calls.push(options);if(options.query.startsWith('MERGE'))return [[]];if(options.query.startsWith('SELECT *')&&options.params.owner_key)return [[{job_id:'created',status:'queued',payload_json:options.params.payload_json}]];return [[{job_id:options.params.job_id,status:'running',attempts:1,claim_token:options.params.claim_token,lease_until:options.params.lease,payload_json:{message:'customer secret'}}]]}};
   const store=createBigQueryAnalysisJobStore({bigquery,project:'p'});
   const created=await store.create({owner_key:'owner',request_id:'request',payload_json:{message:'customer secret',sql_parameters:['secret']}});
   const claimed=await store.claim({worker_id:'worker',leaseMs:60_000,job_id:created.job_id});
-  assert.equal(claimed.job_id,created.job_id);assert.equal(claimed.status,'running');assert.equal(calls.length,2);
-  const enqueue=calls[0];assert.equal(enqueue.location,'EU');assert.match(enqueue.query,/^INSERT INTO `p\.commerce\.oracle_analysis_jobs_v1`/);assert.match(enqueue.query,/PARSE_JSON\(@payload_json\)/);assert.equal(typeof enqueue.params.payload_json,'string');assert.deepEqual(JSON.parse(enqueue.params.payload_json),{message:'customer secret',sql_parameters:['secret']});assert.ok(enqueue.params.created_at instanceof Date);
+  assert.equal(claimed.job_id,created.job_id);assert.equal(claimed.status,'running');assert.equal(calls.length,3);
+  const enqueue=calls[0];assert.equal(enqueue.location,'EU');assert.match(enqueue.query,/^MERGE `p\.commerce\.oracle_analysis_jobs_v1`/);assert.match(enqueue.query,/PARSE_JSON\(@payload_json\)/);assert.equal(typeof enqueue.params.payload_json,'string');assert.deepEqual(JSON.parse(enqueue.params.payload_json),{message:'customer secret',sql_parameters:['secret']});assert.ok(enqueue.params.created_at instanceof Date);
   assert.doesNotMatch(enqueue.query,/table\.insert|insertAll/i);
-  assert.match(calls[1].query,/BEGIN TRANSACTION/);
+  assert.match(calls[2].query,/BEGIN TRANSACTION/);
 });
 
 test('PartialFailure diagnostics never include rejected streaming rows',()=>{
@@ -97,10 +97,40 @@ test('targeted BigQuery claim uses its dataset location, a TIMESTAMP parameter, 
 
 test('concurrent claim abort retries boundedly and executes only the winning lease',async()=>{
   const calls=[];let transactions=0;const dataset={getMetadata:async()=>[{location:'EU'}]};
-  const bigquery={dataset:()=>dataset,query:async options=>{calls.push(options);if(options.query.startsWith('BEGIN TRANSACTION')&&transactions++===0)throw {errors:[{reason:'aborted',message:'Transaction aborted due to concurrent update'}]};if(options.query.startsWith('SELECT *'))return [[{job_id:'job',status:'queued'}]];return [[{job_id:'job',status:'running',attempts:1,lease_until:options.params.lease}]];}};
+  let token;const bigquery={dataset:()=>dataset,query:async options=>{calls.push(options);if(options.query.startsWith('BEGIN TRANSACTION')&&transactions++===0){token=options.params.claim_token;throw {errors:[{reason:'invalidQuery',message:'Transaction aborted due to concurrent update against the jobs table'}]};}if(options.query.startsWith('SELECT status'))return [[{job_id:'job',status:'queued'}]];return [[{job_id:'job',status:'running',attempts:1,claim_token:options.params.claim_token||token,lease_until:options.params.lease}]];}};
   const waits=[],store=createBigQueryAnalysisJobStore({bigquery,project:'p',sleep:async ms=>waits.push(ms)});
   const claimed=await store.claim({worker_id:'worker',leaseMs:60_000,now:Date.parse('2026-09-30T00:00:00Z'),job_id:'job'});
-  assert.equal(claimed.status,'running');assert.equal(transactions,2);assert.deepEqual(waits,[50]);
+  assert.equal(claimed.status,'running');assert.equal(transactions,2);assert.equal(waits.length,1);assert.ok(waits[0]>=25&&waits[0]<75);
+});
+
+test('only recognised concurrent-update invalidQuery errors are retryable',()=>{
+  assert.equal(isConcurrentUpdateAbort({errors:[{reason:'invalidQuery',message:'Transaction aborted due to concurrent update against a table'}]}),true);
+  assert.equal(isConcurrentUpdateAbort({errors:[{reason:'invalidQuery',message:'Syntax error at [1:2]'}]}),false);
+});
+
+test('claim contention retry exhaustion is bounded and never marks an unclaimed job failed',async()=>{
+  let transactions=0,reads=0;const dataset={getMetadata:async()=>[{location:'EU'}]};
+  const abort={errors:[{reason:'invalidQuery',message:'Transaction aborted due to concurrent update against the jobs table'}]};
+  const bigquery={dataset:()=>dataset,query:async options=>{if(options.query.startsWith('BEGIN TRANSACTION')){transactions++;throw abort;}reads++;return [[{job_id:'job',status:'queued'}]];}};
+  const store=createBigQueryAnalysisJobStore({bigquery,project:'p',claimRetries:3,sleep:async()=>{}});
+  await assert.rejects(()=>store.claim({worker_id:'worker',leaseMs:60_000,job_id:'job'}),error=>error===abort);
+  assert.equal(transactions,3);assert.equal(reads,2);
+});
+
+test('simultaneous memory claims have one owner and stale or expired owners cannot write',async()=>{
+  const store=createMemoryAnalysisJobStore([{job_id:'job',owner_key:'o',request_id:'request',status:'queued',payload_json:{},attempts:0,cancel_requested:false}]);
+  const [first,second]=await Promise.all([store.claim({worker_id:'one',leaseMs:60_000,job_id:'job'}),store.claim({worker_id:'two',leaseMs:60_000,job_id:'job'})]);
+  const winner=first||second,loser=first?second:first;assert.ok(winner);assert.equal(loser,null);assert.ok(winner.claim_token);
+  assert.equal(await store.finish('job',{answer:'stale'},{...winner,claim_token:'loser'}),false);
+  store.jobs.get('job').lease_until=new Date(Date.now()-1).toISOString();
+  assert.equal(await store.finish('job',{answer:'expired'},winner),false);assert.equal(store.jobs.get('job').status,'running');
+});
+
+test('evidence checkpoint survives a later terminal persistence failure without another provider run',async()=>{
+  const base=createMemoryAnalysisJobStore([{job_id:'job',owner_key:'o',request_id:'request',status:'queued',payload_json:{},attempts:0,cancel_requested:false}]);let runs=0;
+  const store={...base,finish:async()=>{throw Object.assign(new Error('persistence unavailable'),{code:'PERSISTENCE_FAILED'});}};
+  const worker=createAnalysisJobWorker({store,run:async()=>{runs++;return{answer:'four governed sections',evidence:{sections:[1,2,3,4]}}},logger:{info(){},error(){}}});
+  await worker.tick();assert.equal(runs,1);assert.equal(base.jobs.get('job').status,'failed');assert.equal(base.jobs.get('job').result_json.answer,'four governed sections');
 });
 
 test('concurrent claim loser observes another lease and does not execute analysis',async()=>{
