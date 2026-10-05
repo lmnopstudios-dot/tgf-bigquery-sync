@@ -139,3 +139,10 @@ test('Black Friday intent survives a year-count follow-up and incompatible subje
   result=apply(result.context,'The last 3 years.');assert.equal(result.context.tool_route,'compare_historical_events');assert.equal(result.context.event_count,3);assert.deepEqual(result.context.currencies,['GBP']);
   for(const prompt of ['Show customers instead','What about shipping countries?','Compare Search Console instead']){const changed=apply(result.context,prompt);assert.equal(changed.context.event_name,null);assert.equal(changed.context.event_count,null);assert.notEqual(changed.context.tool_route,'compare_historical_events');}
 });
+
+test('excluded event mention and explicit non-contiguous months override retained Black Friday intent',()=>{
+  const prompt='Compare sales, shipping countries, returning customers and compatible conversion for April, June, July, August and September in 2024, 2025 and 2026, explicitly excluding May and Black Friday. Keep every month independent.';
+  const retained=apply(null,'Compare the last 3 Black Friday sales.').context;
+  for(const prior of [null,retained]){const result=apply(prior,prompt);assert.equal(result.context.tool_route,null);assert.equal(result.context.event_name,null);assert.equal(result.context.requested_subject,'calendar_period_comparison');assert.equal(result.context.comparison_type,'independent_calendar_months');assert.equal(result.context.included_periods.length,15);assert.ok(result.context.included_periods.every(x=>!/-05$|-11$/.test(x)));assert.deepEqual(result.context.contextual_event_mentions,['Black Friday']);assert.ok(result.context.exclusions.includes('black friday'));assert.ok(result.context.exclusions.includes('may'));}
+  for(const wording of ['Exclude Black Friday','not Black Friday','outside Black Friday'])assert.notEqual(apply(retained,`${wording}; compare sales in April, June and July in 2025 and 2026.`).context.tool_route,'compare_historical_events');
+});

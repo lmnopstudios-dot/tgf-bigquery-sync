@@ -8,6 +8,7 @@ const FIELDS = new Set([
   ,'tool_route','request_kind','advisory_topic'
   ,'journey_intent','entry_product_classification','subsequent_product_classification','excluded_product_titles','include_unclassified_products','first_order_semantic','cohort_entry_start','cohort_entry_end','observation_end','minimum_order_sequence','maximum_order_sequence','within_days','journey_group_by'
   ,'event_name','event_count'
+  ,'requested_subject','included_periods','exclusions','contextual_event_mentions'
 ]);
 const GRAINS = new Set(['day','week','month','quarter','year']);
 const CURRENCIES = new Set(['GBP','USD','JPY','EUR']);
@@ -16,7 +17,7 @@ const TOOL_ROUTES = new Set(['get_shopify_online_country_products','get_online_c
 const MONTHS = {jan:1,january:1,feb:2,february:2,mar:3,march:3,apr:4,april:4,may:5,jun:6,june:6,jul:7,july:7,aug:8,august:8,sep:9,sept:9,september:9,oct:10,october:10,nov:11,november:11,dec:12,december:12};
 
 export const ANALYSIS_CONTEXT_FIELDS = Object.freeze([...FIELDS]);
-export function emptyAnalysisContext(){return {analysis_type:null,metrics:[],start_date:null,end_date:null,requested_end_period:null,grain:null,comparison_type:null,comparison_start_date:null,comparison_end_date:null,currencies:[],channel:null,channel_breakdown:false,location:null,platform:null,geography:null,customer_segment:null,product_ref:null,filters:[],sort:null,limit:null,report_section:null,output_preference:null,partial_period:false,unresolved_required_fields:[],tool_route:null,request_kind:null,advisory_topic:null,journey_intent:null,entry_product_classification:null,subsequent_product_classification:null,excluded_product_titles:[],include_unclassified_products:false,first_order_semantic:null,cohort_entry_start:null,cohort_entry_end:null,observation_end:null,minimum_order_sequence:null,maximum_order_sequence:null,within_days:null,journey_group_by:null,event_name:null,event_count:null}}
+export function emptyAnalysisContext(){return {analysis_type:null,metrics:[],start_date:null,end_date:null,requested_end_period:null,grain:null,comparison_type:null,comparison_start_date:null,comparison_end_date:null,currencies:[],channel:null,channel_breakdown:false,location:null,platform:null,geography:null,customer_segment:null,product_ref:null,filters:[],sort:null,limit:null,report_section:null,output_preference:null,partial_period:false,unresolved_required_fields:[],tool_route:null,request_kind:null,advisory_topic:null,journey_intent:null,entry_product_classification:null,subsequent_product_classification:null,excluded_product_titles:[],include_unclassified_products:false,first_order_semantic:null,cohort_entry_start:null,cohort_entry_end:null,observation_end:null,minimum_order_sequence:null,maximum_order_sequence:null,within_days:null,journey_group_by:null,event_name:null,event_count:null,requested_subject:null,included_periods:[],exclusions:[],contextual_event_mentions:[]}}
 
 function contextValidationError(field,rule,message=`invalid ${field}`){const error=Object.assign(new Error(message),{code:'INVALID_ANALYSIS_CONTEXT',validation_field:field,validation_rule:rule});return error}
 
@@ -56,6 +57,10 @@ export function validateAnalysisContext(value={}){
   out.journey_group_by=['downstream_product','cohort_year_downstream_product','entry_product','collaboration_name','summary'].includes(value.journey_group_by)?value.journey_group_by:null;
   out.event_name=typeof value.event_name==='string'?value.event_name.slice(0,100):null;
   out.event_count=Number.isInteger(value.event_count)&&value.event_count>=1&&value.event_count<=5?value.event_count:null;
+  out.requested_subject=typeof value.requested_subject==='string'?value.requested_subject.slice(0,100):null;
+  out.included_periods=Array.isArray(value.included_periods)?[...new Set(value.included_periods.filter(x=>/^20\d{2}-(?:0[1-9]|1[0-2])$/.test(x)))].slice(0,36):[];
+  out.exclusions=Array.isArray(value.exclusions)?[...new Set(value.exclusions.filter(x=>typeof x==='string'&&x.length<=100&&!/@|phone|email/i.test(x)).map(x=>x.toLowerCase()))].slice(0,12):[];
+  out.contextual_event_mentions=Array.isArray(value.contextual_event_mentions)?[...new Set(value.contextual_event_mentions.filter(x=>typeof x==='string'&&x.length<=100))].slice(0,12):[];
   return out;
 }
 
@@ -95,13 +100,19 @@ export function transitionAnalysisContext(existing, message, {now=Date.now(),rep
   const continuation=!unrelated&&!explicitNew&&(base.metrics.length>0||/\b(refunds?|sales|customers?|products?|ecommerce)\b/i.test(lower));
   if(explicitNew) base=emptyAnalysisContext();
   if(!unrelated&&!nonTemporalKind){
+    const excludedBlackFriday=/(?:\bexclude\b|\bexcluding\b|\bnot\b|\boutside\b|\bexcept\b)[\s\S]{0,30}\bblack\s+friday\b/i.test(text);
+    const excludedMonthNumbers=new Set([...lower.matchAll(/(?:exclude|excluding|except|not|outside)\s+(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b/g)].map(x=>MONTHS[x[1]]));
+    const namedMonths=[...lower.matchAll(/\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b/g)].map(x=>MONTHS[x[1]]).filter(x=>!excludedMonthNumbers.has(x));
+    const namedYears=[...lower.matchAll(/\b(20\d{2})\b/g)].map(x=>Number(x[1]));
+    if(namedMonths.length>1&&namedYears.length){const months=[...new Set(namedMonths)],years=[...new Set(namedYears)];set.included_periods=years.flatMap(year=>months.map(month=>`${year}-${String(month).padStart(2,'0')}`));set.requested_subject='calendar_period_comparison';set.comparison_type='independent_calendar_months';set.grain='month';set.start_date=`${Math.min(...years)}-${String(Math.min(...months)).padStart(2,'0')}-01`;const lastYear=Math.max(...years),lastMonth=Math.max(...months);set.end_date=new Date(Date.UTC(lastYear,lastMonth,0)).toISOString().slice(0,10);set.requested_end_period=`${lastYear}-${String(lastMonth).padStart(2,'0')}`;for(const key of ['tool_route','event_name','event_count'])clear.push(key);}
+    if(/\bblack\s+friday\b/i.test(text)){set.contextual_event_mentions=['Black Friday'];if(excludedBlackFriday)set.exclusions=[...base.exclusions,'black friday'];}if(excludedMonthNumbers.size)set.exclusions=[...new Set([...(set.exclusions||base.exclusions),...[...excludedMonthNumbers].map(month=>Object.entries(MONTHS).find(([,number])=>number===month)?.[0])])];
     // A named evidence subject is a replacement, not a continuation of an
     // incompatible platform comparison. Keep reusable dates/currency only.
     const explicitSubject=explicitSalesBaseline?'sales':/\b(?:shipping|delivery)\s+(?:countries|country|destinations?)\b/i.test(text)?'shipping_countries':/\bsearch\s+console\b|\borganic\s+(?:search|clicks?|impressions?)\b/i.test(text)?'search_console':/\bcustomers?\b/i.test(text)?'customers':null;
     if(explicitSubject){for(const key of ['tool_route','platform','comparison_type','comparison_start_date','comparison_end_date','geography','customer_segment','product_ref','report_section','advisory_topic','journey_intent','entry_product_classification','subsequent_product_classification','event_name','event_count'])clear.push(key);set.metrics=[explicitSubject];set.analysis_type=explicitSubject==='customers'?'customers':'ecommerce';if(explicitSalesBaseline){set.tool_route='get_shopify_operational_sales_baseline';set.channel_breakdown=true;clear.push('channel','currencies');}else if(explicitSubject==='shipping_countries'){set.geography='direct_shipping_country';set.channel='online';}}
     const explicitPlatformComparison=/\b(?:shopify|native shopify)\b[\s\S]*\b(?:woocommerce|woo)\b|\b(?:woocommerce|woo)\b[\s\S]*\bshopify\b/i.test(text)&&/\b(?:compare|comparison|versus|vs\.?|with)\b/i.test(text);
-    if(explicitPlatformComparison){for(const key of ['tool_route','geography','customer_segment','product_ref','report_section'])clear.push(key);set.analysis_type='finance';set.metrics=['sales','refunds'];set.platform='shopify+woo';set.channel='online';set.channel_breakdown=false;set.comparison_type='explicit_platform_periods';set.filters=['exclude_pos','exclude_matrixify'];}
-    const historicalEvent=/\bblack\s+friday\b/i.test(text)&&/\b(?:last|previous|recent|compare|comparison|overview|sales?|years?)\b/i.test(text);
+    if(explicitPlatformComparison&&!set.included_periods){for(const key of ['tool_route','geography','customer_segment','product_ref','report_section'])clear.push(key);set.analysis_type='finance';set.metrics=['sales','refunds'];set.platform='shopify+woo';set.channel='online';set.channel_breakdown=false;set.comparison_type='explicit_platform_periods';set.filters=['exclude_pos','exclude_matrixify'];}
+    const historicalEvent=!excludedBlackFriday&&!set.included_periods&&/\bblack\s+friday\b/i.test(text)&&/\b(?:last|previous|recent|compare|comparison|overview|sales?|years?)\b/i.test(text);
     if(historicalEvent){const count=lower.match(/\blast\s+(\d{1,2})\s+(?:black\s+friday\s+)?(?:sales?|years?)\b/);set.event_name='Black Friday';set.event_count=Math.max(1,Math.min(Number(count?.[1]||3),5));set.tool_route='compare_historical_events';set.metrics=['sales','refunds','customers','products','ecommerce_performance'];set.analysis_type='ecommerce';set.channel='online';clear.push('start_date','end_date','requested_end_period','comparison_start_date','comparison_end_date');}
     else if(base.tool_route==='compare_historical_events'&&/\blast\s+(\d{1,2})\s+years?\b/i.test(text)){set.event_count=Math.max(1,Math.min(Number(text.match(/\blast\s+(\d{1,2})\s+years?\b/i)[1]),5));}
     const advisory=isStockClearanceAdvisory(text,base);

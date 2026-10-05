@@ -33,6 +33,6 @@ test('requests online-only unfiltered campaign totals and renders currencies and
 });
 
 test('one campaign source failure preserves other deterministic structured evidence',async()=>{
-  const service=createHistoricalEventComparisonService({now:()=>new Date('2026-10-04T12:00:00Z'),knowledgeService:{searchKnowledge:async()=>({items:[vip,publicPhase,event(2024,'2024-11-22','2024-12-02'),event(2023,'2023-11-17','2023-11-27')]})},collectEvent:async ev=>{if(ev.year===2024)throw Object.assign(new Error('secret backend detail'),{code:'BQ_TIMEOUT'});return{online_sales:{rows:[]}};}});
-  const result=await service('overview of last 3 Black Friday sales');assert.match(result.answer,/BQ_TIMEOUT/);assert.doesNotMatch(result.answer,/secret backend/);assert.equal(result.evidence.sections.find(x=>x.event.year===2024).status,'rejected');
+  const service=createHistoricalEventComparisonService({now:()=>new Date('2026-10-04T12:00:00Z'),knowledgeService:{searchKnowledge:async()=>({items:[vip,publicPhase,event(2024,'2024-11-22','2024-12-02'),event(2023,'2023-11-17','2023-11-27')]})},collectEvent:async ev=>{if(ev.year===2024)throw Object.assign(new Error('secret backend detail'),{code:400,errors:[{reason:'invalidQuery',location:'query; secret'}]});return{online_sales:{rows:[]}};}});
+  const result=await service('overview of last 3 Black Friday sales'),failed=result.evidence.sections.find(x=>x.event.year===2024);assert.match(result.answer,/400/);assert.doesNotMatch(result.answer,/secret backend/);assert.equal(failed.status,'rejected');assert.deepEqual(failed.failure_diagnostic,{reason:'invalidQuery',location:'querysecret'});
 });
