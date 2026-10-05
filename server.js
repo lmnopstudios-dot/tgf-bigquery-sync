@@ -51,6 +51,7 @@ import {answerExactPageviewsRequest,createPageviewsPerSessionService,executePage
 import {createKlaviyoEmailService,executeKlaviyoEmailToolCall} from './oracle/klaviyo-email.js';
 import {createGoogleAdsService,executeGoogleAdsToolCall} from './oracle/google-ads.js';
 import {createBaselineOverviewService} from './oracle/baseline-overview.js';
+import {createGeneralAnalyticsService} from './oracle/general-analytics.js';
 import {createProductEvidenceReportService} from './oracle/product-report.js';
 import {createHistoricalEventComparisonService} from './oracle/historical-event-comparison.js';
 import {createOracleProviderDependencies} from './oracle/provider-dependencies.js';
@@ -4552,7 +4553,8 @@ const productEvidenceReport=createProductEvidenceReportService({
     return data?.shop?.currencyCode||null;
   }
 });
-baselineOverview=async message=>await historicalEventComparison(message)||await ecommerceBaselineOverview(message)||await productEvidenceReport(message);
+const generalAnalytics=createGeneralAnalyticsService({loadReport:ecommerceReportV2});
+baselineOverview=async(message,options={})=>await generalAnalytics(message,options)||await historicalEventComparison(message)||await ecommerceBaselineOverview(message,options)||await productEvidenceReport(message);
 
 async function getSalesByLocation({
   start_date,

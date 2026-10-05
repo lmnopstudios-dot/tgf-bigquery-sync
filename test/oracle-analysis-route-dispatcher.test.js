@@ -35,6 +35,8 @@ test('every deterministic transition route is registered with an executable disp
     'Compare September 2026 Shopify customers with August 2026.',
     'Compare September 2026 Search Console with August 2026.',
     'Can you give me a monthly breakdown of mobile and desktop conversion rates this year?',
+    'Graph online sales versus in-store sales monthly for the last 24 months.',
+    'Give me a sales breakdown of SMALL SILVER ANATOMICAL HEART PENDANT this year.',
     EXACT
   ];
   const emitted=new Set(prompts.map(message=>transitionAnalysisContext(null,message,{now:NOW}).context.tool_route).filter(Boolean));
