@@ -73,7 +73,8 @@ export async function diagnose({ bigquery, project, dataset = ga4Dataset(), star
   const oracleQueries=conversionQueries(project,{dataset});
   const shopifyLocation=await datasetLocation(bigquery,project,'shopify_data',{fallback:'US'});
   const oracleCommon={params:oracleParams,types:oracleTypes,useLegacySql:false,maximumBytesBilled:MAXIMUM_BYTES_BILLED,labels:{component:'oracle_device_conversion'}};
-  const preflight=[['comparison',comparison],['physical_inventory',physical],['oracle_boundary',{...oracleCommon,query:oracleQueries.boundary,location:shopifyLocation}],['oracle_woo',{...oracleCommon,query:oracleQueries.woo,location}],['oracle_coverage',{...oracleCommon,query:oracleQueries.coverage,location}]];
+  const beforeParams=bigQueryDateParameters({before_start:start,before_end:end}),beforeTypes={before_start:'DATE',before_end:'DATE'},beforeCommon={...oracleCommon,params:beforeParams,types:beforeTypes};
+  const preflight=[['comparison',comparison],['physical_inventory',physical],['oracle_boundary',{query:oracleQueries.boundary,location:shopifyLocation,useLegacySql:false,maximumBytesBilled:MAXIMUM_BYTES_BILLED,labels:{component:'oracle_device_conversion'}}],['oracle_woo',{...beforeCommon,query:oracleQueries.woo,location}],['oracle_coverage',{...beforeCommon,query:oracleQueries.coverage,location}]];
   for(const [stage,job] of preflight){try{await bigquery.createQueryJob({...job,dryRun:true});}catch{throw Object.assign(new Error(`${stage} dry-run failed`),{stage:`dry_run:${stage}`});}}
   let persisted,physicalRows;
   try{[[persisted],[physicalRows]]=await Promise.all([bigquery.query(comparison),bigquery.query(physical)]);}catch{throw Object.assign(new Error('physical evidence query failed'),{stage:'query:physical_evidence'});}

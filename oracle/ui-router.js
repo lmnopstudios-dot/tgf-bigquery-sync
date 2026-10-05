@@ -139,7 +139,6 @@ export function createOracleUiRouter({ knowledgeService, bigquery, project, chat
       if (typeof req.body?.message !== 'string' || !req.body.message.trim() || req.body.message.length > 12000) return res.status(400).json({ success: false, error: 'message must be a non-empty string of at most 12000 characters' });
       const previous=sessionContext(req);
       const result=transitionAnalysisContext(previous,req.body.message,{now:now(),reportContext:req.body.report_context||null});
-      if(result.transition.applies_to_message) saveSessionContext(req,result.context);
       console.info('Oracle analysis context transition:',{request_id:id,deployed_revision:env.RENDER_GIT_COMMIT||'unavailable',stage:'scope_resolution',requested_subject:result.context.requested_subject,resolved_subject:result.context.requested_subject,selected_route:result.context.tool_route,requested_periods:result.context.included_periods.length||undefined,period_start:result.context.start_date,period_end:result.context.end_date,continuation:result.transition.continuation,changed_fields:result.transition.set,cleared_fields:result.transition.clear,retained_field_names:result.transition.retain,missing_required_field_names:result.transition.missing_required_fields,ready_to_execute:result.transition.ready_to_execute});
       const clarification=campaignDateClarification(req.body.message,messageTemporalContext)||(result.transition.applies_to_message?clarificationFor(result.context):null);
       const key=sessionKey(req),cached=recentChatEvidence.get(key);
@@ -159,6 +158,9 @@ export function createOracleUiRouter({ knowledgeService, bigquery, project, chat
         return res.status(502).json({success:false,code:failure.code,error:'The analysis service rejected the request before it completed. No figures were returned; retry explicitly with the correlation ID.',request_id:id,failure_stage:failure.failure_stage,upstream_status:failure.status});
       }
       recentChatEvidence.set(key,{expires_at:now()+15*60*1000,value:{as_of:new Date(now()).toISOString(),answer:String(answer.answer||'').slice(0,6000),tools:(answer.tools||[]).slice(0,20)}});
+      // Commit conversational scope only after evidence delivery succeeds. A
+      // failed intervening request must not poison the next transition.
+      if(result.transition.applies_to_message) saveSessionContext(req,result.context);
       // If either the local classifier or the model asks for a date, retain the
       // unanswered request. A short date reply must resume that request rather
       // than replace it with a scope-only answer.
