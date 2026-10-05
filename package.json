@@ -96,9 +96,10 @@
     "discover:google-ads": "node google-ads/discover.js",
     "collect:google-ads": "node google-ads/collect.js",
     "schedule:google-ads": "node google-ads/scheduled-refresh.js",
-    "reconcile:google-ads": "node diagnostics/google-ads-reconciliation.js"
-    ,"collect:freshness": "node ops/collector-runner.js"
-    ,"audit:freshness": "node ops/freshness-inventory.js"
+    "reconcile:google-ads": "node diagnostics/google-ads-reconciliation.js",
+    "collect:freshness": "node ops/collector-runner.js",
+    "audit:freshness": "node ops/freshness-inventory.js",
+    "diagnose:oracle-woo-historical-provider": "node diagnostics/oracle-woo-historical-provider.js"
   },
   "engines": {
     "node": ">=20"
