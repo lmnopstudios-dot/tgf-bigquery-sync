@@ -1532,9 +1532,18 @@ ${dateRange}`;
     start_date,
     end_date,
     sales_channel: 'Online Store',
+    applied_channel_predicate: "sales_channel = 'Online Store'",
     timeseries,
     overall: overallRows[0] ?? null,
-    customer_types: customerTypes
+    customer_types: customerTypes,
+    metric_definitions: {
+      new_customers: 'ShopifyQL source-native `new_customers` aggregate. Shopify did not return a definition proving lifetime first purchase in this response.',
+      returning_customers: 'ShopifyQL source-native `returning_customers` aggregate; no mutually-exclusive relationship to `new_customers` is asserted.'
+    },
+    identity_treatment: 'ShopifyQL aggregate response does not expose the customer identity key or whether guest checkouts are included.',
+    available_history_start: SHOPIFY_NATIVE_HISTORY_START,
+    coverage: null,
+    source_collected_at: null
   };
 }
 
