@@ -26,7 +26,8 @@ test('production collision reports a bounded metadata-only schema diff and ident
     const report=error.readiness;
     assert.equal(report.dataset,'commerce');assert.equal(report.job_table,'oracle_analysis_jobs');assert.equal(report.configured_location,'EU');assert.equal(report.actual_location,'US');
     assert.equal(report.failed_stage,'job_table_schema');assert.equal(report.error_code,'SCHEMA_MISMATCH');assert.equal(report.table_ownership,'another_feature');
-    assert.equal(report.schema_diff.missing_columns.length,11);assert.deepEqual(report.schema_diff.incompatible_columns,[{name:'job_id',expected_type:'STRING',expected_mode:'REQUIRED',actual_type:'INTEGER',actual_mode:'REQUIRED'}]);
+    // All thirteen schema fields other than the colliding job_id are absent.
+    assert.equal(report.schema_diff.missing_columns.length,13);assert.deepEqual(report.schema_diff.incompatible_columns,[{name:'job_id',expected_type:'STRING',expected_mode:'REQUIRED',actual_type:'INTEGER',actual_mode:'REQUIRED'}]);
     assert.equal(report.schema_diff.unexpected_columns.length,20);assert.equal(report.schema_diff.truncated.unexpected,6);assert.doesNotMatch(JSON.stringify(report),/row|payload value|secret/);return true;
   });
 });

@@ -15,6 +15,16 @@ export function oracleRequestRoute(message,{hasCompletedJob=false}={}) {
     && /\b(?:sales|performance|data|figures|revenue|units)\b/i.test(text)
     && ((text.match(/[,;]/g)||[]).length>=2||/\b(?:and|versus|vs\.?|compared? (?:with|to))\b/i.test(text));
   if(multiProductRecommendation)return 'job';
+  // Comparing explicitly selected calendar months across several years fans
+  // out into independent sales and optional evidence reads. It must retain the
+  // exact sparse month set, rather than falling through to the short chat
+  // transport (or being mistaken for a retained event comparison).
+  const monthNames=['january','february','march','april','may','june','july','august','september','october','november','december'];
+  const selectedMonths=monthNames.filter(month=>new RegExp(`\\b${month}\\b`,'i').test(text));
+  const selectedYears=[...new Set(text.match(/\b20\d{2}\b/g)||[])];
+  if(selectedMonths.length>=3&&selectedYears.length>=2
+    && /\b(?:compare|comparison|across|each|independent)\b/i.test(text)
+    && /\b(?:sales|revenue|orders|customers|countries|conversion)\b/i.test(text))return 'job';
   // Cross-platform conversion requests require several governed reads (the
   // launch boundary, session denominators, orders, and attribution coverage).
   // They must not inherit the short interactive synthesis deadline.
