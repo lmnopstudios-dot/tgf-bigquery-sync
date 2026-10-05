@@ -23,6 +23,13 @@ test('ordinary product refinements preserve independent entity, metric, dimensio
   context=apply(context,'Graph that');assert.equal(context.output_preference,'chart');assert.equal(context.tool_route,'get_product_sales_analysis');
 });
 
+test('choice listing and selection follow-ups retain the pending product sales route and scope',()=>{
+  const pending=apply(null,'Give me a sales breakdown of SMALL SILVER ANATOMICAL HEART PENDANT this year.');
+  for(const message of ['gib choice then','can you tell me the 2 product identities so I can choose then','choice 2','shopify:shopify:20']){
+    const next=apply(pending,message);assert.equal(next.requested_subject,'product_sales');assert.equal(next.tool_route,'get_product_sales_analysis');assert.deepEqual(next.metrics,['sales']);assert.equal(next.entity_query,pending.entity_query);assert.deepEqual([next.start_date,next.end_date,next.channel,next.currencies],[pending.start_date,pending.end_date,pending.channel,pending.currencies]);
+  }
+});
+
 test('channel graph and why comparison resolve bounded governed plans without conversion leakage',()=>{
   const conversion=apply(null,'Monthly mobile and desktop conversion rates this year.');
   const graph=apply(conversion,'Graph online sales vs in-store sales monthly for the last 24 months.');
@@ -36,6 +43,27 @@ test('production-shaped providers receive resolved product arguments and return 
   const service=createGeneralAnalyticsService({loadReport});const context=apply(null,'Graph sales for SMALL SILVER ANATOMICAL HEART PENDANT this year.');
   const result=await dispatchAnalysisRequest({message:'Graph sales for SMALL SILVER ANATOMICAL HEART PENDANT this year.',analysisContext:context,baselineOverview:service,chat:async()=>{throw new Error('agent fallback must not run')}});
   assert.equal(calls[0].section,'products');assert.equal(calls[0].args.start_date,'2026-01-01');assert.equal(result.inline_chart.kind,'line');assert.match(result.answer,/\| Month \| Series \| Currency \| Sales \|/);assert.equal(result.evidence.entity_refs[0],'family:shopify:shopify:1');assert.equal(result.evidence.grain,'line_item_month');
+});
+
+test('governed product ambiguity lists source identities and completes validated selection without losing scope',async()=>{
+  const report={rows:[
+    {period:'2026-01',product_ref:'family:shopify:shopify:10',canonical_title:'Small Silver Anatomical Heart Pendant',source_title:'SMALL SILVER ANATOMICAL HEART PENDANT',mapping_method:'governed_product_family',mapping_status:'family_resolved',source_platform:'woo',source_store:'ww',source_product_id:'100',channel:'Online',currency:'GBP',product_sales:120},
+    {period:'2026-01',product_ref:'shopify:shopify:20',canonical_title:'Small Silver Anatomical Heart Pendant',source_title:'SMALL SILVER ANATOMICAL HEART PENDANT',mapping_method:'source_identity',mapping_status:'source_specific',source_platform:'shopify',source_store:'shopify',source_product_id:'20',channel:'Online',currency:'GBP',product_sales:80}
+  ],comparison_rows:[]};
+  const service=createGeneralAnalyticsService({loadReport:async()=>report});let context=apply(null,'Give me a sales breakdown of SMALL SILVER ANATOMICAL HEART PENDANT this year.');
+  const first=await service('Give me a sales breakdown of SMALL SILVER ANATOMICAL HEART PENDANT this year.',{analysisContext:context});
+  assert.equal(first.evidence.ambiguous,true);assert.equal(first.evidence.candidates.length,2);assert.match(first.answer,/1\. \*\*Small Silver/);assert.match(first.answer,/woo \/ ww/);assert.match(first.answer,/`woo:ww:100`/);assert.match(first.answer,/governed_product_family/);assert.match(first.answer,/`shopify:shopify:20`/);
+  const listed=await service('can you tell me the 2 product identities so I can choose then',{analysisContext:context});assert.deepEqual(listed.evidence.candidates,first.evidence.candidates);
+  const invalid=await service('choice 3',{analysisContext:context});assert.match(invalid.answer,/not one of the offered governed identities/);assert.equal(invalid.evidence.ambiguous,true);
+  const selected=await service('2',{analysisContext:context});assert.equal(selected.evidence.resolved_product_ref,'shopify:shopify:20');assert.equal(selected.evidence.source_rows.length,1);assert.equal(selected.evidence.source_rows[0].source_platform,'shopify');assert.match(selected.answer,/2026-01-01 to 2026-10-05/);assert.match(selected.answer,/Currencies:\*\* GBP/);
+  context={...context,product_ref:selected.evidence.resolved_product_ref,output_preference:'chart'};const graphed=await service('graph that',{analysisContext:context});assert.equal(graphed.inline_chart.kind,'line');assert.equal(graphed.evidence.resolved_product_ref,'shopify:shopify:20');assert.equal(graphed.evidence.rows[0].value,80);
+});
+
+test('exact offered source reference selects its governed identity and an isolated choice has no product route',async()=>{
+  const rows=[{period:'2026-01',product_ref:'family:one',canonical_title:'Pendant',source_title:'Pendant',source_product_ref:'woo:ww:1',source_platform:'woo',source_store:'ww',channel:'Online',currency:'GBP',product_sales:1},{period:'2026-01',product_ref:'family:two',canonical_title:'Pendant',source_title:'Pendant',source_product_ref:'shopify:shopify:2',source_platform:'shopify',source_store:'shopify',channel:'Online',currency:'GBP',product_sales:2}];
+  const service=createGeneralAnalyticsService({loadReport:async()=>({rows,comparison_rows:[]})}),context=apply(null,'Show sales for Pendant this year.');
+  const selected=await service('shopify:shopify:2',{analysisContext:context});assert.equal(selected.evidence.resolved_product_ref,'family:two');assert.equal(selected.evidence.selected_candidate.sources[0].source_product_ref,'shopify:shopify:2');
+  assert.equal(await service('1',{analysisContext:emptyAnalysisContext()}),null);
 });
 
 test('channel provider keeps Woo, Square and Shopify POS distinct and explanation separates facts, events and hypotheses',async()=>{
