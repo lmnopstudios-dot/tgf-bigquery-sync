@@ -1,0 +1,54 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { ANALYSIS_TOOL_ROUTES, emptyAnalysisContext, transitionAnalysisContext, validateAnalysisContext } from '../oracle/analysis-context.js';
+import { ANALYSIS_ROUTE_DISPATCHERS, dispatchAnalysisRequest } from '../oracle/analysis-route-dispatcher.js';
+
+const NOW=Date.parse('2026-10-05T12:00:00Z');
+const EXACT='Show historical WooCommerce GA4 conversion evidence for April, June, July, August and September in 2024 and 2025. Retrieve exactly these ten independent months using only get_woocommerce_device_conversion. Return sessions, ecommerce purchases and the compatible purchase-to-session rate, by source store and device wherever supported. State definitions, mapping, coverage and stored collection timestamps. Explain whether purchases count events or purchasing sessions. Preserve successful months. No unrelated providers, inventory, collection, backfill or mutation.';
+
+test('focused Woo transition validates from fresh and retained broad contexts',()=>{
+  const retained=[
+    emptyAnalysisContext(),
+    transitionAnalysisContext(null,'Compare sales in April, June and July in 2025 and 2026.',{now:NOW}).context,
+    transitionAnalysisContext(null,'Compare September 2026 native Shopify with September 2025 WooCommerce sales.',{now:NOW}).context,
+    transitionAnalysisContext(null,'Compare the last 3 Black Friday sales.',{now:NOW}).context
+  ];
+  const expected=['2024-04','2024-06','2024-07','2024-08','2024-09','2025-04','2025-06','2025-07','2025-08','2025-09'];
+  for(const prior of retained){
+    const result=transitionAnalysisContext(prior,EXACT,{now:NOW});
+    assert.equal(result.context.tool_route,'get_woocommerce_device_conversion');
+    assert.deepEqual(result.context.included_periods,expected);
+    assert.deepEqual(result.context.metrics,['conversion']);
+    assert.equal(result.transition.ready_to_execute,true);
+    assert.deepEqual(validateAnalysisContext(result.context),result.context);
+  }
+});
+
+test('every deterministic transition route is registered with an executable dispatcher',()=>{
+  const prompts=[
+    'Show top countries by online sales and top products for September 2026.',
+    'What is the average time between consecutive online orders for each customer in September 2026?',
+    'Show sunglasses sales in September 2026.',
+    'What is the average number of products a customer views in a session before buying something?',
+    'Compare the last 3 Black Friday sales.',
+    'Establish my Shopify operational sales baseline for August and September 2026.',
+    EXACT
+  ];
+  const emitted=new Set(prompts.map(message=>transitionAnalysisContext(null,message,{now:NOW}).context.tool_route).filter(Boolean));
+  // get_online_country_sales is a governed continuation route.
+  const country=transitionAnalysisContext(null,prompts[0],{now:NOW}).context;
+  emitted.add(transitionAnalysisContext(country,'Include WooCommerce in all online sales.',{now:NOW}).context.tool_route);
+  assert.deepEqual([...emitted].sort(),[...ANALYSIS_TOOL_ROUTES].sort());
+  for(const route of emitted)assert.equal(typeof ANALYSIS_ROUTE_DISPATCHERS[route],'function',route);
+});
+
+test('persisted Woo context validates and dispatches only its governed baseline binding',async()=>{
+  const persisted=structuredClone(transitionAnalysisContext(null,EXACT,{now:NOW}).context);
+  let baselineCalls=0,chatCalls=0;
+  const answer=await dispatchAnalysisRequest({message:EXACT,analysisContext:persisted,baselineOverview:async()=>{baselineCalls++;return{answer:'ten months',tools:['get_woocommerce_device_conversion']}},chat:async()=>{chatCalls++;return{answer:'wrong'}}});
+  assert.equal(answer.answer,'ten months');assert.equal(baselineCalls,1);assert.equal(chatCalls,0);
+  await assert.rejects(dispatchAnalysisRequest({message:EXACT,analysisContext:persisted,baselineOverview:async()=>null,chat:async()=>{chatCalls++;}}),error=>error.code==='ANALYSIS_ROUTE_UNAVAILABLE');
+  assert.equal(chatCalls,0);
+  assert.throws(()=>validateAnalysisContext({...persisted,tool_route:'unknown_tool'}),error=>error.code==='INVALID_ANALYSIS_CONTEXT'&&error.validation_rule==='allowed_route');
+  await assert.rejects(dispatchAnalysisRequest({message:EXACT,analysisContext:{...persisted,tool_route:'unknown_tool'},chat:async()=>({})}),error=>error.code==='INVALID_ANALYSIS_CONTEXT');
+});

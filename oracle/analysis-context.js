@@ -12,8 +12,9 @@ const FIELDS = new Set([
 ]);
 const GRAINS = new Set(['day','week','month','quarter','year']);
 const CURRENCIES = new Set(['GBP','USD','JPY','EUR']);
-const METRICS = new Set(['sales','refunds','customers','products','search_console','shipping_countries','ecommerce_performance','customer_journey','customer_order_interval','product_views_before_purchase']);
-const TOOL_ROUTES = new Set(['get_shopify_online_country_products','get_online_country_sales','get_average_customer_order_interval','get_governed_category_sales','get_product_views_before_purchase','compare_historical_events','get_shopify_operational_sales_baseline']);
+const METRICS = new Set(['sales','refunds','customers','products','search_console','shipping_countries','ecommerce_performance','customer_journey','customer_order_interval','product_views_before_purchase','conversion']);
+export const ANALYSIS_TOOL_ROUTES = Object.freeze(['get_shopify_online_country_products','get_online_country_sales','get_average_customer_order_interval','get_governed_category_sales','get_product_views_before_purchase','compare_historical_events','get_shopify_operational_sales_baseline','get_woocommerce_device_conversion']);
+const TOOL_ROUTES = new Set(ANALYSIS_TOOL_ROUTES);
 const MONTHS = {jan:1,january:1,feb:2,february:2,mar:3,march:3,apr:4,april:4,may:5,jun:6,june:6,jul:7,july:7,aug:8,august:8,sep:9,sept:9,september:9,oct:10,october:10,nov:11,november:11,dec:12,december:12};
 
 export const ANALYSIS_CONTEXT_FIELDS = Object.freeze([...FIELDS]);

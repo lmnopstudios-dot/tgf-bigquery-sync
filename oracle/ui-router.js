@@ -10,6 +10,7 @@ import { SHOPIFY_RATE_LIMIT_MESSAGE } from './shopifyql-throttle.js';
 import { requestId, serverFailureDiagnostic, stageOutcome, terminalMessage, transportFailure } from './request-observability.js';
 import { createAnalysisJobWorker, ownerKey, streamingInsertDiagnostic } from './analysis-jobs.js';
 import { campaignDateClarification, resolveKnowledgeDates } from './knowledge-dates.js';
+import { dispatchAnalysisRequest } from './analysis-route-dispatcher.js';
 
 const json = express.json({ limit: '48kb', type: 'application/json' });
 const messageError = body => {
@@ -99,7 +100,7 @@ export function createOracleUiRouter({ knowledgeService, bigquery, project, chat
       const input=job.payload_json;
       const correlation={request_id:job.request_id,job_id:job.job_id,attempt:Number(job.attempts)||0};
       const onProviderStage=event=>console.info('Oracle durable provider stage:',{...correlation,...event});
-      const effective=scopedMessage(input.message,input.analysis_context);const answer=await baselineOverview?.(effective,{onProviderStage})||await chat(effective,{analysisContext:input.analysis_context,transition:input.transition,recentEvidence:input.recent_evidence,requestId:job.request_id,jobId:job.job_id,attempt:Number(job.attempts)||0,signal,durable:true});
+      const effective=scopedMessage(input.message,input.analysis_context);const answer=await dispatchAnalysisRequest({message:effective,analysisContext:input.analysis_context,baselineOverview,baselineOptions:{onProviderStage},chat,chatOptions:{analysisContext:input.analysis_context,transition:input.transition,recentEvidence:input.recent_evidence,requestId:job.request_id,jobId:job.job_id,attempt:Number(job.attempts)||0,signal,durable:true}});
       let proposals=[],proposal_error=null;
       try { proposals=await proposalsFor(input.message,input.created_by,input.temporal_context); } catch(error) { logProposalError(error);proposal_error='Knowledge proposal could not be generated.'; }
       return {success:true,answer:answer.answer,evidence:answer.evidence||null,inline_chart:answer.inline_chart||null,proposals,proposal_error,analysis_scope:analysisScope(input.analysis_context),tools:(answer.tools||[]).slice(0,20)};
@@ -149,7 +150,7 @@ export function createOracleUiRouter({ knowledgeService, bigquery, project, chat
       const chatStarted=Date.now();
       let answer;
       try {
-        answer=clarification?{answer:clarification,tools:[]}:(await baselineOverview?.(effectiveMessage)||await chat(effectiveMessage,{analysisContext:result.transition.applies_to_message?result.context:null,transition:result.transition,recentEvidence,pendingIntent:pending?.message||null,requestId:id,signal:cancellation.signal}));
+        answer=clarification?{answer:clarification,tools:[]}:await dispatchAnalysisRequest({message:effectiveMessage,analysisContext:result.transition.applies_to_message?result.context:null,baselineOverview,chat,chatOptions:{analysisContext:result.transition.applies_to_message?result.context:null,transition:result.transition,recentEvidence,pendingIntent:pending?.message||null,requestId:id,signal:cancellation.signal}});
         console.info('Oracle UI stage outcome:',stageOutcome({id,stage:'agent_request',startedAt:chatStarted,outcome:'success',extra:{tool_count:(answer.tools||[]).length}}));
       } catch(error) {
         const failure=transportFailure(error,{stage:error?.failed_stage||'agent_request'});
