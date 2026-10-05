@@ -15,7 +15,15 @@ const days=(start,end)=>Math.round((Date.parse(`${end}T00:00:00Z`)-Date.parse(`$
 const safeCode=error=>String(error?.code||error?.name||'SOURCE_FAILED').replace(/[^A-Za-z0-9_.-]/g,'').slice(0,60);
 const provenance=item=>({status:item.status,source_type:item.source_type||null,source_reference:item.source_reference||null,recorded_at:item.recorded_at||null});
 
-export function isHistoricalEventComparison(message){return BF.test(String(message||''))&&/\b(?:last|previous|recent|compare|comparison|overview|sales?|years?)\b/i.test(String(message||''));}
+export function isHistoricalEventComparison(message){
+  const text=String(message||'');
+  // Event names mentioned as an exclusion or as context must never outrank an
+  // explicit calendar-period request.  Keep this guard here (the deterministic
+  // route itself), rather than relying only on the UI context classifier: /agent,
+  // durable workers and the interactive UI all call this service directly.
+  const negative=/(?:\bexclude(?:d|s|ing)?\b|\bexcept\b|\boutside\b|\bnot\b)[\s\S]{0,40}\bblack\s+friday\b|\bblack\s+friday\b[\s\S]{0,24}\b(?:context only|as context)\b/i.test(text);
+  return !negative&&BF.test(text)&&/\b(?:last|previous|recent|compare|comparison|overview|sales?|years?)\b/i.test(text);
+}
 
 function normalize(item){
   const start=iso(item.effective_from??item.start_date),end=iso(item.effective_to??item.end_date??start);
@@ -25,7 +33,7 @@ function normalize(item){
 
 /** Resolve campaigns and their phases. Conflicts are scoped to one phase, never merely to one year. */
 export function resolveHistoricalEvents(items,{asOf=new Date(),count=3,eventPattern=BF}={}){
-  const requestDate=new Date(asOf).toISOString().slice(0,10),invalid=[],unconfirmed=[],unmatched=[],phaseRows=new Map(),ordinary=new Map();
+  const requestDate=new Date(asOf).toISOString().slice(0,10),invalid=[],unconfirmed=[],unmatched=[],phaseRows=new Map(),ordinary=new Map(),contextRecords=[];
   for(const item of items||[]){
     if(item.kind!=='event'||!eventPattern.test(`${item.title||''} ${(item.tags||[]).join(' ')}`))continue;
     const normalized=normalize(item);if(normalized.invalid){invalid.push(normalized.invalid);continue;}const row=normalized.row;
@@ -33,7 +41,10 @@ export function resolveHistoricalEvents(items,{asOf=new Date(),count=3,eventPatt
     if(item.status!=='confirmed'){unconfirmed.push({...row,reason:`record status is ${item.status||'unknown'}, not confirmed`});continue;}
     const reviewed=REVIEWED_CAMPAIGN_PHASES[item.id];
     if(reviewed){const key=`${reviewed.campaign}:${reviewed.phase}`,rows=phaseRows.get(key)||[];rows.push({...row,phase:reviewed.phase,phase_label:reviewed.label,campaign_id:reviewed.campaign});phaseRows.set(key,rows);continue;}
-    const phase=String(item.phase||'').trim()||(/\bvip|early access\b/i.test(`${item.title} ${item.description||item.content||''}`)?'vip_early_access':/\bpublic\b/i.test(`${item.title} ${item.description||item.content||''}`)?'public':'campaign');
+    const searchable=`${item.title||''} ${item.description||item.content||''}`;
+    const physical=/\b(?:soho|tgf east|physical|in[ -]?store|shop)\b/i.test(searchable),explicitOnline=/\bonline\b/i.test(searchable);
+    if(physical){contextRecords.push({...row,scope:'physical_store',reason:'physical-store event retained as context and excluded from online scope'});continue;}
+    const phase=String(item.phase||'').trim()||(/\bvip|early access\b/i.test(searchable)?'vip_early_access':/\bpublic\b/i.test(searchable)?'public':explicitOnline?'online_campaign':'campaign');
     const key=`${row.year}:${phase}`,rows=ordinary.get(key)||[];rows.push({...row,phase,phase_label:phase==='campaign'?'Campaign':phase});ordinary.set(key,rows);
   }
   const conflicts=[];
@@ -46,11 +57,12 @@ export function resolveHistoricalEvents(items,{asOf=new Date(),count=3,eventPatt
   const bf2025=mapped.filter(x=>x.campaign_id==='black-friday-2025');
   if(bf2025.length===2){campaigns.push({id:'campaign:black-friday-2025',name:'Black Friday 2025',year:2025,start_date:'2025-11-27',end_date:'2025-11-30',duration_days:4,timezone:null,date_precision:'range',phases:bf2025.sort((a,b)=>a.start_date.localeCompare(b.start_date)),relationship_provenance:{type:'explicit_reviewed_mapping',reference:'confirmed Black Friday 2025 phase mapping reviewed 2026-10-04',event_ids:bf2025.map(x=>x.id)},campaign_context:'Online-only 20% promotion on eligible silver products; eye rings, mixed-metal products, enamel products and collaborations excluded. Physical stores did not participate and POS remained on Square. This context does not filter whole-store sales without governed product classification evidence.'});}
   else for(const expected of ['vip_early_access','public'])if(!bf2025.some(x=>x.phase===expected)&&!blocked.has(`black-friday-2025:${expected}`))unmatched.push({year:2025,phase:expected,reason:'reviewed campaign phase record was not returned'});
-  for(const [key,rows] of ordinary){const row=choose(key,rows);if(row&&!blocked.has(key)){if(row.phase==='campaign')campaigns.push({...row,phases:[row]});else unmatched.push({...row,reason:'phase has no governed parent campaign mapping'});}}
+  const onlineYears=new Set([...ordinary.values()].flat().filter(x=>x.phase==='online_campaign').map(x=>x.year));
+  for(const [key,rows] of ordinary){const row=choose(key,rows);if(row&&!blocked.has(key)){if(row.phase==='online_campaign'||row.phase==='campaign'&&!onlineYears.has(row.year))campaigns.push({...row,phases:[row]});else if(row.phase==='campaign'&&onlineYears.has(row.year))contextRecords.push({...row,scope:'parent_context',reason:'parent campaign retained as context; online event controls online dates'});else unmatched.push({...row,reason:'phase has no governed parent campaign mapping'});}}
   const expectedYears=[];for(let year=Number(requestDate.slice(0,4))-(requestDate.slice(5)<='11-30'?1:0);expectedYears.length<count;year--)expectedYears.push(year);
   const selected=campaigns.filter(x=>expectedYears.includes(x.year)).sort((a,b)=>b.year-a.year);
   const missing=expectedYears.filter(year=>!selected.some(x=>x.year===year)&&!conflicts.some(x=>x.year===year)&&!unconfirmed.some(x=>x.year===year)&&!unmatched.some(x=>x.year===year)).map(year=>({year,reason:'no matching Black Friday event record was returned'}));
-  return{request_date:requestDate,requested_count:count,expected_years:expectedYears,events:selected,conflicts,invalid,missing,unconfirmed,unmatched,complete:selected.length===count&&conflicts.length===0&&invalid.length===0&&missing.length===0&&unconfirmed.length===0&&unmatched.length===0};
+  return{request_date:requestDate,requested_count:count,expected_years:expectedYears,events:selected,context_records:contextRecords,conflicts,invalid,missing,unconfirmed,unmatched,complete:selected.length===count&&conflicts.length===0&&invalid.length===0&&missing.length===0&&unconfirmed.length===0&&unmatched.length===0};
 }
 
 function eventCount(message){const match=String(message).match(/\blast\s+(\d{1,2})\s+(?:black\s+friday\s+)?(?:sales?|years?)\b/i);return Math.max(1,Math.min(Number(match?.[1]||3),5));}
@@ -71,12 +83,20 @@ function renderEvent(section){
 /** Bounded, lazy orchestration. Every campaign is an independent failure boundary. */
 export function createHistoricalEventComparisonService({knowledgeService,collectEvent,now=()=>new Date(),concurrency=2,queryTimeoutMs=55_000}){
   if(!knowledgeService?.searchKnowledge||typeof collectEvent!=='function')throw new Error('knowledgeService and collectEvent are required');
-  return async message=>{if(!isHistoricalEventComparison(message))return null;const requested_at=new Date(now()),count=eventCount(message),knowledge=await knowledgeService.searchKnowledge({text:null,knowledge_type:'event',start_date:null,end_date:null,status:null,tags:['black-friday'],limit:50});const resolved=resolveHistoricalEvents(knowledge.items,{asOf:requested_at,count}),sections=new Array(resolved.events.length),limit=Math.max(1,Math.min(concurrency,2));let cursor=0;
+  return async message=>{if(!isHistoricalEventComparison(message))return null;const requested_at=new Date(now()),count=eventCount(message);
+    // Tags are useful but not authoritative: older confirmed rows may have a
+    // human-readable event name without the normalized tag. Query both scopes
+    // and preserve retrieval outcomes so an empty result is not reported as a
+    // genuinely absent record when both governed reads failed.
+    const searches=[{name:'tag',args:{text:null,knowledge_type:'event',start_date:null,end_date:null,status:null,tags:['black-friday'],limit:50}},{name:'confirmed_name',args:{text:'Black Friday',knowledge_type:'event',start_date:null,end_date:null,status:'confirmed',tags:[],limit:50}}],settled=await Promise.allSettled(searches.map(x=>knowledgeService.searchKnowledge(x.args))),retrieval=settled.map((result,index)=>({scope:searches[index].name,status:result.status,...(result.status==='fulfilled'?{returned_count:result.value.returned_count??result.value.items?.length??0}:{failure:failureDiagnostic(result.reason)})}));
+    if(settled.every(x=>x.status==='rejected'))throw Object.assign(new Error('Black Friday knowledge retrieval failed; record absence was not established'),{code:'EVENT_KNOWLEDGE_RETRIEVAL_FAILED',diagnostic:{retrieval}});
+    const byId=new Map();for(const result of settled)if(result.status==='fulfilled')for(const item of result.value.items||[])if(item?.id)byId.set(item.id,item);
+    const resolved=resolveHistoricalEvents([...byId.values()],{asOf:requested_at,count}),sections=new Array(resolved.events.length),limit=Math.max(1,Math.min(concurrency,2));let cursor=0;
     const bounded=async event=>{let timer;try{return await Promise.race([collectEvent(event,{channel:'online',exclude_pos:true,exclude_matrixify:true,currency_policy:'separate',product_eligibility_filter:false}),new Promise((_,reject)=>{timer=setTimeout(()=>reject(Object.assign(new Error('bounded event query timeout'),{code:'EVENT_QUERY_TIMEOUT'})),queryTimeoutMs);timer.unref?.();})]);}finally{clearTimeout(timer);}};
     const worker=async()=>{while(cursor<resolved.events.length){const index=cursor++,event=resolved.events[index],query_started_at=new Date(now()).toISOString();try{sections[index]={event,status:'fulfilled',report:await bounded(event),query_started_at,query_completed_at:new Date(now()).toISOString()};}catch(error){sections[index]={event,status:'rejected',error_code:safeCode(error),failure_diagnostic:failureDiagnostic(error),query_started_at,query_completed_at:new Date(now()).toISOString()};}}};await Promise.all(Array.from({length:Math.min(limit,resolved.events.length)},worker));
     const lines=['# Black Friday campaign comparison',`**Request as of:** ${resolved.request_date}. Resolved campaign years and governed phases; nominal Black Friday weekends were not substituted.`];
     for(const [heading,key] of [['Conflicting same-phase records','conflicts'],['Missing years','missing'],['Unconfirmed records','unconfirmed'],['Unmatched records or phases','unmatched'],['Invalid records','invalid']])if(resolved[key].length)lines.push('',`## ${heading}`,...resolved[key].map(x=>`- ${x.year||'unknown year'}${x.phase?` ${x.phase}`:''}: ${x.reason} (${(x.event_ids||[x.id]).filter(Boolean).join(', ')||'no record ID'}).`));
     for(const section of sections)lines.push('',...renderEvent(section));
     lines.push('','## Comparison boundaries','- Totals cover each full campaign; phases are displayed separately and are not double-counted as additional campaigns. Different durations are compared using actual totals and daily rates.','- Only source-qualified online orders are included. POS/Square and Matrixify Shopify representations are excluded; currencies remain separate.','- Promotion exclusions are context only. Whole-store sales are not filtered to eligible products because no governed product-classification evidence was requested and supplied.','- Conversion is shown only when compatible traffic evidence covers the exact campaign period.');
-    return{answer:lines.join('\n'),evidence:{version:'historical_event_comparison.v2',requested_scope:{event:'Black Friday',count,as_of:resolved.request_date,channel:'online',exclude_pos:true,exclude_matrixify:true,currencies:'separate',product_eligibility_filter:false},resolved_scope:resolved,sections,collected_at:new Date(now()).toISOString()},tools:['search_knowledge','get_online_country_sales']};};
+    return{answer:lines.join('\n'),evidence:{version:'historical_event_comparison.v2',requested_scope:{event:'Black Friday',count,as_of:resolved.request_date,channel:'online',exclude_pos:true,exclude_matrixify:true,currencies:'separate',product_eligibility_filter:false},knowledge_retrieval:retrieval,resolved_scope:resolved,sections,collected_at:new Date(now()).toISOString()},tools:['search_knowledge','get_online_country_sales']};};
 }
