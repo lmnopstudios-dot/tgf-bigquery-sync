@@ -4507,6 +4507,7 @@ const ecommerceBaselineOverview=createBaselineOverviewService({
   platformSales:platformSalesService,
   customerReport:getShopifyCustomerKpis,
   shopifyDevice:deviceSourceConversionService,
+  knowledgeService,
   klaviyo:klaviyoEmailService,
   organicReport:periods=>ecommerceReportV2('organic',{
     start_date:periods.current.start_date,end_date:periods.current.end_date,
