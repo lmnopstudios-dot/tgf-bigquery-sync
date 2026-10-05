@@ -33,6 +33,7 @@ import { normalizeShippingGeography, persistShippingGeography } from './shopify/
 import { createShopifyCountryProductsService } from './oracle/shopify-country-products.js';
 import { createCustomerOrderIntervalService } from './oracle/customer-order-interval.js';
 import { createOnlineCountrySalesService, ONLINE_COUNTRY_MAX_BYTES } from './oracle/online-country-sales.js';
+import { createPlatformSalesService } from './oracle/platform-sales.js';
 import { createDeviceSourceConversionService, executeDeviceSourceConversionToolCall } from './oracle/device-source-conversion.js';
 import { answerWooDeviceConversionRequest } from './oracle/woo-device-conversion-request.js';
 import { answerShopifyLaunchDeviceConversionRequest } from './oracle/shopify-launch-device-conversion-request.js';
@@ -158,6 +159,7 @@ const collectionClassificationService = createCollectionClassificationService({ 
 const shopifyCountryProductsService = createShopifyCountryProductsService({ bigquery, project: GOOGLE_PROJECT_ID });
 const customerOrderIntervalService = createCustomerOrderIntervalService({ bigquery, project: GOOGLE_PROJECT_ID });
 const onlineCountrySalesService = createOnlineCountrySalesService({ bigquery, project: GOOGLE_PROJECT_ID });
+const platformSalesService = createPlatformSalesService({ bigquery, project: GOOGLE_PROJECT_ID });
 const deviceSourceConversionService = createDeviceSourceConversionService({ bigquery, project: GOOGLE_PROJECT_ID });
 const categorySalesService = createCategorySalesService({ bigquery, project: GOOGLE_PROJECT_ID });
 const productViewPurchaseService = createProductViewPurchaseService({bigquery});
@@ -4502,6 +4504,7 @@ const getEcommerceManagementReport = createEcommerceManagementReportService({
 const ecommerceBaselineOverview=createBaselineOverviewService({
   managementReport:getEcommerceManagementReport,
   onlineCountrySales:onlineCountrySalesService,
+  platformSales:platformSalesService,
   customerReport:getShopifyCustomerKpis,
   shopifyDevice:deviceSourceConversionService,
   klaviyo:klaviyoEmailService,

@@ -92,6 +92,7 @@
     "diagnose:oracle-products": "node diagnostics/oracle-ecommerce-evidence.js products",
     "diagnose:oracle-product-comparison": "node diagnostics/oracle-ecommerce-evidence.js product-comparison",
     "diagnose:ecommerce-scope-cardinality": "node diagnostics/ecommerce-scope-cardinality.js",
+    "diagnose:oracle-multi-month-sales": "node diagnostics/oracle-multi-month-sales.js",
     "discover:google-ads": "node google-ads/discover.js",
     "collect:google-ads": "node google-ads/collect.js",
     "schedule:google-ads": "node google-ads/scheduled-refresh.js",
