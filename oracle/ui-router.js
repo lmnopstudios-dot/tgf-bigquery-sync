@@ -7,7 +7,7 @@ import { reportCsv, reportPdf, reportWorkbook } from './report-export.js';
 import { analysisScope, clarificationFor, emptyAnalysisContext, transitionAnalysisContext } from './analysis-context.js';
 import { governanceDiagnostic, governancePublicError, isGovernanceBusinessError } from './governance-diagnostics.js';
 import { SHOPIFY_RATE_LIMIT_MESSAGE } from './shopifyql-throttle.js';
-import { requestId, serverFailureDiagnostic, stageOutcome, terminalMessage } from './request-observability.js';
+import { requestId, serverFailureDiagnostic, stageOutcome, terminalMessage, transportFailure } from './request-observability.js';
 import { createAnalysisJobWorker, ownerKey, streamingInsertDiagnostic } from './analysis-jobs.js';
 import { campaignDateClarification, resolveKnowledgeDates } from './knowledge-dates.js';
 
@@ -152,9 +152,11 @@ export function createOracleUiRouter({ knowledgeService, bigquery, project, chat
         answer=clarification?{answer:clarification,tools:[]}:(await baselineOverview?.(effectiveMessage)||await chat(effectiveMessage,{analysisContext:result.transition.applies_to_message?result.context:null,transition:result.transition,recentEvidence,pendingIntent:pending?.message||null,requestId:id,signal:cancellation.signal}));
         console.info('Oracle UI stage outcome:',stageOutcome({id,stage:'agent_request',startedAt:chatStarted,outcome:'success',extra:{tool_count:(answer.tools||[]).length}}));
       } catch(error) {
-        console.error('Oracle UI stage outcome:',stageOutcome({id,stage:'agent_request',startedAt:chatStarted,outcome:'failed',error}));
+        const failure=transportFailure(error,{stage:error?.failed_stage||'agent_request'});
+        console.error('Oracle UI stage outcome:',stageOutcome({id,stage:'agent_request',startedAt:chatStarted,outcome:'failed',error,extra:{failure_kind:failure.failure_kind,failure_stage:failure.failure_stage,status:failure.status,error_code:failure.code}}));
         if(error?.code==='THROTTLED') return res.status(429).json({success:false,code:'SHOPIFY_TEMPORARILY_RATE_LIMITED',error:SHOPIFY_RATE_LIMIT_MESSAGE,request_id:id});
-        return res.status(504).json({success:false,code:'ORACLE_AGENT_DEADLINE',error:terminalMessage('agent_request'),request_id:id});
+        if(failure.failure_kind==='timeout_or_abort')return res.status(504).json({success:false,code:'ORACLE_AGENT_DEADLINE',error:terminalMessage('agent_request'),request_id:id,failure_stage:failure.failure_stage});
+        return res.status(502).json({success:false,code:failure.code,error:'The analysis service rejected the request before it completed. No figures were returned; retry explicitly with the correlation ID.',request_id:id,failure_stage:failure.failure_stage,upstream_status:failure.status});
       }
       recentChatEvidence.set(key,{expires_at:now()+15*60*1000,value:{as_of:new Date(now()).toISOString(),answer:String(answer.answer||'').slice(0,6000),tools:(answer.tools||[]).slice(0,20)}});
       // If either the local classifier or the model asks for a date, retain the

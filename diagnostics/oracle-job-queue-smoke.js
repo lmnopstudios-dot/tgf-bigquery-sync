@@ -31,7 +31,9 @@ export async function smokeOracleJobQueue({store,attempts=20,delayMs=500}){
     const claimed=await store.claim({worker_id:`smoke-${process.pid}`,leaseMs:60_000,job_id:created.job_id});
     expect(claimed?.job_id===created.job_id&&claimed.status==='running'&&Number(claimed.attempts)===1,'CLAIM_MISMATCH');
     stage='completion';
-    await store.finish(created.job_id,{synthetic:true,lifecycle:'completed'});
+    // Completion must be written by the same lease owner that claimed the
+    // synthetic job; this exercises (rather than bypasses) durable ownership.
+    await store.finish(created.job_id,{synthetic:true,lifecycle:'completed'},claimed);
     stage='completed_retrieval';
     row=null;
     for(let i=0;i<attempts&&row?.status!=='completed';i++){row=await store.get(created.job_id,owner);if(row?.status!=='completed')await sleep(delayMs);}

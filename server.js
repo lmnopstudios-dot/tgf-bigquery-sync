@@ -8746,6 +8746,8 @@ if (process.env.ORACLE_UI_PASSWORD || process.env.ORACLE_UI_SESSION_SECRET) {
       const recentEvidence = conversation.recentEvidence
         ? `Recent governed Oracle evidence (reuse when relevant; disclose this as-of time and do not treat the prior interpretation as new raw data): ${JSON.stringify(conversation.recentEvidence)}\n\n`
         : '';
+      const agentStarted=Date.now();
+      console.info('Oracle internal agent dispatch:',{request_id:conversation.requestId,job_id:conversation.jobId||null,attempt:conversation.attempt||null,stage:'agent_dispatch',route:durable?'durable_job':'interactive'});
       const response = await fetch(`http://127.0.0.1:${PORT}/agent`, {
         method: 'POST',
         headers: {
@@ -8756,11 +8758,16 @@ if (process.env.ORACLE_UI_PASSWORD || process.env.ORACLE_UI_SESSION_SECRET) {
         body: JSON.stringify({ message: `${recentEvidence}${conversation.analysisContext?.metrics?.length ? `Governed session-local analysis context (retain unless this user message explicitly changes it): ${JSON.stringify(conversation.analysisContext)}\n\nCurrent user message: ${message}\n\nUse only relevant context fields for tool calls. State the resolved scope in the answer, including cohort years, exact order sequence, observation end, exclusions, classification coverage and unclassified products.` : message}`, analysis_context:conversation.analysisContext||null, deadline_at:deadlineAt,request_id:conversation.requestId,job_id:conversation.jobId||null,job_attempt:conversation.attempt||null,durable_job:durable }),
         signal: conversation.signal ? AbortSignal.any([conversation.signal,AbortSignal.timeout(durable?7*60_000+5_000:74_000)]) : AbortSignal.timeout(durable?7*60_000+5_000:74_000)
       });
-      const payload = await response.json();
+      const payload = await response.json().catch(()=>({success:false,code:'ORACLE_AGENT_INVALID_RESPONSE',failed_stage:'agent_response'}));
+      console.info('Oracle internal agent outcome:',{request_id:conversation.requestId,job_id:conversation.jobId||null,attempt:conversation.attempt||null,stage:'agent_response',status:response.status,outcome:response.ok&&payload.success?'success':'rejected',elapsed_ms:Date.now()-agentStarted});
       if (response.status === 429 && payload.code === 'SHOPIFY_TEMPORARILY_RATE_LIMITED') return { answer: SHOPIFY_RATE_LIMIT_MESSAGE, tools: [] };
       if (!response.ok || !payload.success) {
-        if(durable)throw Object.assign(new Error(payload.error||'The governed analysis could not be completed; no figures were returned.'),{code:payload.code||'ORACLE_AGENT_TERMINAL_FAILURE',failed_stage:payload.failed_stage||'agent'});
-        return { answer: payload.error || 'The governed analysis could not be completed; no figures were returned.', tools: [] };
+        // Treat a prompt HTTP rejection as a rejection, not as elapsed-budget
+        // exhaustion. Only bounded, non-sensitive fields cross this internal
+        // transport; response bodies and request content are never logged.
+        const safeCode=/^[A-Z][A-Z0-9_]{0,63}$/.test(String(payload.code||''))?payload.code:'ORACLE_AGENT_API_REJECTED';
+        const safeStage=/^[a-z][a-z0-9_]{0,63}$/.test(String(payload.failed_stage||''))?payload.failed_stage:'agent_request';
+        throw Object.assign(new Error('Oracle agent request rejected'),{name:'ApiError',code:safeCode,status:response.status,failed_stage:safeStage,durable});
       }
       return { answer: payload.answer, tools: payload.tools_used || [], inline_chart: payload.inline_chart || null };
     }

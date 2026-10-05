@@ -12,6 +12,20 @@ export function errorClass(error) {
   return String(error?.constructor?.name || 'Error').slice(0, 80);
 }
 
+export function transportFailure(error,{stage='agent_request'}={}) {
+  const timeout=error?.name==='AbortError'||error?.name==='TimeoutError'||error?.code==='ABORT_ERR'||error?.code==='ETIMEDOUT';
+  const rawStatus=Number(error?.status ?? error?.statusCode);
+  const status=Number.isInteger(rawStatus)&&rawStatus>=400&&rawStatus<=599?rawStatus:null;
+  const suppliedCode=String(error?.code||'');
+  const code=SAFE_CODE.test(suppliedCode)?suppliedCode:(timeout?'ORACLE_AGENT_DEADLINE':'ORACLE_AGENT_API_REJECTED');
+  return {
+    failure_stage:SAFE_STAGE.test(stage)?stage:'agent_request',
+    failure_kind:timeout?'timeout_or_abort':status?'http_api_rejection':'transport_failure',
+    status,
+    code
+  };
+}
+
 const SAFE_CODE = /^[A-Z][A-Z0-9_]{0,63}$/;
 const SAFE_STAGE = /^[a-z][a-z0-9_]{0,63}$/;
 const SAFE_VALIDATION_TOKEN = /^[a-z][a-z0-9_]{0,63}$/;
