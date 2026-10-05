@@ -15,6 +15,7 @@ import { applyOrderDateScope } from './oracle/order-date-scope.js';
 import { assertOracleToolSchemas } from './oracle/tool-schema-validator.js';
 import { createKnowledgeService, executeKnowledgeToolCall } from './oracle/knowledge-bigquery.js';
 import { createOracleUiRouter } from './oracle/ui-router.js';
+import { transitionAnalysisContext } from './oracle/analysis-context.js';
 import { createEcommerceReportV2 } from './oracle/ecommerce-report-v2.js';
 import { createOracleFinanceService } from './oracle/finance.js';
 import { createAnnualLocationFinanceService } from './oracle/annual-location-finance.js';
@@ -8258,12 +8259,12 @@ app.post(
         });
       }
       const suppliedContext=req.body?.analysis_context;
-      if(suppliedContext?.tool_route==='compare_historical_events'&&!/black\s+friday/i.test(message))message=`Compare the last ${suppliedContext.event_count||3} ${suppliedContext.event_name||'Black Friday'} sales. User follow-up: ${message}`;
+      const resolvedRequest=transitionAnalysisContext(suppliedContext,message,{now:Date.now()});
 
       // This broad KPI request has a governed deterministic evidence plan. It
       // must not enter model-selected inventory tooling or let one optional
       // source failure erase independent successful sections.
-      const baselineAnswer=await baselineOverview(message);
+      const baselineAnswer=await baselineOverview(message,{analysisContext:resolvedRequest.context});
       if(baselineAnswer)return res.json({success:true,answer:baselineAnswer.answer,evidence:baselineAnswer.evidence,tools_used:baselineAnswer.tools,request_id:id});
 
       const currentDate = new Date()

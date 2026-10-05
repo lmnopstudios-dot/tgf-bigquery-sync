@@ -19,8 +19,18 @@ export const ANALYSIS_ROUTE_DISPATCHERS = Object.freeze(Object.fromEntries(ANALY
     : baselineThenAgent
 ])));
 
+export function assertEvidenceAgreement(contextValue,evidence){
+  const context=contextValue==null?null:validateAnalysisContext(contextValue);
+  if(!evidence||!context?.requested_subject)return true;
+  const actual=evidence.requested_subject||evidence.subject||({shopify_operational_sales_baseline:'sales',governed_device_conversion:'device_conversion',focused_woo_historical_conversion:'woo_traffic_conversion',independent_calendar_month_comparison:'calendar_period_comparison',woo_shopify_platform_comparison:'platform_sales',woo_shopify_monthly_platform_comparison:'platform_sales'}[evidence.kind]);
+  if(actual!==context.requested_subject)throw Object.assign(new Error('Retrieved evidence does not agree with the resolved analytical subject.'),{code:'EVIDENCE_SCOPE_MISMATCH',failed_stage:'evidence_validation'});
+  return true;
+}
+
 export async function dispatchAnalysisRequest({message,analysisContext,baselineOverview=null,baselineOptions,chat,chatOptions}){
   const context=analysisContext==null?null:validateAnalysisContext(analysisContext);
   const binding=context?.tool_route?ANALYSIS_ROUTE_DISPATCHERS[context.tool_route]:baselineThenAgent;
-  return binding({message,baselineOverview,baselineOptions,chat,chatOptions});
+  const result=await binding({message,baselineOverview,baselineOptions:{...baselineOptions,analysisContext:context},chat,chatOptions});
+  assertEvidenceAgreement(context,result?.evidence);
+  return result;
 }
