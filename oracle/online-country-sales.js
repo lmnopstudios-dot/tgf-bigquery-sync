@@ -128,7 +128,10 @@ export function onlineCountrySalesSql(project) {
     SAFE_DIVIDE(c.unknown_country_orders,c.eligible_orders) unknown_order_share,
     SAFE_DIVIDE(c.unknown_country_sales,c.eligible_sales) unknown_sales_share
   FROM coverage c LEFT JOIN ranked r ON r.currency=c.currency AND r.country_rank<=${ONLINE_COUNTRY_LIMIT}
-  LEFT JOIN shopify_required_coverage sc USING(currency)
+  -- The preceding ON join intentionally retains both c.currency and
+  -- r.currency.  A subsequent USING(currency) is therefore ambiguous in
+  -- BigQuery.  Bind coverage to the authoritative population currency.
+  LEFT JOIN shopify_required_coverage sc ON sc.currency=c.currency
   ORDER BY currency,country_rank LIMIT 100`;
 }
 
@@ -136,10 +139,21 @@ export function createOnlineCountrySalesService({ bigquery, project }) {
   if (!bigquery?.query || !project) throw new Error('bigquery and project are required');
   return async input => {
     const params = validateOnlineCountrySalesInput(input);
-    const [rows] = await bigquery.query({ query: onlineCountrySalesSql(project),
-      params: { ...params, matrixify_app_id: MATRIXIFY_APP_ID }, types: { currency: 'STRING',platform:'STRING' },
-      useLegacySql: false, maximumBytesBilled: String(ONLINE_COUNTRY_MAX_BYTES),
-      labels: { component: 'oracle', operation: 'online_country_sales' } });
+    let rows;
+    try {
+      [rows] = await bigquery.query({ query: onlineCountrySalesSql(project),
+        params: { ...params, matrixify_app_id: MATRIXIFY_APP_ID }, types: { currency: 'STRING',platform:'STRING' },
+        useLegacySql: false, maximumBytesBilled: String(ONLINE_COUNTRY_MAX_BYTES),
+        labels: { component: 'oracle', operation: 'online_country_sales' } });
+    } catch (cause) {
+      const detail=Array.isArray(cause?.errors)?cause.errors[0]:null;
+      const safe=value=>String(value||'').replace(/[^A-Za-z0-9_.:-]/g,'').slice(0,80)||null;
+      const error=Object.assign(new Error('Governed country evidence query failed.'),{
+        code:'ONLINE_COUNTRY_QUERY_FAILED',stage:'provider_query',cause,
+        diagnostic:{stage:'provider_query',reason:safe(detail?.reason||cause?.reason),code:safe(cause?.code),location:safe(detail?.location||cause?.location)}
+      });
+      throw error;
+    }
     return { period: { start_date: params.start_date, end_date: params.end_date }, currency_filter: params.currency,
       rows: JSON.parse(JSON.stringify(rows)), source_scope: params.platform?[params.platform]:['woo','shopify'],
       shopify_native_history: { known_start: SHOPIFY_NATIVE_HISTORY_START,

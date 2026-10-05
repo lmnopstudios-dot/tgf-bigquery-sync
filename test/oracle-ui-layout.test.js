@@ -25,7 +25,8 @@ test('Oracle layout makes the thread the vertical scroller and lets messages and
   assert.match(css, /\.messages\{[^}]*min-height:0[^}]*overflow-x:hidden[^}]*overflow-y:auto/);
   assert.match(css, /\.message\{[^}]*flex:0 0 auto[^}]*overflow:visible/);
   assert.match(css, /\.proposal-group\{[^}]*flex:0 0 auto/);
-  assert.match(css, /\.message table\{[^}]*overflow-x:auto[^}]*overflow-y:visible/);
+  assert.match(css, /\.markdown-table-scroll\{[^}]*overflow-x:auto[^}]*overflow-y:hidden/);
+  assert.match(css, /\.message table\{[^}]*width:max-content[^}]*min-width:100%/);
   assert.match(css, /#composer\{[^}]*position:sticky[^}]*bottom:0/);
   assert.doesNotMatch(css, /\.message\{[^}]*(?:max-height|overflow-y:auto)/);
   assert.match(css, /@media\(max-width:700px\)/);

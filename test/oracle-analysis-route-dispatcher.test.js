@@ -80,3 +80,17 @@ test('persisted evidence must agree with authoritative subject before recovery',
   assert.throws(()=>assertEvidenceAgreement(country,{kind:'shopify_customer_comparison',subject:'customers'}),error=>error.code==='EVIDENCE_SCOPE_MISMATCH'&&error.failed_stage==='evidence_validation');
   assert.equal(assertEvidenceAgreement(country,{kind:'shopify_shipping_country_comparison',subject:'shipping_countries'}),true);
 });
+
+test('customer to conversion to country and fresh country use the shared governed dispatcher',async()=>{
+  const customer=transitionAnalysisContext(null,'Compare January through September 2026 customers.',{now:NOW}).context;
+  const conversion=transitionAnalysisContext(customer,'Can you give me a monthly breakdown of mobile and desktop conversion rates this year?',{now:NOW}).context;
+  const continued=transitionAnalysisContext(conversion,'Show online sales this year by country instead.',{now:NOW}).context;
+  const fresh=transitionAnalysisContext(null,'Show online sales this year by country instead.',{now:NOW}).context;
+  for(const context of [continued,fresh]){
+    assert.equal(context.tool_route,'get_online_country_sales');assert.equal(context.requested_subject,'shipping_countries');
+    assert.deepEqual([context.start_date,context.end_date],['2026-01-01','2026-10-05']);
+    let chatCalls=0;
+    const result=await dispatchAnalysisRequest({message:'Show online sales this year by country instead.',analysisContext:context,baselineOverview:async(_message,options)=>{assert.equal(options.analysisContext,context);return{answer:'country evidence',tools:['get_online_country_sales'],evidence:{kind:'shopify_shipping_country_comparison',subject:'shipping_countries'}};},chat:async()=>{chatCalls++;return null;}});
+    assert.equal(result.answer,'country evidence');assert.equal(chatCalls,0);
+  }
+});
