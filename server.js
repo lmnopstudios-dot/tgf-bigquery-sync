@@ -34,7 +34,7 @@ import { createShopifyCountryProductsService } from './oracle/shopify-country-pr
 import { createCustomerOrderIntervalService } from './oracle/customer-order-interval.js';
 import { createOnlineCountrySalesService, ONLINE_COUNTRY_MAX_BYTES } from './oracle/online-country-sales.js';
 import { createPlatformSalesService } from './oracle/platform-sales.js';
-import { createDeviceSourceConversionService, executeDeviceSourceConversionToolCall } from './oracle/device-source-conversion.js';
+import { executeDeviceSourceConversionToolCall } from './oracle/device-source-conversion.js';
 import { answerWooDeviceConversionRequest } from './oracle/woo-device-conversion-request.js';
 import { answerShopifyLaunchDeviceConversionRequest } from './oracle/shopify-launch-device-conversion-request.js';
 import { answerShopifyDeviceSourceRequest } from './oracle/shopify-device-source-conversion-request.js';
@@ -52,6 +52,7 @@ import {createGoogleAdsService,executeGoogleAdsToolCall} from './oracle/google-a
 import {createBaselineOverviewService} from './oracle/baseline-overview.js';
 import {createProductEvidenceReportService} from './oracle/product-report.js';
 import {createHistoricalEventComparisonService} from './oracle/historical-event-comparison.js';
+import {createOracleProviderDependencies} from './oracle/provider-dependencies.js';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -160,7 +161,8 @@ const shopifyCountryProductsService = createShopifyCountryProductsService({ bigq
 const customerOrderIntervalService = createCustomerOrderIntervalService({ bigquery, project: GOOGLE_PROJECT_ID });
 const onlineCountrySalesService = createOnlineCountrySalesService({ bigquery, project: GOOGLE_PROJECT_ID });
 const platformSalesService = createPlatformSalesService({ bigquery, project: GOOGLE_PROJECT_ID });
-const deviceSourceConversionService = createDeviceSourceConversionService({ bigquery, project: GOOGLE_PROJECT_ID });
+// Bind the live server through the same adapter factory used by the parity CLI.
+const {deviceConversion:deviceSourceConversionService}=createOracleProviderDependencies({env:process.env,bigquery,project:GOOGLE_PROJECT_ID});
 const categorySalesService = createCategorySalesService({ bigquery, project: GOOGLE_PROJECT_ID });
 const productViewPurchaseService = createProductViewPurchaseService({bigquery});
 const pageviewsPerSessionService=createPageviewsPerSessionService({bigquery,project:GOOGLE_PROJECT_ID,runShopifyql:async(query,reportName)=>runShopifyqlReport(await getShopifyAccessToken(),query,reportName),getShopTimezone:async()=>{const data=await shopifyGraphQL(await getShopifyAccessToken(),'{ shop { ianaTimezone } }');if(!data?.shop?.ianaTimezone)throw new Error('Shopify reporting timezone unavailable');return data.shop.ianaTimezone;}});

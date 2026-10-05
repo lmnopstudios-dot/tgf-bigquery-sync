@@ -14,7 +14,7 @@ const governedBaseline = async ({message,baselineOverview,baselineOptions}) => {
 // route names, so a deterministic transition cannot silently become orphaned.
 export const ANALYSIS_ROUTE_DISPATCHERS = Object.freeze(Object.fromEntries(ANALYSIS_TOOL_ROUTES.map(route=>[
   route,
-  route==='get_woocommerce_device_conversion'
+  ['get_woocommerce_device_conversion','get_governed_device_conversion'].includes(route)
     ? governedBaseline
     : baselineThenAgent
 ])));

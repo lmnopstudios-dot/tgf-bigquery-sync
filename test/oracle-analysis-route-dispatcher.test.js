@@ -32,6 +32,7 @@ test('every deterministic transition route is registered with an executable disp
     'What is the average number of products a customer views in a session before buying something?',
     'Compare the last 3 Black Friday sales.',
     'Establish my Shopify operational sales baseline for August and September 2026.',
+    'Can you give me a monthly breakdown of mobile and desktop conversion rates this year?',
     EXACT
   ];
   const emitted=new Set(prompts.map(message=>transitionAnalysisContext(null,message,{now:NOW}).context.tool_route).filter(Boolean));
@@ -51,4 +52,12 @@ test('persisted Woo context validates and dispatches only its governed baseline 
   assert.equal(chatCalls,0);
   assert.throws(()=>validateAnalysisContext({...persisted,tool_route:'unknown_tool'}),error=>error.code==='INVALID_ANALYSIS_CONTEXT'&&error.validation_rule==='allowed_route');
   await assert.rejects(dispatchAnalysisRequest({message:EXACT,analysisContext:{...persisted,tool_route:'unknown_tool'},chat:async()=>({})}),error=>error.code==='INVALID_ANALYSIS_CONTEXT');
+});
+
+test('device conversion replaces stale customer intent and retains matching elapsed year-on-year scope',()=>{
+  const customer=transitionAnalysisContext(null,'Compare September 2026 Shopify customers with August 2026.',{now:NOW}).context;
+  const first=transitionAnalysisContext(customer,'Can you give me a monthly breakdown of mobile and desktop conversion rates this year?',{now:NOW});
+  assert.deepEqual(first.context.metrics,['conversion']);assert.equal(first.context.tool_route,'get_governed_device_conversion');assert.equal(first.context.start_date,'2026-01-01');assert.equal(first.context.end_date,'2026-10-05');assert.equal(first.context.partial_period,true);
+  const follow=transitionAnalysisContext(first.context,"Are this year's online conversion rates better than last year's?",{now:NOW});
+  assert.equal(follow.context.tool_route,'get_governed_device_conversion');assert.deepEqual(follow.context.metrics,['conversion']);assert.equal(follow.context.comparison_type,'matching_elapsed_year_on_year');assert.equal(follow.context.comparison_start_date,'2025-01-01');assert.equal(follow.context.comparison_end_date,'2025-10-05');assert.equal(follow.context.end_date,'2026-10-05');
 });
