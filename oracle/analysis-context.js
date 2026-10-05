@@ -116,6 +116,7 @@ export function transitionAnalysisContext(existing, message, {now=Date.now(),rep
   if(explicitNew) base=emptyAnalysisContext();
   if(broadBaseline){const context=emptyAnalysisContext();return{context,transition:{continuation:false,set:[],clear:ANALYSIS_CONTEXT_FIELDS.filter(key=>JSON.stringify(base[key])!==JSON.stringify(context[key])),retain:[],missing_required_fields:[],ready_to_execute:true,applies_to_message:true}};}
   if(!unrelated&&!nonTemporalKind){
+    const productChoiceFollowup=base.tool_route==='get_product_sales_analysis'&&(/\b(?:choice|option|candidate|product identit(?:y|ies)|stable (?:product )?reference)\b/i.test(text)||/^\s*(?:#?\d+|(?:woo|shopify|square):[^\s]+:[^\s]+)\s*[.!]?$/i.test(text));
     const excludedBlackFriday=/(?:\bexclude\b|\bexcluding\b|\bnot\b|\boutside\b|\bexcept\b)[\s\S]{0,30}\bblack\s+friday\b/i.test(text);
     const excludedMonthNumbers=new Set([...lower.matchAll(/(?:exclude|excluding|except|not|outside)\s+(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b/g)].map(x=>MONTHS[x[1]]));
     const namedMonths=[...lower.matchAll(/\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\b/g)].map(x=>MONTHS[x[1]]).filter(x=>!excludedMonthNumbers.has(x));
@@ -163,7 +164,7 @@ export function transitionAnalysisContext(existing, message, {now=Date.now(),rep
     else if(!explicitSubject&&!viewsBeforePurchase&&/\brefunds?\b/.test(lower)) set.metrics=['refunds'],set.analysis_type='finance';
     else if(!explicitSubject&&!viewsBeforePurchase&&/\bsales|revenue\b/.test(lower)) set.metrics=['sales'],set.analysis_type='finance';
     else if(!explicitSubject&&!viewsBeforePurchase&&/\bcustomers?\b/.test(lower)) set.metrics=['customers'],set.analysis_type='customers';
-    else if(!explicitSubject&&!viewsBeforePurchase&&/\bproducts?\b/.test(lower)) set.metrics=['products'],set.analysis_type='products';
+    else if(!explicitSubject&&!viewsBeforePurchase&&!productChoiceFollowup&&/\bproducts?\b/.test(lower)) set.metrics=['products'],set.analysis_type='products';
     for(const [pattern,grain] of [[/\bdaily\b/,'day'],[/\bweekly\b/,'week'],[/\bmonthly\b/,'month'],[/\bquarterly\b/,'quarter'],[/\byearly|annually\b/,'year']]) if(pattern.test(lower)) set.grain=grain;
     if(/each year separately|by (?:cohort )?year|annual cohorts?/.test(lower))set.grain='year';
     for(const currency of CURRENCIES) if(new RegExp(`\\b${currency}\\b`,'i').test(text)) set.currencies=[currency];
