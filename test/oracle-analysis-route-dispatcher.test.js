@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { ANALYSIS_TOOL_ROUTES, emptyAnalysisContext, transitionAnalysisContext, validateAnalysisContext } from '../oracle/analysis-context.js';
-import { ANALYSIS_ROUTE_DISPATCHERS, dispatchAnalysisRequest } from '../oracle/analysis-route-dispatcher.js';
+import { ANALYSIS_ROUTE_DISPATCHERS, assertEvidenceAgreement, dispatchAnalysisRequest } from '../oracle/analysis-route-dispatcher.js';
 
 const NOW=Date.parse('2026-10-05T12:00:00Z');
 const EXACT='Show historical WooCommerce GA4 conversion evidence for April, June, July, August and September in 2024 and 2025. Retrieve exactly these ten independent months using only get_woocommerce_device_conversion. Return sessions, ecommerce purchases and the compatible purchase-to-session rate, by source store and device wherever supported. State definitions, mapping, coverage and stored collection timestamps. Explain whether purchases count events or purchasing sessions. Preserve successful months. No unrelated providers, inventory, collection, backfill or mutation.';
@@ -32,6 +32,8 @@ test('every deterministic transition route is registered with an executable disp
     'What is the average number of products a customer views in a session before buying something?',
     'Compare the last 3 Black Friday sales.',
     'Establish my Shopify operational sales baseline for August and September 2026.',
+    'Compare September 2026 Shopify customers with August 2026.',
+    'Compare September 2026 Search Console with August 2026.',
     'Can you give me a monthly breakdown of mobile and desktop conversion rates this year?',
     EXACT
   ];
@@ -60,4 +62,21 @@ test('device conversion replaces stale customer intent and retains matching elap
   assert.deepEqual(first.context.metrics,['conversion']);assert.equal(first.context.tool_route,'get_governed_device_conversion');assert.equal(first.context.start_date,'2026-01-01');assert.equal(first.context.end_date,'2026-10-05');assert.equal(first.context.partial_period,true);
   const follow=transitionAnalysisContext(first.context,"Are this year's online conversion rates better than last year's?",{now:NOW});
   assert.equal(follow.context.tool_route,'get_governed_device_conversion');assert.deepEqual(follow.context.metrics,['conversion']);assert.equal(follow.context.comparison_type,'matching_elapsed_year_on_year');assert.equal(follow.context.comparison_start_date,'2025-01-01');assert.equal(follow.context.comparison_end_date,'2025-10-05');assert.equal(follow.context.end_date,'2026-10-05');
+});
+
+test('ordinary cross-subject sequence replaces incompatible intent without tool names',()=>{
+  let context=transitionAnalysisContext(null,'Compare January through September 2026 customers.',{now:NOW}).context;
+  assert.equal(context.tool_route,'get_shopify_customer_kpis');
+  context=transitionAnalysisContext(context,'Can you please give me a breakdown of online sales this year by country?',{now:NOW}).context;
+  assert.equal(context.requested_subject,'shipping_countries');assert.equal(context.tool_route,'get_online_country_sales');assert.deepEqual(context.metrics,['shipping_countries']);assert.deepEqual([context.start_date,context.end_date],['2026-01-01','2026-10-05']);
+  context=transitionAnalysisContext(context,'Monthly mobile and desktop converison rates instead.',{now:NOW}).context;
+  assert.equal(context.requested_subject,'device_conversion');assert.equal(context.tool_route,'get_governed_device_conversion');assert.deepEqual(context.metrics,['conversion']);assert.equal(context.geography,null);
+  context=transitionAnalysisContext(context,'What about customers last month?',{now:NOW}).context;
+  assert.equal(context.requested_subject,'customers');assert.equal(context.tool_route,'get_shopify_customer_kpis');assert.deepEqual([context.start_date,context.end_date],['2026-09-01','2026-09-30']);
+});
+
+test('persisted evidence must agree with authoritative subject before recovery',()=>{
+  const country=transitionAnalysisContext(null,'Online sales this year by country.',{now:NOW}).context;
+  assert.throws(()=>assertEvidenceAgreement(country,{kind:'shopify_customer_comparison',subject:'customers'}),error=>error.code==='EVIDENCE_SCOPE_MISMATCH'&&error.failed_stage==='evidence_validation');
+  assert.equal(assertEvidenceAgreement(country,{kind:'shopify_shipping_country_comparison',subject:'shipping_countries'}),true);
 });

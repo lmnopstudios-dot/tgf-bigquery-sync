@@ -6,8 +6,8 @@ const PLATFORM_COMPARISON=/\b(?:compare|comparison|versus|vs\.?|trend)\b[\s\S]*\
 const SALES_BASELINE=/\b(?:sales\s+(?:starting\s+)?baseline|ecommerce\s+starting\s+baseline)\b|\bestablish\b[\s\S]{0,80}\b(?:sales|ecommerce)\b[\s\S]{0,40}\bbaseline\b/i;
 const OPERATIONAL_SALES=/\bshopify\b[\s\S]{0,50}\boperational sales\b|\boperational sales\b[\s\S]{0,50}\bshopify\b/i;
 const SUBJECTS=Object.freeze({
-  conversion:/\bconversion(?:\s+rates?)?\b/i,
-  shipping:/\b(?:shipping|delivery)\s+(?:countries|country|destinations?)\b|\b(?:countries|country|destinations?)\b[\s\S]{0,40}\b(?:shipping|delivery)\b/i,
+  conversion:/\bconv(?:ersion|erison)(?:\s+rates?)?\b/i,
+  shipping:/\b(?:shipping|delivery)\s+(?:countries|country|destinations?)\b|\b(?:countries|country|destinations?)\b[\s\S]{0,40}\b(?:shipping|delivery)\b|\b(?:online\s+)?sales\b[\s\S]{0,60}\b(?:by|per|breakdown (?:by|of))\s+(?:shipping\s+)?(?:countries|country|destinations?)\b/i,
   customers:/\bcustomers?\b/i,
   search_console:/\bsearch\s+console\b|\borganic\s+(?:search|clicks?|impressions?)\b/i
 });
@@ -77,7 +77,7 @@ function renderKlaviyo(result){if(!result)return['- Unavailable: Klaviyo evidenc
 export function createBaselineOverviewService({managementReport,onlineCountrySales=null,platformSales=null,customerReport=null,shopifyDevice=null,wooConversion=shopifyDevice,knowledgeService=null,klaviyo=null,organicReport=null,salesReport=null,locationFinance=null,now=()=>new Date(),timeZone='Europe/London',legacyFinance=null,finance=null,shopifyConversion=null,shopifySales=null}){
   return async (message,context={})=>{
     if(!isBaselineOverviewRequest(message))return null;
-    const requestedAt=new Date(now()),periods=resolveBaselinePeriods(message,{now:requestedAt,timeZone});
+    const requestedAt=new Date(now()),resolved=context.analysisContext,defaultPeriods=resolveBaselinePeriods(message,{now:requestedAt,timeZone}),periods=resolved?.start_date?{current:{start_date:resolved.start_date,end_date:resolved.end_date},previous_period:resolved.comparison_start_date?{start_date:resolved.comparison_start_date,end_date:resolved.comparison_end_date}:defaultPeriods.previous_period,prior_year:defaultPeriods.prior_year,explicit:true,time_zone:timeZone}:defaultPeriods;
     // Backwards-compatible construction for isolated callers; production uses the management report.
     if(!managementReport&&finance){managementReport=async()=>({finance:{current:[{currency:'GBP',...(await finance({...periods.current,currency:'GBP'}))}],comparisons:{}},conversion:{current:(await shopifyConversion({...periods.current,timeseries:'none'}))?.metrics,comparisons:{}},customers:{current:null},products:{current:(await shopifySales({...periods.current,timeseries:'none'}))?.products||[]}});}
     const broad=LEGACY_BASELINE.test(String(message||'').trim())||COMPREHENSIVE.test(String(message||''));
@@ -137,7 +137,7 @@ export function createBaselineOverviewService({managementReport,onlineCountrySal
       return{answer:lines.join('\n'),tools:['get_shopify_sales_kpis'],attempted_tools:sections.map(()=> 'get_shopify_sales_kpis'),evidence:{kind:'shopify_operational_sales_baseline',selected_intent:'sales_baseline',requested_periods:requested,services_invoked:['get_shopify_sales_kpis'],sections,metric_rows:rows}};
     }
     if(subject==='shipping'){
-      if(!onlineCountrySales)return null;const selected=[periods.current,periods.previous_period],items=[];
+      if(!onlineCountrySales)return null;const selected=resolved?.start_date&&!resolved?.comparison_start_date?[periods.current]:[periods.current,periods.previous_period],items=[];
       for(const period of selected){const result=await onlineCountrySales({...period,currency:null,platform:'shopify'});items.push({period,result,query_executed_at:iso(now())});}
       const lines=['# Shopify shipping-country comparison',`**Requested subject:** direct Shopify shipping countries; ${selected.map(periodLabel).join(' versus ')}.`];
       for(const item of items){lines.push(`\n## ${periodLabel(item.period)}`);const totals=sourceTotals(item.result).filter(x=>x.source_platform==='shopify');for(const row of totals)lines.push(`- **Shopify · ${row.currency}:** ${number(row.orders)} distinct eligible source orders; ${money(row.sales,row.currency)} operational net sales; evidence dates ${row.first_order_date||'unavailable'} to ${row.last_order_date||'unavailable'}.`);for(const row of item.result.rows||[]){const source=(row.sources||[]).find(x=>x.source_platform==='shopify');if(source)lines.push(`- **${row.currency} · ${row.country_code}:** ${number(source.orders)} orders; ${money(source.operational_net_sales,row.currency)} operational net sales.`);}if(!totals.length)lines.push('- No Shopify source population was returned; missing evidence is not zero.');}
