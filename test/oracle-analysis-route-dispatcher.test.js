@@ -97,6 +97,6 @@ test('customer to conversion to country and fresh country use the shared governe
     assert.deepEqual([context.start_date,context.end_date],['2026-01-01','2026-10-05']);
     let chatCalls=0;
     const result=await dispatchAnalysisRequest({message:'Show online sales this year by country instead.',analysisContext:context,baselineOverview:async(_message,options)=>{assert.equal(options.analysisContext,context);return{answer:'country evidence',tools:['get_online_country_sales'],evidence:{kind:'shopify_shipping_country_comparison',subject:'shipping_countries'}};},chat:async()=>{chatCalls++;return null;}});
-    assert.match(result.answer,/country evidence$/);assert.equal(chatCalls,0);
+    assert.match(result.answer,/country evidence/);assert.equal(chatCalls,0);
   }
 });

@@ -1,3 +1,4 @@
+import { renderAnalyticalAnswer } from '../public/oracle/answer.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
@@ -37,10 +38,25 @@ test('invalid, empty, oversized and unrelated structured results safely fall bac
   assert.equal(buildOracleInlineChart('get_shopify_online_country_products',{period:{start_date:'2026-01-01',end_date:'2026-01-31'},rows}).groups[0].items.length,10);
 });
 
-test('chat keeps the prose answer and places a validated optional chart',async()=>{
-  const source=await readFile(new URL('../public/oracle/app.js',import.meta.url),'utf8');
-  assert.match(source,/renderMarkdown\(answer,data\.answer\)/);
-  assert.match(source,/placeInlineChart\(answer,loading,data\.inline_chart\)/);
+test('chat keeps its primary answer when optional chart rendering fails',()=>{
+  const previous=globalThis.document;
+  class Node {
+    constructor(tag=''){this.tag=tag;this.children=[];this.attrs={};this.style={};this.value='';}
+    append(...children){this.children.push(...children);}
+    setAttribute(key,value){this.attrs[key]=value;}
+    set textContent(value){this.value=String(value);this.children=[];}
+    get textContent(){return this.value+this.children.map(c=>c.textContent).join('');}
+    querySelector(){return null;}
+  }
+  globalThis.document={baseURI:'https://oracle.example/',createElement:tag=>new Node(tag),createElementNS:(_ns,tag)=>new Node(tag),createTextNode:value=>{const n=new Node();n.textContent=value;return n;}};
+  try {
+    const answer=new Node('div'),message=new Node('article');
+    renderAnalyticalAnswer(answer,message,{answer:'Business finding.\n\n<details>\n<summary>Show details</summary>\n\nSupporting evidence.\n</details>',charts:[{version:1,kind:'line',table:{}}]});
+    assert.match(answer.textContent,/Business finding/);assert.match(answer.textContent,/Show details/);
+    assert.equal(message.children.length,0);
+    renderAnalyticalAnswer(answer,message,{answer:'Recovered business finding.',inline_chart:{version:1,kind:'horizontal_bar',table:{columns:['Label','Value'],rows:[['Product',2]]},groups:[{label:'Count',items:[{label:'Product',value:2}]}]}});
+    assert.equal(message.children[0].tag,'figure');assert.match(answer.textContent,/Recovered business finding/);
+  }finally{globalThis.document=previous;}
 });
 
 test('chart placement replaces its structured marker and otherwise uses the safe append fallback',()=>{

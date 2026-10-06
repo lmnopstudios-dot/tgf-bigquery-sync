@@ -1,3 +1,4 @@
+import { presentAnalyticalAnswer } from './answer-presentation.js';
 import { selectOracleCharts } from './evidence-charts.js';
 import ExcelJS from 'exceljs';
 import { isProductReportRequest, resolveProductReportConfig, validateProductReportConfig, productReportConfigKey, productReportClarification, PRODUCT_REPORT_CAPABILITIES } from './product-report-config.js';
@@ -93,7 +94,7 @@ export function createProductPriorityService({graphql,loadSources,artifactStore,
     const agrees=artifact=>{if(artifact.request!==message||!artifact.envelope.report_config||productReportConfigKey(artifact.envelope.report_config)!==configKey)throw Object.assign(new Error('Request ID configuration conflict'),{code:'EXPORT_REQUEST_ID_CONFLICT',failed_stage:'evidence_validation'});return artifact;};
     if(!exportOwner||!requestId)throw Object.assign(new Error('Authenticated export owner required'),{code:'EXPORT_OWNER_REQUIRED',failed_stage:'export_authorization'});
     const artifactId=priorityArtifactId(exportOwner,requestId);
-    const deliver=artifact=>({answer:artifact.answer,tools:['export_product_priorities'],evidence:artifact.envelope,charts:artifact.envelope.chart_specs||[],inline_chart:artifact.envelope.chart_specs?.[0]||null,artifact:{id:artifactId,filename:artifact.filename,row_count:artifact.envelope.rows.length,download_url:`${downloadBase}/${artifactId}`}});
+    const deliver=artifact=>presentAnalyticalAnswer({answer:artifact.answer,tools:['export_product_priorities'],evidence:artifact.envelope,charts:artifact.envelope.chart_specs||[],inline_chart:artifact.envelope.chart_specs?.[0]||null,artifact:{id:artifactId,filename:artifact.filename,row_count:artifact.envelope.rows.length,download_url:`${downloadBase}/${artifactId}`}},analysisContext || {});
     const stage=async(name,action)=>{onProviderStage?.({stage:name,status:'started'});try{const result=await action();onProviderStage?.({stage:name,status:'success'});return result;}catch(error){const diagnostic=bigQueryErrorDiagnostic(error);onProviderStage?.({stage:name,status:'failed',code:code(error),reason:diagnostic.reason,...(diagnostic.location?{location:diagnostic.location}:{})});throw Object.assign(error,{failed_stage:error.failed_stage||name});}};
     const existing=await stage('export_storage',()=>artifactStore.get(artifactId,exportOwner)).catch(error=>{throw Object.assign(new Error('Durable export storage unavailable'),{...bigQueryErrorDiagnostic(error),code:'EXPORT_STORAGE_UNAVAILABLE',failed_stage:'export_storage'});});if(existing){return deliver(agrees(existing));}
     if(inFlight.has(artifactId)){const result=await inFlight.get(artifactId);const saved=await artifactStore.get(artifactId,exportOwner);agrees(saved);return result;}

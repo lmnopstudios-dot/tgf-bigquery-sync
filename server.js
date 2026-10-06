@@ -1,3 +1,4 @@
+import { ANALYTICAL_PRESENTATION_INSTRUCTIONS, presentNativeConversionAnswer } from './oracle/answer-presentation.js';
 import { executeGovernedAgentAnalysis } from './oracle/analysis-route-dispatcher.js';
 import { createReadOnlyProductHistory } from './oracle/product-history.js';
 import { withOracleCharts } from './oracle/evidence-charts.js';
@@ -8270,7 +8271,7 @@ app.post(
       }
       const suppliedContext=req.body?.analysis_context;
       const baselineAnswer=await executeGovernedAgentAnalysis({message,analysisContext:suppliedContext,baselineOverview,baselineOptions:{exportOwner:exportOwnerKey('direct-agent',SYNC_SECRET),requestId:id,downloadBase:'/agent/exports',signal:cancellation.signal,onProviderStage:event=>console.info('Oracle direct provider stage:',{request_id:id,deployed_revision:process.env.RENDER_GIT_COMMIT||'unavailable',...event})}});
-      if(baselineAnswer)return res.json({success:true,answer:baselineAnswer.answer,evidence:baselineAnswer.evidence,tools_used:baselineAnswer.tools,inline_chart:baselineAnswer.inline_chart||null,charts:baselineAnswer.charts||[],artifact:baselineAnswer.artifact||null,request_id:id});
+      if(baselineAnswer)return res.json({success:true,answer:baselineAnswer.answer,presentation:baselineAnswer.presentation||null,evidence:baselineAnswer.evidence,tools_used:baselineAnswer.tools,inline_chart:baselineAnswer.inline_chart||null,charts:baselineAnswer.charts||[],artifact:baselineAnswer.artifact||null,request_id:id});
 
       const currentDate = new Date()
         .toISOString()
@@ -8284,7 +8285,7 @@ app.post(
       const governedDeviceAnswer = await answerShopifyDeviceSourceRequest(message, deviceSourceConversionService) || await answerShopifyLaunchDeviceConversionRequest(message, deviceSourceConversionService) || await answerWooDeviceConversionRequest(message, deviceSourceConversionService);
       if (governedDeviceAnswer) return res.json({
         success: true,
-        answer: governedDeviceAnswer.answer,
+        ...presentNativeConversionAnswer(governedDeviceAnswer),
         tools_used: [governedDeviceAnswer.route.tool],
         request_id: id
       });
@@ -8309,6 +8310,7 @@ app.post(
         model: 'gpt-5.6',
         instructions: `
 You are The Great Frog ecommerce data analyst.
+${ANALYTICAL_PRESENTATION_INSTRUCTIONS}
 
 You answer questions using the supplied tools.
 
@@ -8696,7 +8698,7 @@ Important rules:
         stage='response_generation';
         if(toolAdmissionStopped) {
           console.info('Agent stage outcome:',stageOutcome({id,stage:'tool_admission_stopped',startedAt:requestStarted,outcome:'bounded',extra:{proposed_call_count:callBudget.proposed,dispatched_call_count:callBudget.dispatched}}));
-          if(!res.writableEnded&&!cancellation.signal.aborted) return res.status(206).json({success:true,partial:true,answer:completedEvidence.length?evidenceSummary(completedEvidence,{unavailable:failedTools}):partialAnswer(message,successfulTools,failedTools),tools_used:[...toolsUsed],inline_chart:inlineChart,request_id:id});
+          if(!res.writableEnded&&!cancellation.signal.aborted) return res.status(206).json({success:true,partial:true,answer:completedEvidence.length?evidenceSummary(completedEvidence,{unavailable:failedTools}):partialAnswer(message,successfulTools,failedTools),tools_used:[...toolsUsed],evidence:{kind:'governed_tool_results',results:completedEvidence,unavailable:failedTools},inline_chart:inlineChart,request_id:id});
           return;
         }
         const synthesisStarted=Date.now();
@@ -8713,7 +8715,7 @@ Important rules:
         } catch(error) {
           const failure_kind=synthesisFailureKind(error,{deadlineAt,signal:cancellation.signal,outputBytes:synthesisInputBytes});
           console.error('Agent stage outcome:',stageOutcome({id,stage,startedAt:synthesisStarted,outcome:'failed',error,extra:{round:toolRounds,failure_kind,synthesis_input_bytes:synthesisInputBytes,deadline_remaining_ms:Math.max(0,deadlineAt-Date.now())}}));
-          if(successfulTools.length||failedTools.length) return res.status(206).json({success:true,partial:true,answer:evidenceSummary(completedEvidence,{unavailable:failedTools}),tools_used:[...toolsUsed],inline_chart:inlineChart,request_id:id});
+          if(successfulTools.length||failedTools.length) return res.status(206).json({success:true,partial:true,answer:evidenceSummary(completedEvidence,{unavailable:failedTools}),tools_used:[...toolsUsed],evidence:{kind:'governed_tool_results',results:completedEvidence,unavailable:failedTools},inline_chart:inlineChart,request_id:id});
           throw error;
         }
       }
@@ -8723,7 +8725,7 @@ Important rules:
         success: true,
         answer: response.output_text,
         tools_used: [...toolsUsed],
-        ...withOracleCharts({evidence:{kind:'governed_tool_results',results:completedEvidence}})
+        ...withOracleCharts({answer:response.output_text,evidence:{kind:'governed_tool_results',results:completedEvidence}})
       });
     } catch (error) {
       console.error('Agent stage outcome:',stageOutcome({id,stage,startedAt:requestStarted,outcome:'failed',error}));
@@ -8788,7 +8790,7 @@ if (process.env.ORACLE_UI_PASSWORD || process.env.ORACLE_UI_SESSION_SECRET) {
         const safeStage=/^[a-z][a-z0-9_]{0,63}$/.test(String(payload.failed_stage||''))?payload.failed_stage:'agent_request';
         throw Object.assign(new Error('Oracle agent request rejected'),{name:'ApiError',code:safeCode,status:response.status,failed_stage:safeStage,durable});
       }
-      return { answer: payload.answer, tools: payload.tools_used || [], evidence:payload.evidence||null,artifact:payload.artifact||null, inline_chart: payload.inline_chart || null };
+      return { answer: payload.answer, presentation:payload.presentation||null, charts:payload.charts||payload.evidence?.chart_specs||[], tools: payload.tools_used || [], evidence:payload.evidence||null,artifact:payload.artifact||null, inline_chart: payload.inline_chart || null };
     }
   }));
   app.use('/oracle', express.static(new URL('./public/oracle', import.meta.url).pathname, { index: 'index.html' }));
