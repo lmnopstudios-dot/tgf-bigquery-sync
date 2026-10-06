@@ -1,3 +1,4 @@
+import {META_INSTAGRAM_TOOL_DEFINITIONS} from './meta-instagram.js';
 import { ORDER_TOOL_DEFINITIONS } from './order-query.js';
 import { CUSTOMER_TOOL_DEFINITIONS } from './customer-query.js';
 import { CUSTOMER_JOURNEY_TOOL_DEFINITION } from './customer-journey.js';
@@ -30,6 +31,7 @@ export function createOracleToolDefinitions() {
         PAGEVIEWS_TOOL,
         ...KLAVIYO_TOOL_DEFINITIONS,
         ...GOOGLE_ADS_TOOL_DEFINITIONS,
+        ...META_INSTAGRAM_TOOL_DEFINITIONS,
         {
           type: 'function',
           name: 'get_ecommerce_management_report',

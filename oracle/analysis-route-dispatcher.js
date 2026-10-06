@@ -17,7 +17,7 @@ const governedBaseline = async ({message,baselineOverview,baselineOptions}) => {
 // route names, so a deterministic transition cannot silently become orphaned.
 export const ANALYSIS_ROUTE_DISPATCHERS = Object.freeze(Object.fromEntries(ANALYSIS_TOOL_ROUTES.map(route=>[
   route,
-  ['get_woocommerce_device_conversion','get_governed_device_conversion','get_general_sales_analysis','export_product_priorities','get_klaviyo_email_performance','get_klaviyo_click_purchase_opportunities','compare_klaviyo_email_with_shopify_referrer'].includes(route)
+  ['get_meta_performance','get_instagram_performance','get_woocommerce_device_conversion','get_governed_device_conversion','get_general_sales_analysis','export_product_priorities','get_klaviyo_email_performance','get_klaviyo_click_purchase_opportunities','compare_klaviyo_email_with_shopify_referrer'].includes(route)
     ? governedBaseline
     : baselineThenAgent
 ])));
@@ -32,7 +32,7 @@ export function assertEvidenceAgreement(contextValue,evidence){
   if(actual!==context.requested_subject)throw Object.assign(new Error('Retrieved evidence does not agree with the resolved analytical subject.'),{code:'EVIDENCE_SCOPE_MISMATCH',failed_stage:'evidence_validation'});
   if(evidence.metrics&&context.metrics.some(metric=>!evidence.metrics.includes(metric)))throw Object.assign(new Error('Retrieved evidence does not agree with the resolved analytical metrics.'),{code:'EVIDENCE_SCOPE_MISMATCH',failed_stage:'evidence_validation'});
   if(evidence.periods?.length&&context.start_date&&!evidence.periods.some(period=>period.start_date===context.start_date&&period.end_date===context.end_date))throw Object.assign(new Error('Retrieved evidence does not agree with the resolved analytical period.'),{code:'EVIDENCE_SCOPE_MISMATCH',failed_stage:'evidence_validation'});
-  if(['device_conversion','klaviyo_email'].includes(context.requested_subject)){
+  if(['device_conversion','klaviyo_email','meta_ads','instagram'].includes(context.requested_subject)){
     const expected=[{start_date:context.start_date,end_date:context.end_date},...(context.comparison_start_date?[{start_date:context.comparison_start_date,end_date:context.comparison_end_date}]:[])];
     const key=p=>`${p?.start_date}/${p?.end_date}`;
     if(!Array.isArray(evidence.periods)||evidence.periods.length!==expected.length||expected.some(p=>!evidence.periods.some(actual=>key(actual)===key(p))))throw Object.assign(new Error('Evidence must contain exactly the resolved periods.'),{code:'EVIDENCE_SCOPE_MISMATCH',failed_stage:'evidence_validation'});
@@ -50,6 +50,7 @@ export function assertEvidenceAgreement(contextValue,evidence){
     }
     if(context.comparison_start_date&&!evidence.periods?.some(p=>p.start_date===context.comparison_start_date&&p.end_date===context.comparison_end_date))throw Object.assign(new Error('Comparison evidence does not agree with resolved dates.'),{code:'EVIDENCE_SCOPE_MISMATCH',failed_stage:'evidence_validation'});
     if((evidence.comparison_type||null)!==(context.comparison_type||null))throw Object.assign(new Error('Comparison evidence does not agree with resolved scope.'),{code:'EVIDENCE_SCOPE_MISMATCH',failed_stage:'evidence_validation'});
+    if(['meta_ads','instagram'].includes(context.requested_subject)&&JSON.stringify(evidence.social_scope)!==JSON.stringify(context.social_scope))throw Object.assign(new Error('Social evidence differs from resolved scope'),{code:'EVIDENCE_SCOPE_MISMATCH'});
     if(context.email_report_kind&&evidence.email_report_kind!==context.email_report_kind)throw Object.assign(new Error('Email evidence does not agree with campaign/flow scope.'),{code:'EVIDENCE_SCOPE_MISMATCH',failed_stage:'evidence_validation'});
   }
   if(context.entity_query&&evidence.entity_query!==context.entity_query)throw Object.assign(new Error('Retrieved evidence does not agree with the resolved analytical entity.'),{code:'EVIDENCE_SCOPE_MISMATCH',failed_stage:'evidence_validation'});

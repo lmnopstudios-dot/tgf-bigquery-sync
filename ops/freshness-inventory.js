@@ -35,6 +35,7 @@ async function genericRuns(bigquery,project,source){
 
 async function nativeEvidence(bigquery,project,source){
   try{
+    if(source==='meta_ads'||source==='instagram')return await query(bigquery,{query:`SELECT run_id,run_mode mode,IF(status='collected','succeeded',status) status,window_start,window_end,observed_at finished_at FROM \`${project}.meta.coverage\` WHERE source=@source AND grain=@grain ORDER BY observed_at DESC LIMIT 20`,params:{source,grain:source==='meta_ads'?'base':'snapshot'},types:{source:'STRING',grain:'STRING'}});
     if(source==='shopify_finance')return await query(bigquery,{query:`SELECT r.run_id,r.mode,r.status,r.window_start,r.window_end,r.started_at,r.finished_at,s.successful_watermark,s.updated_at state_updated_at,r.run_id=s.run_id state_owned_by_run FROM \`${project}.shopify_data.finance_refresh_runs\` r LEFT JOIN \`${project}.shopify_data.finance_refresh_state\` s ON s.collector='shopify_finance' ORDER BY r.started_at DESC LIMIT 20`});
     if(source==='klaviyo')return await query(bigquery,{query:`SELECT run_id,status,report_start,report_end,retrieved_at,started_at,completed_at,row_count FROM \`${project}.klaviyo.sync_status\` ORDER BY started_at DESC LIMIT 20`});
   }catch(error){return [errorEvidence(`native:${source}`,error)];}

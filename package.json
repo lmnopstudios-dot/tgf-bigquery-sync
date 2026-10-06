@@ -99,7 +99,13 @@
     "reconcile:google-ads": "node diagnostics/google-ads-reconciliation.js",
     "collect:freshness": "node ops/collector-runner.js",
     "audit:freshness": "node ops/freshness-inventory.js",
-    "diagnose:oracle-woo-historical-provider": "node diagnostics/oracle-woo-historical-provider.js"
+    "diagnose:oracle-woo-historical-provider": "node diagnostics/oracle-woo-historical-provider.js",
+    "discover:meta": "node meta/cli.js meta_ads --discover",
+    "discover:instagram": "node meta/cli.js instagram --discover",
+    "backfill:meta": "node meta/cli.js meta_ads",
+    "collect:instagram": "node meta/cli.js instagram",
+    "schedule:meta": "node meta/cli.js meta_ads --scheduled --execute --max-windows 100",
+    "schedule:instagram": "node meta/cli.js instagram --scheduled --execute"
   },
   "engines": {
     "node": ">=20"

@@ -1,0 +1,36 @@
+# Proposed services only. This file is NOT the active Render blueprint.
+# Review account IDs, permissions, metric profiles and pilot evidence first.
+# UTC schedules are editable per service in Render. Do not deploy this PR.
+services:
+  - type: cron
+    name: oracle-meta-ads
+    runtime: node
+    schedule: "10 7 * * *"
+    buildCommand: npm ci
+    startCommand: npm run collect:freshness -- meta_ads
+    envVars: &meta-evidence-env
+      - key: GOOGLE_PROJECT_ID
+        sync: false
+      - key: GOOGLE_SERVICE_ACCOUNT_JSON
+        sync: false
+      - key: META_API_VERSION
+        sync: false
+      - key: META_AD_ACCOUNTS_JSON
+        sync: false
+      - key: INSTAGRAM_ACCOUNTS_JSON
+        sync: false
+      - key: META_ACCESS_TOKEN
+        sync: false
+      - key: INSTAGRAM_ACCESS_TOKEN
+        sync: false
+      - key: META_MAX_CALLS
+        value: "500"
+      - key: META_MAX_PAGES
+        value: "100"
+  - type: cron
+    name: oracle-instagram
+    runtime: node
+    schedule: "40 7 * * *"
+    buildCommand: npm ci
+    startCommand: npm run collect:freshness -- instagram
+    envVars: *meta-evidence-env

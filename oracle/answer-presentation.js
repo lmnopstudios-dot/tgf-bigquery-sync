@@ -1,3 +1,4 @@
+import {socialBusinessView} from './social-analysis.js';
 import { evidenceNumber as numeric } from './numeric-evidence.js';
 
 // Presentation consumes provider contracts; it never retrieves or recomputes evidence.
@@ -94,6 +95,7 @@ function deviceTrend(e) {
   return lines;
 }
 function businessView(e) {
+  if(e.kind==='governed_social')return socialBusinessView(e);
   if(['governed_product_sales','governed_channel_sales','governed_sales_explanation'].includes(e.kind)) return sales(e);
   if(e.kind==='native_conversion_breakdown')return [...sectionsSummary(e,'conversion'),e.source_evidence?.rows?.some(r=>r.cardinality_limited || r.referrer_source==='__other__')?'Some traffic sources are grouped or hidden; source-level attribution is incomplete.':null,e.source_evidence?.rows?.some(r=>r.measurement_change_warning)?'Session measurement changed during this period; this may affect the apparent trend.':null];
   if(e.kind==='governed_device_conversion')return deviceTrend(e);
