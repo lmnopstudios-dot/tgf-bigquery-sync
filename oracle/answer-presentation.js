@@ -7,7 +7,7 @@ const money = (value, currency) => numeric(value) == null || !/^[A-Z]{3}$/.test(
 const rate = value => numeric(value) == null ? 'Unavailable' : `${number(numeric(value) * 100)}%`;
 const day = value => /^\d{4}-\d{2}-\d{2}$/.test(value || '') ? new Intl.DateTimeFormat('en-GB', {day:'numeric', month:'long', year:'numeric', timeZone:'Europe/London'}).format(new Date(`${value}T12:00:00Z`)) : text(value);
 const period = p => p?.start_date && p?.end_date ? `${day(p.start_date)}–${day(p.end_date)}` : 'Dates unavailable';
-const table = (headers, rows) => rows.length ? ['| '+headers.join(' | ')+' |', '|'+headers.map(()=>'---').join('|')+'|', ...rows.slice(0,12).map(row=>'| '+row.map(text).join(' | ')+' |')].join('\n') + (rows.length>12 ? '\n\nShowing 12 rows; the remaining figures are in Show details.' : '') : '';
+const table = (headers, rows, limit=12) => rows.length ? ['| '+headers.join(' | ')+' |', '|'+headers.map(()=>'---').join('|')+'|', ...rows.slice(0,limit).map(row=>'| '+row.map(text).join(' | ')+' |')].join('\n') + (rows.length>limit ? `\n\nShowing ${limit} rows; the remaining figures are in Show details.` : '') : '';
 const failed = value => ['failed','rejected','unavailable'].includes(value?.status) || value?.retrieval_failed || value?.success === false;
 const rowsOf = value => value?.rows || value?.results || [];
 const businessSeries = value => String(value || 'Sales').replace(/ · (?:shopify|square)\b/gi,'').replace(/ · ww\b/gi,' · International').replace(/ · us\b/gi,' · US').replace(/ · uk\b/gi,' · UK').replace(/ · jp\b/gi,' · Japan');
@@ -82,10 +82,22 @@ function sectionsSummary(e, type) {
   if(type!=='conversion') lines.push('Coverage must be verified before treating these figures as a complete population.');
   return lines;
 }
+function deviceTrend(e) {
+  const sections=[...(e.sections||[])].sort((a,b)=>a.period.start_date.localeCompare(b.period.start_date));
+  const lines=['Available conversion rates are shown by device and month.',table(['Month','Mobile','Desktop'],sections.map(s=>[s.period.start_date.slice(0,7),...['mobile','desktop'].map(device=>failed(s)?'Unavailable':rate(s.rows?.find(r=>r.device_type===device)?.rate))]),sections.length)];
+  for(const change of e.changes||[])lines.push(`${change.device_type}: ${numeric(change.percentage_point_change)==null?'change unavailable':`${numeric(change.percentage_point_change).toFixed(2)} percentage points`} (${change.comparison_period.start_date.slice(0,7)} → ${change.current_period.start_date.slice(0,7)}).`);
+  if((e.changes||[]).length)lines.push('These are descriptive rate changes; causal impact is unverified.');
+  if(sections.some(failed))lines.push('Some periods could not be retrieved. Available periods remain shown; unavailable figures are not zero.');
+  if(new Set(sections.map(s=>s.definition)).size>1)lines.push('Conversion definitions differ across platforms; the rates are not a like-for-like comparison.');
+  if(sections.some(s=>s.rows?.some(r=>r.rate==null)))lines.push('Partial or incomplete periods have unavailable rates because complete coverage and compatible numerators and denominators could not be verified.');
+  lines.push(...new Set(sections.flatMap(s=>s.limitations||[])));
+  return lines;
+}
 function businessView(e) {
   if(['governed_product_sales','governed_channel_sales','governed_sales_explanation'].includes(e.kind)) return sales(e);
   if(e.kind==='native_conversion_breakdown')return [...sectionsSummary(e,'conversion'),e.source_evidence?.rows?.some(r=>r.cardinality_limited || r.referrer_source==='__other__')?'Some traffic sources are grouped or hidden; source-level attribution is incomplete.':null,e.source_evidence?.rows?.some(r=>r.measurement_change_warning)?'Session measurement changed during this period; this may affect the apparent trend.':null];
-  if(['governed_device_conversion','focused_woo_historical_conversion'].includes(e.kind)) return sectionsSummary(e,'conversion');
+  if(e.kind==='governed_device_conversion')return deviceTrend(e);
+  if(e.kind==='focused_woo_historical_conversion')return sectionsSummary(e,'conversion');
   if(['shopify_customer_comparison','shopify_monthly_customer_baseline'].includes(e.kind)) return sectionsSummary(e,'customers');
   if(e.kind==='shopify_shipping_country_comparison')return sectionsSummary(e,'country');
   if(['woo_shopify_monthly_platform_comparison','independent_calendar_month_comparison'].includes(e.kind))return [...sectionsSummary(e,'sales'),'Different source definitions and currencies remain separate; no combined platform uplift or causal effect is established.'];
@@ -147,6 +159,7 @@ function supportingMetadata(e) {
 /** Unknown contracts retain their original answer. Never hide an unknown limitation. */
 export function presentAnalyticalAnswer(result, context={}) {
   if(!result?.answer || !result.evidence) return result;
+  context=context||{};
   const e=result.evidence, view=e.ambiguous ? [`Several products match **${text(e.entity_query)}**. Choose one to view its sales.`, ...(e.candidates || []).map((c,i)=>`${i+1}. **${text(c.catalogue_titles?.[0] || 'Unnamed product')}** — ${text(c.sources?.map(s=>[s.source_platform,s.source_store].filter(Boolean).join(' / ')).join('; ') || 'Source unavailable')}`)] : businessView(e);
   if(!view)return result;
   const original=result.presentation?.supporting_markdown ?? result.answer;
@@ -156,10 +169,10 @@ export function presentAnalyticalAnswer(result, context={}) {
   const scope=context.start_date ? `${period(context)}${context.comparison_start_date?`; compared with ${period({start_date:context.comparison_start_date,end_date:context.comparison_end_date})}`:''}` : [...new Set(periods.map(period))].join('; ');
   const lines=view.filter(Boolean);
   if(scope) lines.push(`Dates: ${scope}.`);
-  if(context.current_day_included || e.partial_current_month)lines.push('Today’s data may still be incomplete.');
+  if(e.kind==='governed_device_conversion'?e.sections?.some(s=>s.period?.start_date<=e.cutoff_date&&s.period?.end_date>=e.cutoff_date):(context.current_day_included || e.partial_current_month))lines.push('Today’s data may still be incomplete.');
   const currencies=new Set([...(e.rows||[]).map(r=>r.currency),...(e.metric_rows||[]).map(r=>r.currency),...(e.sections||[]).flatMap(s=>rowsOf(s.result||s.value||s).map(r=>r.currency))].filter(Boolean));
   if(currencies.size>1)lines.push('Currencies are shown separately and have not been converted or combined.');
-  const exact=context.date_cutoff?`Requested/applied dates: ${context.start_date} to ${context.end_date}, inclusive (Europe/London). Current day ${context.current_day_included?'included':'excluded'}. Runtime cutoff: ${context.date_cutoff}.`:'';
+  const exact=context.date_cutoff?`Requested/applied dates: ${context.start_date} to ${context.end_date}${context.comparison_start_date?` versus ${context.comparison_start_date} to ${context.comparison_end_date}`:''}, inclusive (Europe/London). Current day ${context.current_day_included?'included':'excluded'}. Runtime cutoff: ${context.date_cutoff}.`:'';
   const details=[exact,supporting,supportingMetadata(e)].filter(Boolean).join('\n\n');
   return {...result,answer:lines.join('\n\n')+`\n\n<details>\n<summary>Show details</summary>\n\n${details}\n\n</details>`,presentation:{version:1,supporting_markdown:original,summary_markdown:lines.join('\n\n')}};
 }

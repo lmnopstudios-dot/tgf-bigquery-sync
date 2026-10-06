@@ -84,7 +84,7 @@ function datasets(e){
 export function selectOracleCharts(evidence){return datasets(evidence).flatMap(selectChartForDataset).slice(0,8);}
 export function withOracleCharts(result){
   if(!result?.evidence)return result;
-  const charts=result.evidence.chart_specs||selectOracleCharts(result.evidence);
+  const charts=result.evidence.kind==='governed_device_conversion'?selectOracleCharts(result.evidence):result.evidence.chart_specs||selectOracleCharts(result.evidence);
   let answer=result.answer;
   if(charts.length&&result.evidence.kind==='governed_device_conversion'&&!answer.includes('<summary>Full monthly conversion table</summary>'))answer=answer.replace(/(^\| Month \| Mobile conversion[^\n]*\n(?:\|[^\n]*\n?)+)/m,table=>`<details>\n<summary>Full monthly conversion table</summary>\n\n${table}\n</details>\n`);
   return {...result,answer,evidence:{...result.evidence,chart_specs:charts},charts,inline_chart:charts[0]||null};

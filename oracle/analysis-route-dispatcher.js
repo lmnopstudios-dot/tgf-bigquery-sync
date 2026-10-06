@@ -33,6 +33,21 @@ export function assertEvidenceAgreement(contextValue,evidence){
   if(evidence.metrics&&context.metrics.some(metric=>!evidence.metrics.includes(metric)))throw Object.assign(new Error('Retrieved evidence does not agree with the resolved analytical metrics.'),{code:'EVIDENCE_SCOPE_MISMATCH',failed_stage:'evidence_validation'});
   if(evidence.periods?.length&&context.start_date&&!evidence.periods.some(period=>period.start_date===context.start_date&&period.end_date===context.end_date))throw Object.assign(new Error('Retrieved evidence does not agree with the resolved analytical period.'),{code:'EVIDENCE_SCOPE_MISMATCH',failed_stage:'evidence_validation'});
   if(['device_conversion','klaviyo_email'].includes(context.requested_subject)){
+    const expected=[{start_date:context.start_date,end_date:context.end_date},...(context.comparison_start_date?[{start_date:context.comparison_start_date,end_date:context.comparison_end_date}]:[])];
+    const key=p=>`${p?.start_date}/${p?.end_date}`;
+    if(!Array.isArray(evidence.periods)||evidence.periods.length!==expected.length||expected.some(p=>!evidence.periods.some(actual=>key(actual)===key(p))))throw Object.assign(new Error('Evidence must contain exactly the resolved periods.'),{code:'EVIDENCE_SCOPE_MISMATCH',failed_stage:'evidence_validation'});
+    if(context.requested_subject==='device_conversion'&&(!Array.isArray(evidence.sections)||!evidence.sections.length||evidence.sections.some(s=>!expected.some(p=>s.period?.start_date>=p.start_date&&s.period?.end_date<=p.end_date))))throw Object.assign(new Error('Conversion populations fall outside resolved periods.'),{code:'EVIDENCE_SCOPE_MISMATCH',failed_stage:'evidence_validation'});
+
+    if(context.requested_subject==='device_conversion'){
+      const wanted=[];
+      for(const p of expected)for(let cursor=new Date(`${p.start_date.slice(0,7)}-01T00:00:00Z`);cursor.toISOString().slice(0,10)<=p.end_date;cursor.setUTCMonth(cursor.getUTCMonth()+1)){
+        const start=cursor.toISOString().slice(0,10),end=new Date(Date.UTC(cursor.getUTCFullYear(),cursor.getUTCMonth()+1,0)).toISOString().slice(0,10);
+        const name=new Intl.DateTimeFormat('en',{month:'short',timeZone:'UTC'}).format(cursor).toLowerCase();if(context.exclusions.includes(name))continue;
+        wanted.push({start_date:start<p.start_date?p.start_date:start,end_date:end>p.end_date?p.end_date:end});
+      }
+      const populationKeys=[...new Set(wanted.map(key))];
+      if(evidence.sections.length!==populationKeys.length||populationKeys.some(k=>!evidence.sections.some(s=>key(s.period)===k)))throw Object.assign(new Error('Both exact comparison populations must be represented.'),{code:'EVIDENCE_SCOPE_MISMATCH',failed_stage:'evidence_validation'});
+    }
     if(context.comparison_start_date&&!evidence.periods?.some(p=>p.start_date===context.comparison_start_date&&p.end_date===context.comparison_end_date))throw Object.assign(new Error('Comparison evidence does not agree with resolved dates.'),{code:'EVIDENCE_SCOPE_MISMATCH',failed_stage:'evidence_validation'});
     if((evidence.comparison_type||null)!==(context.comparison_type||null))throw Object.assign(new Error('Comparison evidence does not agree with resolved scope.'),{code:'EVIDENCE_SCOPE_MISMATCH',failed_stage:'evidence_validation'});
     if(context.email_report_kind&&evidence.email_report_kind!==context.email_report_kind)throw Object.assign(new Error('Email evidence does not agree with campaign/flow scope.'),{code:'EVIDENCE_SCOPE_MISMATCH',failed_stage:'evidence_validation'});
@@ -43,7 +58,7 @@ export function assertEvidenceAgreement(contextValue,evidence){
 
 function disclosePeriod(result,context){
   if(!result?.answer||!context?.date_cutoff||!context.start_date)return result;
-  return {...result,answer:`**Resolved dates:** ${context.start_date} to ${context.end_date}, inclusive (Europe/London). Current day ${context.current_day_included?'included; evidence through the runtime cutoff may be partial':'excluded'}. Runtime cutoff: ${context.date_cutoff}.\n\n${result.answer}`};
+  return {...result,answer:`**Resolved dates:** ${context.start_date} to ${context.end_date}${context.comparison_start_date?` versus ${context.comparison_start_date} to ${context.comparison_end_date}`:''}, inclusive (Europe/London). Current day ${context.current_day_included?'included; evidence through the runtime cutoff may be partial':'excluded'}. Runtime cutoff: ${context.date_cutoff}.\n\n${result.answer}`};
 }
 export async function dispatchAnalysisRequest({message,analysisContext,baselineOverview=null,baselineOptions,chat,chatOptions}){
   const context=analysisContext==null?null:validateAnalysisContext(analysisContext);
@@ -55,8 +70,8 @@ export async function dispatchAnalysisRequest({message,analysisContext,baselineO
 }
 
 /** Shared deterministic /agent entrypoint; a null result continues existing model tooling. */
-export async function executeGovernedAgentAnalysis({message,analysisContext,baselineOverview,baselineOptions={},now=Date.now()}){
-  const resolved=transitionAnalysisContext(analysisContext,message,{now});
+export async function executeGovernedAgentAnalysis({message,analysisContext,baselineOverview,baselineOptions={},scopeResolved=false,now=Date.now()}){
+  const resolved=scopeResolved?{context:validateAnalysisContext(analysisContext||{})}:transitionAnalysisContext(analysisContext,message,{now});
   baselineOptions.onProviderStage?.({stage:'scope_resolution',resolved_subject:resolved.context.requested_subject,selected_route:resolved.context.tool_route,start_date:resolved.context.start_date,end_date:resolved.context.end_date});
   const clarification=clarificationFor(resolved.context);
   if(clarification)return {answer:clarification,tools:[]};
