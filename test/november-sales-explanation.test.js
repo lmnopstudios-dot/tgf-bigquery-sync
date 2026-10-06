@@ -35,7 +35,7 @@ function verify(result,f){
   assert.deepEqual(f.calls.map(x=>[x.params.start_date,x.params.end_date,x.params.channel]),[['2025-11-01','2025-11-30','Online'],['2024-11-01','2024-11-30','Online']]);
   assert.equal(result.evidence.rows.length,3);assert.equal(result.evidence.comparison_rows.length,2);
   assert.doesNotMatch(result.answer,/380,628\.47|380628\.47|Unrelated|Unconfirmed|Outside period|Undated|Unknown Online|in-store|retail/i);
-  assert.match(result.answer,/2024-11-01 to 2024-11-30/);assert.match(result.answer,/Orders|Gross sales|Refunds|Net sales/);
+  assert.match(result.answer,/2024-11-01 to 2024-11-30/);assert.match(result.answer,/Finance sale transactions|Canonical net gross/);
   assert.match(result.answer,/ev_campaign_2025-11-01|campaign-log|Timing alone|remains unexplained/);
   assert.equal(result.evidence.changes.find(x=>x.source==='Woo UK').absolute_change,53162.080000000016);
   assert.equal(result.evidence.changes.find(x=>x.source==='Woo US').absolute_change,27466.39);

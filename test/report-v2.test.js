@@ -96,3 +96,20 @@ test('PDF, XLSX and CSV exports are real bounded formats with numeric cells', as
   const buffer=await reportWorkbook(report), workbook=new ExcelJS.Workbook(); await workbook.xlsx.load(buffer);
   assert.equal(workbook.getWorksheet('Sales').getCell('B2').value,12); assert.ok(workbook.getWorksheet('Definitions'));
 });
+
+test('November finance preserves comparison rows but withholds unreconciled migration KPI deltas and labels counts',async()=>{
+  let index=0;const rows=[[{period:'2025-11-18',source:'Shopify',channel:'Online',currency:'GBP',transaction_type:'sale',transaction_count:3,amount:80}],[{period:'2024-11-01',source:'Woo UK',channel:'Online',currency:'GBP',transaction_type:'sale',transaction_count:5,amount:100}]];
+  const result=await createEcommerceReportV2({bigquery:{query:async()=>[rows[index++]]},project:'test',knowledgeService:{}})('sales',{start_date:'2025-11-01',end_date:'2025-11-30',comparison:'custom',comparison_start:'2024-11-01',comparison_end:'2024-11-30'});
+  assert.equal(result.comparison_rows[0].net_gross,100);assert.equal(result.rows[0].sales_transaction_count,3);assert.equal(result.kpis.find(k=>k.metric==='orders').label,'Finance sale transactions');assert.ok(result.kpis.every(k=>k.comparison_value===null));assert.equal(result.online_comparison.status,'withheld');assert.equal(result.evidence_availability.finance.comparability,'not_directly_comparable');assert.deepEqual(result.migration_diagnostics.periods[0].prelaunch_dates,['2025-11-18']);
+});
+
+test('dated campaign retrieval recovers both years independently from saturated general context',async()=>{
+  const calls=[];const knowledgeService={getBusinessContext:async()=>({items:Array.from({length:50},(_,i)=>({id:`df-${i}`,status:'confirmed',kind:'definition'}))}),searchKnowledge:async args=>{calls.push(args);return{items:[{id:args.end_date.startsWith('2024')?'ev_d62be9ed-527e-403a-a661-cb2d11095ca5':'ev-2025',status:'confirmed',kind:'event',title:'Service supplied campaign',effective_from:args.start_date,effective_to:args.end_date,tags:['online'],source_type:'business_document',source_reference:'fixture'}]};}};
+  const result=await createEcommerceReportV2({bigquery:{},project:'test',knowledgeService})('context',{start_date:'2025-11-01',end_date:'2025-11-30',comparison:'custom',comparison_start:'2024-11-01',comparison_end:'2024-11-30'});
+  assert.equal(calls.length,2);assert.ok(calls.every(x=>x.knowledge_type==='event'&&x.status==='confirmed'&&x.limit===50&&!x.text&&!x.tags.length));assert.ok(result.context.comparison.some(x=>x.id==='ev_d62be9ed-527e-403a-a661-cb2d11095ca5'));assert.ok(result.context.current.some(x=>x.id==='ev-2025'));
+});
+
+test('finance preserves comparison-only currencies and components when current evidence is missing',async()=>{
+  let call=0;const result=await createEcommerceReportV2({bigquery:{query:async()=>[++call===1?[]:[{date:'2024-11-01',source:'Woo US',channel:'Online',currency:'USD',net_gross:30,orders:2}]]},project:'test',knowledgeService:{}})('sales',{start_date:'2025-11-01',end_date:'2025-11-30',comparison:'custom',comparison_start:'2024-11-01',comparison_end:'2024-11-30'});
+  assert.equal(result.status,'available');assert.deepEqual(result.currencies,['USD']);assert.equal(result.source_components.current.length,0);assert.equal(result.source_components.comparison[0].net_gross,30);assert.equal(result.evidence_availability.finance.current.available,false);
+});

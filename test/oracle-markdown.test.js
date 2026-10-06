@@ -14,3 +14,8 @@ test('Markdown tables keep semantic markup inside a keyboard-accessible scroll r
 test('Markdown emits only allow-listed structured chart placement markers',()=>{const html=render('Overview\n\n[[oracle-section:cohort-overview-end]]\n\n| Product | Rank |\n|---|---|\n| Ring | 1 |');assert.match(html,/data-oracle-section="cohort-overview-end"/);assert.doesNotMatch(html,/\[\[oracle-section/);assert.match(render('[[oracle-section:Bad selector!]]'),/\[\[oracle-section:Bad selector!\]\]/);});
 
 test('ordered choices retain their visible number across intervening detail blocks',()=>{const html=render('1. **First**\n   - detail one\n\n2. **Second**\n   - detail two');assert.match(html,/<ol><li><strong>First<\/strong><\/li><\/ol>/);assert.match(html,/<ol start="2"><li><strong>Second<\/strong><\/li><\/ol>/);});
+
+test('supporting evidence renders as collapsed safe details with full daily tables',()=>{
+  const html=render('Finding\n\n<details>\n<summary>Daily provenance and supporting evidence</summary>\n\n| Date | Source |\n|---|---|\n| 2025-11-18 | Shopify |\n\n<script>bad()</script>\n</details>');assert.match(html,/<details><summary>Daily provenance/);assert.doesNotMatch(html,/<details[^>]*open|<script>/);assert.match(html,/<table>/);assert.match(html,/2025-11-18/);
+  const malformed=render('<details>\n<summary onclick=bad()>Unsafe</summary>\n</details>');assert.doesNotMatch(malformed,/<details>|<summary onclick/);
+});
