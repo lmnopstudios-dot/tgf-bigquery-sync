@@ -1,0 +1,32 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import express from 'express';
+import {createSession} from '../oracle/ui-security.js';
+import {createOracleUiRouter} from '../oracle/ui-router.js';
+import {createOracleProviderDependencies} from '../oracle/provider-dependencies.js';
+import {createBaselineOverviewService} from '../oracle/baseline-overview.js';
+import {createMemoryAnalysisJobStore} from '../oracle/analysis-jobs.js';
+import {createMemoryExportStore} from '../oracle/product-priority-storage.js';
+const env={ORACLE_UI_PASSWORD:'test-password',ORACLE_UI_SESSION_SECRET:'12345678901234567890123456789012',ORACLE_ANALYSIS_JOBS_ENABLED:'true'},now=()=>Date.parse('2026-10-06T12:00:00Z');
+test('actual shared HTTP interactive/durable paths, scoped follow-ups, charts, private export and restart recovery',async t=>{
+ const calls=[],jobs=createMemoryAnalysisJobStore(),exports=createMemoryExportStore();let unavailable=false;
+ const bq={query:async o=>{if(unavailable)throw new Error('private outage');calls.push(o);if(o.query.includes('meta.coverage'))return [[{account_id:'123',status:'collected',window_start:o.params.start.value,window_end:o.params.end.value}]];if(o.query.includes('instagram_observations'))return [[{account_id:'123',resource_id:'501',media_type:'REELS',metric:'saved',profile_key:'saved|lifetime',evidence_kind:'lifetime_total',paid_organic_scope:'native_scope_unverified',value:'20',publication_at:'2026-04-01T10:00:00Z',observed_at:'2026-10-06T10:00:00Z',permalink:'https://www.instagram.com/p/example/',availability:'available'}]];return [[{account_id:'123',account_name:'UK Meta',campaign_name:'Campaign A',currency:'GBP',spend:'10',purchase_count:'2',purchase_value:'50',cpa:'5',roas:'5',attribution_contract_id:'same'}]];}};
+ const deps=createOracleProviderDependencies({bigquery:bq,project:'fixture',env:{}}),baseline=createBaselineOverviewService({social:deps.social,socialExportStore:exports,now:()=>new Date(now())});
+ const start=async()=>{const app=express();app.use('/api/oracle',createOracleUiRouter({knowledgeService:{},baselineOverview:baseline,chat:async()=>{throw new Error('unrelated model fallback')},generateProposals:async()=>[],analysisJobStore:jobs,exportStore:exports,env,now}));return new Promise(resolve=>{const server=app.listen(0,'127.0.0.1',()=>resolve({server,base:`http://127.0.0.1:${server.address().port}/api/oracle`}));});};
+ let {server,base}=await start();t.after(()=>server.close());
+ const login=async()=>{const r=await fetch(`${base}/auth/login`,{method:'POST',headers:{origin:new URL(base).origin,'content-type':'application/json'},body:JSON.stringify({password:'test-password'})}),body=await r.json();return {cookie:r.headers.getSetCookie().map(c=>c.split(';')[0]).join('; '),csrf:body.csrf};};
+ const auth=await login();const headers=()=>({cookie:auth.cookie,origin:new URL(base).origin,'content-type':'application/json','x-csrf-token':auth.csrf}),post=async(path,message)=>{const r=await fetch(base+path,{method:'POST',headers:headers(),body:JSON.stringify({message})});assert.equal(r.ok,true,await r.clone().text());return r.json();};
+ let result=await post('/chat','How did Meta ads perform last month?');assert.equal(result.evidence.subject,'meta_ads');assert.ok(result.charts.length);assert.match(result.answer,/Show details/);assert.match(result.answer,/not verified first-time/);
+ result=await post('/chat','Break that down by Instagram versus Facebook placements.');assert.equal(result.evidence.social_scope.breakdown,'placement');assert.match(calls.at(-2).query,/placement_daily/);assert.equal(result.evidence.periods[0].start_date,'2026-09-01');
+ result=await post('/chat','Which Instagram posts got the most saves this year?');assert.equal(result.evidence.subject,'instagram');assert.equal(result.evidence.social_scope.metric,'saved');assert.match(result.answer,/lifetime totals/);assert.match(result.answer,/organic scope/);
+ const queued=await post('/jobs','Export Meta campaign spend and attributed revenue by month for September 2026.');assert.ok(queued.job_id);
+ for(let i=0;i<200;i++){result=await (await fetch(`${base}/jobs/${queued.job_id}`,{headers:{cookie:auth.cookie}})).json();if(['completed','failed'].includes(result.status))break;await new Promise(r=>setTimeout(r,5));}
+ assert.equal(result.status,'completed',JSON.stringify(result));assert.ok(result.artifact.id);assert.ok(result.charts.length);const artifact=result.artifact,initial=result.answer;
+ const download=await fetch(new URL(artifact.download_url,new URL(base).origin),{headers:{cookie:auth.cookie}});assert.equal(download.status,200);assert.match(download.headers.get('content-disposition'),/oracle-meta-evidence.xlsx/);const bytes=Buffer.from(await download.arrayBuffer());assert.equal(bytes.subarray(0,2).toString(),'PK');
+ const stranger={cookie:`oracle_session=${createSession('other-admin',env.ORACLE_UI_SESSION_SECRET)}`};assert.equal((await fetch(new URL(artifact.download_url,new URL(base).origin),{headers:{cookie:stranger.cookie}})).status,404);
+ await new Promise(resolve=>server.close(resolve));({server,base}=await start());unavailable=true;
+ const recovered=await (await fetch(`${base}/jobs/${queued.job_id}`,{headers:{cookie:auth.cookie}})).json();assert.equal(recovered.answer,initial);assert.equal(recovered.artifact.id,artifact.id);assert.ok(recovered.charts.length);assert.match(recovered.analysis_scope,/meta_ads/);
+ const manifest=await (await fetch(`${base}/exports/${artifact.id}/manifest`,{headers:{cookie:auth.cookie}})).json();assert.ok(manifest.charts.length);assert.equal(manifest.evidence.subject,'meta_ads');
+ const recoveredBytes=Buffer.from(await (await fetch(`${base}/exports/${artifact.id}`,{headers:{cookie:auth.cookie}})).arrayBuffer());assert.deepEqual(recoveredBytes,bytes);
+ unavailable=false;result=await post('/chat','What changed between August and September?');assert.deepEqual(result.evidence.periods,[{start_date:'2026-09-01',end_date:'2026-09-30'},{start_date:'2026-08-01',end_date:'2026-08-31'}]);assert.ok(result.charts.length);
+});

@@ -1,3 +1,4 @@
+import {executeMetaInstagramToolCall} from './oracle/meta-instagram.js';
 import { governedAgentRequest, governedModelInput } from './oracle/agent-request.js';
 import { ANALYTICAL_PRESENTATION_INSTRUCTIONS, presentNativeConversionAnswer } from './oracle/answer-presentation.js';
 import { executeGovernedAgentAnalysis } from './oracle/analysis-route-dispatcher.js';
@@ -171,7 +172,7 @@ const customerOrderIntervalService = createCustomerOrderIntervalService({ bigque
 const onlineCountrySalesService = createOnlineCountrySalesService({ bigquery, project: GOOGLE_PROJECT_ID });
 const platformSalesService = createPlatformSalesService({ bigquery, project: GOOGLE_PROJECT_ID });
 // Bind the live server through the same adapter factory used by the parity CLI.
-const {deviceConversion:deviceSourceConversionService,klaviyo:klaviyoEmailService}=createOracleProviderDependencies({env:process.env,bigquery,project:GOOGLE_PROJECT_ID});
+const {deviceConversion:deviceSourceConversionService,klaviyo:klaviyoEmailService,social:metaInstagramService}=createOracleProviderDependencies({env:process.env,bigquery,project:GOOGLE_PROJECT_ID});
 const categorySalesService = createCategorySalesService({ bigquery, project: GOOGLE_PROJECT_ID });
 const productViewPurchaseService = createProductViewPurchaseService({bigquery});
 const pageviewsPerSessionService=createPageviewsPerSessionService({bigquery,project:GOOGLE_PROJECT_ID,runShopifyql:async(query,reportName)=>runShopifyqlReport(await getShopifyAccessToken(),query,reportName),getShopTimezone:async()=>{const data=await shopifyGraphQL(await getShopifyAccessToken(),'{ shop { ianaTimezone } }');if(!data?.shop?.ianaTimezone)throw new Error('Shopify reporting timezone unavailable');return data.shop.ianaTimezone;}});
@@ -4530,6 +4531,8 @@ const ecommerceBaselineOverview=createBaselineOverviewService({
   wooConversion:deviceSourceConversionService,
   knowledgeService,
   klaviyo:klaviyoEmailService,
+  social:(name,args)=>metaInstagramService(name,args),
+  socialExportStore:{get:(...args)=>priorityExportStore.get(...args),put:(...args)=>priorityExportStore.put(...args)},
   organicReport:periods=>ecommerceReportV2('organic',{
     start_date:periods.current.start_date,end_date:periods.current.end_date,
     comparison:'custom',comparison_start:(periods.comparison_period||periods.prior_year).start_date,
@@ -8541,7 +8544,8 @@ Important rules:
                   if(pageviewsCall.handled)result=pageviewsCall.result;
                   else { const klaviyoCall=await executeKlaviyoEmailToolCall(klaviyoEmailService,item.name,args);
                   if(klaviyoCall.handled)result=klaviyoCall.result;
-                  else { const googleAdsCall=await executeGoogleAdsToolCall(googleAdsService,item.name,args);
+                  else { const socialCall=await executeMetaInstagramToolCall(metaInstagramService,item.name,args);
+                  const googleAdsCall=socialCall.handled?socialCall:await executeGoogleAdsToolCall(googleAdsService,item.name,args);
                   if(googleAdsCall.handled)result=googleAdsCall.result;
                   else { const deviceConversionCall = await executeDeviceSourceConversionToolCall(deviceSourceConversionService, item.name, args);
                   if (deviceConversionCall.handled) result = deviceConversionCall.result;

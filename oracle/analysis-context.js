@@ -1,3 +1,4 @@
+import {socialContextPatch,validateSocialScope} from './social-context.js';
 import { classifyKlaviyoQuestion } from './klaviyo-email.js';
 import { naturalReportPeriod as period } from './report-natural-period.js';
 import { isProductReportRequest, resolveProductReportConfig, validateProductReportConfig, productReportClarification } from './product-report-config.js';
@@ -14,18 +15,18 @@ const FIELDS = new Set([
   ,'event_name','event_count'
   ,'requested_subject','included_periods','exclusions','contextual_event_mentions','placement_context'
   ,'failed_subject_switch'
-  ,'product_report','email_report_kind'
+  ,'product_report','email_report_kind','social_scope'
   ,'entity_query','explanation_requested','pending_product_candidates'
 ]);
 const GRAINS = new Set(['day','week','month','quarter','year']);
 const CURRENCIES = new Set(['GBP','USD','JPY','EUR']);
-const METRICS = new Set(['sales','refunds','customers','products','search_console','shipping_countries','ecommerce_performance','customer_journey','customer_order_interval','product_views_before_purchase','conversion','email_attribution']);
-export const ANALYSIS_TOOL_ROUTES = Object.freeze(['get_shopify_online_country_products','get_online_country_sales','get_shopify_customer_kpis','get_search_console_evidence','get_average_customer_order_interval','get_governed_category_sales','get_product_views_before_purchase','compare_historical_events','get_shopify_operational_sales_baseline','get_woocommerce_device_conversion','get_governed_device_conversion','get_general_sales_analysis','get_product_sales_analysis','export_product_priorities','get_klaviyo_email_performance','get_klaviyo_click_purchase_opportunities','compare_klaviyo_email_with_shopify_referrer']);
+const METRICS = new Set(['sales','refunds','customers','products','search_console','shipping_countries','ecommerce_performance','customer_journey','customer_order_interval','product_views_before_purchase','conversion','email_attribution','meta_ads','instagram']);
+export const ANALYSIS_TOOL_ROUTES = Object.freeze(['get_meta_performance','get_instagram_performance','get_shopify_online_country_products','get_online_country_sales','get_shopify_customer_kpis','get_search_console_evidence','get_average_customer_order_interval','get_governed_category_sales','get_product_views_before_purchase','compare_historical_events','get_shopify_operational_sales_baseline','get_woocommerce_device_conversion','get_governed_device_conversion','get_general_sales_analysis','get_product_sales_analysis','export_product_priorities','get_klaviyo_email_performance','get_klaviyo_click_purchase_opportunities','compare_klaviyo_email_with_shopify_referrer']);
 const TOOL_ROUTES = new Set(ANALYSIS_TOOL_ROUTES);
 const MONTHS = {jan:1,january:1,feb:2,february:2,mar:3,march:3,apr:4,april:4,may:5,jun:6,june:6,jul:7,july:7,aug:8,august:8,sep:9,sept:9,september:9,oct:10,october:10,nov:11,november:11,dec:12,december:12};
 
 export const ANALYSIS_CONTEXT_FIELDS = Object.freeze([...FIELDS]);
-export function emptyAnalysisContext(){return {analysis_type:null,metrics:[],start_date:null,end_date:null,requested_end_period:null,grain:null,comparison_type:null,comparison_start_date:null,comparison_end_date:null,currencies:[],channel:null,channel_breakdown:false,location:null,platform:null,geography:null,customer_segment:null,product_ref:null,filters:[],sort:null,limit:null,report_section:null,output_preference:null,partial_period:false,date_cutoff:null,current_day_included:false,unresolved_required_fields:[],tool_route:null,request_kind:null,advisory_topic:null,journey_intent:null,entry_product_classification:null,subsequent_product_classification:null,excluded_product_titles:[],include_unclassified_products:false,first_order_semantic:null,cohort_entry_start:null,cohort_entry_end:null,observation_end:null,minimum_order_sequence:null,maximum_order_sequence:null,within_days:null,journey_group_by:null,event_name:null,event_count:null,requested_subject:null,included_periods:[],exclusions:[],contextual_event_mentions:[],placement_context:null,entity_query:null,explanation_requested:false,pending_product_candidates:[],product_report:null,email_report_kind:null,failed_subject_switch:null}}
+export function emptyAnalysisContext(){return {analysis_type:null,metrics:[],start_date:null,end_date:null,requested_end_period:null,grain:null,comparison_type:null,comparison_start_date:null,comparison_end_date:null,currencies:[],channel:null,channel_breakdown:false,location:null,platform:null,geography:null,customer_segment:null,product_ref:null,filters:[],sort:null,limit:null,report_section:null,output_preference:null,partial_period:false,date_cutoff:null,current_day_included:false,unresolved_required_fields:[],tool_route:null,request_kind:null,advisory_topic:null,journey_intent:null,entry_product_classification:null,subsequent_product_classification:null,excluded_product_titles:[],include_unclassified_products:false,first_order_semantic:null,cohort_entry_start:null,cohort_entry_end:null,observation_end:null,minimum_order_sequence:null,maximum_order_sequence:null,within_days:null,journey_group_by:null,event_name:null,event_count:null,requested_subject:null,included_periods:[],exclusions:[],contextual_event_mentions:[],placement_context:null,entity_query:null,explanation_requested:false,pending_product_candidates:[],product_report:null,email_report_kind:null,social_scope:null,failed_subject_switch:null}}
 
 function contextValidationError(field,rule,message=`invalid ${field}`){const error=Object.assign(new Error(message),{code:'INVALID_ANALYSIS_CONTEXT',validation_field:field,validation_rule:rule});return error}
 
@@ -39,6 +40,7 @@ export function validateAnalysisContext(value={}){
   out.analysis_type=value.analysis_type??null;
   if(value.failed_subject_switch!=null&&(!value.failed_subject_switch||typeof value.failed_subject_switch!=='object'||!validSubject(value.failed_subject_switch.attempted_subject)||!validSubject(value.failed_subject_switch.previous_subject)))throw contextValidationError('failed_subject_switch','supported_subjects');
   out.failed_subject_switch=value.failed_subject_switch?{attempted_subject:value.failed_subject_switch.attempted_subject,previous_subject:value.failed_subject_switch.previous_subject,attempted_year:Number.isInteger(value.failed_subject_switch.attempted_year)?value.failed_subject_switch.attempted_year:null}:null;
+  out.social_scope=validateSocialScope(value.social_scope);
   out.email_report_kind=['campaign','flow','all'].includes(value.email_report_kind)?value.email_report_kind:null;
   out.product_report=value.product_report==null?null:validateProductReportConfig(value.product_report);
   out.metrics=[...new Set(value.metrics||[])].filter(x=>METRICS.has(x)).slice(0,8);
@@ -86,6 +88,8 @@ export function transitionAnalysisContext(existing, message, {now=Date.now(),rep
   let base=validateAnalysisContext(existing||{}); const text=String(message||'').trim(), lower=text.toLowerCase();
   if(/^(?:new (?:question|analysis)|forget that|start over)\b/i.test(text))return transitionAnalysisContext(emptyAnalysisContext(),text.replace(/^(?:new (?:question|analysis)|forget that|start over)\s*[:,.]?\s*/i,''),{now});
   if(reportContext) base=initializeFromReportContext(base,reportContext);
+  const social=socialContextPatch(base,text,now);
+  if(social){const context=validateAnalysisContext({...emptyAnalysisContext(),...social});context.unresolved_required_fields=context.start_date&&context.end_date?[]:['start_date','end_date'];return {context,transition:{continuation:base.requested_subject===context.requested_subject,set:ANALYSIS_CONTEXT_FIELDS.filter(k=>JSON.stringify(base[k])!==JSON.stringify(context[k])),clear:[],retain:[],missing_required_fields:context.unresolved_required_fields,ready_to_execute:!context.unresolved_required_fields.length,applies_to_message:true}};}
   if(isProductPriorityRequest(text)||isProductReportRequest(text,base.product_report)){
     const defaults=priorityDates(now),rolling=text.match(/\blast\s+(\d{1,4})\s+(?:completed\s+)?days?\b/i);
     let dates=period(text,now);
@@ -198,7 +202,7 @@ export function transitionAnalysisContext(existing, message, {now=Date.now(),rep
       Object.assign(set,ranges[1],{comparison_start_date:ranges[0].start_date,comparison_end_date:ranges[0].end_date,comparison_type:'explicit_period_comparison',requested_end_period:ranges[1].start_date.slice(0,7),partial_period:false,included_periods:[]});
     }
     if(base.failed_subject_switch&&['device_conversion','product_sales'].includes(base.failed_subject_switch.attempted_subject)&&['device_conversion','product_sales'].includes(base.failed_subject_switch.previous_subject)&&/\b(?:conversion|product sales)\b/i.test(text)){
-      const selected=/\bconversion\b/i.test(text)?'device_conversion':'product_sales';set.requested_subject=selected;set.tool_route=selected==='device_conversion'?'get_governed_device_conversion':'get_product_sales_analysis';set.metrics=[selected==='device_conversion'?'conversion':'sales'];set.analysis_type=selected==='device_conversion'?'ecommerce':'products';clear.push('failed_subject_switch');if(selected==='device_conversion'){clear.push('entity_query','product_ref','pending_product_candidates');set.channel='online';}
+      const selected=/\bconversion\b/i.test(text)?'device_conversion':'product_sales';set.requested_subject=selected;set.tool_route=selected==='device_conversion'?'get_governed_device_conversion':'get_product_sales_analysis';set.metrics=[selected==='device_conversion'?'conversion':'sales'];set.analysis_type=selected==='device_conversion'?'ecommerce':'products';clear.push('failed_subject_switch');if(selected==='device_conversion'){clear.push('social_scope','entity_query','product_ref','pending_product_candidates');set.channel='online';}
     }
     if(!base.currencies.length&&!set.currencies&&set.analysis_type==='finance'&&!['get_shopify_online_country_products','get_online_country_sales','get_governed_category_sales','get_shopify_operational_sales_baseline','get_general_sales_analysis','get_product_sales_analysis'].includes(set.tool_route||base.tool_route)&&!advisory) set.currencies=['GBP'];
   }
@@ -207,7 +211,7 @@ export function transitionAnalysisContext(existing, message, {now=Date.now(),rep
     const context={...emptyAnalysisContext(),unresolved_required_fields:['requested_subject']};
     return {context,transition:{continuation:false,set:[],clear:ANALYSIS_CONTEXT_FIELDS,retain:[],missing_required_fields:['requested_subject'],ready_to_execute:false,applies_to_message:true}};
   }
-  if(set.requested_subject&&set.requested_subject!==base.requested_subject)clear.push('entity_query','product_ref','pending_product_candidates','explanation_requested','output_preference','failed_subject_switch','email_report_kind','placement_context');
+  if(set.requested_subject&&set.requested_subject!==base.requested_subject)clear.push('social_scope','entity_query','product_ref','pending_product_candidates','explanation_requested','output_preference','failed_subject_switch','email_report_kind','placement_context');
   if(set.tool_route&&set.tool_route!=='export_product_priorities')clear.push('product_report');
   const effectiveClear=clear.filter(key=>!Object.hasOwn(set,key));const next={...base,...set};if(next.analysis_type==='customer_journey'){next.first_order_semantic=next.first_order_semantic||'first_observed_ever';if(next.start_date){next.cohort_entry_start=next.start_date;next.cohort_entry_end=next.end_date;next.observation_end=next.end_date;}}for(const key of effectiveClear) next[key]=emptyAnalysisContext()[key];
   const missing=[];if(next.metrics.length&&(!next.start_date||!next.end_date)&&next.tool_route!=='compare_historical_events'&&!['advisory','knowledge_save','policy_definition'].includes(next.request_kind)) {if(!next.start_date)missing.push('start_date');if(!next.end_date)missing.push('end_date');}
