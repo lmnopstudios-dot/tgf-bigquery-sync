@@ -1,3 +1,4 @@
+import { evidenceNumber } from './numeric-evidence.js';
 import { createCanonicalFinanceService, FINANCE_SEMANTICS } from '../finance/canonical.js';
 
 export function createOracleFinanceService({bigquery,project}){
@@ -8,8 +9,8 @@ export function createOracleFinanceService({bigquery,project}){
       const dimensions={summary:[],month:[],channel:['channel'],source:['source'],month_source:['source'],month_channel_source:['source','channel']}[group_by];
       if(!dimensions)throw new Error('Unsupported refund grouping');
       const rows=await canonicalFinance({start_date,end_date,currency,channel,source,transaction_type:'refund',grain:group_by.startsWith('month')?'month':'summary',dimensions});
-      const presented=rows.map(row=>({...row,refund_count:Number(row.refund_events||0),refunds_gross:Number(row.amount||0),refunded_amount:Math.abs(Number(row.amount||0)),semantics:FINANCE_SEMANTICS}));
-      return group_by==='summary'?presented[0]||{period:'summary',refund_count:0,distinct_refunded_orders:0,refunds_gross:0,refunded_amount:0,semantics:FINANCE_SEMANTICS}:presented;
+      const presented=rows.map(row=>({...row,refund_count:evidenceNumber(row.refund_events),refunds_gross:evidenceNumber(row.amount),refunded_amount:evidenceNumber(row.amount)==null?null:Math.abs(evidenceNumber(row.amount)),semantics:FINANCE_SEMANTICS}));
+      return group_by==='summary'&&currency!=null?presented[0]||{period:'summary',currency,status:'unavailable',refund_count:null,distinct_refunded_orders:null,refunds_gross:null,refunded_amount:null,semantics:FINANCE_SEMANTICS}:presented;
     }
   };
 }
