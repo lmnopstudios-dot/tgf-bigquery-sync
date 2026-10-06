@@ -10,6 +10,6 @@ test('migration diagnostic retrieves exact governed event and both periods using
   assert.ok(calls.some(x=>x.params.id==='ev_d62be9ed-527e-403a-a661-cb2d11095ca5'));
   assert.ok(calls.some(x=>x.params.start_date==='2025-11-01'));
   assert.ok(calls.some(x=>x.params.start_date==='2024-11-01'));
-  assert.ok(calls.some(x=>x.params.knowledge_type==='event'&&x.params.start_date.value==='2024-10-18'));
+  assert.ok(calls.some(x=>x.params.knowledge_type==='event'&&x.params.start_date.value==='2024-11-01'));
   assert.equal(result.results.finance_components_and_overlap.status,'fulfilled');
 });

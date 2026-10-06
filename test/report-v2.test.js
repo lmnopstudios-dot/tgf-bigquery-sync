@@ -63,14 +63,10 @@ test('finance uses Shopify presentment currency once, excludes Matrixify, and se
   assert.match(sql,/NOT REGEXP_CONTAINS[\s\S]+shopify/);
 });
 
-test('business context retrieves current and comparison independently with bounded nearby look-behind', async () => {
-  const calls=[]; const knowledgeService={getBusinessContext:async input=>{calls.push(input);return {items:[{id:`event-${calls.length}`,status:'confirmed',effective_from:input.start_date,effective_to:input.start_date}]}}};
-  const service=createEcommerceReportV2({bigquery:{},project:'test',knowledgeService});
-  const result=await service('context',{start_date:'2026-04-01',end_date:'2026-04-30',comparison:'custom',comparison_start:'2025-04-01',comparison_end:'2025-04-30'});
-  assert.deepEqual(calls,[{start_date:'2026-03-18',end_date:'2026-04-30',topics:[]},{start_date:'2025-03-18',end_date:'2025-04-30',topics:[]}]);
-  assert.equal(result.context.current[0].temporal_relation,'nearby_before_period');
-  assert.equal(result.context.comparison[0].temporal_relation,'nearby_before_period');
-  assert.notEqual(result.context.current,result.context.comparison);
+test('business context retrieves only relevant confirmed dated events for exact independent periods',async()=>{
+  const calls=[],knowledgeService={searchKnowledge:async input=>{calls.push(input);return{items:[{id:'ev_'+input.start_date,kind:'event',title:'Campaign',status:'confirmed',effective_from:input.start_date,effective_to:input.end_date,tags:['online'],source_type:'business_document',source_reference:'campaign record'}]}}};
+  const result=await createEcommerceReportV2({bigquery:{},project:'test',knowledgeService})('context',{start_date:'2026-04-01',end_date:'2026-04-30',comparison:'custom',comparison_start:'2025-04-01',comparison_end:'2025-04-30'});
+  assert.deepEqual(calls.map(x=>[x.start_date,x.end_date,x.knowledge_type,x.status]),[['2026-04-01','2026-04-30','event','confirmed'],['2025-04-01','2025-04-30','event','confirmed']]);assert.equal(result.context.current.length,1);assert.equal(result.context.comparison.length,1);
 });
 
 test('period availability preserves asymmetric and semantic-mismatch states',()=>{
@@ -108,7 +104,7 @@ test('November finance preserves comparison rows but withholds unreconciled migr
 });
 
 test('dated campaign retrieval recovers both years independently from saturated general context',async()=>{
-  const calls=[];const knowledgeService={getBusinessContext:async()=>({items:Array.from({length:50},(_,i)=>({id:`df-${i}`,status:'confirmed',kind:'definition'}))}),searchKnowledge:async args=>{calls.push(args);return{items:[{id:args.end_date.startsWith('2024')?'ev_d62be9ed-527e-403a-a661-cb2d11095ca5':'ev-2025',status:'confirmed',kind:'event',title:'Service supplied campaign',effective_from:args.end_date}]};}};
+  const calls=[];const knowledgeService={getBusinessContext:async()=>({items:Array.from({length:50},(_,i)=>({id:`df-${i}`,status:'confirmed',kind:'definition'}))}),searchKnowledge:async args=>{calls.push(args);return{items:[{id:args.end_date.startsWith('2024')?'ev_d62be9ed-527e-403a-a661-cb2d11095ca5':'ev-2025',status:'confirmed',kind:'event',title:'Service supplied campaign',effective_from:args.start_date,effective_to:args.end_date,tags:['online'],source_type:'business_document',source_reference:'fixture'}]};}};
   const result=await createEcommerceReportV2({bigquery:{},project:'test',knowledgeService})('context',{start_date:'2025-11-01',end_date:'2025-11-30',comparison:'custom',comparison_start:'2024-11-01',comparison_end:'2024-11-30'});
   assert.equal(calls.length,2);assert.ok(calls.every(x=>x.knowledge_type==='event'&&x.status==='confirmed'&&x.limit===50&&!x.text&&!x.tags.length));assert.ok(result.context.comparison.some(x=>x.id==='ev_d62be9ed-527e-403a-a661-cb2d11095ca5'));assert.ok(result.context.current.some(x=>x.id==='ev-2025'));
 });

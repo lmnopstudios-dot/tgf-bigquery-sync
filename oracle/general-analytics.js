@@ -1,7 +1,8 @@
+import { relevantSalesEvent } from './sales-context.js';
+import { evidenceNumber as finite } from './numeric-evidence.js';
 import {financeSource,financeComponents,migrationDiagnostics,ONLINE_COMPARISON_BOUNDARY,isOnline} from './sales-comparison.js';
 import { normalizeProductTitle } from './ecommerce-report-v2.js';
 
-const finite=value=>Number.isFinite(Number(value))?Number(value):null;
 const esc=value=>String(value??'').replaceAll('|','\\|').replaceAll('\n',' ');
 const money=(value,currency)=>value==null?'Unavailable':`${currency} ${Number(value).toLocaleString('en-GB',{maximumFractionDigits:2})}`;
 const month=value=>String(value?.period||value?.date||'').slice(0,7);
@@ -49,7 +50,7 @@ function requestedChoice(message,choices){
 
 function aggregate(rows,valueField='net_gross'){
   const groups=new Map();
-  for(const row of rows||[]){const period=month(row),currency=String(row.currency||'').toUpperCase(),label=sourceLabel(row),value=finite(row[valueField]);if(!period||!currency||value==null)continue;const key=[period,label,currency].join('|'),prior=groups.get(key)||{period,label,currency,value:0};prior.value+=value;groups.set(key,prior);}
+  for(const row of rows||[]){const period=month(row),currency=String(row.currency||'').toUpperCase(),label=sourceLabel(row)+(row.source_store?` · ${row.source_store}`:''),value=finite(row[valueField]);if(!period||!currency)continue;const key=[period,label,currency].join('|'),prior=groups.get(key)||{period,label,currency,source:row.source||null,source_platform:row.source_platform||null,source_store:row.source_store||null,channel:row.channel||null,provenance:row.provenance||[],coverage:row.coverage||null,value:0,gross_sales:0,refunds:0,orders:0};for(const field of ['gross_sales','refunds','orders']){const n=finite(row[field]);prior[field]=prior[field]==null||n==null?null:prior[field]+n;}prior.value=prior.value==null||value==null?null:prior.value+value;groups.set(key,prior);}
   return [...groups.values()].sort((a,b)=>a.period.localeCompare(b.period)||a.currency.localeCompare(b.currency)||a.label.localeCompare(b.label));
 }
 function supportingTable(rows){return ['| Month | Series | Currency | Sales |','|---|---|---|---:|',...rows.map(row=>`| ${row.period} | ${esc(row.label)} | ${row.currency} | ${money(row.value,row.currency)} |`)].join('\n');}
@@ -58,7 +59,7 @@ export function createGeneralAnalyticsService({loadReport}){
   if(typeof loadReport!=='function')throw new Error('loadReport is required');
   return async (_message,{analysisContext:context,onProviderStage}={})=>{
     if(!['channel_sales','product_sales'].includes(context?.requested_subject))return null;
-    const reportInput={start_date:context.start_date,end_date:context.end_date,...(context.comparison_start_date?{comparison:'custom',comparison_start:context.comparison_start_date,comparison_end:context.comparison_end_date}:{comparison:'previous_period'})};
+    const reportInput={start_date:context.start_date,end_date:context.end_date,...(context.comparison_start_date?{comparison:'custom',comparison_start:context.comparison_start_date,comparison_end:context.comparison_end_date}:{comparison:'previous_period'}),...(context.channel==='online'?{channel:'Online'}:{})};
     if(context.requested_subject==='product_sales'){
       const pending=Array.isArray(context.pending_product_candidates)?context.pending_product_candidates:[];
       let resolved=pending.find(choice=>choice.product_ref===context.product_ref)||null,selection=pending.length?requestedChoice(_message,pending):{attempted:false,choice:null,selection_kind:null};
@@ -75,7 +76,7 @@ export function createGeneralAnalyticsService({loadReport}){
       const selected=matches.filter(row=>row.product_ref===resolved.product_ref),rows=aggregate(selected,'product_sales'),answer=[`# Sales for ${esc(selected[0]?.canonical_title||selected[0]?.source_title||context.entity_query)}`,`**Resolved entity:** ${resolved.product_ref} · **Applied period:** ${context.start_date} to ${context.end_date}${context.partial_period?' (partial end period)':''} · **Channel:** ${context.channel||'online and in-store'} · **Currencies:** ${context.currencies?.length?context.currencies.join(', '):'source-native currencies'}.`,supportingTable(rows),'','Currencies and source-native line-item sales remain separate. Reporting-family membership may group source products without changing their identities. Missing evidence is unavailable, not zero. No inventory was queried.'].join('\n\n');
       return{answer,tools:['get_ecommerce_report_v2_evidence'],inline_chart:context.output_preference==='chart'?chart('product-sales','Monthly product sales',`${context.start_date} to ${context.end_date}`,'Line-item sales',rows):null,evidence:{kind:'governed_product_sales',subject:'product_sales',entity_query:context.entity_query,entity_refs:[resolved.product_ref],resolved_product_ref:resolved.product_ref,selected_candidate:resolved,metrics:['sales'],periods:[{start_date:context.start_date,end_date:context.end_date}],grain:'line_item_month',channel:context.channel,currencies:context.currencies,rows,source_rows:selected,diagnostics:[{stage:'selection_validation',code:resolved?'SELECTION_VALIDATED':'SELECTION_IMPLICIT'},{stage:'provider_arguments',code:'SELECTED_IDENTITY_BOUND',selected_product_ref:resolved.product_ref,source_reference_count:resolved.sources.length},{stage:'evidence_validation',code:'SELECTED_IDENTITY_MATCHED',matched_source_row_count:selected.length},{stage:'delivery',code:'PRODUCT_SALES_DELIVERED'}]}};
     }
-    const [sales,eventResult]=await Promise.all([loadReport('sales',reportInput),context.explanation_requested?loadReport('context',reportInput).then(value=>({status:'fulfilled',value}),()=>({status:'rejected'})):Promise.resolve(null)]);
+    const [sales,eventResult]=await Promise.all([loadReport('sales',reportInput).catch(()=>({rows:[],comparison_rows:[],retrieval:[{status:'failed'},{status:'failed'}]})),context.explanation_requested?loadReport('context',reportInput).then(value=>({status:'fulfilled',value}),()=>({status:'rejected'})):Promise.resolve(null)]);
     const events=eventResult?.value;
     const selected=list=>(list||[]).filter(row=>(context.channel!=='online'||isOnline(row))&&(!context.currencies?.length||context.currencies.includes(String(row.currency||'').toUpperCase()))&&!context.exclusions?.includes(MONTH_NAMES[Number(month(row).slice(5))]));
     const current=selected(sales.rows),comparison=selected(sales.comparison_rows),rows=aggregate(current),prior=aggregate(comparison),diagnostics=migrationDiagnostics(current,comparison);
@@ -86,6 +87,7 @@ export function createGeneralAnalyticsService({loadReport}){
       `**Business-level online comparison withheld, including within each currency:** ${ONLINE_COMPARISON_BOUNDARY.reason}`,
       `**Applied periods:** ${context.start_date} to ${context.end_date}${context.partial_period?' (partial final month)':''}; comparison ${sales.comparison?.start_date||context.comparison_start_date||'unavailable'} to ${sales.comparison?.end_date||context.comparison_end_date||'unavailable'}.`,
       'Finance sale transaction counts are ledger counts, not validated distinct ecommerce orders. Canonical net gross uses accounting refunds; source-native operational sales, eligible orders and order-cohort refunds are different measures and have not been substituted.',
+      comparison.length&&comparison.every(row=>finite(row.net_gross)!=null)?'Source-only components remain separate; no overall online change is inferred.':'Source-only change unavailable for missing or invalid comparison evidence.',
       '## Source components',
       '| Period | Source / channel | Currency | Canonical net gross | Finance sale transactions | Coverage |',
       '|---|---|---|---:|---:|---|'];
@@ -101,16 +103,22 @@ export function createGeneralAnalyticsService({loadReport}){
     if(context.explanation_requested){
       lines.push('## Confirmed contextual events');
       for(const [label,key] of [['Current period','current'],['Comparison period','comparison']]){
-        const items=(events?.context?.[key]||[]).filter(event=>!event.status||event.status==='confirmed');
-        lines.push(`**${label}:**`,...(items.length?items.map(event=>`- ${esc(event.title||event.name||event.summary||event.id)} · ${esc(event.id)} · ${esc(event.effective_from||'date unknown')} to ${esc(event.effective_to||event.effective_from||'date unknown')} · ${esc(event.content||event.description||'')} · source ${esc(event.source_reference||'unavailable')}. Documented context; temporal overlap does not prove causality.`):[eventResult?.status==='rejected'?'- Governed context retrieval failed; campaign context is unknown.':'- No confirmed contextual event was retrieved; campaign context is unknown, not absent.']));
+        const period=key==='current'?{start_date:context.start_date,end_date:context.end_date}:{start_date:context.comparison_start_date||sales.comparison?.start_date,end_date:context.comparison_end_date||sales.comparison?.end_date};
+        const items=(events?.context?.[key]||[]).filter(event=>relevantSalesEvent(event,[period],{onlineOnly:context.channel==='online'}));
+        lines.push(`**${label}:**`,...(items.length?items.map(event=>`- ${esc(event.title||event.name||event.summary||event.id)} · ${esc(event.id)} · ${esc(event.effective_from||'date unknown')} to ${esc(event.effective_to||event.effective_from||'date unknown')} · ${esc(event.content||event.description||'')} · source ${esc(event.source_reference||'unavailable')}. Documented context; temporal overlap does not prove causality.`):[eventResult?.status==='rejected'||events?.retrieval?.[key==='current'?0:1]?.status==='failed'?'- Governed context retrieval failed; campaign context is unknown.':'- No confirmed contextual event was retrieved; campaign context is unknown, not absent.']));
       }
-      lines.push('## Hypotheses','Campaign, traffic and merchandising effects remain hypotheses. Migration prevents interpreting a Woo-only change as a business decline; this evidence does not quantify migration uplift or campaign causality.');
+      lines.push('## What remains unexplained','Overall online demand and campaign contributions remain unknown without compatible definitions and migration reconciliation.','## Hypotheses','Campaign, traffic and merchandising effects remain hypotheses. Migration prevents interpreting a Woo-only change as a business decline; this evidence does not quantify migration uplift or campaign causality.');
     }
     lines.push('<details>','<summary>Daily provenance and supporting evidence</summary>','',
-      '| Period | Date | Source / channel | Currency | Canonical net gross | Finance sale transactions |',
-      '|---|---|---|---|---:|---:|',
-      ...[['Current',current],['Comparison',comparison]].flatMap(([label,list])=>list.map(row=>`| ${label} | ${esc(row.date||row.period)} | ${esc(financeSource(row))} / ${esc(row.channel)} | ${row.currency} | ${money(row.net_gross,row.currency)} | ${row.sales_transaction_count??row.orders??'Unavailable'} |`)),
+      '| Period | Date | Source / channel | Currency | Canonical net gross | Finance sale transactions | Provenance |',
+      '|---|---|---|---|---:|---:|---|',
+      ...[['Current',current],['Comparison',comparison]].flatMap(([label,list])=>list.map(row=>`| ${label} | ${esc(row.date||row.period)} | ${esc(financeSource(row))} / ${esc(row.channel)} | ${row.currency} | ${money(row.net_gross,row.currency)} | ${row.sales_transaction_count??row.orders??'Unavailable'} | ${esc((row.provenance||[]).join('; ')||'Unavailable')} |`)),
       '', 'Daily rows identify source and date evidence; query execution does not prove collection completeness. All returned dates and source components are retained.', '</details>');
-    return{answer:lines.filter(x=>x!==null).join('\n'),tools:['get_ecommerce_report_v2_evidence',...(eventResult?['get_business_context','search_knowledge']:[])],inline_chart:context.output_preference==='chart'?chart('channel-sales','Canonical finance by source and currency',`${context.start_date} to ${context.end_date}`,'Canonical net gross',rows):null,evidence:{kind:context.explanation_requested?'governed_sales_explanation':'governed_channel_sales',subject:'channel_sales',metrics:['sales'],periods:[{start_date:context.start_date,end_date:context.end_date},...(context.comparison_start_date?[{start_date:context.comparison_start_date,end_date:context.comparison_end_date}]:[])],grain:'month',channel:context.channel||'online_vs_instore',rows,comparison_rows:prior,source_rows:{current,comparison},source_components:{current:financeComponents(current),comparison:financeComponents(comparison)},online_comparison:ONLINE_COMPARISON_BOUNDARY,migration_diagnostics:diagnostics,documented_events:events?.context||null,context_status:eventResult?.status||'not_requested'}};
+    return{answer:lines.filter(x=>x!==null).join('\n'),tools:['get_ecommerce_report_v2_evidence',...(eventResult?['get_business_context','search_knowledge']:[])],inline_chart:context.output_preference==='chart'?chart('channel-sales','Canonical finance by source and currency',`${context.start_date} to ${context.end_date}`,'Canonical net gross',rows):null,evidence:{kind:context.explanation_requested?'governed_sales_explanation':'governed_channel_sales',subject:'channel_sales',metrics:['sales'],periods:[{start_date:context.start_date,end_date:context.end_date},...(context.comparison_start_date?[{start_date:context.comparison_start_date,end_date:context.comparison_end_date}]:[])],grain:'month',channel:context.channel||'online_vs_instore',rows,comparison_rows:prior,source_rows:current,comparison_source_rows:comparison,changes:componentChanges(current,comparison),source_components:{current:financeComponents(current),comparison:financeComponents(comparison)},online_comparison:ONLINE_COMPARISON_BOUNDARY,migration_diagnostics:diagnostics,documented_events:[...(events?.context?.current||[]),...(events?.context?.comparison||[])],documented_context:events?.context||null,coverage:sales.coverage||null,provenance:sales.provenance||null,retrieval:sales.retrieval||null,knowledge_retrieval:events?.retrieval||null,context_status:eventResult?.status||'not_requested'}};
   };
+}
+
+function componentChanges(current,comparison){
+  const a=financeComponents(current),b=financeComponents(comparison),key=r=>[r.source,r.channel,r.currency].join('|');
+  return [...new Set([...a,...b].map(key))].map(k=>{const x=a.find(r=>key(r)===k),y=b.find(r=>key(r)===k),sample=x||y,delta=x?.net_gross!=null&&y?.net_gross!=null?x.net_gross-y.net_gross:null;return{source:sample.source,currency:sample.currency,current:x?.net_gross??null,comparison:y?.net_gross??null,absolute_change:delta,percentage_change:delta!=null&&y.net_gross!==0?delta/y.net_gross*100:null,scope:'source_only',business_online_comparison:'withheld'};});
 }

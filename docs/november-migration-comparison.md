@@ -8,7 +8,7 @@ The current governed finance path preserves non-Shopify ledger history and nativ
 
 Default tables contain currency/source components and concise observed-day coverage. Observed dates do not establish collection completeness. Daily provenance is available in collapsed supporting evidence. Shopify evidence before 20 November, including 18 November if returned, is retained and flagged for investigation. Same-day Woo/Shopify evidence is not proof of duplication. No launch cutoff or date deletion is applied.
 
-Both periods retrieve confirmed context independently with a 14-day look-behind, plus an independent event-only search so undated general records cannot crowd out campaigns. Event content comes from governed services, not embedded campaign text. Failed or empty retrieval means unknown campaign context, not no campaign.
+Both exact periods retrieve confirmed dated events independently through an event-only search with no required tags, so undated general records and inconsistent historical tagging cannot crowd out campaign candidates. Governed event eligibility is checked before rendering. Event content comes from governed services, not embedded campaign text. Failed or empty retrieval means unknown campaign context, not no campaign.
 
 Run the bounded existing-data diagnostic:
 

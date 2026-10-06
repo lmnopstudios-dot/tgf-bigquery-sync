@@ -61,12 +61,14 @@ export function buildCanonicalFinanceQuery(project,{grain='day',dimensions=[]}={
   if (!Object.hasOwn(GRAINS,grain)) throw new Error('grain must be summary, day, week, or month');
   const allowed=new Set(['source','channel','currency','transaction_type']);
   if (!dimensions.every(x=>allowed.has(x))) throw new Error('unsupported finance dimension');
-  const selected=[`${GRAINS[grain]} period`,...dimensions];
+  const selected=[`${GRAINS[grain]} period`,...[...new Set([...dimensions,'currency'])]];
   const grouped=selected.map((_,i)=>String(i+1)).join(',');
   return `WITH ${canonicalFinanceCtes(project)}
     SELECT ${selected.join(',')},COUNT(*) transaction_count,
       COUNTIF(transaction_type='refund') refund_events,
       COUNT(DISTINCT IF(transaction_type='refund',order_id,NULL)) distinct_refunded_orders,
+      ARRAY_AGG(DISTINCT provenance IGNORE NULLS) provenance,
+      FORMAT_DATE('%Y-%m-%d',MIN(transaction_date)) first_observed_date,FORMAT_DATE('%Y-%m-%d',MAX(transaction_date)) last_observed_date,
       CAST(SUM(amount) AS FLOAT64) amount,CAST(SUM(tax) AS FLOAT64) tax,
       CAST(SUM(net_ex_tax) AS FLOAT64) net_ex_tax
     FROM canonical_transactions

@@ -1,5 +1,5 @@
 const MAX_GROUPS=12,MAX_ITEMS=10,DATE=/^\d{4}-\d{2}-\d{2}$/;
-const number=value=>{const n=Number(value);return Number.isFinite(n)&&n>=0?n:null};
+const number=value=>{if(value==null||value==='')return null;const n=Number(value);return Number.isFinite(n)&&n>=0?n:null};
 const text=(value,max=120)=>typeof value==='string'&&value.trim()&&value.length<=max?value.trim():null;
 const period=value=>value&&DATE.test(value.start_date)&&DATE.test(value.end_date)&&value.start_date<=value.end_date;
 
