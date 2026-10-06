@@ -38,6 +38,9 @@ test('every deterministic transition route is registered with an executable disp
     'Can you give me a monthly breakdown of mobile and desktop conversion rates this year?',
     'Graph online sales versus in-store sales monthly for the last 24 months.',
     'Give me a sales breakdown of SMALL SILVER ANATOMICAL HEART PENDANT this year.',
+    'How have Klaviyo campaigns affected sales performance this year?',
+    'Which Klaviyo campaigns have strong clicks but weak purchases this year?',
+    'Compare Klaviyo attribution beside Shopify email-referrer this year.',
     EXACT
   ];
   const emitted=new Set(prompts.map(message=>transitionAnalysisContext(null,message,{now:NOW}).context.tool_route).filter(Boolean));

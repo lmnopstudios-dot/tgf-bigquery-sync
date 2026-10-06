@@ -12,20 +12,23 @@ export function rankProductReport(catalogue,sources,rawConfig){
   const urls=new Map(),origins=new Set(catalogue.products.map(p=>new URL(p.url).origin));
   for(const p of catalogue.products)urls.set(p.url,urls.has(p.url)?null:p.product_id);
   const byId=new Map(products.map(p=>[p.product_id,p])),observed=new Map(products.map(p=>[p.product_id,{}]));
-  const invalid=new Set();
+  const invalid=new Set(),joins={};
   for(const name of config.metrics){
     const capability=PRODUCT_REPORT_CAPABILITIES[name],binding=capability.provider_binding;
     if(!binding||sources[binding.provider]?.status!=='available')continue;
+    const diagnostic=joins[name]={source_rows:0,matched_rows:0,invalid_identity_or_url:0,unmatched_or_ambiguous:0,invalid_metric:0};
     for(const row of sources[binding.provider].rows||[]){
+      diagnostic.source_rows++;
       if(binding.provider==='sales'&&(row.evidence_window||row.window)==='history')continue;
-      let id;
-      if(binding.provider==='sales')id=shopifyProductId(row.product_id);
-      else {const raw=row.url||row.landing_path||row.page;const url=String(raw||'').startsWith('/')&&!String(raw).startsWith('//')&&origins.size===1?canonicalProductUrl(`${[...origins][0]}${raw}`):canonicalProductUrl(raw);id=urls.get(url);}
-      if(!byId.has(id))continue;
+      let id,identityValid;
+      if(binding.provider==='sales'){id=shopifyProductId(row.product_id);identityValid=Boolean(id);}
+      else {const raw=row.url||row.landing_path||row.page;const url=String(raw||'').startsWith('/')&&!String(raw).startsWith('//')&&origins.size===1?canonicalProductUrl(`${[...origins][0]}${raw}`):canonicalProductUrl(raw);id=urls.get(url);identityValid=Boolean(url);}
+      if(!byId.has(id)){diagnostic[identityValid?'unmatched_or_ambiguous':'invalid_identity_or_url']++;continue;}
+      diagnostic.matched_rows++;
       const currency=capability.money?String(row.currency||''):null;
       if(capability.money&&!/^[A-Z]{3}$/.test(currency))continue;
       const values=observed.get(id),key=capability.money?`${name}:${currency}`:name,invalidKey=`${id}:${key}`,value=number(row[binding.field]);
-      if(value===null||!capability.money&&value<0){invalid.add(invalidKey);values[key]=null;continue;}
+      if(value===null||!capability.money&&value<0){diagnostic.invalid_metric++;invalid.add(invalidKey);values[key]=null;continue;}
       if(invalid.has(invalidKey))continue;
       // Commerce counts are product totals, repeated once per currency by SQL.
       // Conflicting totals are unavailable rather than summed or guessed.
@@ -42,8 +45,10 @@ export function rankProductReport(catalogue,sources,rawConfig){
     const x=a.metrics[sortKey]??null,y=b.metrics[sortKey]??null;
     return (x===null)-(y===null)||(config.sort.direction==='asc'?1:-1)*((x??0)-(y??0))||idOrder(a,b);
   });
+  columns.push({key:'ranking_status',header:'Ranking status'});
+  for(const row of rows)row.ranking_status=config.sort.metric&&row.metrics[sortKey]==null?'Unrankable — sort evidence unavailable':'Supported';
   const total=rows.length,selected=config.population.limit?rows.slice(0,config.population.limit):rows;
-  const availability=Object.fromEntries(config.metrics.map(name=>{const c=PRODUCT_REPORT_CAPABILITIES[name],provider=c.provider_binding?.provider,source=sources[provider],matched=rows.filter(row=>Object.entries(row.metrics).some(([key,value])=>(key===name||key.startsWith(`${name}:`))&&value!==null)).length;return[name,{status:!c.supported?'unsupported':source?.status||'unavailable',provider_binding:c.provider_binding,definition:c.definition,matched_product_count:matched,unmatched_product_count:total-matched,complete:Boolean(source?.complete),error_code:source?.error_code||null}];}));
+  const availability=Object.fromEntries(config.metrics.map(name=>{const c=PRODUCT_REPORT_CAPABILITIES[name],provider=c.provider_binding?.provider,source=sources[provider],matched=rows.filter(row=>Object.entries(row.metrics).some(([key,value])=>(key===name||key.startsWith(`${name}:`))&&value!==null)).length;return[name,{status:!c.supported?'unsupported':source?.status||'unavailable',provider_binding:c.provider_binding,definition:c.definition,matched_product_count:matched,unmatched_product_count:total-matched,complete:Boolean(source?.complete),error_code:source?.error_code||null,join_diagnostics:joins[name]||null}];}));
   const any=config.sort.metric?rows.some(row=>row.metrics[sortKey]!=null):rows.some(row=>Object.values(row.metrics).some(value=>value!==null));
   return {rows:selected,columns,population_count:total,evidence_availability:availability,ranking_status:!any?'unavailable':!catalogue.complete||Object.values(availability).some(s=>!s.complete||s.unmatched_product_count||s.status!=='available')?'provisional':'available'};
 }
@@ -51,7 +56,7 @@ export async function productReportWorkbook(envelope){
   const workbook=new ExcelJS.Workbook();workbook.creator='Oracle';workbook.created=new Date(envelope.generated_at);
   const sheet=workbook.addWorksheet(envelope.manifest.complete_catalogue?'Product report':'Products - incomplete');
   sheet.columns=envelope.report_columns.map(column=>({header:column.header,width:column.key==='title'?48:column.key==='url'?65:30}));
-  for(const row of envelope.rows){const added=sheet.addRow(envelope.report_columns.map(column=>column.key==='title'?row.title:column.key==='url'?{text:row.url,hyperlink:row.url}:row.metrics[column.key]??null));added.getCell(2).font={color:{argb:'FF0563C1'},underline:true};added.alignment={vertical:'top',wrapText:true};}
+  for(const row of envelope.rows){const added=sheet.addRow(envelope.report_columns.map(column=>column.key==='title'?row.title:column.key==='url'?{text:row.url,hyperlink:row.url}:column.key==='ranking_status'?row.ranking_status:row.metrics[column.key]??null));added.getCell(2).font={color:{argb:'FF0563C1'},underline:true};added.alignment={vertical:'top',wrapText:true};}
   sheet.getRow(1).font={bold:true};sheet.views=[{state:'frozen',ySplit:1}];sheet.autoFilter={from:{row:1,column:1},to:{row:Math.max(1,sheet.rowCount),column:sheet.columnCount}};
   return Buffer.from(await workbook.xlsx.writeBuffer());
 }
