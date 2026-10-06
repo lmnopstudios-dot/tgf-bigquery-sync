@@ -40,13 +40,17 @@ export function assertEvidenceAgreement(contextValue,evidence){
   return true;
 }
 
+function disclosePeriod(result,context){
+  if(!result?.answer||!context?.date_cutoff||!context.start_date)return result;
+  return {...result,answer:`**Resolved dates:** ${context.start_date} to ${context.end_date}, inclusive (Europe/London). Current day ${context.current_day_included?'included; evidence through the runtime cutoff may be partial':'excluded'}. Runtime cutoff: ${context.date_cutoff}.\n\n${result.answer}`};
+}
 export async function dispatchAnalysisRequest({message,analysisContext,baselineOverview=null,baselineOptions,chat,chatOptions}){
   const context=analysisContext==null?null:validateAnalysisContext(analysisContext);
   const clarification=context?clarificationFor(context):null;if(clarification)return {answer:clarification,tools:[]};
   const binding=context?.tool_route?ANALYSIS_ROUTE_DISPATCHERS[context.tool_route]:baselineThenAgent;
   const result=await binding({message,baselineOverview,baselineOptions:{...baselineOptions,analysisContext:analysisContext??context},chat,chatOptions});
   try{assertEvidenceAgreement(context,result?.evidence);baselineOptions?.onProviderStage?.({stage:'evidence_validation',status:'success'});}catch(error){baselineOptions?.onProviderStage?.({stage:'evidence_validation',status:'failed',code:'EVIDENCE_SCOPE_MISMATCH'});throw error;}
-  return withOracleCharts(result);
+  return withOracleCharts(disclosePeriod(result,context));
 }
 
 /** Shared deterministic /agent entrypoint; a null result continues existing model tooling. */
@@ -58,5 +62,5 @@ export async function executeGovernedAgentAnalysis({message,analysisContext,base
   const result=await baselineOverview(message,{...baselineOptions,analysisContext:resolved.context});
   if(!result)return null;
   assertEvidenceAgreement(resolved.context,result.evidence);
-  return withOracleCharts(result);
+  return withOracleCharts(disclosePeriod(result,resolved.context));
 }

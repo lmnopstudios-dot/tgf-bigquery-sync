@@ -1,7 +1,15 @@
 const MONTHS = {jan:1,january:1,feb:2,february:2,mar:3,march:3,apr:4,april:4,may:5,jun:6,june:6,jul:7,july:7,aug:8,august:8,sep:9,sept:9,september:9,oct:10,october:10,nov:11,november:11,dec:12,december:12};
 const iso=value=>/^\d{4}-\d{2}-\d{2}$/.test(String(value||''))?value:null;
-export function naturalReportPeriod(text, now){
+function parseReportPeriod(text, now){
   const lower=text.toLowerCase(),localDay=new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/London',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(now)),today=new Date(`${localDay}T00:00:00Z`),todayIso=localDay;
+  // Rolling windows include the runtime London day, matching governed
+  // month-to-date cutoffs. Calendar weeks are completed Monday–Sunday.
+  const shift=days=>new Date(+today+days*86400000).toISOString().slice(0,10);
+  const window=(start,end,partial=false)=>({start_date:start,end_date:end,requested_end_period:end,partial_period:partial});
+  if(/\b(?:in (?:the )?last week|(?:past|last) (?:seven|7) days|past week)\b/.test(lower))return window(shift(-6),todayIso,true);
+  if(/\blast week\b/.test(lower)){const mondayOffset=(today.getUTCDay()+6)%7;return window(shift(-mondayOffset-7),shift(-mondayOffset-1));}
+  const weekday=lower.match(/\bsince last (monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/);
+  if(weekday){const target=['sunday','monday','tuesday','wednesday','thursday','friday','saturday'].indexOf(weekday[1]),distance=(today.getUTCDay()-target+7)%7||7;return window(shift(-distance),todayIso,true);}
   const explicitIso=lower.match(/\b(20\d{2}-\d{2}-\d{2})\s*(?:to|through|–|—)\s*(20\d{2}-\d{2}-\d{2})\b/);if(explicitIso)return{start_date:explicitIso[1],end_date:explicitIso[2],partial_period:false};
   if(/\bthis year(?:'s)?\b/.test(lower)&&/\blast year(?:'s)?\b/.test(lower)){const y=today.getUTCFullYear(),priorEnd=new Date(Date.UTC(y-1,today.getUTCMonth(),today.getUTCDate())).toISOString().slice(0,10);return{start_date:`${y}-01-01`,end_date:todayIso,requested_end_period:String(y),partial_period:true,comparison_type:'matching_elapsed_year_on_year',comparison_start_date:`${y-1}-01-01`,comparison_end_date:priorEnd};}
   const fromNamedToNow=lower.match(/\bfrom\s+(\d{1,2})\s+(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+(20\d{2})\s+to\s+(?:now|today)\b/);
@@ -28,3 +36,10 @@ export function naturalReportPeriod(text, now){
   return null;
 }
 
+
+export function naturalReportPeriod(text, now=Date.now()){
+  const resolved=parseReportPeriod(text,now);
+  if(!resolved)return null;
+  const cutoff=new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/London',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(now));
+  return {...resolved,date_cutoff:cutoff,current_day_included:resolved.start_date<=cutoff&&resolved.end_date>=cutoff};
+}
