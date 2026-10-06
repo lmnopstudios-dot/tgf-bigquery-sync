@@ -5,6 +5,7 @@ export function oracleRequestRoute(message,{hasCompletedJob=false}={}) {
   const lower=text.toLowerCase();
   const words=text.split(/\s+/).filter(Boolean).length;
   if(!text)return 'chat';
+  if(/\bproducts?\b/i.test(text)&&/\b(?:export|download|report|ranked|top selling|top \d+)\b/i.test(text)||/\b(?:photography|content)\b.*\bpriority list\b/i.test(text))return 'job';
   if(/\bproducts?\b/i.test(text)&&(/\b(?:export|download)\b/i.test(text)&&/\b(?:priority|photograph(?:y|s)?|product[ -]page|improvements?)\b/i.test(text)||/\bpriority\b/i.test(text)&&/\b(?:photography|product[ -]page)\b/i.test(text)))return 'job';
   if(/^which historically strong woocommerce products now have weak shopify sales despite available online stock\?$/i.test(text))return 'job';
   if(/\b(propose|save|remember|definition|rule|policy|hypothetical|what if)\b/i.test(text))return 'chat';

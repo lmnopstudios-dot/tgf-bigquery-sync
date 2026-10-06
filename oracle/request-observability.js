@@ -27,7 +27,7 @@ export function transportFailure(error,{stage='agent_request'}={}) {
 }
 
 const SAFE_CODE = /^[A-Z][A-Z0-9_]{0,63}$/;
-const SAFE_STAGE = /^[a-z][a-z0-9_]{0,63}$/;
+const SAFE_STAGE = /^[a-z][a-z0-9_.:-]{0,79}$/;
 const SAFE_VALIDATION_TOKEN = /^[a-z][a-z0-9_]{0,63}$/;
 
 /**

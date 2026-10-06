@@ -23,6 +23,7 @@ const normalizedType = type => {
 };
 const signature = field => `${normalizedType(field.type)}:${String(field.mode||'NULLABLE').toUpperCase()}`;
 
+const safeStage=(value,fallback='analysis')=>/^[a-z][a-z0-9_.:-]{0,79}$/.test(String(value||''))?String(value):fallback;
 const safeToken=(value,fallback='unknown')=>/^[A-Za-z0-9_.-]{1,80}$/.test(String(value||''))?String(value):fallback;
 const errorDetail=error=>{const outer=Array.isArray(error?.errors)?error.errors[0]:null;return Array.isArray(outer?.errors)?outer.errors[0]:outer;};
 export function bigQueryErrorDiagnostic(error) {
@@ -105,7 +106,7 @@ export function createBigQueryAnalysisJobStore({bigquery,project,dataset=ORACLE_
 export function createAnalysisJobWorker({store,run,pollMs=1000,leaseMs=9*60_000,runtimeMs=8*60_000,maxBackoffMs=60_000,logger=console,workerId=`${process.pid}-${crypto.randomUUID()}`}) {
   let timer=null,running=false,controller=null,stopped=true,failures=0,stage='claim';
   let context={};
-  const diagnostic=(error,failedStage=stage)=>{const bq=bigQueryErrorDiagnostic(error);return {...context,stage:safeToken(error?.failed_stage||error?.stage||failedStage),code:safeToken(error?.code),...(bq.reason!=='unknown'?{bigquery_reason:bq.reason}:{}),...(bq.location?{bigquery_location:bq.location}:{}),...(Number.isInteger(error?.status)?{status:error.status}:{})};};
+  const diagnostic=(error,failedStage=stage)=>{const bq=bigQueryErrorDiagnostic(error);return {...context,stage:safeStage(error?.failed_stage||error?.stage||failedStage),code:safeToken(error?.code),...(bq.reason!=='unknown'?{bigquery_reason:bq.reason}:{}),...(bq.location?{bigquery_location:bq.location}:{}),...(Number.isInteger(error?.status)?{status:error.status}:{})};};
   const tick=async()=>{
     if(running)return;
     running=true;context={worker_id:safeToken(workerId)};
@@ -127,7 +128,7 @@ export function createAnalysisJobWorker({store,run,pollMs=1000,leaseMs=9*60_000,
         if(await store.finish(job.job_id,result,job)===false)throw Object.assign(new Error('Lease rejected'),{code:'LEASE_NOT_OWNED'});
         logger.info?.('Oracle job worker stage:',{...context,stage,status:'success'});
       }catch(error){
-        const failedStage=safeToken(error?.failed_stage||error?.stage||stage,'analysis');
+        const failedStage=safeStage(error?.failed_stage||error?.stage||stage,'analysis');
         logger.error('Oracle job worker stage failed:',diagnostic(error,failedStage));
         // A rejected lease must never cause a terminal write by the stale worker.
         if(error?.code==='LEASE_NOT_OWNED')return;

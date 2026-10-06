@@ -1,3 +1,4 @@
+import { selectOracleCharts } from './evidence-charts.js';
 const MAX_GROUPS=12,MAX_ITEMS=10,DATE=/^\d{4}-\d{2}-\d{2}$/;
 const number=value=>{if(value==null||value==='')return null;const n=Number(value);return Number.isFinite(n)&&n>=0?n:null};
 const text=(value,max=120)=>typeof value==='string'&&value.trim()&&value.length<=max?value.trim():null;
@@ -6,9 +7,10 @@ const period=value=>value&&DATE.test(value.start_date)&&DATE.test(value.end_date
 /** Build an inert, bounded chart DTO only from recognized governed tool results. */
 export function buildOracleInlineChart(tool,result){
   if(!result||typeof result!=='object')return null;
-  if(tool==='get_shopify_online_country_products')return countries(result);
-  if(tool==='analyze_customer_journey')return secondOrders(result);
-  return null;
+  const legacy=tool==='get_shopify_online_country_products'?countries(result):tool==='analyze_customer_journey'?secondOrders(result):null;
+  if(!legacy)return null;
+  const specs=selectOracleCharts({kind:'governed_tool_results',results:[{name:tool,result}]});
+  return specs.length?{...legacy,definition:specs[0].definition,unit:specs[0].unit,accessible_label:specs[0].accessible_label,table:{columns:specs[0].table.columns,rows:specs.flatMap(s=>s.table.rows)}}:null;
 }
 
 function countries(result){

@@ -1,3 +1,5 @@
+import { createReadOnlyProductHistory } from './oracle/product-history.js';
+import { withOracleCharts } from './oracle/evidence-charts.js';
 import { createProductionPriorityDependencies } from './oracle/product-priority-production.js';
 import { exportOwnerKey, sendPriorityDownload } from './oracle/product-priority-storage.js';
 import express from 'express';
@@ -4556,7 +4558,7 @@ const productEvidenceReport=createProductEvidenceReportService({
     return data?.shop?.currencyCode||null;
   }
 });
-const generalAnalytics=createGeneralAnalyticsService({loadReport:ecommerceReportV2});
+const generalAnalytics=createGeneralAnalyticsService({loadReport:ecommerceReportV2,inspectProductHistory:createReadOnlyProductHistory({bigquery,project:GOOGLE_PROJECT_ID})});
 const {artifactStore:priorityExportStore,service:productPriorityExport}=createProductionPriorityDependencies({bigquery,project:GOOGLE_PROJECT_ID});
 baselineOverview=async(message,options={})=>await productPriorityExport(message,options)||await generalAnalytics(message,options)||await historicalEventComparison(message)||await ecommerceBaselineOverview(message,options)||await productEvidenceReport(message);
 
@@ -8272,8 +8274,8 @@ app.post(
       // This broad KPI request has a governed deterministic evidence plan. It
       // must not enter model-selected inventory tooling or let one optional
       // source failure erase independent successful sections.
-      const baselineAnswer=await baselineOverview(message,{analysisContext:resolvedRequest.context,exportOwner:exportOwnerKey('direct-agent',SYNC_SECRET),requestId:id,downloadBase:'/agent/exports',signal:cancellation.signal});
-      if(baselineAnswer)return res.json({success:true,answer:baselineAnswer.answer,evidence:baselineAnswer.evidence,tools_used:baselineAnswer.tools,artifact:baselineAnswer.artifact||null,request_id:id});
+      const baselineAnswer=withOracleCharts(await baselineOverview(message,{analysisContext:resolvedRequest.context,exportOwner:exportOwnerKey('direct-agent',SYNC_SECRET),requestId:id,downloadBase:'/agent/exports',signal:cancellation.signal}));
+      if(baselineAnswer)return res.json({success:true,answer:baselineAnswer.answer,evidence:baselineAnswer.evidence,tools_used:baselineAnswer.tools,inline_chart:baselineAnswer.inline_chart||null,charts:baselineAnswer.charts||[],artifact:baselineAnswer.artifact||null,request_id:id});
 
       const currentDate = new Date()
         .toISOString()
@@ -8726,7 +8728,7 @@ Important rules:
         success: true,
         answer: response.output_text,
         tools_used: [...toolsUsed],
-        inline_chart: inlineChart
+        ...withOracleCharts({evidence:{kind:'governed_tool_results',results:completedEvidence}})
       });
     } catch (error) {
       console.error('Agent stage outcome:',stageOutcome({id,stage,startedAt:requestStarted,outcome:'failed',error}));
