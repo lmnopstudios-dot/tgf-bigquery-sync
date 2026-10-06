@@ -14,7 +14,7 @@ const governedBaseline = async ({message,baselineOverview,baselineOptions}) => {
 // route names, so a deterministic transition cannot silently become orphaned.
 export const ANALYSIS_ROUTE_DISPATCHERS = Object.freeze(Object.fromEntries(ANALYSIS_TOOL_ROUTES.map(route=>[
   route,
-  ['get_woocommerce_device_conversion','get_governed_device_conversion','get_general_sales_analysis'].includes(route)
+  ['get_woocommerce_device_conversion','get_governed_device_conversion','get_general_sales_analysis','export_product_priorities'].includes(route)
     ? governedBaseline
     : baselineThenAgent
 ])));
@@ -25,7 +25,8 @@ export function assertEvidenceAgreement(contextValue,evidence){
   const actual=evidence.requested_subject||evidence.subject||({sales_baseline:'sales'}[evidence.selected_intent])||({shopify_operational_sales_baseline:'sales',governed_device_conversion:'device_conversion',focused_woo_historical_conversion:'woo_traffic_conversion',independent_calendar_month_comparison:'calendar_period_comparison',woo_shopify_platform_comparison:'platform_sales',woo_shopify_monthly_platform_comparison:'platform_sales'}[evidence.kind]);
   if(actual!==context.requested_subject)throw Object.assign(new Error('Retrieved evidence does not agree with the resolved analytical subject.'),{code:'EVIDENCE_SCOPE_MISMATCH',failed_stage:'evidence_validation'});
   if(evidence.metrics&&context.metrics.some(metric=>!evidence.metrics.includes(metric)))throw Object.assign(new Error('Retrieved evidence does not agree with the resolved analytical metrics.'),{code:'EVIDENCE_SCOPE_MISMATCH',failed_stage:'evidence_validation'});
-  if(evidence.periods?.length&&context.start_date&&!evidence.periods.some(period=>period.start_date===context.start_date&&period.end_date===context.end_date))throw Object.assign(new Error('Retrieved evidence does not agree with the resolved analytical period.'),{code:'EVIDENCE_SCOPE_MISMATCH',failed_stage:'evidence_validation'});
+  // A retry of an immutable export retains its saved default window.
+  if(!(context.tool_route==='export_product_priorities'&&evidence.kind==='product_priority_export'&&/^[a-f0-9]{64}$/.test(evidence.manifest?.artifact_reference||''))&&evidence.periods?.length&&context.start_date&&!evidence.periods.some(period=>period.start_date===context.start_date&&period.end_date===context.end_date))throw Object.assign(new Error('Retrieved evidence does not agree with the resolved analytical period.'),{code:'EVIDENCE_SCOPE_MISMATCH',failed_stage:'evidence_validation'});
   if(context.entity_query&&evidence.entity_query!==context.entity_query)throw Object.assign(new Error('Retrieved evidence does not agree with the resolved analytical entity.'),{code:'EVIDENCE_SCOPE_MISMATCH',failed_stage:'evidence_validation'});
   return true;
 }

@@ -26,6 +26,7 @@ test('focused Woo transition validates from fresh and retained broad contexts',(
 
 test('every deterministic transition route is registered with an executable dispatcher',()=>{
   const prompts=[
+    'Export all published Shopify products in priority order for photography and product-page improvements.',
     'Show top countries by online sales and top products for September 2026.',
     'What is the average time between consecutive online orders for each customer in September 2026?',
     'Show sunglasses sales in September 2026.',
@@ -41,7 +42,7 @@ test('every deterministic transition route is registered with an executable disp
   ];
   const emitted=new Set(prompts.map(message=>transitionAnalysisContext(null,message,{now:NOW}).context.tool_route).filter(Boolean));
   // get_online_country_sales is a governed continuation route.
-  const country=transitionAnalysisContext(null,prompts[0],{now:NOW}).context;
+  const country=transitionAnalysisContext(null,prompts[1],{now:NOW}).context;
   emitted.add(transitionAnalysisContext(country,'Include WooCommerce in all online sales.',{now:NOW}).context.tool_route);
   assert.deepEqual([...emitted].sort(),[...ANALYSIS_TOOL_ROUTES].sort());
   for(const route of emitted)assert.equal(typeof ANALYSIS_ROUTE_DISPATCHERS[route],'function',route);
