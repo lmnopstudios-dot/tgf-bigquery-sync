@@ -6,8 +6,8 @@ const identifier=value=>{if(!/^[A-Za-z0-9_-]+$/.test(value))throw new Error('Inv
 // Reuse Oracle's durable BigQuery storage and IAM, not Render's ephemeral disk.
 // Bytes are persisted once; downloads return those exact bytes after restart.
 export function createBigQueryExportStore({bigquery,project,dataset='commerce',table='oracle_exports_v1'}){
-  const fq=`\`${identifier(project)}.${identifier(dataset)}.${identifier(table)}\``;let readiness;
-  const run=async(query,params={})=>(await bigquery.query({query,params,useLegacySql:false,maximumBytesBilled:'5000000000',labels:{component:'oracle_exports'}}))[0];
+  const fq=`\`${identifier(project)}.${identifier(dataset)}.${identifier(table)}\``;let readiness,location;
+  const run=async(query,params={})=>{location??=(await bigquery.dataset(dataset).getMetadata())[0].location;return (await bigquery.query({query,params,location,useLegacySql:false,maximumBytesBilled:'5000000000',labels:{component:'oracle_exports'}}))[0];};
   const ready=()=>readiness??=(async()=>{await run(`CREATE TABLE IF NOT EXISTS ${fq} (artifact_id STRING NOT NULL,owner_key STRING NOT NULL,artifact_json JSON NOT NULL,created_at TIMESTAMP NOT NULL) CLUSTER BY owner_key,artifact_id`);})().catch(error=>{readiness=null;throw error;});
   return{
     async get(id,owner){await ready();const row=(await run(`SELECT artifact_json FROM ${fq} WHERE artifact_id=@id AND owner_key=@owner LIMIT 1`,{id,owner}))[0];return row?typeof row.artifact_json==='string'?JSON.parse(row.artifact_json):row.artifact_json:null;},

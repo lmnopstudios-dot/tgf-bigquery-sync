@@ -1,3 +1,4 @@
+import { bigQueryErrorDiagnostic } from './analysis-jobs.js';
 import { MATRIXIFY_APP_ID } from '../finance/canonical.js';
 
 // Read only the existing governed, persisted source tables. No collection,
@@ -26,9 +27,9 @@ export function prioritySourceQueries(project){
 }
 export function createPrioritySourceLoader({bigquery,project,landingOrigin='https://www.thegreatfroglondon.com'}){
   const queries=prioritySourceQueries(project);
-  return async dates=>Object.fromEntries(await Promise.all(Object.entries(queries).map(async([name,query])=>{
+  return async (dates,{onProviderStage}={})=>Object.fromEntries(await Promise.all(Object.entries(queries).map(async([name,query])=>{
     try{const params={start_date:dates.start_date,end_date:dates.end_date,...(name==='sales'?{matrixify_app_id:MATRIXIFY_APP_ID}:{})};const [rows]=await bigquery.query({query,params,useLegacySql:false,maximumBytesBilled:'5000000000',jobTimeoutMs:'60000',labels:{component:'oracle_priority',source:name}});
       return[name,{status:rows.length?'available':'unavailable',complete:false,coverage:'Existing persisted evidence; complete day-level collection coverage not established. Omitted rows are unmatched, never assumed zero.',definition:name==='sales'?'Shopify online line-item discounted presentment sales; POS and Matrixify excluded. Same product ID history through end date retained separately.':name==='traffic'?'GA4 landing sessions from the governed website property; not product conversion.':'Search Console page impressions and clicks; one governed property selected per day.',rows:name==='traffic'?rows.map(row=>({...row,url:`${landingOrigin}${row.landing_path}`})):rows}];
-    }catch(error){return[name,{status:'unavailable',complete:false,error_code:/^[A-Z0-9_]{1,64}$/.test(String(error.code||''))?String(error.code):'SOURCE_FAILED',rows:[]}];}
+    }catch(error){const diagnostic=bigQueryErrorDiagnostic(error);onProviderStage?.({stage:`priority_${name}`,status:'unavailable',reason:diagnostic.reason,...(diagnostic.location?{location:diagnostic.location}:{})});return[name,{status:'unavailable',complete:false,error_code:/^[A-Z0-9_]{1,64}$/.test(String(error.code||''))?String(error.code):'SOURCE_FAILED',rows:[]}];}
   })));
 }

@@ -146,15 +146,15 @@ test('worker persists tool code and failed stage as a terminal outcome',async()=
   await worker.tick();const job=store.jobs.get('inventory-job');assert.equal(job.status,'failed');assert.equal(job.error_code,'ONLINE_LOCATION_NOT_FOUND');assert.deepEqual(job.result_json,{failed_stage:'inventory_retrieval',code:'ONLINE_LOCATION_NOT_FOUND'});
 });
 
-test('BigQuery query diagnostics expose only bounded redacted message and location',()=>{
+test('BigQuery query diagnostics never expose exception messages',()=>{
   const diagnostic=bigQueryErrorDiagnostic({errors:[{reason:'invalidQuery',location:'query;secret',message:`Value 'customer prompt' cannot be assigned to \`private-project.commerce.jobs\` at [1:415] ${'x'.repeat(500)}`}]});
-  assert.equal(diagnostic.reason,'invalidQuery');assert.equal(diagnostic.location,undefined);assert.ok(diagnostic.message.length<=300);assert.match(diagnostic.message,/Value \[redacted\] cannot be assigned to \[redacted\] at \[1:415\]/);assert.doesNotMatch(JSON.stringify(diagnostic),/customer prompt|private-project|secret/);
+  assert.equal(diagnostic.reason,'invalidQuery');assert.equal(diagnostic.location,undefined);assert.equal(diagnostic.message,undefined);assert.doesNotMatch(JSON.stringify(diagnostic),/customer prompt|private-project|secret/);
 });
 
 test('worker infrastructure failures use bounded exponential backoff and safe stage logs',async()=>{
   let claims=0;const logs=[];const worker=createAnalysisJobWorker({store:{claim:async()=>{claims++;throw {name:'ApiError',code:400,errors:[{reason:'invalidQuery',location:'query',message:"Bad 'prompt secret' in `private.table` at [1:42]"}]};}},run:async()=>{},pollMs:5,maxBackoffMs:20,logger:{error:(message,detail)=>logs.push({message,detail})}});
   worker.start();await sleep(38);worker.stop();
-  assert.ok(claims>=2&&claims<=3,`expected 2-3 bounded claims, received ${claims}`);assert.equal(worker.backoffMs,20);assert.ok(logs.every(log=>log.detail.stage==='claim'&&log.detail.bigquery_reason==='invalidQuery'&&log.detail.bigquery_message.includes('[redacted]')));assert.doesNotMatch(JSON.stringify(logs),/prompt secret|private\.table/);
+  assert.ok(claims>=2&&claims<=3,`expected 2-3 bounded claims, received ${claims}`);assert.equal(worker.backoffMs,20);assert.ok(logs.every(log=>log.detail.stage==='claim'&&log.detail.bigquery_reason==='invalidQuery'&&log.detail.bigquery_message===undefined));assert.doesNotMatch(JSON.stringify(logs),/prompt secret|private\.table/);
 });
 
 test('production-shaped ordinary claim handles empty and queued queues and excludes smoke jobs',async()=>{
@@ -233,7 +233,7 @@ test('production smoke lifecycle targets only its marked synthetic job and retri
   const synthetic=[...store.jobs.values()].find(job=>job.request_id.startsWith('oracle-smoke-')&&job.job_id!=='abandoned-smoke');
   assert.equal(synthetic.status,'completed');assert.deepEqual(synthetic.payload_json,{synthetic:true,non_customer:true,purpose:'oracle-job-queue-smoke'});
   store.create=async()=>{throw {errors:[{reason:'invalidQuery',location:'query',message:"Bad value 'customer prompt' in `private.dataset.table` at [1:9]"}]}};
-  const failure=await smokeOracleJobQueue({store,delayMs:0});assert.deepEqual(failure,{success:false,failed_stage:'enqueue',bigquery_reason:'invalidQuery',bigquery_message:'Bad value [redacted] in [redacted] at [1:9]',bigquery_location:'query'});
+  const failure=await smokeOracleJobQueue({store,delayMs:0});assert.deepEqual(failure,{success:false,failed_stage:'enqueue',bigquery_reason:'invalidQuery',bigquery_location:'query'});
 });
 
 test('ordinary workers skip synthetic rows abandoned by smoke runs',async()=>{

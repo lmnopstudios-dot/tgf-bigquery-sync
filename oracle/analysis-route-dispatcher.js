@@ -35,6 +35,6 @@ export async function dispatchAnalysisRequest({message,analysisContext,baselineO
   const context=analysisContext==null?null:validateAnalysisContext(analysisContext);
   const binding=context?.tool_route?ANALYSIS_ROUTE_DISPATCHERS[context.tool_route]:baselineThenAgent;
   const result=await binding({message,baselineOverview,baselineOptions:{...baselineOptions,analysisContext:analysisContext??context},chat,chatOptions});
-  assertEvidenceAgreement(context,result?.evidence);
+  try{assertEvidenceAgreement(context,result?.evidence);baselineOptions?.onProviderStage?.({stage:'evidence_validation',status:'success'});}catch(error){baselineOptions?.onProviderStage?.({stage:'evidence_validation',status:'failed',code:'EVIDENCE_SCOPE_MISMATCH'});throw error;}
   return result;
 }

@@ -1,4 +1,5 @@
 import ExcelJS from 'exceljs';
+import { bigQueryErrorDiagnostic } from './analysis-jobs.js';
 import { priorityArtifactId } from './product-priority-storage.js';
 import { createHash } from 'node:crypto';
 
@@ -43,7 +44,7 @@ export async function fetchPublishedProducts(graphql,{signal}={}){
     seen.add(next);cursor=next;
   }while(true);
   return {products:[...products.values()],complete:true,pages,publication_contract:'ACTIVE/UNLISTED + publishedAt + non-null onlineStoreUrl (Online Store publication; not inventory availability)'};
-  }catch(error){if(signal?.aborted)throw error;return{products:[...products.values()],complete:false,pages,error_code:code(error),publication_contract:'ACTIVE/UNLISTED + publishedAt + non-null onlineStoreUrl'};}
+  }catch(error){if(signal?.aborted)throw error;return{products:[...products.values()],complete:false,pages,error_code:code(error),...bigQueryErrorDiagnostic(error),...(Number.isInteger(error.status)?{status:error.status}:{}),publication_contract:'ACTIVE/UNLISTED + publishedAt + non-null onlineStoreUrl'};}
 }
 const code=error=>/^[A-Z0-9_]{1,64}$/.test(String(error?.code||''))?String(error.code):'SOURCE_FAILED';
 const numeric=value=>value!==null&&value!==undefined&&value!==''&&Number.isFinite(Number(value))?Number(value):null;
@@ -86,21 +87,22 @@ export function createProductPriorityService({graphql,loadSources,artifactStore,
     if(!exportOwner||!requestId)throw Object.assign(new Error('Authenticated export owner required'),{code:'EXPORT_OWNER_REQUIRED',failed_stage:'export_authorization'});
     const artifactId=priorityArtifactId(exportOwner,requestId);
     const deliver=artifact=>({answer:artifact.answer,tools:['export_product_priorities'],evidence:artifact.envelope,artifact:{id:artifactId,filename:artifact.filename,row_count:artifact.envelope.rows.length,download_url:`${downloadBase}/${artifactId}`}});
-    const existing=await artifactStore.get(artifactId,exportOwner).catch(()=>{throw Object.assign(new Error('Durable export storage unavailable'),{code:'EXPORT_STORAGE_UNAVAILABLE',failed_stage:'export_storage'});});if(existing){if(existing.request!==message)throw Object.assign(new Error('Request ID conflict'),{code:'EXPORT_REQUEST_ID_CONFLICT'});return deliver(existing);}
+    const stage=async(name,action)=>{onProviderStage?.({stage:name,status:'started'});try{const result=await action();onProviderStage?.({stage:name,status:'success'});return result;}catch(error){const diagnostic=bigQueryErrorDiagnostic(error);onProviderStage?.({stage:name,status:'failed',code:code(error),reason:diagnostic.reason,...(diagnostic.location?{location:diagnostic.location}:{})});throw Object.assign(error,{failed_stage:error.failed_stage||name});}};
+    const existing=await stage('export_storage',()=>artifactStore.get(artifactId,exportOwner)).catch(error=>{throw Object.assign(new Error('Durable export storage unavailable'),{...bigQueryErrorDiagnostic(error),code:'EXPORT_STORAGE_UNAVAILABLE',failed_stage:'export_storage'});});if(existing){if(existing.request!==message)throw Object.assign(new Error('Request ID conflict'),{code:'EXPORT_REQUEST_ID_CONFLICT'});return deliver(existing);}
     if(inFlight.has(artifactId)){const result=await inFlight.get(artifactId);const saved=await artifactStore.get(artifactId,exportOwner);if(saved.request!==message)throw Object.assign(new Error('Request ID conflict'),{code:'EXPORT_REQUEST_ID_CONFLICT'});return result;}
     const work=(async()=>{
-      const dates={...priorityDates(now()),...(analysisContext?.tool_route==='export_product_priorities'&&analysisContext.start_date&&analysisContext.end_date?{start_date:analysisContext.start_date,end_date:analysisContext.end_date}:{})};onProviderStage?.({stage:'priority_catalogue',outcome:'started'});
-      const catalogue=await fetchPublishedProducts(graphql,{signal});
-      if(!catalogue.complete&&!catalogue.products.length)throw Object.assign(new Error('Catalogue unavailable; no export created'),{code:'CATALOGUE_UNAVAILABLE',failed_stage:'priority_catalogue'});
-      onProviderStage?.({stage:'priority_catalogue',outcome:catalogue.complete?'success':'incomplete',row_count:catalogue.products.length});
-      const sources=await loadSources(dates,{signal});const ranked=rankProducts(catalogue,sources);
+      const dates={...priorityDates(now()),...(analysisContext?.tool_route==='export_product_priorities'&&analysisContext.start_date&&analysisContext.end_date?{start_date:analysisContext.start_date,end_date:analysisContext.end_date}:{})};
+      const catalogue=await stage('priority_catalogue',()=>fetchPublishedProducts(graphql,{signal}));
+      if(!catalogue.complete&&!catalogue.products.length)throw Object.assign(new Error('Catalogue unavailable; no export created'),{code:'CATALOGUE_UNAVAILABLE',failed_stage:'priority_catalogue',reason:catalogue.reason,...(catalogue.status?{status:catalogue.status}:{}),provider_code:catalogue.error_code});
+      onProviderStage?.({stage:'priority_catalogue',status:catalogue.complete?'complete':'incomplete',...(catalogue.error_code?{code:catalogue.error_code,reason:catalogue.reason}:{}),...(catalogue.status?{status:catalogue.status}:{})});
+      const sources=await stage('priority_enrichment',()=>loadSources(dates,{signal,onProviderStage}));const ranked=await stage('priority_ranking',()=>rankProducts(catalogue,sources));
       const availability=Object.fromEntries(Object.entries(sources).map(([key,{rows,...details}])=>[key,{...details,row_count:rows?.length||0,matched_product_count:ranked.rows.filter(row=>row.components[key]!==null).length,unmatched_product_count:ranked.rows.filter(row=>row.components[key]===null).length}]));
       const envelope={kind:'product_priority_export',subject:'product_priority',metrics:['products'],generated_at:new Date(now()).toISOString(),applied_dates:dates,periods:[dates],catalogue:{...catalogue,products:undefined},ranking_method:PRIORITY_METHOD,ranking_status:ranked.ranking_status,evidence_availability:availability,rows:ranked.rows,manifest:{version:1,row_count:ranked.rows.length,complete_catalogue:catalogue.complete,artifact_reference:artifactId,worksheet_count:1,columns:PRIORITY_COLUMNS}};
       const limitations=Object.entries(availability).map(([name,source])=>`${name}: ${source.status} (${source.matched_product_count} matched products, ${source.unmatched_product_count} unmatched)${source.complete?'':'; coverage incomplete or unverified'}${source.error_code?` (${source.error_code})`:''}`).join('; ');
       const answer=`${catalogue.complete?'All current Online Store published Shopify products':'INCOMPLETE catalogue — only retrieved published Shopify products'}: ${ranked.rows.length} rows. Ranking ${ranked.ranking_status}. Applied evidence dates: ${dates.start_date} to ${dates.end_date} (${dates.timezone}; 90 completed days). ${limitations}. Missing/unmatched evidence is not zero; unranked products have blank Priority. Sales ranks stay within currency (50%); landing traffic (30%); uncaptured organic impressions (20%). Ties use Shopify product ID. Review photography is a review task; image quality and purchase journeys were not assessed. Download the staff worksheet below.`;
-      const buffer=await priorityWorkbook(envelope);const artifact={request:message,answer,envelope,filename:`oracle-product-priorities${!catalogue.complete?'-incomplete':ranked.ranking_status==='available'?'':`-${ranked.ranking_status}`}.xlsx`,sha256:createHash('sha256').update(buffer).digest('hex'),xlsx_base64:buffer.toString('base64')};
-      signal?.throwIfAborted();await artifactStore.put(artifactId,exportOwner,artifact).catch(error=>{if(error.failed_stage)throw error;throw Object.assign(new Error('Export persistence failed'),{code:'EXPORT_PERSISTENCE_FAILED',failed_stage:'export_persistence'});});const saved=await artifactStore.get(artifactId,exportOwner);if(!saved)throw Object.assign(new Error('Artifact not persisted'),{code:'EXPORT_PERSISTENCE_FAILED',failed_stage:'export_persistence'});
-      onProviderStage?.({stage:'priority_delivery',outcome:'persisted',row_count:ranked.rows.length});return deliver(saved);
+      const buffer=await stage('priority_workbook',()=>priorityWorkbook(envelope));const artifact={request:message,answer,envelope,filename:`oracle-product-priorities${!catalogue.complete?'-incomplete':ranked.ranking_status==='available'?'':`-${ranked.ranking_status}`}.xlsx`,sha256:createHash('sha256').update(buffer).digest('hex'),xlsx_base64:buffer.toString('base64')};
+      signal?.throwIfAborted();await stage('export_persistence',()=>artifactStore.put(artifactId,exportOwner,artifact)).catch(error=>{if(error.code==='EXPORT_STORAGE_SIZE_EXCEEDED')throw error;throw Object.assign(new Error('Export persistence failed'),{...bigQueryErrorDiagnostic(error),code:'EXPORT_PERSISTENCE_FAILED',failed_stage:'export_persistence'});});const saved=await stage('export_verification',()=>artifactStore.get(artifactId,exportOwner));if(!saved)throw Object.assign(new Error('Artifact not persisted'),{code:'EXPORT_PERSISTENCE_FAILED',failed_stage:'export_persistence'});
+      onProviderStage?.({stage:'priority_delivery',status:'persisted'});return deliver(saved);
     })();inFlight.set(artifactId,work);try{return await work;}finally{inFlight.delete(artifactId);}
   };
 }

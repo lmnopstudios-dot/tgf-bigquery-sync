@@ -1,6 +1,5 @@
-import { createProductPriorityService } from './oracle/product-priority.js';
-import { createPrioritySourceLoader } from './oracle/product-priority-sources.js';
-import { createBigQueryExportStore, exportOwnerKey, sendPriorityDownload } from './oracle/product-priority-storage.js';
+import { createProductionPriorityDependencies } from './oracle/product-priority-production.js';
+import { exportOwnerKey, sendPriorityDownload } from './oracle/product-priority-storage.js';
 import express from 'express';
 import { BigQuery } from '@google-cloud/bigquery';
 import ExcelJS from 'exceljs';
@@ -4558,8 +4557,7 @@ const productEvidenceReport=createProductEvidenceReportService({
   }
 });
 const generalAnalytics=createGeneralAnalyticsService({loadReport:ecommerceReportV2});
-const priorityExportStore=createBigQueryExportStore({bigquery,project:GOOGLE_PROJECT_ID,dataset:process.env.ORACLE_JOB_DATASET||ORACLE_JOB_DEFAULTS.dataset});
-const productPriorityExport=createProductPriorityService({graphql:async(query,variables,{signal}={})=>shopifyGraphQL(await getShopifyAccessToken(),query,variables,signal),loadSources:createPrioritySourceLoader({bigquery,project:GOOGLE_PROJECT_ID}),artifactStore:priorityExportStore});
+const {artifactStore:priorityExportStore,service:productPriorityExport}=createProductionPriorityDependencies({bigquery,project:GOOGLE_PROJECT_ID});
 baselineOverview=async(message,options={})=>await productPriorityExport(message,options)||await generalAnalytics(message,options)||await historicalEventComparison(message)||await ecommerceBaselineOverview(message,options)||await productEvidenceReport(message);
 
 async function getSalesByLocation({

@@ -24,24 +24,19 @@ const normalizedType = type => {
 const signature = field => `${normalizedType(field.type)}:${String(field.mode||'NULLABLE').toUpperCase()}`;
 
 const safeToken=(value,fallback='unknown')=>/^[A-Za-z0-9_.-]{1,80}$/.test(String(value||''))?String(value):fallback;
-const QUERY_MESSAGE_LIMIT=300;
+const errorDetail=error=>{const outer=Array.isArray(error?.errors)?error.errors[0]:null;return Array.isArray(outer?.errors)?outer.errors[0]:outer;};
 export function bigQueryErrorDiagnostic(error) {
-  const outer=Array.isArray(error?.errors)?error.errors[0]:null;
-  const detail=Array.isArray(outer?.errors)?outer.errors[0]:outer;
-  // Only BigQuery's structured error detail is eligible for output. Generic
-  // application errors can contain prompts, credentials, or row values.
-  const raw=String(detail?.message||'');
-  const message=raw.replace(/`[^`]*`|'[^']*'|"[^"]*"/g,'[redacted]').replace(/[\r\n\t]+/g,' ').replace(/\s+/g,' ').trim().slice(0,QUERY_MESSAGE_LIMIT);
+  const detail=errorDetail(error);
   return {
     reason:safeToken(detail?.reason||error?.reason||error?.code),
-    ...(message?{message}:{}),
     ...(safeToken(detail?.location||error?.location,'')?{location:safeToken(detail?.location||error?.location)}:{})
   };
 }
 export function isConcurrentUpdateAbort(error) {
   const diagnostic=bigQueryErrorDiagnostic(error);
+  // Inspect text only for this exact retry classification; never emit it.
   return diagnostic.reason==='aborted'||(
-    diagnostic.reason==='invalidQuery'&&/transaction aborted due to concurrent update/i.test(diagnostic.message||'')
+    diagnostic.reason==='invalidQuery'&&/transaction aborted due to concurrent update/i.test(String(errorDetail(error)?.message||''))
   );
 }
 /** BigQuery PartialFailureError contains the rejected row. Never return or log it. */
@@ -81,7 +76,7 @@ export function createBigQueryAnalysisJobStore({bigquery,project,dataset=ORACLE_
   const resolveDatasetLocation=async ds=>{if(datasetLocation)return datasetLocation;const [metadata]=await ds.getMetadata();datasetLocation=metadata.location;return datasetLocation;};
   const query=async(sql,params={})=>(await bigquery.query({query:sql,params,location:await resolveDatasetLocation(bigquery.dataset(dataset))}))[0];
   const contentionDelay=attempt=>sleep(Math.floor((50*2**attempt)*(0.5+Math.random())));
-  const terminalWrite=async(sql,params)=>{for(let attempt=0;attempt<claimRetries;attempt++){try{return await query(sql,params);}catch(error){if(!isConcurrentUpdateAbort(error)||attempt===claimRetries-1)throw error;const row=normalize((await query(`SELECT status,lease_until,claim_token FROM ${fq} WHERE job_id=@job_id LIMIT 1`,{job_id:params.job_id}))[0]);if(!row||['completed','failed','cancelled'].includes(row.status))return false;if(row.claim_token!==params.claim_token||String(value(row.lease_until))!==params.lease.toISOString())return false;await contentionDelay(attempt);}}};
+  const terminalWrite=async(sql,params)=>{for(let attempt=0;attempt<claimRetries;attempt++){try{const [job]=await bigquery.createQueryJob({query:sql,params,location:await resolveDatasetLocation(bigquery.dataset(dataset)),useLegacySql:false});await job.getQueryResults();const [metadata]=await job.getMetadata();return Number(metadata.statistics?.query?.numDmlAffectedRows)===1;}catch(error){if(!isConcurrentUpdateAbort(error)||attempt===claimRetries-1)throw error;const row=normalize((await query(`SELECT status,lease_until,claim_token FROM ${fq} WHERE job_id=@job_id LIMIT 1`,{job_id:params.job_id}))[0]);if(!row||['completed','failed','cancelled'].includes(row.status))return false;if(row.claim_token!==params.claim_token||String(value(row.lease_until))!==params.lease.toISOString())return false;await contentionDelay(attempt);}}};
   return {
     async setup(){const ds=bigquery.dataset(dataset);const [exists]=await ds.exists();if(!exists)await ds.create({location});await resolveDatasetLocation(ds);const t=ds.table(table);const [present]=await t.exists();if(!present){await t.create({schema:JOB_SCHEMA});return;}let [metadata]=await t.getMetadata();const fields=metadata.schema?.fields||[],missingLeaseFields=JOB_SCHEMA.filter(field=>['claim_token','worker_id'].includes(field.name)&&!fields.some(existing=>existing.name===field.name));if(missingLeaseFields.length){await t.setMetadata({schema:{fields:[...fields,...missingLeaseFields]}});[metadata]=await t.getMetadata();}const inspection=inspectJobTableSchema(metadata.schema?.fields||[]);if(!inspection.matches)throw Object.assign(new Error(`Oracle job table schema mismatch: ${table}`),{code:'SCHEMA_MISMATCH',schema_diff:inspection});},
     // Do not use table.insert here. That API uses BigQuery's legacy streaming
@@ -110,8 +105,42 @@ export function createBigQueryAnalysisJobStore({bigquery,project,dataset=ORACLE_
 export function createAnalysisJobWorker({store,run,pollMs=1000,leaseMs=9*60_000,runtimeMs=8*60_000,maxBackoffMs=60_000,logger=console,workerId=`${process.pid}-${crypto.randomUUID()}`}) {
   let timer=null,running=false,controller=null,stopped=true,failures=0,stage='claim';
   let context={};
-  const diagnostic=error=>{const bq=bigQueryErrorDiagnostic(error);return {...context,stage,error_class:safeToken(error?.name,'Error'),code:safeToken(error?.code),...(bq.reason!=='unknown'?{bigquery_reason:bq.reason}:{}),...(bq.message?{bigquery_message:bq.message}:{}),...(bq.location?{bigquery_location:bq.location}:{})};};
-  const tick=async()=>{if(running)return;running=true;context={worker_id:safeToken(workerId)};try{stage='claim';const job=await store.claim({worker_id:workerId,leaseMs});if(!job)return;context={request_id:safeToken(job.request_id),job_id:safeToken(job.job_id),attempt:Number(job.attempts)||0,worker_id:safeToken(workerId)};logger.info?.('Oracle job worker stage:',{...context,stage:'claimed',outcome:'success'});controller=new AbortController();const cancelPoll=setInterval(async()=>{try{stage='cancel_check';if(await store.isCancelled(job.job_id))controller.abort(new Error('cancelled'));}catch(error){logger.error('Oracle job worker stage failed:',diagnostic(error));}},Math.min(pollMs,1000));let runtimeTimer;try{const timeout=new Promise((_,reject)=>{runtimeTimer=setTimeout(()=>{controller.abort(new Error('runtime'));reject(Object.assign(new Error('runtime'),{code:'JOB_RUNTIME_EXCEEDED'}));},runtimeMs)});stage='analysis';const result=await Promise.race([run(job,controller.signal),timeout]);stage='evidence_checkpoint';await store.checkpoint?.(job.job_id,result,job);logger.info?.('Oracle job worker stage:',{...context,stage,outcome:'success'});stage='finish';await store.finish(job.job_id,result,job);logger.info?.('Oracle job worker stage:',{...context,stage,outcome:'success'});}catch(error){try{stage='fail';const code=error?.code==='JOB_RUNTIME_EXCEEDED'?'JOB_RUNTIME_EXCEEDED':safeToken(error?.code,'ANALYSIS_FAILED');await store.fail(job.job_id,code,{failed_stage:safeToken(error?.failed_stage||error?.stage,'analysis'),code},job);}catch(failError){logger.error('Oracle job worker stage failed:',diagnostic(failError));throw failError;}}finally{clearTimeout(runtimeTimer);clearInterval(cancelPoll);controller=null;}}finally{running=false;context={};}};
+  const diagnostic=(error,failedStage=stage)=>{const bq=bigQueryErrorDiagnostic(error);return {...context,stage:safeToken(error?.failed_stage||error?.stage||failedStage),code:safeToken(error?.code),...(bq.reason!=='unknown'?{bigquery_reason:bq.reason}:{}),...(bq.location?{bigquery_location:bq.location}:{}),...(Number.isInteger(error?.status)?{status:error.status}:{})};};
+  const tick=async()=>{
+    if(running)return;
+    running=true;context={worker_id:safeToken(workerId)};
+    try{
+      stage='claim';
+      const job=await store.claim({worker_id:workerId,leaseMs});if(!job)return;
+      context={request_id:safeToken(job.request_id),job_id:safeToken(job.job_id),attempt:Number(job.attempts)||0,worker_id:safeToken(workerId)};
+      logger.info?.('Oracle job worker stage:',{...context,stage:'claimed',status:'success'});
+      controller=new AbortController();const activeController=controller;
+      const cancelPoll=setInterval(async()=>{try{if(await store.isCancelled(job.job_id))activeController.abort(new Error('cancelled'));}catch(error){logger.error('Oracle job worker stage failed:',diagnostic(error,'cancel_check'));}},Math.min(pollMs,1000));
+      let runtimeTimer,result;
+      try{
+        const timeout=new Promise((_,reject)=>{runtimeTimer=setTimeout(()=>{activeController.abort(new Error('runtime'));reject(Object.assign(new Error('runtime'),{code:'JOB_RUNTIME_EXCEEDED'}));},runtimeMs)});
+        stage='analysis';result=await Promise.race([run(job,controller.signal),timeout]);
+        stage='evidence_checkpoint';
+        if(await store.checkpoint?.(job.job_id,result,job)===false)throw Object.assign(new Error('Lease rejected'),{code:'LEASE_NOT_OWNED'});
+        logger.info?.('Oracle job worker stage:',{...context,stage,status:'success'});
+        stage='finish';
+        if(await store.finish(job.job_id,result,job)===false)throw Object.assign(new Error('Lease rejected'),{code:'LEASE_NOT_OWNED'});
+        logger.info?.('Oracle job worker stage:',{...context,stage,status:'success'});
+      }catch(error){
+        const failedStage=safeToken(error?.failed_stage||error?.stage||stage,'analysis');
+        logger.error('Oracle job worker stage failed:',diagnostic(error,failedStage));
+        // A rejected lease must never cause a terminal write by the stale worker.
+        if(error?.code==='LEASE_NOT_OWNED')return;
+        const code=error?.code==='JOB_RUNTIME_EXCEEDED'?'JOB_RUNTIME_EXCEEDED':safeToken(error?.code,'ANALYSIS_FAILED');
+        try{
+          stage='fail';
+          // Keep successful evidence/artifact references even if checkpoint failed.
+          const written=await store.fail(job.job_id,code,{...result,failed_stage:failedStage,code},job);
+          if(written===false)logger.error('Oracle job worker stage failed:',{...context,stage,code:'LEASE_NOT_OWNED'});
+        }catch(failError){logger.error('Oracle job worker stage failed:',diagnostic(failError));throw failError;}
+      }finally{clearTimeout(runtimeTimer);clearInterval(cancelPoll);controller=null;}
+    }finally{running=false;context={};}
+  };
   const schedule=delay=>{if(stopped)return;timer=setTimeout(async()=>{try{await tick();failures=0;}catch(error){failures++;logger.error('Oracle job worker failed:',diagnostic(error));}schedule(failures?Math.min(maxBackoffMs,pollMs*2**Math.min(failures,10)):pollMs);},delay);timer.unref?.();};
   return {start(){if(!stopped)return;stopped=false;schedule(0);},stop(){stopped=true;clearTimeout(timer);timer=null;controller?.abort(new Error('worker stopped'));},tick,get backoffMs(){return failures?Math.min(maxBackoffMs,pollMs*2**Math.min(failures,10)):pollMs;}};
 }
