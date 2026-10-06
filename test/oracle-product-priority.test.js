@@ -59,7 +59,7 @@ test('valid XLSX has exactly five columns, one sheet, clickable links, dropdown,
 });
 
 test('durable store uses owner-scoped persisted bytes and idempotent MERGE; no ephemeral files',async()=>{
-  const calls=[],rows=new Map();const store=createBigQueryExportStore({project:'test',bigquery:{async query(args){calls.push(args);if(args.query.startsWith('MERGE')){const key=args.params.owner+args.params.id;if(!rows.has(key))rows.set(key,{artifact_json:args.params.artifact});}return [[...(args.query.startsWith('SELECT')?[rows.get(args.params.owner+args.params.id)].filter(Boolean):[])]];}}});
+  const calls=[],rows=new Map();const store=createBigQueryExportStore({project:'test',bigquery:{dataset:()=>({getMetadata:async()=>[{location:'EU'}]}),async query(args){calls.push(args);if(args.query.startsWith('MERGE')){const key=args.params.owner+args.params.id;if(!rows.has(key))rows.set(key,{artifact_json:args.params.artifact});}return [[...(args.query.startsWith('SELECT')?[rows.get(args.params.owner+args.params.id)].filter(Boolean):[])]];}}});
   const bytes={xlsx_base64:'YWJj',envelope:{rows:[1]}};await store.put('id','owner',bytes);await store.put('id','owner',{xlsx_base64:'different'});assert.deepEqual(await store.get('id','owner'),bytes);assert.equal(await store.get('id','other'),null);assert.equal(calls.filter(p=>p.query.startsWith('CREATE')).length,1);assert.match(calls.find(p=>p.query.startsWith('SELECT')).query,/owner_key=@owner/);
 });
 
@@ -100,3 +100,9 @@ test('durable submission dates survive running after midnight',async()=>{const c
 test('failed job checkpoint recovers an already persisted completed export without provider replay',async t=>{const f=await fixture(true);t.after(()=>f.server.close());const result=await send(f,true,'checkpoint-failed');const job=f.jobs.jobs.get(result.job_id);job.status='failed';job.result_json={failed_stage:'evidence_checkpoint'};job.error_code='CHECKPOINT_FAILED';const response=await f.request(`/api/oracle/jobs/${result.job_id}`,{headers:{cookie:f.headers.cookie}}),recovered=await response.json();assert.equal(recovered.status,'completed');assert.equal(recovered.recovered_persisted_export,true);assert.equal(recovered.artifact.id,result.artifact.id);assert.equal(f.calls.length,1);});
 
 test('durable storage failure is explicit and cannot fall back to ephemeral downloads',async()=>{const service=createProductPriorityService({artifactStore:{async get(){throw new Error('storage down')}},graphql:async()=>assert.fail('storage first'),loadSources:async()=>sources()});await assert.rejects(service(prompt,{requestId:'no-storage',exportOwner:'owner'}),error=>error.code==='EXPORT_STORAGE_UNAVAILABLE'&&error.failed_stage==='export_storage');});
+
+test('failed-job artifact recovery validates saved evidence before reporting completion',async t=>{
+  const f=await fixture(true);t.after(()=>f.server.close());const result=await send(f,true,'invalid-recovery'),job=f.jobs.jobs.get(result.job_id);job.status='failed';job.result_json=null;job.error_code='EVIDENCE_SCOPE_MISMATCH';
+  const get=f.store.get.bind(f.store);f.store.get=async(...args)=>{const saved=await get(...args);return saved?{...saved,envelope:{...saved.envelope,subject:'sales'}}:null;};
+  const response=await f.request(`/api/oracle/jobs/${result.job_id}`,{headers:{cookie:f.headers.cookie}});assert.equal(response.status,500);const body=await response.json();assert.notEqual(body.status,'completed');assert.notEqual(body.recovered_persisted_export,true);
+});
