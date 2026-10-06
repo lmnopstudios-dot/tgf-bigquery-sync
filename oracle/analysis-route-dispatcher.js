@@ -1,3 +1,4 @@
+import { presentAnalyticalAnswer } from './answer-presentation.js';
 import { withOracleCharts } from './evidence-charts.js';
 import { productReportConfigKey } from './product-report-config.js';
 import { ANALYSIS_TOOL_ROUTES, validateAnalysisContext, clarificationFor, transitionAnalysisContext } from './analysis-context.js';
@@ -50,7 +51,7 @@ export async function dispatchAnalysisRequest({message,analysisContext,baselineO
   const binding=context?.tool_route?ANALYSIS_ROUTE_DISPATCHERS[context.tool_route]:baselineThenAgent;
   const result=await binding({message,baselineOverview,baselineOptions:{...baselineOptions,analysisContext:analysisContext??context},chat,chatOptions});
   try{assertEvidenceAgreement(context,result?.evidence);baselineOptions?.onProviderStage?.({stage:'evidence_validation',status:'success'});}catch(error){baselineOptions?.onProviderStage?.({stage:'evidence_validation',status:'failed',code:'EVIDENCE_SCOPE_MISMATCH'});throw error;}
-  return withOracleCharts(disclosePeriod(result,context));
+  return presentAnalyticalAnswer(withOracleCharts(disclosePeriod(result,context)),context);
 }
 
 /** Shared deterministic /agent entrypoint; a null result continues existing model tooling. */
@@ -62,5 +63,5 @@ export async function executeGovernedAgentAnalysis({message,analysisContext,base
   const result=await baselineOverview(message,{...baselineOptions,analysisContext:resolved.context});
   if(!result)return null;
   assertEvidenceAgreement(resolved.context,result.evidence);
-  return withOracleCharts(disclosePeriod(result,resolved.context));
+  return presentAnalyticalAnswer(withOracleCharts(disclosePeriod(result,resolved.context)),resolved.context);
 }

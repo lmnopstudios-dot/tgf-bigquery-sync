@@ -74,6 +74,10 @@ function verify(result,f,{partial=false,ambiguous=false}={}){
   assert.equal(result.evidence.subject,'product_sales');
   assert.match(result.answer,/2026-09-30 to 2026-10-06/);
   assert.match(result.answer,/Current day included/);
+  assert.match(result.answer,/<details>\n<summary>Show details<\/summary>/);
+  assert.doesNotMatch(result.answer.split('<details>')[0],/No Woo relationship|Runtime cutoff|source_product_ref/);
+  assert.ok(result.presentation.summary_markdown);
+  assert.ok(result.presentation.supporting_markdown);
   if(ambiguous){assert.equal(result.evidence.ambiguous,true);assert.match(result.answer,/Please choose one/);return;}
   assert.equal(result.evidence.rows[0].units,4);
   assert.equal(result.evidence.rows[0].orders_containing_product,3);
@@ -114,6 +118,7 @@ for(const durable of [false,true])for(const options of [{},{partial:true},{ambig
   const first=await send(QUESTION);assert.match(first.answer,/date range/);assert.equal(f.calls.length,0);
   if(options.unrelated){await send('Who is the founder?');assert.equal(f.calls.length,0);}
   const result=await send('In the last week');verify(result,f,options);
+  if(durable){const recovered=await(await fetch(base+'/jobs/'+result.job_id,{headers:{cookie}})).json();assert.equal(recovered.answer,result.answer);assert.deepEqual(recovered.presentation,result.presentation);assert.deepEqual(recovered.evidence,result.evidence);}
 });
 
 test('successful comparison survives a failed current read, and compatible source comparisons execute',async()=>{
