@@ -38,3 +38,12 @@ test('unsupported metrics remain explicit capabilities and unknown requested col
   const unknown=transitionAnalysisContext(null,'Export products with sentiment scores this year.',{now});assert.equal(unknown.transition.ready_to_execute,false);assert.ok(unknown.context.product_report.unresolved.includes('metrics'));
   const dimension=transitionAnalysisContext(null,'Export product units sold by country this year.',{now});assert.equal(dimension.transition.ready_to_execute,false);assert.ok(dimension.context.product_report.unsupported_requirements.length);
 });
+
+test('report refinements preserve configuration while new subjects leave exports',()=>{
+  const landing=apply('Export all published Shopify products in order of landing traffic only.');
+  const add=apply('Add units sold and sales value to that sheet.',landing),sort=apply('Sort by units instead.',add),dates=apply('What about last year?',sort);
+  assert.deepEqual(dates.product_report.metrics,['landing_sessions','units_sold','product_sales']);assert.equal(dates.product_report.sort.metric,'units_sold');assert.equal(dates.product_report.period.start_date,'2025-01-01');assert.equal(dates.product_report.period.end_date,'2025-12-31');
+  const selected=apply('Only product IDs 10, 2.',sort),all=apply('All published Shopify products instead.',selected);assert.equal(all.product_report.population.product_ids,null);
+  for(const message of ['Show mobile and desktop conversion rates this year.','Show sales for Pendant this year.','How have Klaviyo campaigns affected sales this year?'])assert.equal(apply(message,sort).product_report,null);
+  assert.equal(transitionAnalysisContext(null,'Export top-selling products this year.',{now}).transition.ready_to_execute,false);
+});

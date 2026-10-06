@@ -1,3 +1,4 @@
+import { executeGovernedAgentAnalysis } from './oracle/analysis-route-dispatcher.js';
 import { createReadOnlyProductHistory } from './oracle/product-history.js';
 import { withOracleCharts } from './oracle/evidence-charts.js';
 import { createProductionPriorityDependencies } from './oracle/product-priority-production.js';
@@ -52,7 +53,7 @@ import { buildOracleInlineChart } from './oracle/inline-charts.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { createBigQueryAnalysisJobStore, ORACLE_JOB_DEFAULTS } from './oracle/analysis-jobs.js';
 import {answerExactPageviewsRequest,createPageviewsPerSessionService,executePageviewsToolCall,PAGEVIEWS_MAX_BYTES} from './oracle/pageviews-per-session.js';
-import {createKlaviyoEmailService,executeKlaviyoEmailToolCall} from './oracle/klaviyo-email.js';
+import {executeKlaviyoEmailToolCall} from './oracle/klaviyo-email.js';
 import {createGoogleAdsService,executeGoogleAdsToolCall} from './oracle/google-ads.js';
 import {createBaselineOverviewService} from './oracle/baseline-overview.js';
 import {createGeneralAnalyticsService} from './oracle/general-analytics.js';
@@ -168,11 +169,10 @@ const customerOrderIntervalService = createCustomerOrderIntervalService({ bigque
 const onlineCountrySalesService = createOnlineCountrySalesService({ bigquery, project: GOOGLE_PROJECT_ID });
 const platformSalesService = createPlatformSalesService({ bigquery, project: GOOGLE_PROJECT_ID });
 // Bind the live server through the same adapter factory used by the parity CLI.
-const {deviceConversion:deviceSourceConversionService}=createOracleProviderDependencies({env:process.env,bigquery,project:GOOGLE_PROJECT_ID});
+const {deviceConversion:deviceSourceConversionService,klaviyo:klaviyoEmailService}=createOracleProviderDependencies({env:process.env,bigquery,project:GOOGLE_PROJECT_ID});
 const categorySalesService = createCategorySalesService({ bigquery, project: GOOGLE_PROJECT_ID });
 const productViewPurchaseService = createProductViewPurchaseService({bigquery});
 const pageviewsPerSessionService=createPageviewsPerSessionService({bigquery,project:GOOGLE_PROJECT_ID,runShopifyql:async(query,reportName)=>runShopifyqlReport(await getShopifyAccessToken(),query,reportName),getShopTimezone:async()=>{const data=await shopifyGraphQL(await getShopifyAccessToken(),'{ shop { ianaTimezone } }');if(!data?.shop?.ianaTimezone)throw new Error('Shopify reporting timezone unavailable');return data.shop.ianaTimezone;}});
-const klaviyoEmailService=createKlaviyoEmailService({bigquery,project:GOOGLE_PROJECT_ID});
 const googleAdsService=createGoogleAdsService({bigquery,project:GOOGLE_PROJECT_ID});
 let baselineOverview;
 const oracleInventoryLocationSelector=inventoryLocationSelector(process.env);
@@ -8269,12 +8269,7 @@ app.post(
         });
       }
       const suppliedContext=req.body?.analysis_context;
-      const resolvedRequest=transitionAnalysisContext(suppliedContext,message,{now:Date.now()});
-
-      // This broad KPI request has a governed deterministic evidence plan. It
-      // must not enter model-selected inventory tooling or let one optional
-      // source failure erase independent successful sections.
-      const baselineAnswer=withOracleCharts(await baselineOverview(message,{analysisContext:resolvedRequest.context,exportOwner:exportOwnerKey('direct-agent',SYNC_SECRET),requestId:id,downloadBase:'/agent/exports',signal:cancellation.signal}));
+      const baselineAnswer=await executeGovernedAgentAnalysis({message,analysisContext:suppliedContext,baselineOverview,baselineOptions:{exportOwner:exportOwnerKey('direct-agent',SYNC_SECRET),requestId:id,downloadBase:'/agent/exports',signal:cancellation.signal,onProviderStage:event=>console.info('Oracle direct provider stage:',{request_id:id,deployed_revision:process.env.RENDER_GIT_COMMIT||'unavailable',...event})}});
       if(baselineAnswer)return res.json({success:true,answer:baselineAnswer.answer,evidence:baselineAnswer.evidence,tools_used:baselineAnswer.tools,inline_chart:baselineAnswer.inline_chart||null,charts:baselineAnswer.charts||[],artifact:baselineAnswer.artifact||null,request_id:id});
 
       const currentDate = new Date()

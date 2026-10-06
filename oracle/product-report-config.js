@@ -50,9 +50,9 @@ function mentionedMetrics(text){
 export function isProductReportRequest(text,previous=null){
   text=String(text||'');
   if(!/\b(?:export|download)\b/i.test(text)&&/\b(?:customers?|before|after|next)\b|\b(?:first|second|third|nth)\s+(?:purchase|order)\b/i.test(text))return false;
-  if(previous&&/^(?:add|include|sort|rank|instead|use|make|export|download|show|top|all|only|for|in|online|xlsx|units|sales|GBP|USD|EUR|JPY)\b/i.test(text))return true;
+  if(previous&&!/\b(?:klaviyo|campaigns?|flows?|customers?|conversion|countries|country)\b/i.test(text)&&((mentionedMetrics(text).length&&/^(?:add|include|sort|rank|only|use|units|sales value)\b/i.test(text))||(/^(?:what about|for|in|this year|last year|change (?:the )?dates)\b/i.test(text)&&naturalReportPeriod(text,Date.now()))||/^(?:top \d+|all (?:published (?:Shopify )?)?products|only product ids?|online|xlsx|GBP|USD|EUR|JPY)\b/i.test(text)))return true;
   if(!/\b(?:export|download|report)\b/i.test(text)&&/\b(?:countries|country|locations)\b/i.test(text))return false;
-  return /\bproducts?\b/i.test(text)&&/\b(?:export|download|show|report|list|ranked|rank|top selling|top \d+)\b/i.test(text)&&! /\b(?:inventory|stock|collections?)\b/i.test(text)||/\b(?:photography|content)\b/i.test(text)&&/\bpriority list\b/i.test(text);
+  return /\bproducts?\b/i.test(text)&&/\b(?:export|download|show|report|list|ranked|rank|top[ -]selling|top \d+)\b/i.test(text)&&! /\b(?:inventory|stock|collections?)\b/i.test(text)||/\b(?:photography|content)\b/i.test(text)&&/\bpriority list\b/i.test(text);
 }
 export const hasExplicitMetricRanking=text=>/\b(?:sort(?:ed)? by|rank(?:ed)? by|in order of)\b/i.test(text);
 export function productReportClarification(config){
@@ -75,21 +75,21 @@ export function resolveProductReportConfig(message,{previous=null,period=null,de
   const sorting=sortText?mentionedMetrics(sortText)[0]:null;
   if(requested.length){config.unresolved=config.unresolved.filter(x=>x!=='metrics');config.metrics=continuation&&/^(?:add|include|sort|rank)\b/i.test(text)?[...new Set([...config.metrics,...requested])]:requested;}
   if(continuation&&config.unresolved.includes('sort_metric')){const chosen=requested.find(m=>['units_sold','product_sales'].includes(m));if(chosen){config.sort.metric=chosen;config.unresolved=config.unresolved.filter(x=>x!=='sort_metric');}}
-  if(!requested.length&&!continuation&&!priority&&!/\btop selling\b/i.test(text))config.unresolved.push('metrics');
+  if(!requested.length&&!continuation&&!priority&&!/\btop[ -]selling\b/i.test(text))config.unresolved.push('metrics');
   if(continuation&&requested.length&&/^(?:only|use)\b/i.test(text)&&!requested.includes(config.sort.metric)){config.sort.metric=requested.find(m=>!PRODUCT_REPORT_CAPABILITIES[m].money)??(config.currency?requested[0]:null);}
   if(!config.metrics.length)config.metrics=priority?['product_sales','landing_sessions','organic_clicks','organic_impressions']:['units_sold'];
   if(sorting&&/\bonly\b/i.test(text))config.metrics=[sorting];
   if(sorting&&config.priority_preset){config.priority_preset=null;if(/\bonly\b/i.test(text))config.metrics=[sorting];}
   if(priority)config.sort={metric:'priority',direction:'desc'};
   else if(sorting){config.sort.metric=sorting;config.unresolved=config.unresolved.filter(x=>x!=='sort_metric');}
-  else if(/\btop selling\b/i.test(text)){
+  else if(/\btop[ -]selling\b/i.test(text)){
     const resolved=requested.find(x=>['units_sold','product_sales'].includes(x))||(continuation&&['units_sold','product_sales'].includes(config.sort.metric)?config.sort.metric:null);
     config.sort.metric=resolved;config.unresolved=resolved?[]:['sort_metric'];
   }else if(!config.sort.metric&&!config.unresolved.includes('sort_metric'))config.sort.metric=config.metrics.find(m=>!PRODUCT_REPORT_CAPABILITIES[m].money)??(config.currency?config.metrics[0]:null);
   if(/\b(?:ascending|asc|lowest|least)\b/i.test(text))config.sort.direction='asc';else if(/\b(?:descending|desc|highest|most)\b/i.test(text))config.sort.direction='desc';
   if(/\ball currencies\b/i.test(text))config.currency=null;
   const currency=text.match(/\b(GBP|USD|EUR|JPY|CAD|AUD)\b/i)?.[1]?.toUpperCase();if(currency){config.currency=currency;if(!config.sort.metric&&!config.unresolved.includes('sort_metric'))config.sort.metric=config.metrics[0];}
-  const limit=text.match(/\btop\s+(\d+)\b/i);if(limit)config.population.limit=Number(limit[1]);if(/\ball products\b/i.test(text))config.population.limit=null;
+  const limit=text.match(/\btop\s+(\d+)\b/i);if(limit)config.population.limit=Number(limit[1]);if(/\ball (?:published (?:Shopify )?|Shopify (?:published )?)?products\b/i.test(text)){config.population.limit=null;config.population.product_ids=null;}
   const ids=text.match(/\bproduct ids?\s+([\d, ]+)/i);if(ids)config.population.product_ids=ids[1].split(/[, ]+/).filter(Boolean);
   if(/\bonline (?:only|instead)\b|\bxlsx (?:only|instead)\b/i.test(text))config.unsupported_requirements=[];
   if(/\b(?:in[ -]store|pos|retail|woocommerce|all channels|collection|collaboration|category|categories|country|countries|inventory|stock)\b/i.test(text))config.unsupported_requirements.push('requested population/channel/dimension has no binding');

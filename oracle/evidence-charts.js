@@ -33,6 +33,7 @@ export function selectChartForDataset(dataset){
     if(kind==='stage_bar'&&(points.some(p=>p.value<0)||points.some((p,i)=>i>0&&p.value>points[i-1].value)))continue;
     const sorted=kind==='horizontal_bar'?[...points].sort((a,b)=>(dataset.direction==='asc'?a.value-b.value:b.value-a.value)||String(a.id||a.label).localeCompare(String(b.id||b.label))).slice(0,10):kind==='line'?[...points].sort((a,b)=>String(a.period).localeCompare(String(b.period))):points.slice(0,120);
     const spec={version:1,kind,id:`evidence-chart-${charts.length}-${safeText(dataset.id||'facts').replace(/[^a-z0-9-]/gi,'-')}`,title:safeText(dataset.title),period:safeText(dataset.period),metric:safeText(dataset.metric),unit:c||dataset.unit,definition:safeText(definition),source:safeText(dataset.source),population:safeText(dataset.population),bounded:Boolean(dataset.bounded)||kind==='horizontal_bar'&&points.length>sorted.length,missing_values:'gap',placement:null,table:{columns:['Period','Series','Label','Unit','Value'],rows:sorted.map(p=>[p.period||dataset.period,p.series||'',p.label,c||dataset.unit,p.value])},accessible_label:`${safeText(dataset.title)}; ${safeText(dataset.period)}; ${c||dataset.unit}. ${safeText(definition)}. Missing evidence is not zero.`};
+    if(kind==='line')spec.period_axis=[...new Set(dataset.points.map(p=>p.period).filter(date))].sort();
     if(kind==='line')spec.series=sorted.map(p=>({period:p.period,label:p.series||p.label,currency:c||'PCT',unit:dataset.unit,value:p.value}));
     else if(kind==='grouped_bar')spec.groups=[...new Set(sorted.map(p=>p.label))].map(label=>({label,currency:c,items:sorted.filter(p=>p.label===label).map((p,i)=>({label:p.series,value:p.value,rank:i+1}))}));
     else spec.groups=[{label:c||dataset.metric,currency:c,items:sorted.map((p,i)=>({label:p.label,value:kind==='stacked_percentage_bar'?p.value/sorted.reduce((s,p)=>s+p.value,0)*100:p.value,rank:i+1}))}];
@@ -84,5 +85,7 @@ export function selectOracleCharts(evidence){return datasets(evidence).flatMap(s
 export function withOracleCharts(result){
   if(!result?.evidence)return result;
   const charts=result.evidence.chart_specs||selectOracleCharts(result.evidence);
-  return {...result,evidence:{...result.evidence,chart_specs:charts},charts,inline_chart:charts[0]||null};
+  let answer=result.answer;
+  if(charts.length&&result.evidence.kind==='governed_device_conversion'&&!answer.includes('<summary>Full monthly conversion table</summary>'))answer=answer.replace(/(^\| Month \| Mobile conversion[^\n]*\n(?:\|[^\n]*\n?)+)/m,table=>`<details>\n<summary>Full monthly conversion table</summary>\n\n${table}\n</details>\n`);
+  return {...result,answer,evidence:{...result.evidence,chart_specs:charts},charts,inline_chart:charts[0]||null};
 }
