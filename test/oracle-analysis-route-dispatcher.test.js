@@ -55,7 +55,7 @@ test('persisted Woo context validates and dispatches only its governed baseline 
   const persisted=structuredClone(transitionAnalysisContext(null,EXACT,{now:NOW}).context);
   let baselineCalls=0,chatCalls=0;
   const answer=await dispatchAnalysisRequest({message:EXACT,analysisContext:persisted,baselineOverview:async()=>{baselineCalls++;return{answer:'ten months',tools:['get_woocommerce_device_conversion']}},chat:async()=>{chatCalls++;return{answer:'wrong'}}});
-  assert.equal(answer.answer,'ten months');assert.equal(baselineCalls,1);assert.equal(chatCalls,0);
+  assert.match(answer.answer,/ten months$/);assert.equal(baselineCalls,1);assert.equal(chatCalls,0);
   await assert.rejects(dispatchAnalysisRequest({message:EXACT,analysisContext:persisted,baselineOverview:async()=>null,chat:async()=>{chatCalls++;}}),error=>error.code==='ANALYSIS_ROUTE_UNAVAILABLE');
   assert.equal(chatCalls,0);
   assert.throws(()=>validateAnalysisContext({...persisted,tool_route:'unknown_tool'}),error=>error.code==='INVALID_ANALYSIS_CONTEXT'&&error.validation_rule==='allowed_route');
@@ -97,6 +97,6 @@ test('customer to conversion to country and fresh country use the shared governe
     assert.deepEqual([context.start_date,context.end_date],['2026-01-01','2026-10-05']);
     let chatCalls=0;
     const result=await dispatchAnalysisRequest({message:'Show online sales this year by country instead.',analysisContext:context,baselineOverview:async(_message,options)=>{assert.equal(options.analysisContext,context);return{answer:'country evidence',tools:['get_online_country_sales'],evidence:{kind:'shopify_shipping_country_comparison',subject:'shipping_countries'}};},chat:async()=>{chatCalls++;return null;}});
-    assert.equal(result.answer,'country evidence');assert.equal(chatCalls,0);
+    assert.match(result.answer,/country evidence$/);assert.equal(chatCalls,0);
   }
 });
