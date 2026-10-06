@@ -18,5 +18,5 @@ export function createMemoryExportStore(){const rows=new Map();return{async get(
 export async function sendPriorityDownload(store,id,owner,res){
   if(!/^[a-f0-9]{64}$/.test(id))return res.status(404).json({success:false,error:'Export not found'});
   const artifact=await store.get(id,owner);if(!artifact)return res.status(404).json({success:false,error:'Export not found'});
-  res.setHeader('Cache-Control','private, no-store');res.setHeader('Content-Type','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');const filename=/^oracle-product-priorities(?:-(?:incomplete|provisional|unavailable))?\.xlsx$/.test(artifact.filename)?artifact.filename:'oracle-product-priorities.xlsx';res.setHeader('Content-Disposition',`attachment; filename="${filename}"`);res.send(Buffer.from(artifact.xlsx_base64,'base64'));
+  res.setHeader('Cache-Control','private, no-store');res.setHeader('Content-Type','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');const filename=/^oracle-product-(?:priorities|report)(?:-(?:incomplete|provisional|unavailable))?\.xlsx$/.test(artifact.filename)?artifact.filename:'oracle-product-priorities.xlsx';res.setHeader('Content-Disposition',`attachment; filename="${filename}"`);res.send(Buffer.from(artifact.xlsx_base64,'base64'));
 }

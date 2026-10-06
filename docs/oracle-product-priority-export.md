@@ -1,3 +1,5 @@
+Current generalized capability and requirement ledger: [Governed product reports and contextual charts](oracle-governed-product-reports.md).
+
 # Product priority export
 
 Implemented from merged main `51a124856266c856af89ba10c8a2bf8d4461cf6c` (6 October 2026).

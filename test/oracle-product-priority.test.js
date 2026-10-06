@@ -51,7 +51,7 @@ test('natural paraphrases use governed executable routing and clear stale contex
   const stale=transitionAnalysisContext(null,'Sales for HEART PENDANT this year',{now:NOW}).context;
   for(const message of [prompt,'download a product priority list','export products for the photography team','List all current published Shopify products in priority order for photography and product-page improvements, using available online sales, landing-page traffic and organic search evidence.']){
     const result=transitionAnalysisContext(stale,message,{now:NOW});assert.equal(result.context.tool_route,'export_product_priorities');assert.equal(result.context.entity_query,null);assert.equal(result.context.product_ref,null);assert.equal(result.transition.ready_to_execute,true);assert.deepEqual(result.context.metrics,['products']);assert.equal(oracleRequestRoute(message,{hasCompletedJob:true}),'job');
-    const answer=await dispatchAnalysisRequest({message,analysisContext:result.context,baselineOverview:async()=>({answer:'OK',evidence:{subject:'product_priority',metrics:['products'],periods:[priorityDates(NOW)]}}),chat:async()=>assert.fail('must not enter agent')});assert.equal(answer.answer,'OK');
+    const answer=await dispatchAnalysisRequest({message,analysisContext:result.context,baselineOverview:async()=>({answer:'OK',evidence:{subject:'product_priority',metrics:['products'],report_config:result.context.product_report,periods:[priorityDates(NOW)]}}),chat:async()=>assert.fail('must not enter agent')});assert.equal(answer.answer,'OK');
   }
 });
 test('valid XLSX has exactly five columns, one sheet, clickable links, dropdown, filters and frozen header',async()=>{

@@ -1,6 +1,7 @@
 const money=(value,currency)=>new Intl.NumberFormat('en-GB',{style:'currency',currency,maximumFractionDigits:0}).format(value);
 const count=value=>new Intl.NumberFormat('en-GB').format(value);
 export function renderInlineChart(chart){
+  if(chart?.version===1&&chart.table)return renderEvidenceChart(chart);
   if(chart?.version===1&&chart.kind==='line')return renderLineChart(chart);
   if(!chart||chart.version!==1||chart.kind!=='horizontal_bar'||!Array.isArray(chart.groups)||!chart.groups.length)return null;
   const figure=document.createElement('figure');figure.className='inline-chart';figure.tabIndex=0;figure.setAttribute('aria-labelledby',`${chart.id}-title`);
@@ -28,4 +29,37 @@ export function placeRenderedInlineChart(answerRoot,messageRoot,figure,placement
   const marker=section&&/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(section)?answerRoot.querySelector(`[data-oracle-section=\"${section}\"]`):null;
   if(marker)marker.replaceWith(figure);else messageRoot.append(figure);
   return figure;
+}
+
+
+function renderEvidenceChart(chart){
+  if(!['line','horizontal_bar','grouped_bar','stacked_percentage_bar','stage_bar'].includes(chart.kind))return null;
+  const figure=document.createElement('figure');figure.className='inline-chart';figure.tabIndex=0;
+  figure.setAttribute('aria-label',chart.accessible_label);
+  const caption=document.createElement('figcaption'),title=document.createElement('strong'),meta=document.createElement('span');title.textContent=chart.title;
+  meta.textContent=`${chart.period} · ${chart.metric} · ${chart.unit} · ${chart.source}. ${chart.definition}`;caption.append(title,meta);figure.append(caption);
+  if(chart.kind==='line'){
+    const points=chart.series||[],periods=[...new Set(points.map(p=>p.period))].sort(),values=points.map(p=>Number(p.value)),min=Math.min(0,...values),max=Math.max(1,...values),span=max-min||1;
+    const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');svg.setAttribute('viewBox','0 0 900 280');svg.setAttribute('role','img');svg.setAttribute('aria-label',chart.accessible_label);
+    const colors=['#c9a868','#75bb91','#7ca7cf','#d88972'];
+    [...new Set(points.map(p=>p.label))].forEach((label,index)=>{
+      const byPeriod=new Map(points.filter(p=>p.label===label).map(p=>[p.period,p]));let segment=[];
+      const draw=()=>{if(!segment.length)return;const line=document.createElementNS('http://www.w3.org/2000/svg','polyline');line.setAttribute('points',segment.join(' '));line.setAttribute('fill','none');line.setAttribute('stroke',colors[index%colors.length]);line.setAttribute('stroke-width','3');svg.append(line);segment=[];};
+      // Insert omitted calendar months as gaps; never interpolate missing facts.
+      const axis=[];if(periods.every(p=>/^\d{4}-\d{2}$/.test(p))){for(let d=new Date(`${periods[0]}-01T00:00:00Z`);d.toISOString().slice(0,7)<=periods.at(-1)&&axis.length<120;d.setUTCMonth(d.getUTCMonth()+1))axis.push(d.toISOString().slice(0,7));}else axis.push(...periods);
+      axis.forEach((p,i)=>{const point=byPeriod.get(p);if(!point){draw();return;}segment.push(`${45+i*810/Math.max(axis.length-1,1)},${235-(point.value-min)/span*190}`);});draw();
+    });figure.append(svg);
+  }else if(chart.kind==='stacked_percentage_bar'){
+    const colors=['#c9a868','#75bb91','#7ca7cf','#d88972','#b78bd2'];
+    for(const group of chart.groups||[]){const heading=document.createElement('h4');heading.textContent=group.label;figure.append(heading);const stack=document.createElement('div');stack.style.display='flex';stack.style.width='100%';stack.style.minHeight='2rem';stack.setAttribute('role','img');stack.setAttribute('aria-label',group.items.map(item=>`${item.label}: ${count(item.value)}%`).join('; '));group.items.forEach((item,index)=>{const segment=document.createElement('span');segment.style.width=`${item.value}%`;segment.style.backgroundColor=colors[index%colors.length];segment.title=`${item.label}: ${count(item.value)}%`;segment.setAttribute('aria-hidden','true');stack.append(segment);});figure.append(stack);}
+  }else{
+    const all=(chart.groups||[]).flatMap(g=>g.items),commonMax=Math.max(1,...all.map(p=>Math.abs(p.value)));
+    for(const group of chart.groups||[]){const max=group.currency?Math.max(1,...group.items.map(p=>Math.abs(p.value))):commonMax;const heading=document.createElement('h4');heading.textContent=group.label;figure.append(heading);const list=document.createElement('ol');list.className='inline-bars';
+      for(const item of group.items){const row=document.createElement('li'),label=document.createElement('span'),track=document.createElement('span'),bar=document.createElement('span'),shown=document.createElement('span');label.className='bar-label';label.textContent=item.label;track.className='bar-track';track.setAttribute('aria-hidden','true');bar.className='bar-fill';bar.style.width=`${Math.abs(item.value)/max*100}%`;track.append(bar);shown.className='bar-value';shown.textContent=`${count(item.value)} ${group.currency||chart.unit}`;row.setAttribute('aria-label',`${item.label}: ${shown.textContent}`);row.append(label,track,shown);list.append(row);}figure.append(list);
+    }
+  }
+  const wrap=document.createElement('div');wrap.className='table-wrap chart-table';const table=document.createElement('table'),head=document.createElement('thead'),body=document.createElement('tbody'),header=document.createElement('tr');
+  for(const label of chart.table.columns){const th=document.createElement('th');th.scope='col';th.textContent=label;header.append(th);}head.append(header);
+  for(const values of chart.table.rows){const row=document.createElement('tr');for(const value of values){const td=document.createElement('td');td.textContent=value==null?'Unavailable':String(value);row.append(td);}body.append(row);}table.append(head,body);wrap.append(table);figure.append(wrap);
+  const note=document.createElement('p');note.textContent=`${chart.bounded?'Bounded results; no whole-population share is implied. ':''}Missing evidence is unavailable, never zero.`;figure.append(note);return figure;
 }
