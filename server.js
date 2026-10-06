@@ -1,3 +1,6 @@
+import { createProductPriorityService } from './oracle/product-priority.js';
+import { createPrioritySourceLoader } from './oracle/product-priority-sources.js';
+import { createBigQueryExportStore, exportOwnerKey, sendPriorityDownload } from './oracle/product-priority-storage.js';
 import express from 'express';
 import { BigQuery } from '@google-cloud/bigquery';
 import ExcelJS from 'exceljs';
@@ -271,7 +274,8 @@ async function getShopifyAccessToken() {
 async function shopifyGraphQL(
   token,
   query,
-  variables = {}
+  variables = {},
+  signal = null
 ) {
   const response = await fetch(
     `https://${SHOPIFY_SHOP}.myshopify.com/admin/api/2026-07/graphql.json`,
@@ -285,7 +289,7 @@ async function shopifyGraphQL(
         query,
         variables
       }),
-      signal: requestBudget.getStore()?.signal
+      signal: signal || requestBudget.getStore()?.signal
     }
   );
 
@@ -4554,7 +4558,9 @@ const productEvidenceReport=createProductEvidenceReportService({
   }
 });
 const generalAnalytics=createGeneralAnalyticsService({loadReport:ecommerceReportV2});
-baselineOverview=async(message,options={})=>await generalAnalytics(message,options)||await historicalEventComparison(message)||await ecommerceBaselineOverview(message,options)||await productEvidenceReport(message);
+const priorityExportStore=createBigQueryExportStore({bigquery,project:GOOGLE_PROJECT_ID,dataset:process.env.ORACLE_JOB_DATASET||ORACLE_JOB_DEFAULTS.dataset});
+const productPriorityExport=createProductPriorityService({graphql:async(query,variables,{signal}={})=>shopifyGraphQL(await getShopifyAccessToken(),query,variables,signal),loadSources:createPrioritySourceLoader({bigquery,project:GOOGLE_PROJECT_ID}),artifactStore:priorityExportStore});
+baselineOverview=async(message,options={})=>await productPriorityExport(message,options)||await generalAnalytics(message,options)||await historicalEventComparison(message)||await ecommerceBaselineOverview(message,options)||await productEvidenceReport(message);
 
 async function getSalesByLocation({
   start_date,
@@ -8232,6 +8238,8 @@ app.post(
 
 
 
+app.get('/agent/exports/:id',requireSyncSecret,async(req,res,next)=>{try{await sendPriorityDownload(priorityExportStore,req.params.id,exportOwnerKey('direct-agent',SYNC_SECRET),res);}catch(error){next(error)}});
+
 app.post(
   '/agent',
   requireSyncSecret,
@@ -8266,8 +8274,8 @@ app.post(
       // This broad KPI request has a governed deterministic evidence plan. It
       // must not enter model-selected inventory tooling or let one optional
       // source failure erase independent successful sections.
-      const baselineAnswer=await baselineOverview(message,{analysisContext:resolvedRequest.context});
-      if(baselineAnswer)return res.json({success:true,answer:baselineAnswer.answer,evidence:baselineAnswer.evidence,tools_used:baselineAnswer.tools,request_id:id});
+      const baselineAnswer=await baselineOverview(message,{analysisContext:resolvedRequest.context,exportOwner:exportOwnerKey('direct-agent',SYNC_SECRET),requestId:id,downloadBase:'/agent/exports',signal:cancellation.signal});
+      if(baselineAnswer)return res.json({success:true,answer:baselineAnswer.answer,evidence:baselineAnswer.evidence,tools_used:baselineAnswer.tools,artifact:baselineAnswer.artifact||null,request_id:id});
 
       const currentDate = new Date()
         .toISOString()
@@ -8752,6 +8760,7 @@ if (process.env.ORACLE_UI_PASSWORD || process.env.ORACLE_UI_SESSION_SECRET) {
       ? createBigQueryAnalysisJobStore({bigquery,project:GOOGLE_PROJECT_ID,dataset:process.env.ORACLE_JOB_DATASET||ORACLE_JOB_DEFAULTS.dataset,table:process.env.ORACLE_JOB_TABLE||ORACLE_JOB_DEFAULTS.table,location:process.env.ORACLE_JOB_DATASET_LOCATION||ORACLE_JOB_DEFAULTS.location})
       : null,
     baselineOverview,
+    exportStore:priorityExportStore,
     env: process.env,
     generateProposals: createProposalGenerator({ openai, model: process.env.ORACLE_PROPOSAL_MODEL || 'gpt-5.6' }),
     chat: async (message, conversation = {}) => {
@@ -8784,7 +8793,7 @@ if (process.env.ORACLE_UI_PASSWORD || process.env.ORACLE_UI_SESSION_SECRET) {
         const safeStage=/^[a-z][a-z0-9_]{0,63}$/.test(String(payload.failed_stage||''))?payload.failed_stage:'agent_request';
         throw Object.assign(new Error('Oracle agent request rejected'),{name:'ApiError',code:safeCode,status:response.status,failed_stage:safeStage,durable});
       }
-      return { answer: payload.answer, tools: payload.tools_used || [], inline_chart: payload.inline_chart || null };
+      return { answer: payload.answer, tools: payload.tools_used || [], evidence:payload.evidence||null,artifact:payload.artifact||null, inline_chart: payload.inline_chart || null };
     }
   }));
   app.use('/oracle', express.static(new URL('./public/oracle', import.meta.url).pathname, { index: 'index.html' }));
