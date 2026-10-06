@@ -70,3 +70,108 @@ test('complete conversation through the production /agent entrypoint over HTTP',
   for(const message of sequence){const response=await fetch(`http://127.0.0.1:${server.address().port}/agent`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({message,analysis_context:context})});assert.equal(response.status,200);results.push(await response.json());context=apply(context,message);}
   verify(results,f);
 });
+
+const productionSequence=[sequence[0],sequence[1],sequence[1]];
+function assertMonthlyComparison(result){
+  const e=result.evidence;
+  assert.deepEqual(e.periods,[{start_date:'2026-09-01',end_date:'2026-09-30'},{start_date:'2026-08-01',end_date:'2026-08-31'}]);
+  assert.deepEqual(e.sections.map(s=>s.period.start_date),['2026-09-01','2026-08-01']);
+  assert.equal(e.definitions.comparable,true);
+  assert.equal(e.sections[0].rows.find(r=>r.device_type==='mobile').numerator,8);
+  assert.equal(e.sections[1].rows.find(r=>r.device_type==='mobile').numerator,5);
+  assert.ok(Math.abs(e.changes[0].percentage_point_change-3)<1e-12);
+  assert.match(result.presentation.summary_markdown,/\| Month \| Mobile \| Desktop \|/);
+  assert.match(result.presentation.summary_markdown,/2026-08.*5%.*6%/);
+  assert.match(result.presentation.summary_markdown,/2026-09.*8%.*9%/);
+  assert.match(result.presentation.summary_markdown,/mobile: 3.00 percentage points/);
+  assert.doesNotMatch(result.answer,/Today’s data may still be incomplete|2026-01|Showing 12/);
+  assert.match(result.presentation.supporting_markdown,/2026-08/);
+  assert.match(result.presentation.supporting_markdown,/2026-09/);
+  assert.equal(result.inline_chart.kind,'grouped_bar');
+  assert.match(result.inline_chart.period,/2026-09-01 to 2026-09-30 versus 2026-08-01 to 2026-08-31/);
+  assert.deepEqual(Object.fromEntries(result.inline_chart.groups.map(g=>[g.label,g.items.map(i=>i.value)])),{mobile:[8,5],desktop:[9,6]});
+}
+test('production bridge preserves resolved scope and rejects stale annual populations on repeated follow-ups',async()=>{
+  const {governedAgentRequest,governedModelInput}=await import('../oracle/agent-request.js');
+  const f=fixture();let context=null,annual;
+  for(const [i,message] of productionSequence.entries()){
+    context=apply(context,message);
+    const request=governedAgentRequest(message,{analysisContext:context,recentEvidence:annual},NOW+1000);
+    assert.equal(request.message,message);
+    const modelInput=governedModelInput(request.message,request.analysis_context);assert.match(modelInput,/Authoritative resolved analytical scope/);if(i){assert.doesNotMatch(modelInput,/2026-01-01/);assert.match(modelInput,/2026-08-01/);assert.match(modelInput,/2026-09-01/);}
+    const result=await executeGovernedAgentAnalysis({message:request.message,analysisContext:request.analysis_context,scopeResolved:request.scope_resolved,baselineOverview:f.baseline,now:NOW});
+    if(!i){annual=result;assert.equal((result.presentation.summary_markdown.match(/\| 2026-/g)||[]).length,10);assert.doesNotMatch(result.presentation.summary_markdown,/Showing 12/);}else assertMonthlyComparison(result);
+  }
+  // Real dependency factory's SQL arguments, rather than only route labels.
+  const periods=f.calls.filter(c=>c.params.start_date).map(c=>[c.params.start_date.value,c.params.end_date.value]);
+  assert.deepEqual(periods.slice(-4),[['2026-09-01','2026-09-30'],['2026-08-01','2026-08-31'],['2026-09-01','2026-09-30'],['2026-08-01','2026-08-31']]);
+  assert.throws(()=>assertEvidenceAgreement(context,annual.evidence),e=>e.code==='EVIDENCE_SCOPE_MISMATCH');
+  const exact=await f.baseline(sequence[1],{analysisContext:context});
+  assert.throws(()=>assertEvidenceAgreement(context,{...exact.evidence,sections:exact.evidence.sections.slice(0,1)}),e=>e.code==='EVIDENCE_SCOPE_MISMATCH');
+  assert.throws(()=>assertEvidenceAgreement(context,{...exact.evidence,sections:annual.evidence.sections}),e=>e.code==='EVIDENCE_SCOPE_MISMATCH');
+});
+for(const durable of [false,true])test(`production repeat, subject change, reset and old-result recovery through ${durable?'durable':'interactive'} submissions`,async t=>{
+  const f=fixture(),jobs=createMemoryAnalysisJobStore(),app=express();
+  const router=()=>createOracleUiRouter({knowledgeService:{},baselineOverview:f.baseline,chat:async()=>({answer:'Which analysis do you mean?',tools:[]}),analysisJobStore:jobs,env:{...env,ORACLE_ANALYSIS_JOBS_ENABLED:String(durable)},now:()=>NOW});
+  let activeRouter=router();app.use('/api/oracle',(req,res,next)=>activeRouter(req,res,next));
+  const server=await new Promise(resolve=>{const s=app.listen(0,'127.0.0.1',()=>resolve(s));});t.after(()=>{server.closeAllConnections();server.close();});
+  const base=`http://127.0.0.1:${server.address().port}/api/oracle`,origin=new URL(base).origin;
+  const login=await fetch(base+'/auth/login',{method:'POST',headers:{origin,'content-type':'application/json'},body:JSON.stringify({password:env.ORACLE_UI_PASSWORD})}),auth=await login.json();
+  let cookie=login.headers.getSetCookie().map(v=>v.split(';')[0]).join('; '),id=0;
+  const headers=()=>({cookie,origin,'content-type':'application/json','x-csrf-token':auth.csrf});
+  const send=async(message,extra={})=>{let r=await fetch(base+`/${durable?'jobs':'chat'}`,{method:'POST',headers:{...headers(),'x-request-id':`reset-${durable}-${++id}`},body:JSON.stringify({message,...extra})});assert.equal(r.status,durable?202:200);let data=await r.json();if(durable){for(let n=0;n<250;n++){data=await(await fetch(base+'/jobs/'+data.job_id,{headers:headers()})).json();if(data.status==='completed')break;assert.notEqual(data.status,'failed');await new Promise(r=>setTimeout(r,10));}assert.equal(data.status,'completed');}return data;};
+  let annual,comparison;for(const [i,message]of productionSequence.entries()){const r=await send(message);if(!i)annual=r;else{comparison=r;assertMonthlyComparison(r);}}
+  if(durable){activeRouter=router();const restored=await(await fetch(base+'/jobs/'+comparison.job_id,{headers:headers()})).json();assertMonthlyComparison(restored);assertMonthlyComparison(await send(sequence[1]));}
+  const email=await send(sequence[2]);assert.equal(email.evidence.subject,'klaviyo_email');
+  await send(sequence[0]);
+  await send('New question: How are mobile and desktop conversion rates?');
+  const clear=await fetch(base+'/analysis/clear',{method:'POST',headers:headers(),body:'{}'});assert.equal(clear.status,200);
+  cookie+='; '+clear.headers.getSetCookie()[0].split(';')[0];
+  const before=f.calls.length;
+  const scopeOnly=await send(sequence[1]);assert.equal(scopeOnly.evidence,null);assert.equal(f.calls.length,before);
+  if(durable){activeRouter=router();const recovered=await(await fetch(base+'/jobs/'+annual.job_id,{headers:headers()})).json();assert.equal(recovered.status,'completed');assert.deepEqual(recovered.evidence,annual.evidence);assert.equal(recovered.analysis_scope,null);assert.equal(jobs.jobs.get(annual.job_id).status,'completed');}
+  const explicit=await send(sequence[0]);assert.equal(explicit.evidence.sections.length,10);
+  const resetSubmission=await send(sequence[1],{new_question:true});assert.equal(resetSubmission.evidence,null);
+});
+test('conversion changes use raw pooled numerators/denominators and retain provider limitations',async()=>{
+  const context=apply(apply(null,sequence[0]),sequence[1]);
+  const provider=async(tool,p)=>({period:{expected_days:p.start_date==='2026-09-01'?30:31},limitations:['Source coverage is verified; attribution is unverified.'],rows:['mobile','desktop'].flatMap(device=>[0,1].map(i=>({device_type:device,sessions:p.start_date==='2026-09-01'?301+i:199+i,numerator:p.start_date==='2026-09-01'?7+i:1+i,rate:0.99,coverage:{covered_days:p.start_date==='2026-09-01'?30:31,expected_days:p.start_date==='2026-09-01'?30:31}})))});
+  const baseline=createBaselineOverviewService({now:()=>new Date(NOW),wooConversion:provider,shopifyDevice:provider});
+  const result=await dispatchAnalysisRequest({message:sequence[1],analysisContext:context,baselineOverview:baseline});
+  const expected=(15/603-3/399)*100;
+  assert.equal(result.evidence.changes[0].percentage_point_change,expected);
+  assert.equal(result.evidence.sections[0].rows[0].sessions,603);
+  assert.equal(result.evidence.sections[0].rows[0].numerator,15);
+  assert.match(result.presentation.summary_markdown,new RegExp(`${expected.toFixed(2)} percentage points`));
+  assert.match(result.presentation.summary_markdown,/attribution is unverified/);
+  assert.equal(result.inline_chart.groups[0].items[0].value,15/603*100);
+});
+test('partial comparison preserves successful evidence and suppresses unsupported changes',async()=>{
+  const context=apply(apply(null,sequence[0]),sequence[1]);
+  const provider=async(tool,p)=>{if(p.start_date==='2026-08-01')throw Object.assign(Error('private'),{code:'PROVIDER_DOWN'});return {period:{expected_days:30},rows:[{device_type:'mobile',sessions:101,numerator:7,coverage:{covered_days:30,expected_days:30}}]};};
+  const result=await dispatchAnalysisRequest({message:sequence[1],analysisContext:context,baselineOverview:createBaselineOverviewService({now:()=>new Date(NOW),wooConversion:provider,shopifyDevice:provider})});
+  assert.equal(result.evidence.sections[0].rows[0].numerator,7);assert.equal(result.evidence.changes[0].percentage_point_change,null);
+  assert.match(result.presentation.summary_markdown,/2026-08.*Unavailable/);assert.match(result.presentation.summary_markdown,/2026-09.*6.93%/);
+  assert.match(result.presentation.summary_markdown,/Some periods could not be retrieved/);assert.match(result.presentation.summary_markdown,/change unavailable/);
+});
+test('New question leaves running jobs intact and prevents late completion from restoring scope',async t=>{
+  const f=fixture(),jobs=createMemoryAnalysisJobStore(),app=express();let release,entered;
+  const started=new Promise(r=>{entered=r;}),gate=new Promise(r=>{release=r;});
+  app.use('/api/oracle',createOracleUiRouter({knowledgeService:{},analysisJobStore:jobs,baselineOverview:async(...args)=>{entered();await gate;return f.baseline(...args);},chat:async()=>({answer:'Which analysis do you mean?',tools:[]}),env:{...env,ORACLE_ANALYSIS_JOBS_ENABLED:'true'},now:()=>NOW}));
+  const server=await new Promise(resolve=>{const s=app.listen(0,'127.0.0.1',()=>resolve(s));});t.after(()=>{release();server.closeAllConnections();server.close();});
+  const base=`http://127.0.0.1:${server.address().port}/api/oracle`,origin=new URL(base).origin;
+  const login=await fetch(base+'/auth/login',{method:'POST',headers:{origin,'content-type':'application/json'},body:JSON.stringify({password:env.ORACLE_UI_PASSWORD})}),auth=await login.json(),cookie=login.headers.getSetCookie().map(v=>v.split(';')[0]).join('; '),headers={cookie,origin,'content-type':'application/json','x-csrf-token':auth.csrf};
+  const job=await(await fetch(base+'/jobs',{method:'POST',headers,body:JSON.stringify({message:sequence[0]})})).json();await started;
+  const reset=await fetch(base+'/analysis/clear',{method:'POST',headers,body:'{}'});assert.equal(reset.status,200);
+  assert.equal(jobs.jobs.get(job.job_id).status,'running');assert.equal(jobs.jobs.get(job.job_id).cancel_requested,false);
+  release();let result;for(let i=0;i<250;i++){result=await(await fetch(base+'/jobs/'+job.job_id,{headers})).json();if(result.status==='completed')break;await new Promise(r=>setTimeout(r,10));}
+  assert.equal(result.status,'completed');assert.equal(result.evidence.sections.length,10);assert.equal(result.analysis_scope,null);
+  assert.equal((await(await fetch(base+'/session',{headers})).json()).analysis_scope,null);
+});
+test('persisted conversion chart specs are regenerated from the authoritative populations',async()=>{
+  const {withOracleCharts}=await import('../oracle/evidence-charts.js'),f=fixture();
+  const annual=await f.baseline(sequence[0],{analysisContext:apply(null,sequence[0])});
+  const exact=await f.baseline(sequence[1],{analysisContext:apply(apply(null,sequence[0]),sequence[1])});
+  const stale=withOracleCharts({...exact,evidence:{...exact.evidence,chart_specs:withOracleCharts(annual).charts}});
+  assert.equal(stale.inline_chart.kind,'grouped_bar');assert.doesNotMatch(stale.inline_chart.period,/2026-01/);assert.match(stale.inline_chart.period,/2026-08/);
+});

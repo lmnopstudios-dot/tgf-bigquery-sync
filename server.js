@@ -1,3 +1,4 @@
+import { governedAgentRequest, governedModelInput } from './oracle/agent-request.js';
 import { ANALYTICAL_PRESENTATION_INSTRUCTIONS, presentNativeConversionAnswer } from './oracle/answer-presentation.js';
 import { executeGovernedAgentAnalysis } from './oracle/analysis-route-dispatcher.js';
 import { createReadOnlyProductHistory } from './oracle/product-history.js';
@@ -8270,7 +8271,7 @@ app.post(
         });
       }
       const suppliedContext=req.body?.analysis_context;
-      const baselineAnswer=await executeGovernedAgentAnalysis({message,analysisContext:suppliedContext,baselineOverview,baselineOptions:{exportOwner:exportOwnerKey('direct-agent',SYNC_SECRET),requestId:id,downloadBase:'/agent/exports',signal:cancellation.signal,onProviderStage:event=>console.info('Oracle direct provider stage:',{request_id:id,deployed_revision:process.env.RENDER_GIT_COMMIT||'unavailable',...event})}});
+      const baselineAnswer=await executeGovernedAgentAnalysis({message,analysisContext:suppliedContext,scopeResolved:req.body?.scope_resolved===true,baselineOverview,baselineOptions:{exportOwner:exportOwnerKey('direct-agent',SYNC_SECRET),requestId:id,downloadBase:'/agent/exports',signal:cancellation.signal,onProviderStage:event=>console.info('Oracle direct provider stage:',{request_id:id,deployed_revision:process.env.RENDER_GIT_COMMIT||'unavailable',...event})}});
       if(baselineAnswer)return res.json({success:true,answer:baselineAnswer.answer,presentation:baselineAnswer.presentation||null,evidence:baselineAnswer.evidence,tools_used:baselineAnswer.tools,inline_chart:baselineAnswer.inline_chart||null,charts:baselineAnswer.charts||[],artifact:baselineAnswer.artifact||null,request_id:id});
 
       const currentDate = new Date()
@@ -8447,7 +8448,7 @@ Important rules:
 - Do not fabricate data for a failed tool. If a Shopify tool is throttled, describe that source as temporarily unavailable rather than as missing data.
 
         `,
-        input: message,
+        input: req.body?.scope_resolved===true?governedModelInput(message,suppliedContext):message,
         tools
       }, { timeout: Math.max(1, deadlineAt - Date.now() - callBudget.synthesisReserveMs), signal:cancellation.signal });
 
@@ -8764,9 +8765,6 @@ if (process.env.ORACLE_UI_PASSWORD || process.env.ORACLE_UI_SESSION_SECRET) {
       // Leave headroom for the UI route to serialize a bounded terminal response.
       const durable=conversation.durable===true;
       const deadlineAt = Date.now() + (durable?7*60_000:70_000);
-      const recentEvidence = conversation.recentEvidence
-        ? `Recent governed Oracle evidence (reuse when relevant; disclose this as-of time and do not treat the prior interpretation as new raw data): ${JSON.stringify(conversation.recentEvidence)}\n\n`
-        : '';
       const agentStarted=Date.now();
       console.info('Oracle internal agent dispatch:',{request_id:conversation.requestId,job_id:conversation.jobId||null,attempt:conversation.attempt||null,stage:'agent_dispatch',route:durable?'durable_job':'interactive'});
       const response = await fetch(`http://127.0.0.1:${PORT}/agent`, {
@@ -8776,7 +8774,7 @@ if (process.env.ORACLE_UI_PASSWORD || process.env.ORACLE_UI_SESSION_SECRET) {
           'content-type': 'application/json'
           ,'x-request-id': conversation.requestId
         },
-        body: JSON.stringify({ message: `${recentEvidence}${conversation.analysisContext?.metrics?.length ? `Governed session-local analysis context (retain unless this user message explicitly changes it): ${JSON.stringify(conversation.analysisContext)}\n\nCurrent user message: ${message}\n\nUse only relevant context fields for tool calls. State the resolved scope in the answer, including cohort years, exact order sequence, observation end, exclusions, classification coverage and unclassified products.` : message}`, analysis_context:conversation.analysisContext||null, deadline_at:deadlineAt,request_id:conversation.requestId,job_id:conversation.jobId||null,job_attempt:conversation.attempt||null,durable_job:durable }),
+        body: JSON.stringify(governedAgentRequest(message,conversation,deadlineAt)),
         signal: conversation.signal ? AbortSignal.any([conversation.signal,AbortSignal.timeout(durable?7*60_000+5_000:74_000)]) : AbortSignal.timeout(durable?7*60_000+5_000:74_000)
       });
       const payload = await response.json().catch(()=>({success:false,code:'ORACLE_AGENT_INVALID_RESPONSE',failed_stage:'agent_response'}));
