@@ -105,7 +105,9 @@
     "backfill:meta": "node meta/cli.js meta_ads",
     "collect:instagram": "node meta/cli.js instagram",
     "schedule:meta": "node meta/cli.js meta_ads --scheduled --execute --max-windows 100",
-    "schedule:instagram": "node meta/cli.js instagram --scheduled --execute"
+    "schedule:instagram": "node meta/cli.js instagram --scheduled --execute",
+    "probe:tiktok": "node tiktok/cli.js --probe",
+    "preserve:tiktok": "node tiktok/cli.js"
   },
   "engines": {
     "node": ">=20"
