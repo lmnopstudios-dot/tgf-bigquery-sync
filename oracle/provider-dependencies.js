@@ -1,3 +1,4 @@
+import {createTikTokService} from './tiktok.js';
 import {createMetaInstagramService} from './meta-instagram.js';
 import { createKlaviyoEmailService } from './klaviyo-email.js';
 import {createBigQueryClient} from '../bigquery/client.js';
@@ -8,5 +9,5 @@ import {createDeviceSourceConversionService} from './device-source-conversion.js
 export function createOracleProviderDependencies({env=process.env,bigquery=null,project=null,dataset=null,dryRun=false}={}){
   const client=bigquery&&project?{bigquery,project}:createBigQueryClient(env);
   const conversionDataset=dataset||ga4Dataset(env.GA4_DATASET);
-  return Object.freeze({...client,conversionDataset,social:createMetaInstagramService({...client,env}),klaviyo:createKlaviyoEmailService(client),deviceConversion:createDeviceSourceConversionService({...client,dataset:conversionDataset,dryRun})});
+  return Object.freeze({...client,conversionDataset,social:((meta,tiktok)=>(name,args)=>name==='get_tiktok_performance'?tiktok(name,args):meta(name,args))(createMetaInstagramService({...client,env}),createTikTokService(client)),klaviyo:createKlaviyoEmailService(client),deviceConversion:createDeviceSourceConversionService({...client,dataset:conversionDataset,dryRun})});
 }

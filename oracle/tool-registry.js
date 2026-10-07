@@ -1,3 +1,4 @@
+import {TIKTOK_TOOL_DEFINITIONS} from './tiktok.js';
 import {META_INSTAGRAM_TOOL_DEFINITIONS} from './meta-instagram.js';
 import { ORDER_TOOL_DEFINITIONS } from './order-query.js';
 import { CUSTOMER_TOOL_DEFINITIONS } from './customer-query.js';
@@ -32,6 +33,7 @@ export function createOracleToolDefinitions() {
         ...KLAVIYO_TOOL_DEFINITIONS,
         ...GOOGLE_ADS_TOOL_DEFINITIONS,
         ...META_INSTAGRAM_TOOL_DEFINITIONS,
+        ...TIKTOK_TOOL_DEFINITIONS,
         {
           type: 'function',
           name: 'get_ecommerce_management_report',

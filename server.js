@@ -1,3 +1,4 @@
+import {executeTikTokToolCall} from './oracle/tiktok.js';
 import {createCurrentStockService,createStockGroupLookup,STOCK_RESOLUTION_QUERY} from './oracle/current-stock.js';
 import {createInventoryReadBudget,inventoryDiagnostic} from './shopify/inventory-budget.js';
 import {executeMetaInstagramToolCall} from './oracle/meta-instagram.js';
@@ -8251,7 +8252,8 @@ Important rules:
                   if(pageviewsCall.handled)result=pageviewsCall.result;
                   else { const klaviyoCall=await executeKlaviyoEmailToolCall(klaviyoEmailService,item.name,args);
                   if(klaviyoCall.handled)result=klaviyoCall.result;
-                  else { const socialCall=await executeMetaInstagramToolCall(metaInstagramService,item.name,args);
+                  else { const tikTokCall=await executeTikTokToolCall(metaInstagramService,item.name,args);
+                  const socialCall=tikTokCall.handled?tikTokCall:await executeMetaInstagramToolCall(metaInstagramService,item.name,args);
                   const googleAdsCall=socialCall.handled?socialCall:await executeGoogleAdsToolCall(googleAdsService,item.name,args);
                   if(googleAdsCall.handled)result=googleAdsCall.result;
                   else { const deviceConversionCall = await executeDeviceSourceConversionToolCall(deviceSourceConversionService, item.name, args);
