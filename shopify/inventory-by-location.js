@@ -1,17 +1,17 @@
+import {createInventoryReadBudget,inventoryDiagnostic} from './inventory-budget.js';
 const chunk=(values,size)=>{const out=[];for(let i=0;i<values.length;i+=size)out.push(values.slice(i,i+size));return out;};
 const tail=value=>String(value??'').replace(/^shopify:shopify:/,'').replace(/^gid:\/\/shopify\/Product\//,'');
 const productGid=value=>`gid://shopify/Product/${tail(value)}`;
-const throttled=error=>error?.errors?.find(item=>item?.extensions?.code==='THROTTLED');
 
 // `publishedOnCurrentPublication` is not present in the Admin API schema used by
 // the deployed 2026-07 endpoint. Keeping it in this otherwise valid operation
 // makes GraphQL reject the whole request before returning any product. Do not
 // substitute a publication claim: the MTO presentation layer treats it as
 // unknown until a publication-scoped query is deliberately implemented.
-export const INVENTORY_PRODUCTS_QUERY=`query InventoryProducts($ids:[ID!]!){nodes(ids:$ids){... on Product{id title handle status tags onlineStoreUrl variants(first:100){pageInfo{hasNextPage endCursor}nodes{id title sku availableForSale inventoryPolicy inventoryItem{id}}}}}}`;
-const VARIANTS=`query InventoryVariants($id:ID!,$cursor:String!){product(id:$id){variants(first:100,after:$cursor){pageInfo{hasNextPage endCursor}nodes{id title sku availableForSale inventoryPolicy inventoryItem{id}}}}}`;
+export const INVENTORY_PRODUCTS_QUERY=`query InventoryProducts($ids:[ID!]!){nodes(ids:$ids){... on Product{id title handle status tags onlineStoreUrl variants(first:20){pageInfo{hasNextPage endCursor}nodes{id title sku availableForSale inventoryPolicy inventoryItem{id tracked}}}}}}`;
+const VARIANTS=`query InventoryVariants($id:ID!,$cursor:String!){product(id:$id){variants(first:50,after:$cursor){pageInfo{hasNextPage endCursor}nodes{id title sku availableForSale inventoryPolicy inventoryItem{id tracked}}}}}`;
 export const LOCATIONS_QUERY=`query InventoryLocations($cursor:String){locations(first:100,after:$cursor,includeLegacy:true){pageInfo{hasNextPage endCursor}nodes{id name isActive fulfillsOnlineOrders}}}`;
-const LEVELS=`query InventoryLevels($ids:[ID!]!,$location:ID!){nodes(ids:$ids){... on InventoryItem{id inventoryLevel(locationId:$location){quantities(names:["available"]){name quantity}}}}}`;
+const LEVELS=`query InventoryLevels($ids:[ID!]!,$location:ID!){nodes(ids:$ids){... on InventoryItem{id inventoryLevel(locationId:$location){quantities(names:["available","on_hand","committed"]){name quantity}}}}}`;
 const locationGid=value=>{const text=String(value??'').trim();if(!text)return null;return /^gid:\/\/shopify\/Location\/\d+$/.test(text)?text:/^\d+$/.test(text)?`gid://shopify/Location/${text}`:text;};
 
 export function inventoryLocationSelector(env=process.env){
@@ -57,30 +57,72 @@ export async function listAndResolveInventoryLocations({call,selector=inventoryL
 }
 
 /** Exact, read-only Online inventory retrieval. Parent and inventory-item `nodes`
- * queries are genuine batched GraphQL calls; only products with >100 variants
+ * queries are genuine batched GraphQL calls; only products with >20 variants
  * need a product-specific pagination call. Diagnostics contain aggregate counts only. */
-export function createBatchedInventoryByLocation({graphql,getToken,locationSelector=inventoryLocationSelector(),now=Date.now,sleep=ms=>new Promise(r=>setTimeout(r,ms)),log=()=>{},parentBatchSize=20,itemBatchSize=100,concurrency=2}){
-  return async(parentIds,{deadlineAt=Infinity,signal}={})=>{
-    const started=now(),stats={requested_parents:parentIds.length,returned_parents:0,variants:0,network_calls:0,parent_batch_calls:0,variant_page_calls:0,inventory_batch_calls:0,location_page_calls:0,pages:0,throttle_waits:0,throttle_wait_ms:0};
-    if(!parentIds.length)return{products:[],requested_count:0,completed_count:0,missing_ids:[],complete:true,diagnostics:{...stats,duration_ms:0,complete:true},as_of:new Date().toISOString(),location:null,location_id:null};
-    const token=await getToken();
-    const call=async(query,variables,kind)=>{for(let attempt=0;attempt<2;attempt++){if(signal?.aborted)throw Object.assign(new Error('inventory request aborted'),{name:'AbortError'});stats.network_calls++;stats[kind]++;try{return await graphql(token,query,variables);}catch(error){const detail=throttled(error);if(!detail||attempt)return Promise.reject(error);const reset=Date.parse(detail.extensions?.cost?.windowResetAt),waitMs=Number.isFinite(reset)?Math.max(0,reset-now())+350:null,remaining=Number.isFinite(deadlineAt)?deadlineAt-now():Infinity;if(waitMs===null||waitMs>30_000||waitMs+5_000>=remaining)throw Object.assign(error,{code:'INVENTORY_THROTTLE_BUDGET_EXHAUSTED'});stats.throttle_waits++;stats.throttle_wait_ms+=waitMs;await sleep(waitMs);}}};
-    const resolution=await listAndResolveInventoryLocations({call,selector:locationSelector});stats.pages+=resolution.pages;
-    if(!resolution.location){const diagnostic={selector:resolution.selector,reason:resolution.reason,identity_match_count:resolution.identity_match_count,locations:resolution.locations,truncated:resolution.truncated};log({event:'historical_inventory_location_not_found',...diagnostic});throw Object.assign(new Error('Configured Online inventory location was not found or eligible'),{code:'ONLINE_LOCATION_NOT_FOUND',diagnostic});}
-    const onlineLocation=resolution.location;
-    const products=[];
-    const mapConcurrent=async(values,fn)=>{const out=new Array(values.length);let next=0;await Promise.all(Array.from({length:Math.min(concurrency,values.length)},async()=>{while(next<values.length){const i=next++;out[i]=await fn(values[i]);}}));return out;};
-    const parentPages=await mapConcurrent(chunk(parentIds,parentBatchSize),async ids=>{const data=await call(INVENTORY_PRODUCTS_QUERY,{ids:ids.map(productGid)},'parent_batch_calls');stats.pages++;return data.nodes;});
-    for(const product of parentPages.flat().filter(Boolean)){
-      const variants=[...product.variants.nodes];let info=product.variants.pageInfo,seen=new Set();
-      while(info.hasNextPage){if(!info.endCursor||seen.has(info.endCursor))throw new Error('Invalid Shopify variant pagination cursor');seen.add(info.endCursor);const page=await call(VARIANTS,{id:product.id,cursor:info.endCursor},'variant_page_calls');stats.pages++;if(!page.product)throw new Error('Shopify product disappeared during pagination');variants.push(...page.product.variants.nodes);info=page.product.variants.pageInfo;}
-      products.push({...product,variants});
-    }
-    const items=products.flatMap(p=>p.variants.map(v=>v.inventoryItem?.id).filter(Boolean));
-    const levelPages=await mapConcurrent(chunk(items,itemBatchSize),async ids=>{const data=await call(LEVELS,{ids,location:onlineLocation.id},'inventory_batch_calls');stats.pages++;return data.nodes;});
-    const levels=new Map(levelPages.flat().filter(Boolean).map(x=>[x.id,x.inventoryLevel]));
-    for(const product of products)product.variants=product.variants.map(v=>({...v,locations:[{location_id:onlineLocation.id,location_name:onlineLocation.name,available:levels.get(v.inventoryItem?.id)?.quantities?.find(q=>q.name==='available')?.quantity??null}]}));
-    stats.returned_parents=products.length;stats.variants=products.reduce((n,p)=>n+p.variants.length,0);stats.duration_ms=now()-started;stats.complete=products.length===parentIds.length;
-    log({...stats,location_selector:resolution.selector,resolved_location:{id:onlineLocation.id,name:onlineLocation.name,isActive:onlineLocation.isActive,fulfillsOnlineOrders:onlineLocation.fulfillsOnlineOrders}});return{products,requested_count:parentIds.length,completed_count:products.length,missing_ids:parentIds.filter(id=>!products.some(p=>tail(p.id)===tail(id))),complete:stats.complete,diagnostics:stats,as_of:new Date().toISOString(),location:onlineLocation.name,location_id:onlineLocation.id};
+export function createBatchedInventoryByLocation({graphql,getToken,locationSelector=inventoryLocationSelector(),now=Date.now,sleep,log=()=>{},parentBatchSize=5,itemBatchSize=50,concurrency=2}){
+  // Keep nested parent query cost below Shopify's 1,000-point ceiling.
+  parentBatchSize=Math.max(1,Math.min(5,parentBatchSize));itemBatchSize=Math.max(1,Math.min(50,itemBatchSize));concurrency=Math.max(1,Math.min(2,concurrency));
+  return async(parentIds,{deadlineAt=now()+45_000,signal,allLocations=false,variantIds=null,maxRequests=40,maxVariantPages=5,maxVariants=500,maxLocations=10}={})=>{
+    deadlineAt=Math.min(deadlineAt,now()+45_000);
+    maxRequests=Math.max(1,Math.min(40,maxRequests));maxVariantPages=Math.max(1,Math.min(5,maxVariantPages));maxVariants=Math.max(1,Math.min(500,maxVariants));maxLocations=Math.max(1,Math.min(10,maxLocations));
+    parentIds=[...new Set(parentIds)];
+    if(parentIds.length>25)throw Object.assign(new Error('Inventory product bound exceeded'),{code:'INVENTORY_PRODUCT_LIMIT'});
+    const budget=createInventoryReadBudget({deadlineAt,signal,maxRequests,now,...(sleep?{sleep}:{})}),stats={requested_parents:parentIds.length,returned_parents:0,variants:0,network_calls:0,parent_batch_calls:0,variant_page_calls:0,inventory_batch_calls:0,location_page_calls:0,pages:0,throttle_waits:0,throttle_wait_ms:0};
+    const products=[],failures=[],observed=new Map();let locations=[],resolution=null,token;
+    const call=(query,vars,kind)=>budget.call(async child=>{stats.network_calls++;stats[kind]++;const data=await graphql(token,query,vars,child);stats.pages++;return data;},kind);
+    const mapConcurrent=async(values,fn)=>{let next=0;await Promise.all(Array.from({length:Math.min(concurrency,values.length)},async()=>{while(next<values.length){const value=values[next++];try{await fn(value);}catch(error){failures.push({...inventoryDiagnostic(error,'evidence_retrieval'),...(value?.location?{location_id:value.location.id}:{})});}}}));};
+    try{
+      if(parentIds.length){
+        token=await budget.call(child=>getToken(child),'authentication');
+        resolution=await listAndResolveInventoryLocations({call,selector:locationSelector,maxPages:2});
+        if(resolution.truncated)failures.push({stage:'location_resolution',code:'INVENTORY_LOCATION_PAGE_LIMIT'});
+        locations=allLocations?resolution.locations.filter(l=>l.isActive).slice(0,maxLocations):resolution.location?[resolution.location]:[];
+        if(allLocations&&resolution.locations.filter(l=>l.isActive).length>maxLocations)failures.push({stage:'location_resolution',code:'INVENTORY_LOCATION_LIMIT'});
+        if(!locations.length)throw Object.assign(new Error('Inventory location unavailable'),{code:'ONLINE_LOCATION_NOT_FOUND'});
+        await mapConcurrent(chunk(parentIds,parentBatchSize),async ids=>{
+          const data=await call(INVENTORY_PRODUCTS_QUERY,{ids:ids.map(productGid)},'parent_batch_calls');
+          if(!Array.isArray(data?.nodes))throw Object.assign(new Error('Invalid parent response'),{code:'INVENTORY_INVALID_RESPONSE'});
+          products.push(...data.nodes.filter(Boolean).map(p=>({...p,variants:p.variants.nodes,variant_page_info:p.variants.pageInfo})));
+        });
+        // Pagination failure retains already observed variants, never claims completeness.
+        for(const product of products){
+          let info=product.variant_page_info,pages=1;const seen=new Set();
+          try{while(info?.hasNextPage){
+            if(pages>=maxVariantPages||product.variants.length>=maxVariants)throw Object.assign(new Error('Variant bound'),{code:'INVENTORY_VARIANT_PAGE_LIMIT'});
+            if(!info.endCursor||seen.has(info.endCursor))throw Object.assign(new Error('Invalid cursor'),{code:'INVENTORY_INVALID_CURSOR'});
+            seen.add(info.endCursor);const page=await call(VARIANTS,{id:product.id,cursor:info.endCursor},'variant_page_calls');pages++;
+            if(!Array.isArray(page?.product?.variants?.nodes))throw Object.assign(new Error('Missing product'),{code:'INVENTORY_PRODUCT_UNAVAILABLE'});
+            product.variants.push(...page.product.variants.nodes);info=page.product.variants.pageInfo;
+          }}catch(error){failures.push(inventoryDiagnostic(error,'variant_pagination'));}
+          delete product.variant_page_info;
+          if(variantIds)product.variants=product.variants.filter(v=>variantIds.includes(v.id));
+        }
+        let retained=0;
+        for(const p of products){const keep=Math.max(0,maxVariants-retained);if(p.variants.length>keep){failures.push({stage:'inventory_retrieval',code:'INVENTORY_VARIANT_LIMIT',omitted_variant_count:p.variants.length-keep});p.variants=p.variants.slice(0,keep);}retained+=p.variants.length;}
+        let items=[...new Set(products.flatMap(p=>p.variants.filter(v=>v.inventoryItem?.tracked!==false).map(v=>v.inventoryItem?.id).filter(Boolean)))];
+        if(items.length>maxVariants){items=items.slice(0,maxVariants);failures.push({stage:'inventory_retrieval',code:'INVENTORY_VARIANT_LIMIT'});}
+        // Location-specific nodes avoid fetching all inventory levels per variant.
+        await mapConcurrent(locations.flatMap(location=>chunk(items,itemBatchSize).map(ids=>({location,ids}))),async({location,ids})=>{
+          const data=await call(LEVELS,{ids,location:location.id},'inventory_batch_calls');
+          if(!Array.isArray(data?.nodes))throw Object.assign(new Error('Invalid levels'),{code:'INVENTORY_INVALID_RESPONSE'});
+          const at=new Date(now()).toISOString();
+          for(const item of data.nodes.filter(Boolean))observed.set(`${item.id}|${location.id}`,{level:item.inventoryLevel,observed_at:at});
+        });
+      }
+    }catch(error){failures.push(inventoryDiagnostic(error,'evidence_retrieval'));}
+    for(const p of products){p.is_made_to_order=(p.tags||[]).some(t=>/^made[- ]to[- ]order$/i.test(t));p.variants=p.variants.map(v=>({...v,inventory_tracked:v.inventoryItem?.tracked??null,inventory_item_id:v.inventoryItem?.id??null,locations:locations.map(l=>{
+      const value=observed.get(`${v.inventoryItem?.id}|${l.id}`),quantities=value?.level?.quantities;
+      const quantity=name=>{const n=quantities?.find(q=>q.name===name)?.quantity;return typeof n==='number'&&Number.isFinite(n)?n:null;};
+      const available=quantity('available');
+      return {location_id:l.id,location_name:l.name,available,on_hand:quantity('on_hand'),committed:quantity('committed'),observed_at:value?.observed_at??null,evidence_state:v.inventoryItem?.tracked===false?'untracked':available!=null?'observed':value?'unavailable':'failed'};
+    })}));}
+    const missing=parentIds.filter(id=>!products.some(p=>tail(p.id)===tail(id)));
+    if(missing.length)failures.push({stage:'product_retrieval',code:'INVENTORY_PRODUCTS_MISSING'});
+    const rows=products.flatMap(p=>p.variants.flatMap(v=>v.locations));
+    const complete=parentIds.length>0&&products.length>0&&rows.length>0&&!failures.length&&rows.every(r=>r.evidence_state==='observed'||r.evidence_state==='untracked');
+    stats.returned_parents=products.length;stats.variants=products.reduce((n,p)=>n+p.variants.length,0);
+    const diagnostics={...stats,...budget.finish(),complete};diagnostics.throttle_waits=diagnostics.retry_count;
+    log(diagnostics);
+    return {products,requested_count:parentIds.length,completed_count:products.length,missing_ids:missing,complete,availability:complete?'complete':rows.some(r=>r.evidence_state==='observed')?'partial':failures.length?'failed':'unavailable',failures,diagnostics,as_of:new Date(now()).toISOString(),source:'live_shopify_admin',location:allLocations?null:locations[0]?.name??null,location_id:allLocations?null:locations[0]?.id??null,resolved_location:allLocations?null:locations[0]??null,location_coverage:{requested:allLocations?'all_active':locationSelector,resolved:locations.map(l=>({id:l.id,name:l.name})),observed:locations.filter(l=>rows.some(r=>r.location_id===l.id&&r.evidence_state==='observed')).map(l=>({id:l.id,name:l.name})),complete}};
   };
 }

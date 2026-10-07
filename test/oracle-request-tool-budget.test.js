@@ -52,6 +52,9 @@ test('deadline reserve, bounded concurrency and cancellation stop new work',()=>
 
 test('inventory implementation batches variant-level Shopify work with two workers',async()=>{
   const source=await import('node:fs/promises').then(fs=>fs.readFile(new URL('../server.js',import.meta.url),'utf8'));
-  assert.match(source,/mapWithConcurrency\(variants, 2/);
+  assert.match(source,/createBatchedInventoryByLocation/);
+  const provider=await import('node:fs/promises').then(fs=>fs.readFile(new URL('../shopify/inventory-by-location.js',import.meta.url),'utf8'));
+  assert.match(provider,/Math.min\(2,concurrency\)/);
+  assert.match(provider,/inventoryLevel\(locationId:\$location\)/);
   assert.match(source,/Multiple named products should be batched|combine exact title terms with OR/);
 });

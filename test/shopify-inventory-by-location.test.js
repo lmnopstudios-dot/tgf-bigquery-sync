@@ -5,16 +5,16 @@ import {createBatchedInventoryByLocation,inventoryLocationSelector,inventoryLoca
 const product=(id,variants,more=false,cursor=null)=>({id:`gid://shopify/Product/${id}`,title:`P${id}`,handle:`p${id}`,status:'ACTIVE',tags:[],variants:{nodes:variants,pageInfo:{hasNextPage:more,endCursor:cursor}}});
 const variant=i=>({id:`gid://shopify/ProductVariant/${i}`,title:`V${i}`,sku:`S${i}`,availableForSale:true,inventoryItem:{id:`gid://shopify/InventoryItem/${i}`}});
 
-test('twenty parents are one GraphQL parent call and inventory items are batched',async()=>{
+test('twenty parents use cost-bounded GraphQL parent calls and inventory items are batched',async()=>{
   const parents=Array.from({length:20},(_,i)=>String(i+1));
   const graphql=async(_token,query,vars)=>{
     if(query.includes('InventoryLocations'))return{locations:{nodes:[{id:'L1',name:'Online',isActive:true,fulfillsOnlineOrders:true}],pageInfo:{hasNextPage:false,endCursor:null}}};
-    if(query.includes('InventoryProducts'))return{nodes:vars.ids.map((_,i)=>product(i+1,[variant(i+1)]))};
+    if(query.includes('InventoryProducts'))return{nodes:vars.ids.map(id=>{const i=Number(id.split('/').at(-1));return product(i,[variant(i)])})};
     if(query.includes('InventoryLevels'))return{nodes:vars.ids.map((id,i)=>({id,inventoryLevel:{quantities:[{name:'available',quantity:i+1}]}}))};
     throw new Error('unexpected query');
   };
-  const result=await createBatchedInventoryByLocation({graphql,getToken:async()=> 'token'})(parents);
-  assert.equal(result.complete,true);assert.equal(result.diagnostics.parent_batch_calls,1);assert.equal(result.diagnostics.inventory_batch_calls,1);assert.equal(result.diagnostics.network_calls,3);assert.equal(result.products[19].variants[0].locations[0].available,20);
+  const result=await createBatchedInventoryByLocation({locationSelector:inventoryLocationSelector({}),graphql,getToken:async()=> 'token'})(parents);
+  assert.equal(result.complete,true);assert.equal(result.diagnostics.parent_batch_calls,4);assert.equal(result.diagnostics.inventory_batch_calls,1);assert.equal(result.diagnostics.network_calls,6);assert.equal(result.products[19].variants[0].locations[0].available,20);
 });
 
 test('paginates every variant and batches inventory for large products',async()=>{
@@ -25,14 +25,14 @@ test('paginates every variant and batches inventory for large products',async()=
     if(query.includes('InventoryVariants'))return{product:product('1',vars.cursor==='a'?second:third,vars.cursor==='a','b')};
     if(query.includes('InventoryLevels'))return{nodes:vars.ids.map(id=>({id,inventoryLevel:{quantities:[{name:'available',quantity:1}]}}))};
   };
-  const result=await createBatchedInventoryByLocation({graphql,getToken:async()=> 't'})(['1']);
-  assert.equal(result.products[0].variants.length,205);assert.equal(result.diagnostics.variant_page_calls,2);assert.equal(result.diagnostics.inventory_batch_calls,3);assert.equal(result.diagnostics.network_calls,7);
+  const result=await createBatchedInventoryByLocation({locationSelector:inventoryLocationSelector({}),graphql,getToken:async()=> 't'})(['1']);
+  assert.equal(result.products[0].variants.length,205);assert.equal(result.diagnostics.variant_page_calls,2);assert.equal(result.diagnostics.inventory_batch_calls,5);assert.equal(result.diagnostics.network_calls,9);
 });
 
 test('waits once for a reported throttle within budget and reports aggregate wait',async()=>{
   let now=1_000,calls=0;const throttle=Object.assign(new Error('throttle'),{errors:[{extensions:{code:'THROTTLED',cost:{windowResetAt:new Date(1_100).toISOString()}}}]});
   const graphql=async(_token,query,vars)=>{if(query.includes('InventoryLocations')&&calls++===0)throw throttle;if(query.includes('InventoryLocations'))return{locations:{nodes:[{id:'L',name:'Online',isActive:true,fulfillsOnlineOrders:true}],pageInfo:{hasNextPage:false}}};if(query.includes('InventoryProducts'))return{nodes:[product('1',[variant(1)])]};return{nodes:[{id:vars.ids[0],inventoryLevel:{quantities:[{name:'available',quantity:2}]}}]};};
-  const result=await createBatchedInventoryByLocation({graphql,getToken:async()=> 't',now:()=>now,sleep:async ms=>{now+=ms;}})(['1'],{deadlineAt:10_000});
+  const result=await createBatchedInventoryByLocation({locationSelector:inventoryLocationSelector({}),graphql,getToken:async()=> 't',now:()=>now,sleep:async ms=>{now+=ms;}})(['1'],{deadlineAt:10_000});
   assert.equal(result.diagnostics.throttle_waits,1);assert.equal(result.diagnostics.throttle_wait_ms,450);assert.equal(result.diagnostics.network_calls,4);
 });
 
@@ -61,14 +61,15 @@ test('Oracle live and historical readers share the configured selector without a
   assert.deepEqual(inventoryLocationSelectorForRequest('Soho',configured),{type:'exact_name',value:'Soho',configured_by:'request',eligibility:'active'});
   const source=await import('node:fs/promises').then(fs=>fs.readFile(new URL('../server.js',import.meta.url),'utf8'));
   assert.match(source,/getShopifyInventoryPerformance[\s\S]+resolveOracleInventoryLocation\(location\)/);
-  assert.match(source,/getShopifyInventoryByLocation[\s\S]+resolveOracleInventoryLocation\(location, token\)/);
+  assert.match(source,/getShopifyInventoryByLocation[\s\S]+inventoryLocationSelectorForRequest\(location,oracleInventoryLocationSelector\)/);
   assert.doesNotMatch(source,/normalizedLocation === null/);
 });
 
 test('Oracle inventory contract reports the resolved name and preserves MTO evidence',async()=>{
   const source=await import('node:fs/promises').then(fs=>fs.readFile(new URL('../server.js',import.meta.url),'utf8'));
-  assert.match(source,/resolved_location: \{ id: resolvedLocation\.id, name: resolvedLocation\.name \}/);
-  assert.match(source,/inventoryPolicy: variant\.inventoryPolicy/);
+  const provider=await import('node:fs/promises').then(fs=>fs.readFile(new URL('../shopify/inventory-by-location.js',import.meta.url),'utf8'));
+  assert.match(provider,/resolved_location:/);
+  assert.match(provider,/inventoryPolicy/);
   assert.match(source,/ready_to_ship:[\s\S]+made_to_order:/);
 });
 
@@ -96,7 +97,7 @@ test('location diagnostic listing is bounded and contains only location metadata
 });
 
 test('failure exposes selector and safe location evidence before product retrieval',async()=>{
-  const logs=[];const load=createBatchedInventoryByLocation({locationSelector:{type:'id',value:'L9',configured_by:'SHOPIFY_LOCATION_ID'},getToken:async()=> 'secret',log:value=>logs.push(value),graphql:async(_token,query)=>{if(query.includes('InventoryLocations'))return{locations:{nodes:[{id:'L1',name:'Not Online',isActive:true,fulfillsOnlineOrders:true}],pageInfo:{hasNextPage:false,endCursor:null}}};throw new Error('product query must not run');}});
-  await assert.rejects(load(['1']),error=>error.code==='ONLINE_LOCATION_NOT_FOUND'&&error.diagnostic.selector.value==='L9'&&/no location/.test(error.diagnostic.reason));
+  const logs=[];const load=createBatchedInventoryByLocation({locationSelector:inventoryLocationSelector({}),locationSelector:{type:'id',value:'L9',configured_by:'SHOPIFY_LOCATION_ID'},getToken:async()=> 'secret',log:value=>logs.push(value),graphql:async(_token,query)=>{if(query.includes('InventoryLocations'))return{locations:{nodes:[{id:'L1',name:'Not Online',isActive:true,fulfillsOnlineOrders:true}],pageInfo:{hasNextPage:false,endCursor:null}}};throw new Error('product query must not run');}});
+  const result=await load(['1']);assert.equal(result.availability,'failed');assert.equal(result.failures[0].code,'ONLINE_LOCATION_NOT_FOUND');assert.equal(result.location_coverage.requested.value,'L9');
   assert.equal(logs.length,1);assert.doesNotMatch(JSON.stringify(logs),/secret/);
 });
