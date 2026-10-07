@@ -1,3 +1,5 @@
+import {createCurrentStockService,createStockGroupLookup,STOCK_RESOLUTION_QUERY} from './oracle/current-stock.js';
+import {createInventoryReadBudget,inventoryDiagnostic} from './shopify/inventory-budget.js';
 import {executeMetaInstagramToolCall} from './oracle/meta-instagram.js';
 import { governedAgentRequest, governedModelInput } from './oracle/agent-request.js';
 import { ANALYTICAL_PRESENTATION_INSTRUCTIONS, presentNativeConversionAnswer } from './oracle/answer-presentation.js';
@@ -116,7 +118,7 @@ function sleep(ms) {
 
 class ShopifyGraphQLError extends Error {
   constructor(errors) {
-    super(JSON.stringify(errors, null, 2));
+    super('Shopify GraphQL request failed');
     this.name = 'ShopifyGraphQLError';
     this.errors = errors;
   }
@@ -207,25 +209,7 @@ collectionClassificationService.setup().catch(error => console.error('Collection
    SHOPIFY
 ========================================================= */
 
-function sanitizeShopifyResponsePreview(
-  body,
-  secrets = []
-) {
-  let preview = body;
-
-  for (const secret of secrets) {
-    if (secret) {
-      preview = preview.split(secret).join('[REDACTED]');
-    }
-  }
-
-  return preview
-    .replace(/[\r\n\t]+/g, ' ')
-    .replace(/[\u0000-\u001f\u007f]/g, '')
-    .slice(0, 500);
-}
-
-async function getShopifyAccessToken() {
+async function getShopifyAccessToken(signal=null) {
   const response = await fetch(
     `https://${SHOPIFY_SHOP}.myshopify.com/admin/oauth/access_token`,
     {
@@ -238,7 +222,8 @@ async function getShopifyAccessToken() {
         grant_type: 'client_credentials',
         client_id: SHOPIFY_CLIENT_ID,
         client_secret: SHOPIFY_CLIENT_SECRET
-      })
+      }),
+      signal:signal||requestBudget.getStore()?.signal
     }
   );
 
@@ -248,13 +233,7 @@ async function getShopifyAccessToken() {
   try {
     data = JSON.parse(responseBody);
   } catch {
-    console.error(
-      `Shopify OAuth returned non-JSON response (HTTP ${response.status}):`,
-      sanitizeShopifyResponsePreview(
-        responseBody,
-        [SHOPIFY_CLIENT_SECRET]
-      )
-    );
+    console.error('Shopify OAuth error:',{http_status:response.status,code:'SHOPIFY_AUTH_INVALID_RESPONSE'});
 
     throw new Error(
       `Shopify OAuth returned non-JSON response: HTTP ${response.status}`
@@ -262,16 +241,11 @@ async function getShopifyAccessToken() {
   }
 
   if (!response.ok) {
-    console.error(
-      'Shopify auth error:',
-      data
-    );
-
-    throw new Error(
-      'Could not get Shopify access token'
-    );
+    console.error('Shopify OAuth error:',{http_status:response.status,code:'SHOPIFY_AUTH_FAILED'});
+    throw Object.assign(new Error('Shopify authentication failed'),{code:'SHOPIFY_AUTH_FAILED',http_status:response.status});
   }
 
+  if(!data.access_token)throw Object.assign(new Error('Shopify authentication failed'),{code:'SHOPIFY_AUTH_FAILED',http_status:response.status});
   return data.access_token;
 }
 
@@ -303,32 +277,18 @@ async function shopifyGraphQL(
   try {
     data = JSON.parse(responseBody);
   } catch {
-    console.error(
-      `Shopify GraphQL returned non-JSON response (HTTP ${response.status}):`,
-      sanitizeShopifyResponsePreview(
-        responseBody,
-        [token]
-      )
-    );
-
-    throw new Error(
-      `Shopify GraphQL returned non-JSON response: HTTP ${response.status}`
-    );
+    console.error('Shopify GraphQL error:',{http_status:response.status,code:'SHOPIFY_INVALID_RESPONSE'});
+    throw Object.assign(new Error('Shopify response unavailable'),{code:'SHOPIFY_INVALID_RESPONSE',http_status:response.status});
   }
-
   if (!response.ok || data.errors) {
-    console.error(
-      'Shopify GraphQL error:',
-      JSON.stringify(data, null, 2)
-    );
-
-    if (data.errors) {
-      throw new ShopifyGraphQLError(data.errors);
-    }
-
-    throw new Error(JSON.stringify(data, null, 2));
+    const error=data.errors?new ShopifyGraphQLError(data.errors):new Error('Shopify HTTP failure');
+    error.http_status=response.status;error.cost=data.extensions?.cost;
+    error.code=data.errors?.[0]?.extensions?.code||(response.status===401?'SHOPIFY_AUTH_FAILED':response.status===403?'SHOPIFY_PERMISSION_DENIED':response.status===429?'THROTTLED':'SHOPIFY_HTTP_FAILED');
+    console.error('Shopify GraphQL error:',inventoryDiagnostic(error,'shopify_graphql'));
+    throw error;
   }
 
+  if(data.data&&typeof data.data==='object')Object.defineProperty(data.data,'shopify_metadata',{value:{http_status:response.status,cost:data.extensions?.cost},enumerable:false});
   return data.data;
 }
 
@@ -1642,15 +1602,6 @@ async function searchShopifyProducts({
   );
 }
 
-// Keep connection pages conservative: Shopify rejects any Admin GraphQL query
-// whose requested cost exceeds 1,000 points. In particular, the discovery
-// query nests variants under products, so its two bounded connections use the
-// smallest pages here and inventory levels are fetched separately.
-const SHOPIFY_INVENTORY_PRODUCT_PAGE_SIZE = 25;
-const SHOPIFY_INVENTORY_DISCOVERY_VARIANT_PAGE_SIZE = 20;
-const SHOPIFY_INVENTORY_VARIANT_PAGE_SIZE = 50;
-const SHOPIFY_INVENTORY_LEVEL_PAGE_SIZE = 50;
-
 async function resolveOracleInventoryLocation(requestedLocation, token = null) {
   const accessToken = token || await getShopifyAccessToken();
   const selector = inventoryLocationSelectorForRequest(
@@ -1678,266 +1629,21 @@ async function resolveOracleInventoryLocation(requestedLocation, token = null) {
   return resolution.location;
 }
 
-async function mapWithConcurrency(values, concurrency, mapper) {
-  const results = new Array(values.length);
-  let next = 0;
-  const workers = Array.from({ length: Math.min(concurrency, values.length) }, async () => {
-    while (next < values.length) {
-      const index = next++;
-      results[index] = await mapper(values[index], index);
-    }
-  });
-  await Promise.all(workers);
-  return results;
-}
-
-const SHOPIFY_INVENTORY_BY_LOCATION_PRODUCTS_QUERY = `
-  query InventoryProductsByLocation(
-    $query: String!
-    $limit: Int!
-    $variantPageSize: Int!
-  ) {
-    products(first: $limit, query: $query) {
-      nodes {
-        id
-        title
-        handle
-        status
-        tags
-        variants(first: $variantPageSize) {
-          pageInfo {
-            hasNextPage
-            endCursor
-          }
-          nodes {
-            id
-            title
-            sku
-            availableForSale
-            inventoryPolicy
-            inventoryItem {
-              id
-            }
-          }
-        }
-      }
-    }
-  }
-`;
-
-const SHOPIFY_INVENTORY_BY_LOCATION_VARIANTS_QUERY = `
-  query InventoryProductVariants(
-    $productId: ID!
-    $cursor: String!
-    $pageSize: Int!
-  ) {
-    product(id: $productId) {
-      variants(first: $pageSize, after: $cursor) {
-        pageInfo {
-          hasNextPage
-          endCursor
-        }
-        nodes {
-          id
-          title
-          sku
-          availableForSale
-          inventoryPolicy
-          inventoryItem {
-            id
-          }
-        }
-      }
-    }
-  }
-`;
-
-const SHOPIFY_INVENTORY_BY_LOCATION_LEVELS_QUERY = `
-  query InventoryItemLevels(
-    $inventoryItemId: ID!
-    $cursor: String
-    $pageSize: Int!
-  ) {
-    inventoryItem(id: $inventoryItemId) {
-      inventoryLevels(first: $pageSize, after: $cursor) {
-        pageInfo {
-          hasNextPage
-          endCursor
-        }
-        nodes {
-          location {
-            id
-            name
-            isActive
-          }
-          quantities(names: ["available"]) {
-            name
-            quantity
-          }
-        }
-      }
-    }
-  }
-`;
-
-async function getShopifyInventoryByLocation({
-  query,
-  location,
-  limit = 10
-}) {
-  if (typeof query !== 'string' || !query.trim()) {
-    throw new Error('query must be a non-empty string');
-  }
-
-  if (location !== null && (
-    typeof location !== 'string' || !location.trim()
-  )) {
-    throw new Error('location must be null or a non-empty string');
-  }
-
-  if (!Number.isInteger(limit) || limit < 1 || limit > 25) {
-    throw new Error('limit must be an integer between 1 and 25');
-  }
-
-  const token = await getShopifyAccessToken();
-  const resolvedLocation = await resolveOracleInventoryLocation(location, token);
-  const data = await shopifyGraphQL(
-    token,
-    SHOPIFY_INVENTORY_BY_LOCATION_PRODUCTS_QUERY,
-    {
-      query: query.trim(),
-      limit: Math.min(limit, SHOPIFY_INVENTORY_PRODUCT_PAGE_SIZE),
-      variantPageSize: SHOPIFY_INVENTORY_DISCOVERY_VARIANT_PAGE_SIZE
-    }
-  );
-
-  const collectInventoryLevels = async inventoryItem => {
-    if (!inventoryItem) {
-      return [];
-    }
-
-    const levels = [];
-    let cursor = null;
-    const seenCursors = new Set();
-
-    while (true) {
-      const page = await shopifyGraphQL(
-        token,
-        SHOPIFY_INVENTORY_BY_LOCATION_LEVELS_QUERY,
-        {
-          inventoryItemId: inventoryItem.id,
-          cursor,
-          pageSize: SHOPIFY_INVENTORY_LEVEL_PAGE_SIZE
-        }
-      );
-
-      if (!page.inventoryItem) {
-        throw new Error(`Shopify inventory item not found: ${inventoryItem.id}`);
-      }
-
-      levels.push(...page.inventoryItem.inventoryLevels.nodes);
-      const pageInfo = page.inventoryItem.inventoryLevels.pageInfo;
-
-      if (!pageInfo.hasNextPage) {
-        break;
-      }
-
-      const nextCursor = pageInfo.endCursor;
-
-      if (!nextCursor || seenCursors.has(nextCursor)) {
-        throw new Error('Shopify inventory-level pagination returned an invalid cursor');
-      }
-
-      seenCursors.add(nextCursor);
-      cursor = nextCursor;
-    }
-
-    return levels;
-  };
-
-  const products = [];
-
-  for (const product of data.products.nodes) {
-    const variants = [...product.variants.nodes];
-    let pageInfo = product.variants.pageInfo;
-    const seenCursors = new Set();
-
-    while (pageInfo.hasNextPage) {
-      const cursor = pageInfo.endCursor;
-
-      if (!cursor || seenCursors.has(cursor)) {
-        throw new Error('Shopify variant pagination returned an invalid cursor');
-      }
-
-      seenCursors.add(cursor);
-      const page = await shopifyGraphQL(
-        token,
-        SHOPIFY_INVENTORY_BY_LOCATION_VARIANTS_QUERY,
-        {
-          productId: product.id,
-          cursor,
-          pageSize: SHOPIFY_INVENTORY_VARIANT_PAGE_SIZE
-        }
-      );
-
-      if (!page.product) {
-        throw new Error(`Shopify product not found: ${product.id}`);
-      }
-
-      variants.push(...page.product.variants.nodes);
-      pageInfo = page.product.variants.pageInfo;
-    }
-
-    // Inventory-level lookup was formerly serial at variant grain. A product
-    // with many sizes therefore consumed most of an interactive request. Two
-    // workers retain Shopify cost headroom while removing that waterfall.
-    const normalizedVariants = await mapWithConcurrency(variants, 2, async variant => {
-      const levels = await collectInventoryLevels(variant.inventoryItem);
-      const activeLevels = levels.filter(level => level.location.isActive);
-
-      return {
-        id: variant.id,
-        title: variant.title,
-        sku: variant.sku,
-        availableForSale: variant.availableForSale,
-        inventoryPolicy: variant.inventoryPolicy,
-        inventory_item_id: variant.inventoryItem?.id ?? null,
-        locations: activeLevels
-          .filter(level => level.location.id === resolvedLocation.id)
-          .map(level => ({
-            location_id: level.location.id,
-            location_name: level.location.name,
-            available: level.quantities.find(
-              quantity => quantity.name === 'available'
-            )?.quantity ?? null
-          }))
-      };
-    });
-
-    products.push({
-      id: product.id,
-      title: product.title,
-      handle: product.handle,
-      status: product.status,
-      tags: product.tags,
-      is_made_to_order: product.tags.some(
-        tag => tag.toLowerCase() === 'made-to-order'
-      ),
-      variants: normalizedVariants
-    });
-  }
-
-  return {
-    query: query.trim(),
-    location_filter: location,
-    location_found: true,
-    resolved_location: { id: resolvedLocation.id, name: resolvedLocation.name },
-    products,
-    semantics: {
-      ready_to_ship: `The exact available quantity at ${resolvedLocation.name} is finished physical stock ready to ship.`,
-      made_to_order: 'Made-to-order purchasability is separate from ready-to-ship quantity and requires product status, publication, availableForSale, and CONTINUE inventory policy evidence.'
-    }
-  };
+async function getShopifyInventoryByLocation({query,location=null,limit=10},options={}) {
+  if(typeof query!=='string'||!query.trim()||!Number.isInteger(limit)||limit<1||limit>25)throw Object.assign(new Error('Invalid inventory arguments'),{code:'INVENTORY_INVALID_ARGUMENTS'});
+  const deadlineAt=Math.min(options.deadlineAt??requestBudget.getStore()?.deadlineAt??Infinity,Date.now()+45_000);
+  const signal=options.signal||requestBudget.getStore()?.signal;
+  const budget=createInventoryReadBudget({deadlineAt,signal,maxRequests:3});
+  try{
+    const token=await budget.call(child=>getShopifyAccessToken(child),'authentication');
+    const data=await budget.call(child=>shopifyGraphQL(token,STOCK_RESOLUTION_QUERY,{query:query.trim(),cursor:null},child),'product_resolution');
+    const ids=data.products.nodes.slice(0,limit).map(p=>p.id);
+    const load=createBatchedInventoryByLocation({graphql:shopifyGraphQL,getToken:async()=>token,locationSelector:inventoryLocationSelectorForRequest(location,oracleInventoryLocationSelector)});
+    const result=await load(ids,{deadlineAt,signal,maxRequests:37});
+    if(data.products.pageInfo?.hasNextPage||data.products.nodes.length>limit){result.complete=false;result.availability=result.products.length?'partial':'unavailable';result.failures.push({stage:'product_resolution',code:'INVENTORY_PRODUCT_LIMIT'});}
+    return {...result,query:query.trim(),location_filter:location,location_found:Boolean(result.resolved_location),semantics:{ready_to_ship:'Available is native Shopify sellable quantity; it does not independently verify readiness to ship.',made_to_order:'Purchasability and CONTINUE policy do not establish physical stock, production capacity or component availability.'}};
+  }catch(error){return {products:[],complete:false,availability:'failed',failures:[inventoryDiagnostic(error,'evidence_retrieval')],error:'Current inventory could not be retrieved; missing inventory is not zero.'};}
+  finally{budget.finish();}
 }
 
 async function getAllOrders() {
@@ -4565,7 +4271,8 @@ const productEvidenceReport=createProductEvidenceReportService({
 });
 const generalAnalytics=createGeneralAnalyticsService({loadReport:ecommerceReportV2,inspectProductHistory:createReadOnlyProductHistory({bigquery,project:GOOGLE_PROJECT_ID})});
 const {artifactStore:priorityExportStore,service:productPriorityExport}=createProductionPriorityDependencies({bigquery,project:GOOGLE_PROJECT_ID});
-baselineOverview=async(message,options={})=>await productPriorityExport(message,options)||await generalAnalytics(message,options)||await historicalEventComparison(message)||await ecommerceBaselineOverview(message,options)||await productEvidenceReport(message);
+const currentStock=createCurrentStockService({graphql:shopifyGraphQL,getToken:getShopifyAccessToken,lookupGroup:createStockGroupLookup({bigquery,project:GOOGLE_PROJECT_ID}),locationSelector:oracleInventoryLocationSelector,log:diagnostic=>console.info('Oracle inventory read:',diagnostic)});
+baselineOverview=async(message,options={})=>await currentStock(message,options)||await productPriorityExport(message,options)||await generalAnalytics(message,options)||await historicalEventComparison(message)||await ecommerceBaselineOverview(message,options)||await productEvidenceReport(message);
 
 async function getSalesByLocation({
   start_date,
@@ -8274,7 +7981,7 @@ app.post(
         });
       }
       const suppliedContext=req.body?.analysis_context;
-      const baselineAnswer=await executeGovernedAgentAnalysis({message,analysisContext:suppliedContext,scopeResolved:req.body?.scope_resolved===true,baselineOverview,baselineOptions:{exportOwner:exportOwnerKey('direct-agent',SYNC_SECRET),requestId:id,downloadBase:'/agent/exports',signal:cancellation.signal,onProviderStage:event=>console.info('Oracle direct provider stage:',{request_id:id,deployed_revision:process.env.RENDER_GIT_COMMIT||'unavailable',...event})}});
+      const baselineAnswer=await executeGovernedAgentAnalysis({message,analysisContext:suppliedContext,scopeResolved:req.body?.scope_resolved===true,baselineOverview,baselineOptions:{exportOwner:exportOwnerKey('direct-agent',SYNC_SECRET),requestId:id,downloadBase:'/agent/exports',deadlineAt:deadlineAt-12_000,signal:cancellation.signal,onProviderStage:event=>console.info('Oracle direct provider stage:',{request_id:id,deployed_revision:process.env.RENDER_GIT_COMMIT||'unavailable',...event})}});
       if(baselineAnswer)return res.json({success:true,answer:baselineAnswer.answer,presentation:baselineAnswer.presentation||null,evidence:baselineAnswer.evidence,tools_used:baselineAnswer.tools,inline_chart:baselineAnswer.inline_chart||null,charts:baselineAnswer.charts||[],artifact:baselineAnswer.artifact||null,request_id:id});
 
       const currentDate = new Date()
@@ -8625,7 +8332,7 @@ Important rules:
 
 } else if (item.name === 'get_shopify_inventory_by_location') {
 
-  result = await getShopifyInventoryByLocation(args);
+  result = await getShopifyInventoryByLocation(args,{deadlineAt:deadlineAt-callBudget.synthesisReserveMs,signal:cancellation.signal});
 
 } else if (item.name === 'get_shopify_profitability') {
 
