@@ -53,12 +53,13 @@ export function assertEvidenceAgreement(contextValue,evidence){
     if(['meta_ads','instagram'].includes(context.requested_subject)&&JSON.stringify(evidence.social_scope)!==JSON.stringify(context.social_scope))throw Object.assign(new Error('Social evidence differs from resolved scope'),{code:'EVIDENCE_SCOPE_MISMATCH'});
     if(context.email_report_kind&&evidence.email_report_kind!==context.email_report_kind)throw Object.assign(new Error('Email evidence does not agree with campaign/flow scope.'),{code:'EVIDENCE_SCOPE_MISMATCH',failed_stage:'evidence_validation'});
   }
+  if(context.campaign_request?.selected&&evidence.campaign?.entity_id!==context.campaign_request.selected.entity_id)throw Object.assign(new Error('Campaign evidence identity differs from pending scope'),{code:'EVIDENCE_SCOPE_MISMATCH'});
   if(context.entity_query&&evidence.entity_query!==context.entity_query)throw Object.assign(new Error('Retrieved evidence does not agree with the resolved analytical entity.'),{code:'EVIDENCE_SCOPE_MISMATCH',failed_stage:'evidence_validation'});
   return true;
 }
 
 function disclosePeriod(result,context){
-  if(!result?.answer||!context?.date_cutoff||!context.start_date)return result;
+  if(!result?.answer||!context?.date_cutoff||!context.start_date||context.campaign_request)return result;
   return {...result,answer:`**Resolved dates:** ${context.start_date} to ${context.end_date}${context.comparison_start_date?` versus ${context.comparison_start_date} to ${context.comparison_end_date}`:''}, inclusive (Europe/London). Current day ${context.current_day_included?'included; evidence through the runtime cutoff may be partial':'excluded'}. Runtime cutoff: ${context.date_cutoff}.\n\n${result.answer}`};
 }
 export async function dispatchAnalysisRequest({message,analysisContext,baselineOverview=null,baselineOptions,chat,chatOptions}){
@@ -66,8 +67,8 @@ export async function dispatchAnalysisRequest({message,analysisContext,baselineO
   const clarification=context?clarificationFor(context):null;if(clarification)return {answer:clarification,tools:[]};
   const binding=context?.tool_route?ANALYSIS_ROUTE_DISPATCHERS[context.tool_route]:baselineThenAgent;
   const result=await binding({message,baselineOverview,baselineOptions:{...baselineOptions,analysisContext:analysisContext??context},chat,chatOptions});
-  try{assertEvidenceAgreement(context,result?.evidence);baselineOptions?.onProviderStage?.({stage:'evidence_validation',status:'success'});}catch(error){baselineOptions?.onProviderStage?.({stage:'evidence_validation',status:'failed',code:'EVIDENCE_SCOPE_MISMATCH'});throw error;}
-  return presentAnalyticalAnswer(withOracleCharts(disclosePeriod(result,context)),context);
+  try{assertEvidenceAgreement(result?.analysis_context||context,result?.evidence);baselineOptions?.onProviderStage?.({stage:'evidence_validation',status:'success'});}catch(error){baselineOptions?.onProviderStage?.({stage:'evidence_validation',status:'failed',code:'EVIDENCE_SCOPE_MISMATCH'});throw error;}
+  return presentAnalyticalAnswer(withOracleCharts(disclosePeriod(result,result?.analysis_context||context)),context);
 }
 
 /** Shared deterministic /agent entrypoint; a null result continues existing model tooling. */
@@ -78,6 +79,6 @@ export async function executeGovernedAgentAnalysis({message,analysisContext,base
   if(clarification)return {answer:clarification,tools:[]};
   const result=await baselineOverview(message,{...baselineOptions,analysisContext:resolved.context});
   if(!result)return null;
-  assertEvidenceAgreement(resolved.context,result.evidence);
+  assertEvidenceAgreement(result.analysis_context||resolved.context,result.evidence);
   return presentAnalyticalAnswer(withOracleCharts(disclosePeriod(result,resolved.context)),resolved.context);
 }
