@@ -9,8 +9,8 @@ export const PRODUCT_REPORT_METHOD=Object.freeze({version:1,join:'Stable Shopify
 export function rankProductReport(catalogue,sources,rawConfig){
   const config=validateProductReportConfig(rawConfig),products=catalogue.products.filter(p=>!config.population.product_ids||config.population.product_ids.includes(p.product_id));
   // Validate uniqueness against the full catalogue, even for a selected subset.
-  const urls=new Map(),origins=new Set(catalogue.products.map(p=>new URL(p.url).origin));
-  for(const p of catalogue.products)urls.set(p.url,urls.has(p.url)?null:p.product_id);
+  const urls=new Map(),origins=new Set((catalogue.identity_products||catalogue.products).map(p=>new URL(p.url).origin));
+  for(const p of catalogue.identity_products||catalogue.products)urls.set(p.url,urls.has(p.url)?null:p.product_id);
   const byId=new Map(products.map(p=>[p.product_id,p])),observed=new Map(products.map(p=>[p.product_id,{}]));
   const invalid=new Set(),joins={};
   for(const name of config.metrics){

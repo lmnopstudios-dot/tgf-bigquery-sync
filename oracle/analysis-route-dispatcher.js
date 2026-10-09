@@ -1,6 +1,7 @@
+import { assertCatalogueSelection } from './product-catalogue-filter.js';
 import { presentAnalyticalAnswer } from './answer-presentation.js';
 import { withOracleCharts } from './evidence-charts.js';
-import { productReportConfigKey } from './product-report-config.js';
+import { productReportConfigKey, resolveProductReportConfig } from './product-report-config.js';
 import { ANALYSIS_TOOL_ROUTES, validateAnalysisContext, clarificationFor, transitionAnalysisContext } from './analysis-context.js';
 
 const baselineThenAgent = async ({message,baselineOverview,baselineOptions,chat,chatOptions}) =>
@@ -22,9 +23,11 @@ export const ANALYSIS_ROUTE_DISPATCHERS = Object.freeze(Object.fromEntries(ANALY
     : baselineThenAgent
 ])));
 
-export function assertEvidenceAgreement(contextValue,evidence){
+export function assertEvidenceAgreement(contextValue,evidence,requestMessage=null){
   const context=contextValue==null?null:validateAnalysisContext(contextValue);
   if(context?.product_report&&evidence){
+    if(requestMessage){const inferred=resolveProductReportConfig(requestMessage,{previous:context.product_report,defaultPeriod:context.product_report.period}).config.catalogue_filter;if(inferred&&JSON.stringify(inferred)!==JSON.stringify(context.product_report.catalogue_filter))throw Object.assign(new Error('Recovered export lost the original category request'),{code:'EVIDENCE_SCOPE_MISMATCH',failed_stage:'evidence_validation'});}
+    assertCatalogueSelection(evidence,context.product_report);
     if(!evidence.report_config||productReportConfigKey(context.product_report)!==productReportConfigKey(evidence.report_config))throw Object.assign(new Error('Retrieved export does not agree with the full report configuration.'),{code:'EVIDENCE_SCOPE_MISMATCH',failed_stage:'evidence_validation'});
   }
   if(!evidence||!context?.requested_subject)return true;
