@@ -133,7 +133,9 @@ function businessView(e) {
     const preview=e.kind==='product_priority_export'
       ? table(['Product','Priority'],rows.map(r=>[r.title || 'Unnamed product',number(r.priority)]))
       : table(columns.map(c=>c.header),rows.map(r=>columns.map(c=>c.key==='title'?r.title:c.key.includes(':')?money(r.metrics?.[c.key],c.key.split(':')[1]):number(r.metrics?.[c.key]))));
-    return [`Your product report contains ${number(e.manifest?.row_count ?? rows.length)} products.`,
+    return [e.catalogue_selection?.filter?`Filter: **${text(e.catalogue_selection.filter.term)+(e.catalogue_selection.filter.ready_to_ship?' + ready-to-ship':'')}** (${text(e.catalogue_selection.bindings?.map(b=>b.source).join(', '))}); ${number(e.population_count)} matching products.`:null,
+      e.report_config?`Metrics: ${text(e.report_config.metrics.join(', '))}. Dates: ${text(e.report_config.period.start_date)} to ${text(e.report_config.period.end_date)} (Europe/London). ${e.report_config.period_defaulted?'Default: 90 completed days.':''}`:null,
+      `Your product report contains ${number(e.manifest?.row_count ?? rows.length)} products.`,
       e.ranking_status!=='available'?`Ranking is ${text(e.ranking_status || 'unverified')}; missing evidence may change the order.`:null,
       e.catalogue?.complete===false?'The product catalogue is incomplete; the report includes retrieved products only.':null,
       'The download retains the full report and supporting definitions.',preview,
