@@ -18,7 +18,7 @@ export async function collectMetadata({client,retrievedAt=new Date().toISOString
       validateItem(item,kind);
       const a=item.attributes||{},status=clean(a.status);
       const messageIds=relatedIds(item,kind==='campaign'?'campaign-messages':'flow-actions');
-      rows.push({entity_kind:kind,entity_id:item.id,entity_name:clean(a.name),status,send_time:clean(a.send_time||a.scheduled_at||a.updated),send_time_semantics:a.send_strategy?'recipient-local strategy retained from source':'source timestamp; no universal send instant inferred',message_ids:JSON.stringify(messageIds),subject:includeContent?clean(a.subject):null,preview_text:includeContent?clean(a.preview_text):null,destination_links:includeContent?JSON.stringify(a.destination_links||[]):null,source_endpoint:endpoint.split('?')[0],retrieved_at:retrievedAt,is_sent:kind==='campaign'?['sent','sending'].includes(String(status).toLowerCase()):null});
+      rows.push({entity_kind:kind,entity_id:item.id,entity_name:clean(a.name),status,send_time:clean(a.send_time),send_time_semantics:kind==='campaign'&&a.send_time&&!a.send_strategy&&['sent','sending'].includes(String(status).toLowerCase())?'actual campaign send timestamp':a.send_strategy?'recipient-local strategy retained from source':'actual send timestamp unavailable',message_ids:JSON.stringify(messageIds),subject:includeContent?clean(a.subject):null,preview_text:includeContent?clean(a.preview_text):null,destination_links:includeContent?JSON.stringify(a.destination_links||[]):null,source_endpoint:endpoint.split('?')[0],retrieved_at:retrievedAt,is_sent:kind==='campaign'?['sent','sending'].includes(String(status).toLowerCase()):null});
       // Included records are deliberately not treated as separate sent entities.
       void included;
     }
