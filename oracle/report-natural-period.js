@@ -39,7 +39,8 @@ function parseReportPeriod(text, now){
 }
 
 
-export function naturalReportPeriod(text, now=Date.now()){
+export function naturalReportPeriod(text, now=Date.now(), {referenceYear=null}={}){
+  if(/^(?:(?:just|only|for|in|during|what about|how about)\s+)?(?:january|february|march|april|may|june|july|august|september|october|november|december)[.!]?$/i.test(text.trim()))text=`${text.trim().replace(/[.!]$/,'')} ${referenceYear||new Intl.DateTimeFormat('en',{year:'numeric',timeZone:'Europe/London'}).format(new Date(now))}`;
   const resolved=parseReportPeriod(text,now);
   if(!resolved)return null;
   const cutoff=new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/London',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(now));

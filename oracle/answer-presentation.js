@@ -1,3 +1,4 @@
+import { weekdayBusinessView } from './weekday-sales.js';
 import { isCampaignPurchaseMetric } from './campaign-context.js';
 import {socialBusinessView} from './social-analysis.js';
 import { evidenceNumber as numeric } from './numeric-evidence.js';
@@ -96,6 +97,7 @@ function deviceTrend(e) {
   return lines;
 }
 function businessView(e) {
+  if(e.kind==='governed_weekday_sales')return weekdayBusinessView(e);
   if(e.kind==='governed_social')return socialBusinessView(e);
   if(['governed_product_sales','governed_channel_sales','governed_sales_explanation'].includes(e.kind)) return sales(e);
   if(e.kind==='native_conversion_breakdown')return [...sectionsSummary(e,'conversion'),e.source_evidence?.rows?.some(r=>r.cardinality_limited || r.referrer_source==='__other__')?'Some traffic sources are grouped or hidden; source-level attribution is incomplete.':null,e.source_evidence?.rows?.some(r=>r.measurement_change_warning)?'Session measurement changed during this period; this may affect the apparent trend.':null];
@@ -162,8 +164,9 @@ function businessView(e) {
 // Only analytical metadata is rendered. Full provider evidence stays in the response;
 // credentials, query payloads and person-level rows never become a display dump.
 function supportingMetadata(e) {
-  const keys=['periods','requested_periods','applied_dates','cutoff_date','time_zone','channel','currencies','resolved_product_ref','selected_candidate','history','coverage','retrieval','placement','definitions','classification_boundary','ranking_status','ranking_method','provider_provenance','evidence_availability','comparison_compatible','comparison_period'];
+  const keys=['promotion','applied_exclusions','retrieved_daily_rows','analytical_plan','periods','requested_periods','applied_dates','cutoff_date','time_zone','channel','currencies','resolved_product_ref','selected_candidate','history','coverage','retrieval','placement','definitions','classification_boundary','ranking_status','ranking_method','provider_provenance','evidence_availability','comparison_compatible','comparison_period'];
   const metadata=Object.fromEntries(keys.filter(key=>e[key]!=null).map(key=>[key,e[key]]));
+  if(e.kind==='governed_weekday_sales'){metadata.weekday_calculations=e.rows;metadata.eligible_daily_evidence=e.source_rows;}
   if(e.kind==='governed_product_sales') {
     metadata.metric_definitions={sales:'Persisted source-native line-item sales; operational evidence, not canonical finance.',units:'Sum of source-native line quantity in this product/source/channel/currency/month population.',orders_containing_product:'Distinct source order IDs containing the product in the same product/source/store/channel/currency/month population; not a unit count.'};
     metadata.product_sources=(e.source_rows || []).map(r=>Object.fromEntries(['source_platform','source_store','source_product_id','source_variant_ids','mapping_method','mapping_status','coverage','source_collected_at','provenance'].filter(k=>r[k]!=null).map(k=>[k,r[k]])));

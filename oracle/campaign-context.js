@@ -19,7 +19,7 @@ export function campaignContextPatch(base,text,now){
   if(!fresh&&!pending)return null;
   // A new analytical subject must bypass pending clarification handling.
   if(!fresh&&/\b(?:products?|conversion rates?|mobile|desktop|stock|inventory|flows?|customers?|export|download)\b/i.test(text))return null;
-  const dates=naturalReportPeriod(text,now);
+  const dates=naturalReportPeriod(text,now,{referenceYear:!fresh?base.start_date?.slice(0,4):null});
   const select=text.match(/^(?:(?:use|choose|pick|select)\s+)?(?:option\s+|choice\s+)?#?(\d+)\s*[.!]?$/i);
   const matches=pending?.candidates.filter(c=>[c.entity_id,c.entity_name].some(v=>v?.toLowerCase()===text.toLowerCase().replace(/[.!]$/,'')));
   const exact=matches?.length===1?matches[0]:null;

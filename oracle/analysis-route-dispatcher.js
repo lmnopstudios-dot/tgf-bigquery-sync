@@ -1,3 +1,6 @@
+import { assertWeekdayEvidence } from './weekday-sales.js';
+import { resolveAnalyticalPlan, analyticalPlanKey, assertPlanAgreement } from './analytical-plan.js';
+import { resolveExecutionPlan } from './analytical-capabilities.js';
 import { assertCatalogueSelection } from './product-catalogue-filter.js';
 import { presentAnalyticalAnswer } from './answer-presentation.js';
 import { withOracleCharts } from './evidence-charts.js';
@@ -18,13 +21,36 @@ const governedBaseline = async ({message,baselineOverview,baselineOptions}) => {
 // route names, so a deterministic transition cannot silently become orphaned.
 export const ANALYSIS_ROUTE_DISPATCHERS = Object.freeze(Object.fromEntries(ANALYSIS_TOOL_ROUTES.map(route=>[
   route,
-  ['get_shopify_inventory_by_location','get_meta_performance','get_instagram_performance','get_woocommerce_device_conversion','get_governed_device_conversion','get_general_sales_analysis','export_product_priorities','get_klaviyo_email_performance','get_klaviyo_click_purchase_opportunities','compare_klaviyo_email_with_shopify_referrer'].includes(route)
+  ['get_shopify_inventory_by_location','get_meta_performance','get_instagram_performance','get_woocommerce_device_conversion','get_governed_device_conversion','get_general_sales_analysis','get_daily_sales_analysis','export_product_priorities','get_klaviyo_email_performance','get_klaviyo_click_purchase_opportunities','compare_klaviyo_email_with_shopify_referrer'].includes(route)
     ? governedBaseline
     : baselineThenAgent
 ])));
 
+/** Provider hydration may resolve identity, never replace the submitted subject/population. */
+export function assertResolvedAnalysisContext(submittedValue,resolvedValue){
+  if(!submittedValue?.requested_subject||!resolvedValue)return true;
+  const submitted=validateAnalysisContext(submittedValue),resolved=validateAnalysisContext(resolvedValue),expected=resolveAnalyticalPlan(submitted),actual=resolveAnalyticalPlan(resolved);
+  if(submitted.tool_route==='get_daily_sales_analysis'){
+    if(!submitted.source_store)expected.scope.source_store=actual.scope.source_store;
+    if(!submitted.currencies.length)expected.scope.currencies=actual.scope.currencies;
+  }
+  if(submitted.campaign_request){
+    if(!submitted.campaign_request.selected){expected.entities.selected=actual.entities.selected;expected.dates.timezone=actual.dates.timezone;}
+    expected.entities.candidates=actual.entities.candidates;
+    if(submitted.campaign_request.date_mode==='since_send'){
+      expected.dates.start_date=actual.dates.start_date;expected.dates.end_date=actual.dates.end_date;
+      expected.dates.cutoff=actual.dates.cutoff;expected.dates.current_day_included=actual.dates.current_day_included;expected.dates.partial_period=actual.dates.partial_period;
+    }
+  }
+  if(analyticalPlanKey(expected)!==analyticalPlanKey(actual))throw Object.assign(new Error('Resolved evidence changed the submitted analytical scope.'),{code:'EVIDENCE_SCOPE_MISMATCH',failed_stage:'evidence_validation'});
+  return true;
+}
+
 export function assertEvidenceAgreement(contextValue,evidence,requestMessage=null){
   const context=contextValue==null?null:validateAnalysisContext(contextValue);
+  assertPlanAgreement(context,evidence);
+  if(context?.tool_route==='get_daily_sales_analysis'&&evidence&&!evidence.analytical_plan)throw Object.assign(new Error('Recovered daily evidence has no validated plan'),{code:'EVIDENCE_SCOPE_MISMATCH'});
+  if(context?.tool_route==='get_daily_sales_analysis'&&evidence)assertWeekdayEvidence(context,evidence);
   if(context?.product_report&&evidence){
     if(requestMessage){const inferred=resolveProductReportConfig(requestMessage,{previous:context.product_report,defaultPeriod:context.product_report.period}).config.catalogue_filter;if(inferred&&JSON.stringify(inferred)!==JSON.stringify(context.product_report.catalogue_filter))throw Object.assign(new Error('Recovered export lost the original category request'),{code:'EVIDENCE_SCOPE_MISMATCH',failed_stage:'evidence_validation'});}
     assertCatalogueSelection(evidence,context.product_report);
@@ -67,21 +93,30 @@ function disclosePeriod(result,context){
 }
 export async function dispatchAnalysisRequest({message,analysisContext,baselineOverview=null,baselineOptions,chat,chatOptions}){
   const context=analysisContext==null?null:validateAnalysisContext(analysisContext);
+  const execution=resolveExecutionPlan(context,ANALYSIS_ROUTE_DISPATCHERS);
+  if(execution.limitation)return {answer:execution.limitation,analysis_unavailable:true,tools:[]};
   const clarification=context?clarificationFor(context):null;if(clarification)return {answer:clarification,tools:[]};
-  const binding=context?.tool_route?ANALYSIS_ROUTE_DISPATCHERS[context.tool_route]:baselineThenAgent;
-  const result=await binding({message,baselineOverview,baselineOptions:{...baselineOptions,analysisContext:analysisContext??context},chat,chatOptions});
-  try{assertEvidenceAgreement(result?.analysis_context||context,result?.evidence);baselineOptions?.onProviderStage?.({stage:'evidence_validation',status:'success'});}catch(error){baselineOptions?.onProviderStage?.({stage:'evidence_validation',status:'failed',code:'EVIDENCE_SCOPE_MISMATCH'});throw error;}
-  return presentAnalyticalAnswer(withOracleCharts(disclosePeriod(result,result?.analysis_context||context)),context);
+  const binding=execution.execute||baselineThenAgent;
+  let result=await binding({message,baselineOverview,baselineOptions:{...baselineOptions,analysisContext:analysisContext??context},chat,chatOptions});
+  try{assertResolvedAnalysisContext(context,result?.analysis_context);assertEvidenceAgreement(result?.analysis_context||context,result?.evidence);baselineOptions?.onProviderStage?.({stage:'evidence_validation',status:'success'});}catch(error){baselineOptions?.onProviderStage?.({stage:'evidence_validation',status:'failed',code:'EVIDENCE_SCOPE_MISMATCH'});throw error;}
+  if(result?.evidence&&context?.requested_subject&&!result.evidence.report_config)result={...result,evidence:{...result.evidence,analytical_plan:resolveAnalyticalPlan(result.analysis_context||context)}};
+  await baselineOptions?.onEvidence?.(result);
+  return presentAnalyticalAnswer(withOracleCharts(disclosePeriod(result,result?.analysis_context||context)),result?.analysis_context||context);
 }
 
 /** Shared deterministic /agent entrypoint; a null result continues existing model tooling. */
 export async function executeGovernedAgentAnalysis({message,analysisContext,baselineOverview,baselineOptions={},scopeResolved=false,now=Date.now()}){
   const resolved=scopeResolved?{context:validateAnalysisContext(analysisContext||{})}:transitionAnalysisContext(analysisContext,message,{now});
   baselineOptions.onProviderStage?.({stage:'scope_resolution',resolved_subject:resolved.context.requested_subject,selected_route:resolved.context.tool_route,start_date:resolved.context.start_date,end_date:resolved.context.end_date});
+  const execution=resolveExecutionPlan(resolved.context,ANALYSIS_ROUTE_DISPATCHERS);
+  if(execution.limitation)return {answer:execution.limitation,analysis_unavailable:true,tools:[]};
   const clarification=clarificationFor(resolved.context);
   if(clarification)return {answer:clarification,tools:[]};
-  const result=await baselineOverview(message,{...baselineOptions,analysisContext:resolved.context});
+  let result=await baselineOverview(message,{...baselineOptions,analysisContext:resolved.context});
   if(!result)return null;
+  assertResolvedAnalysisContext(resolved.context,result.analysis_context);
   assertEvidenceAgreement(result.analysis_context||resolved.context,result.evidence);
-  return presentAnalyticalAnswer(withOracleCharts(disclosePeriod(result,resolved.context)),resolved.context);
+  if(result.evidence&&!result.evidence.report_config)result={...result,evidence:{...result.evidence,analytical_plan:resolveAnalyticalPlan(result.analysis_context||resolved.context)}};
+  await baselineOptions.onEvidence?.(result);
+  return presentAnalyticalAnswer(withOracleCharts(disclosePeriod(result,result.analysis_context||resolved.context)),result.analysis_context||resolved.context);
 }

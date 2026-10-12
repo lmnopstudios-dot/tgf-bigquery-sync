@@ -1,3 +1,4 @@
+import { createDailySalesProvider } from './daily-sales-provider.js';
 import {createTikTokService} from './tiktok.js';
 import {createMetaInstagramService} from './meta-instagram.js';
 import { createKlaviyoEmailService } from './klaviyo-email.js';
@@ -6,8 +7,8 @@ import {ga4Dataset} from '../ga4/storage-contract.js';
 import {createDeviceSourceConversionService} from './device-source-conversion.js';
 
 /** One production contract for CLI, HTTP, interactive and durable Oracle paths. */
-export function createOracleProviderDependencies({env=process.env,bigquery=null,project=null,dataset=null,dryRun=false}={}){
+export function createOracleProviderDependencies({env=process.env,bigquery=null,project=null,dataset=null,dryRun=false,shopifySales=null}={}){
   const client=bigquery&&project?{bigquery,project}:createBigQueryClient(env);
   const conversionDataset=dataset||ga4Dataset(env.GA4_DATASET);
-  return Object.freeze({...client,conversionDataset,social:((meta,tiktok)=>(name,args)=>name==='get_tiktok_performance'?tiktok(name,args):meta(name,args))(createMetaInstagramService({...client,env}),createTikTokService(client)),klaviyo:createKlaviyoEmailService(client),deviceConversion:createDeviceSourceConversionService({...client,dataset:conversionDataset,dryRun})});
+  return Object.freeze({...client,conversionDataset,dailySales:createDailySalesProvider({shopifySales}),social:((meta,tiktok)=>(name,args)=>name==='get_tiktok_performance'?tiktok(name,args):meta(name,args))(createMetaInstagramService({...client,env}),createTikTokService(client)),klaviyo:createKlaviyoEmailService(client),deviceConversion:createDeviceSourceConversionService({...client,dataset:conversionDataset,dryRun})});
 }

@@ -151,10 +151,15 @@ test('BigQuery query diagnostics never expose exception messages',()=>{
   assert.equal(diagnostic.reason,'invalidQuery');assert.equal(diagnostic.location,undefined);assert.equal(diagnostic.message,undefined);assert.doesNotMatch(JSON.stringify(diagnostic),/customer prompt|private-project|secret/);
 });
 
-test('worker infrastructure failures use bounded exponential backoff and safe stage logs',async()=>{
+test('worker infrastructure failures use bounded exponential backoff and safe stage logs',async t=>{
+  t.mock.timers.enable({apis:['setTimeout']});
   let claims=0;const logs=[];const worker=createAnalysisJobWorker({store:{claim:async()=>{claims++;throw {name:'ApiError',code:400,errors:[{reason:'invalidQuery',location:'query',message:"Bad 'prompt secret' in `private.table` at [1:42]"}]};}},run:async()=>{},pollMs:5,maxBackoffMs:20,logger:{error:(message,detail)=>logs.push({message,detail})}});
-  worker.start();await sleep(38);worker.stop();
-  assert.ok(claims>=2&&claims<=3,`expected 2-3 bounded claims, received ${claims}`);assert.equal(worker.backoffMs,20);assert.ok(logs.every(log=>log.detail.stage==='claim'&&log.detail.bigquery_reason==='invalidQuery'&&log.detail.bigquery_message===undefined));assert.doesNotMatch(JSON.stringify(logs),/prompt secret|private\.table/);
+  t.after(()=>worker.stop());
+  const advance=async milliseconds=>{t.mock.timers.tick(milliseconds);await new Promise(resolve=>setImmediate(resolve));};
+  worker.start();await advance(0);assert.equal(claims,1);assert.equal(worker.backoffMs,10);
+  await advance(9);assert.equal(claims,1);await advance(1);assert.equal(claims,2);assert.equal(worker.backoffMs,20);
+  await advance(19);assert.equal(claims,2);await advance(1);assert.equal(claims,3);
+  worker.stop();await advance(100);assert.equal(claims,3);assert.equal(worker.backoffMs,20);assert.ok(logs.every(log=>log.detail.stage==='claim'&&log.detail.bigquery_reason==='invalidQuery'&&log.detail.bigquery_message===undefined));assert.doesNotMatch(JSON.stringify(logs),/prompt secret|private\.table/);
 });
 
 test('production-shaped ordinary claim handles empty and queued queues and excludes smoke jobs',async()=>{
