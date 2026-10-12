@@ -27,6 +27,7 @@ export function selectCataloguePopulation(catalogue,config){
 
 export function assertCatalogueSelection(evidence,config){
   const fail=()=>{throw Object.assign(new Error('Export population does not agree with resolved catalogue selection'),{code:'EVIDENCE_SCOPE_MISMATCH',failed_stage:'evidence_validation'});};
+  if(evidence?.manifest?.complete_catalogue===false)return fail();
   const selection=evidence?.catalogue_selection;
   if(!config.catalogue_filter&&!selection)return true; // Existing unfiltered downloads remain supported.
   if(selection?.contract_version!==2||JSON.stringify(selection.filter)!==JSON.stringify(config.catalogue_filter)||!Array.isArray(selection.matching_product_ids)||!Array.isArray(evidence.rows))return fail();
