@@ -13,14 +13,14 @@ export function errorClass(error) {
 }
 
 export function transportFailure(error,{stage='agent_request'}={}) {
-  const timeout=error?.name==='AbortError'||error?.name==='TimeoutError'||error?.code==='ABORT_ERR'||error?.code==='ETIMEDOUT';
+  const timeout=error?.name==='AbortError'||error?.name==='TimeoutError'||error?.code==='ABORT_ERR'||error?.code==='ETIMEDOUT'||error?.code==='CATALOGUE_TIMEOUT';
   const rawStatus=Number(error?.status ?? error?.statusCode);
   const status=Number.isInteger(rawStatus)&&rawStatus>=400&&rawStatus<=599?rawStatus:null;
   const suppliedCode=String(error?.code||'');
   const code=SAFE_CODE.test(suppliedCode)?suppliedCode:(timeout?'ORACLE_AGENT_DEADLINE':'ORACLE_AGENT_API_REJECTED');
   return {
     failure_stage:SAFE_STAGE.test(stage)?stage:'agent_request',
-    failure_kind:timeout?'timeout_or_abort':status?'http_api_rejection':'transport_failure',
+    failure_kind:timeout?'timeout_or_abort':suppliedCode==='CATALOGUE_CANCELLED'?'cancelled':suppliedCode.startsWith('CATALOGUE_PAGINATION_')?'pagination_failure':suppliedCode.startsWith('SHOPIFY_')?'http_api_rejection':suppliedCode.startsWith('CATALOGUE_')?'internal_error':status?'http_api_rejection':'transport_failure',
     status,
     code
   };
@@ -92,4 +92,13 @@ export function partialAnswer(message, successfulTools = [], failedTools = []) {
     ? ` Optional evidence unavailable: ${[...new Set(failedTools)].join(', ')}.`
     : '';
   return `${evidence}${unavailable}${stockAdvice} The final synthesis did not complete, so do not treat these proposed tactics as evidence-backed findings.`;
+}
+
+export function cataloguePublicError(code){
+ if(code==='CATALOGUE_TIMEOUT')return 'The catalogue retrieval timed out. No export was created. Please retry explicitly.';
+ if(code==='CATALOGUE_CANCELLED')return 'The catalogue retrieval was cancelled. No export was created.';
+ if(String(code).startsWith('CATALOGUE_PAGINATION_'))return 'The catalogue pagination failed. No export was created. Please retry explicitly.';
+ if(String(code).startsWith('SHOPIFY_'))return 'Shopify rejected the catalogue request. No export was created. Please retry explicitly.';
+ if(String(code).startsWith('CATALOGUE_'))return 'The catalogue could not be verified. No export was created. Please retry explicitly.';
+ return null;
 }

@@ -27,11 +27,15 @@ export function canonicalProductUrl(value){
   try{const u=new URL(value);if(u.protocol!=='https:'||u.username||u.password||u.port||!/^\/products\/[^/]+\/?$/.test(u.pathname))return null;u.search='';u.hash='';u.pathname=u.pathname.replace(/\/$/,'');return u.href;}catch{return null;}
 }
 export const PUBLISHED_PRODUCTS_QUERY=`query OraclePublishedProducts($cursor:String){products(first:100,after:$cursor,sortKey:ID){nodes{id title status publishedAt onlineStoreUrl seo{description}} pageInfo{hasNextPage endCursor}}}`;
-export async function fetchPublishedProducts(graphql,{signal,inspectClassification=false}={}){
+export async function fetchPublishedProducts(graphql,{signal,inspectClassification=false,includeSeo=true,deadlineAt,onProviderStage}={}){
+  const started=Date.now();
+  if(Number.isFinite(deadlineAt)){const remaining=deadlineAt-Date.now();if(remaining<=0)throw Object.assign(new Error('Catalogue deadline'),{code:'CATALOGUE_TIMEOUT',failed_stage:'priority_catalogue'});signal=signal?AbortSignal.any([signal,AbortSignal.timeout(Math.ceil(remaining))]):AbortSignal.timeout(Math.ceil(remaining));}
+  const diagnostic=()=>({page_count:pages,item_count:products.size,elapsed_ms:Date.now()-started,deadline_remaining_ms:Number.isFinite(deadlineAt)?Math.max(0,deadlineAt-Date.now()):null});
   const products=new Map(),seen=new Set();let cursor=null,pages=0;
   try{do{
     signal?.throwIfAborted();
-    const data=await graphql(inspectClassification?PUBLISHED_PRODUCTS_QUERY.replace('seo{description}', 'productType tags collections(first:5){nodes{id title handle} pageInfo{hasNextPage endCursor}} seo{description}'):PUBLISHED_PRODUCTS_QUERY,{cursor},{signal});const connection=data?.products;
+    const baseQuery=includeSeo?PUBLISHED_PRODUCTS_QUERY:PUBLISHED_PRODUCTS_QUERY.replace('seo{description}','');
+    const data=await graphql(inspectClassification?baseQuery.replace(includeSeo?'seo{description}':'onlineStoreUrl', (includeSeo?'':'onlineStoreUrl ')+ 'productType tags collections(first:5){nodes{id title handle} pageInfo{hasNextPage endCursor}}'+(includeSeo?' seo{description}':'')):baseQuery,{cursor},{signal});const connection=data?.products;
     if(!Array.isArray(connection?.nodes)||typeof connection?.pageInfo?.hasNextPage!=='boolean')throw Object.assign(new Error('Invalid catalogue page'),{code:'CATALOGUE_PAGE_INVALID'});
     pages++;
     for(const p of connection.nodes){
@@ -58,12 +62,13 @@ export async function fetchPublishedProducts(graphql,{signal,inspectClassificati
       if(products.has(id)&&JSON.stringify(products.get(id))!==JSON.stringify(row))throw Object.assign(new Error('Conflicting product'),{code:'CATALOGUE_PRODUCT_CONFLICT'});
       products.set(id,row);
     }
+    if(pages===1||pages%25===0||!connection.pageInfo.hasNextPage)onProviderStage?.({stage:'priority_catalogue_page',status:'success',...diagnostic()});
     if(!connection.pageInfo.hasNextPage)break;
     const next=connection.pageInfo.endCursor;if(!next||seen.has(next))throw Object.assign(new Error('Pagination stalled'),{code:'CATALOGUE_PAGINATION_STALLED'});
     seen.add(next);cursor=next;
   }while(true);
   return {products:[...products.values()],complete:true,pages,publication_contract:'ACTIVE/UNLISTED + publishedAt + non-null onlineStoreUrl (Online Store publication; not inventory availability)'};
-  }catch(error){if(signal?.aborted)throw error;return{products:[...products.values()],complete:false,pages,error_code:code(error),...bigQueryErrorDiagnostic(error),...(Number.isInteger(error.status)?{status:error.status}:{}),publication_contract:'ACTIVE/UNLISTED + publishedAt + non-null onlineStoreUrl'};}
+  }catch(error){if(signal?.aborted){const failureCode=signal.reason?.name==='TimeoutError'?'CATALOGUE_TIMEOUT':'CATALOGUE_CANCELLED';onProviderStage?.({stage:'priority_catalogue_page',status:'failed',code:failureCode,...diagnostic()});throw Object.assign(new Error('Catalogue cancelled'),{code:failureCode,failed_stage:'priority_catalogue',...diagnostic()});}onProviderStage?.({stage:'priority_catalogue_page',status:'failed',code:code(error),...(Number.isInteger(error.status)?{http_status:error.status}:{}),...diagnostic()});return{products:[...products.values()],complete:false,pages,error_code:code(error),...bigQueryErrorDiagnostic(error),...(Number.isInteger(error.status)?{status:error.status}:{}),publication_contract:'ACTIVE/UNLISTED + publishedAt + non-null onlineStoreUrl'};}
 }
 const code=error=>/^[A-Z0-9_]{1,64}$/.test(String(error?.code||''))?String(error.code):'SOURCE_FAILED';
 const numeric=value=>value!==null&&value!==undefined&&value!==''&&Number.isFinite(Number(value))?Number(value):null;
@@ -101,27 +106,31 @@ export async function priorityWorkbook(envelope){
 }
 export function createProductPriorityService({graphql,loadSources,artifactStore,now=()=>Date.now()}){
   const inFlight=new Map();
-  return async(message,{analysisContext,exportOwner,requestId,downloadBase='/api/oracle/exports',signal,onProviderStage}={})=>{
+  return async(message,{analysisContext,exportOwner,requestId,downloadBase='/api/oracle/exports',signal,onProviderStage,deadlineAt}={})=>{
     if(!isProductPriorityRequest(message)&&!isProductReportRequest(message)&&analysisContext?.tool_route!=='export_product_priorities')return null;
     const reportConfig=analysisContext?.product_report?validateProductReportConfig(analysisContext.product_report):resolveProductReportConfig(message,{now:now(),defaultPeriod:{start_date:priorityDates(now()).start_date,end_date:priorityDates(now()).end_date},priority:isProductPriorityRequest(message),period:analysisContext?.start_date&&analysisContext?.end_date?analysisContext:null}).config;
     const clarification=productReportClarification(reportConfig);if(clarification)return {answer:clarification,tools:[]};
     const configKey=productReportConfigKey(reportConfig),preset=Boolean(reportConfig.priority_preset);
-    const agrees=artifact=>{if(reportConfig.catalogue_filter&&artifact.envelope.catalogue_selection?.contract_version!==2)throw Object.assign(new Error('Stale category export'),{code:'EXPORT_REQUEST_ID_CONFLICT',failed_stage:'evidence_validation'});if(artifact.request!==message||!artifact.envelope.report_config||productReportConfigKey(artifact.envelope.report_config)!==configKey)throw Object.assign(new Error('Request ID configuration conflict'),{code:'EXPORT_REQUEST_ID_CONFLICT',failed_stage:'evidence_validation'});assertCatalogueSelection(artifact.envelope,reportConfig);return artifact;};
+    const agrees=artifact=>{if(artifact.envelope.manifest?.complete_catalogue!==true)throw Object.assign(new Error('Incomplete saved catalogue'),{code:'CATALOGUE_INCOMPLETE',failed_stage:'evidence_validation'});if(reportConfig.catalogue_filter&&artifact.envelope.catalogue_selection?.contract_version!==2)throw Object.assign(new Error('Stale category export'),{code:'EXPORT_REQUEST_ID_CONFLICT',failed_stage:'evidence_validation'});if(artifact.request!==message||!artifact.envelope.report_config||productReportConfigKey(artifact.envelope.report_config)!==configKey)throw Object.assign(new Error('Request ID configuration conflict'),{code:'EXPORT_REQUEST_ID_CONFLICT',failed_stage:'evidence_validation'});assertCatalogueSelection(artifact.envelope,reportConfig);return artifact;};
     if(!exportOwner||!requestId)throw Object.assign(new Error('Authenticated export owner required'),{code:'EXPORT_OWNER_REQUIRED',failed_stage:'export_authorization'});
     const artifactId=priorityArtifactId(exportOwner,requestId);
     const deliver=artifact=>presentAnalyticalAnswer({answer:artifact.answer,tools:['export_product_priorities'],evidence:artifact.envelope,charts:artifact.envelope.chart_specs||[],inline_chart:artifact.envelope.chart_specs?.[0]||null,artifact:{id:artifactId,filename:artifact.filename,row_count:artifact.envelope.rows.length,download_url:`${downloadBase}/${artifactId}`}},analysisContext || {});
-    const stage=async(name,action)=>{onProviderStage?.({stage:name,status:'started'});try{const result=await action();onProviderStage?.({stage:name,status:'success'});return result;}catch(error){const diagnostic=bigQueryErrorDiagnostic(error);onProviderStage?.({stage:name,status:'failed',code:code(error),reason:diagnostic.reason,...(diagnostic.location?{location:diagnostic.location}:{})});throw Object.assign(error,{failed_stage:error.failed_stage||name});}};
+    const stage=async(name,action)=>{onProviderStage?.({stage:name,status:'started'});try{signal?.throwIfAborted();const result=await action();signal?.throwIfAborted();onProviderStage?.({stage:name,status:'success'});return result;}catch(error){if(signal?.aborted)error=Object.assign(new Error('Export execution stopped'),{code:signal.reason?.name==='TimeoutError'?'CATALOGUE_TIMEOUT':'CATALOGUE_CANCELLED',failed_stage:name});const diagnostic=bigQueryErrorDiagnostic(error);onProviderStage?.({stage:name,status:'failed',code:code(error),reason:diagnostic.reason,...(diagnostic.location?{location:diagnostic.location}:{})});throw Object.assign(error,{failed_stage:error.failed_stage||name});}};
     const existing=await stage('export_storage',()=>artifactStore.get(artifactId,exportOwner)).catch(error=>{throw Object.assign(new Error('Durable export storage unavailable'),{...bigQueryErrorDiagnostic(error),code:'EXPORT_STORAGE_UNAVAILABLE',failed_stage:'export_storage'});});if(existing){return deliver(agrees(existing));}
     if(inFlight.has(artifactId)){const result=await inFlight.get(artifactId);const saved=await artifactStore.get(artifactId,exportOwner);agrees(saved);return result;}
     const work=(async()=>{
+      if(Number.isFinite(deadlineAt)){const remaining=deadlineAt-Date.now();if(remaining<=0)throw Object.assign(new Error('Catalogue deadline'),{code:'CATALOGUE_TIMEOUT',failed_stage:'priority_catalogue'});signal=signal?AbortSignal.any([signal,AbortSignal.timeout(Math.ceil(remaining))]):AbortSignal.timeout(Math.ceil(remaining));}
       const dates={...reportConfig.period};
-      const catalogue=await stage('priority_catalogue',()=>fetchPublishedProducts(graphql,{signal,inspectClassification:Boolean(reportConfig.catalogue_filter)}));
-      if(!catalogue.complete&&!catalogue.products.length)throw Object.assign(new Error('Catalogue unavailable; no export created'),{code:'CATALOGUE_UNAVAILABLE',failed_stage:'priority_catalogue',reason:catalogue.reason,...(catalogue.status?{status:catalogue.status}:{}),provider_code:catalogue.error_code});
+      const catalogue=await stage('priority_catalogue',async()=>{
+        const result=await fetchPublishedProducts(graphql,{signal,inspectClassification:Boolean(reportConfig.catalogue_filter),includeSeo:preset,deadlineAt,onProviderStage});
+        if(!result.complete)throw Object.assign(new Error('Catalogue unavailable; no export created'),{code:result.error_code==='SOURCE_FAILED'?'CATALOGUE_UNAVAILABLE':result.error_code,failed_stage:'priority_catalogue',reason:result.reason,...(result.status?{status:result.status}:{}),provider_code:result.error_code});
+        return result;
+      });
       onProviderStage?.({stage:'priority_catalogue',status:catalogue.complete?'complete':'incomplete',...(catalogue.error_code?{code:catalogue.error_code,reason:catalogue.reason}:{}),...(catalogue.status?{status:catalogue.status}:{})});
       const selected=selectCataloguePopulation(catalogue,reportConfig);
       if(selected.clarification)return {answer:selected.clarification,tools:[]};
       const selectedCatalogue=selected.catalogue;
-      const sources=selectedCatalogue.products.length?await stage('priority_enrichment',()=>loadSources(dates,{signal,onProviderStage,reportConfig,productIds:selected.selection.matching_product_ids,productUrls:selectedCatalogue.products.map(p=>p.url)})):{};const ranked=await stage('priority_ranking',()=>preset?rankProducts({...selectedCatalogue,identity_products:catalogue.products},sources):rankProductReport({...selectedCatalogue,identity_products:catalogue.products},sources,reportConfig));
+      const sources=selectedCatalogue.products.length?await stage('priority_enrichment',()=>loadSources(dates,{signal,deadlineAt,onProviderStage,reportConfig,productIds:selected.selection.matching_product_ids,productUrls:selectedCatalogue.products.map(p=>p.url)})):{};const ranked=await stage('priority_ranking',()=>preset?rankProducts({...selectedCatalogue,identity_products:catalogue.products},sources):rankProductReport({...selectedCatalogue,identity_products:catalogue.products},sources,reportConfig));
       const populationCount=ranked.population_count??ranked.rows.length;
       if(preset&&reportConfig.population.limit)ranked.rows=ranked.rows.slice(0,reportConfig.population.limit);
       const availability=preset?Object.fromEntries(Object.entries(sources).map(([key,{rows,...details}])=>[key,{...details,row_count:rows?.length||0,matched_product_count:ranked.rows.filter(row=>row.components[key]!==null).length,unmatched_product_count:ranked.rows.filter(row=>row.components[key]===null).length}])):ranked.evidence_availability;

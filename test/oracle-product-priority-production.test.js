@@ -14,7 +14,7 @@ import { inspectPriorityIncident } from '../diagnostics/oracle-product-priority-
 const prompt='Export all published Shopify products in priority order for photography and product-page improvements.';
 const now=()=>Date.parse('2026-10-06T12:00:00Z');
 const env={SHOPIFY_SHOP:'fixture',SHOPIFY_CLIENT_ID:'fixture-id',SHOPIFY_CLIENT_SECRET:'fixture-secret',ORACLE_JOB_DATASET:'commerce',ORACLE_UI_PASSWORD:'fixture-password',ORACLE_UI_SESSION_SECRET:'12345678901234567890123456789012',ORACLE_UI_ADMIN_NAME:'staff'};
-const product=id=>({id:`gid://shopify/Product/${id}`,title:`Product ${id}`,status:'ACTIVE',publishedAt:'2026-01-01',onlineStoreUrl:`https://www.thegreatfroglondon.com/products/p-${id}`,seo:{description:''}});
+const product=id=>({id:`gid://shopify/Product/${id}`,title:`Product ${id}`,status:'ACTIVE',publishedAt:'2026-01-01',onlineStoreUrl:`https://www.thegreatfroglondon.com/products/p-${id}`,seo:{description:''},productType:id===2?'Rings':'Pendants',tags:[],collections:{nodes:[],pageInfo:{hasNextPage:false,endCursor:null}}});
 const rejected=()=>Object.assign(new Error('private customer unquoted token fixture-secret'),{code:400,errors:[{reason:'invalidQuery',location:'q',message:'private customer unquoted token fixture-secret'}]});
 
 function production({catalogueFailure=false,enrichmentFailure=false,storageFailure=null,salesRows=null,trafficRows=null,organicRows=null,trafficFailure=false,organicFailure=false,productIds=[1,2,3]}={}){
@@ -56,9 +56,9 @@ test('real production factory + shared dispatch paginates, binds providers, pers
 });
 
 test('production catalogue API rejection never claims a complete export; optional enrichment is isolated',async()=>{
-  const f=production({catalogueFailure:true,enrichmentFailure:true}),events=[],result=await dispatch(f,'partial',events);
-  assert.equal(result.evidence.catalogue.complete,false);assert.equal(result.artifact.row_count,1);assert.match(result.answer,/INCOMPLETE catalogue/);assert.equal(result.evidence.ranking_status,'unavailable');assert.equal(result.evidence.rows[0].priority,null);
-  assert.ok(events.some(event=>event.stage==='priority_catalogue'&&event.code==='SHOPIFY_GRAPHQL_FAILED'&&event.reason==='ACCESS_DENIED'));
+  const f=production({catalogueFailure:true,enrichmentFailure:true}),events=[];
+  await assert.rejects(dispatch(f,'partial',events),e=>e.code==='SHOPIFY_GRAPHQL_FAILED'&&e.failed_stage==='priority_catalogue');
+  assert.equal(f.records.size,0);
   assert.doesNotMatch(JSON.stringify(events),/private customer|fixture-secret|unquoted token/);
   const complete=await dispatch(production({enrichmentFailure:true}),'unavailable');assert.equal(complete.artifact.row_count,3);assert.equal(complete.evidence.catalogue.complete,true);assert.equal(complete.evidence.ranking_status,'unavailable');
 });
@@ -192,4 +192,15 @@ test('production landing URL shapes expose bounded join diagnostics and mark unr
   const f=flexible({trafficRows:[{landing_path:'https://www.thegreatfroglondon.com/products/p-1?utm=test',sessions:40},{landing_path:'/collections/unmatched',sessions:20},{landing_path:'(not set)',sessions:10}]}),result=await runReport(f,'Export all published Shopify products in order of landing traffic only.','landing-shapes'),sheet=await reportSheet(f,result);
   const diag=result.evidence.evidence_availability.landing_sessions.join_diagnostics;assert.deepEqual(diag,{source_rows:3,matched_rows:1,invalid_identity_or_url:2,unmatched_or_ambiguous:0,invalid_metric:0});assert.equal(result.evidence.rows[0].metrics.landing_sessions,40);
   assert.equal(sheet.getRow(1).values.at(-1),'Ranking status');assert.match(sheet.getRow(3).values.at(-1),/Unrankable/);assert.equal(sheet.getCell('C3').value,null);
+});
+
+test('real production bindings preserve pendant units population and dates across pages',async()=>{
+ const message='Export Shopify pendants ranked by units sold this year',context=transitionAnalysisContext(null,message,{now:Date.parse('2026-10-12T12:00Z')}).context;
+ const f=production({salesRows:[{product_id:'1',units_sold:12}]});
+ const result=await dispatchAnalysisRequest({message,analysisContext:context,baselineOverview:f.service,baselineOptions:{exportOwner:'owner',requestId:'pendants'},chat:async()=>assert.fail('governed route')});
+ assert.deepEqual(result.evidence.rows.map(p=>p.product_id),['1','3']);
+ assert.equal(result.evidence.rows[0].metrics.units_sold,12);assert.equal(result.evidence.rows[1].metrics.units_sold??null,null);
+ const sales=f.calls.find(c=>c.query.includes('order_line_items'));assert.deepEqual(sales.params.selected_product_ids,['1','3']);assert.equal(sales.params.start_date,'2026-01-01');assert.equal(sales.params.end_date,'2026-10-12');
+ const queries=f.http.filter(c=>c.url.endsWith('graphql.json')).map(c=>JSON.parse(c.options.body).query);assert.ok(queries.every(q=>!q.includes('seo{')));
+ const saved=await f.artifactStore.get(result.artifact.id,'owner'),wb=new ExcelJS.Workbook();await wb.xlsx.load(Buffer.from(saved.xlsx_base64,'base64'));assert.equal(wb.worksheets[0].getCell('C2').value,12);assert.equal(wb.worksheets[0].getCell('C3').value,null);
 });
