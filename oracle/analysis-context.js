@@ -1,3 +1,4 @@
+import { promotionIntent } from './promotion-context.js';
 import { dailySalesContextPatch, validatePromotionContext, requestedDimensions } from './analytical-refinement.js';
 import { campaignContextPatch, validateCampaignRequest } from './campaign-context.js';
 import {currentStockScope} from './current-stock.js';
@@ -244,6 +245,8 @@ export function transitionAnalysisContext(existing, message, {now=Date.now(),rep
   if(set.tool_route&&set.tool_route!=='export_product_priorities')clear.push('product_report');
   if(set.tool_route&&set.tool_route!==base.tool_route)clear.push('native_metrics','dimensions','time_zone','source_store','ranking_metric','ranking_direction','promotion_context');
   const effectiveClear=clear.filter(key=>!Object.hasOwn(set,key));const next={...base,...set};if(next.analysis_type==='customer_journey'){next.first_order_semantic=next.first_order_semantic||'first_observed_ever';if(next.start_date){next.cohort_entry_start=next.start_date;next.cohort_entry_end=next.end_date;next.observation_end=next.end_date;}}for(const key of effectiveClear) next[key]=emptyAnalysisContext()[key];
+  const promotion=promotionIntent(text);
+  if(promotion&&['sales','channel_sales','product_sales'].includes(next.requested_subject))next.promotion_context={query:promotion,treatment:'compare_excluding'};
   if(requestedDimensions(text))next.dimensions=requestedDimensions(text);
   const missing=[];if(next.metrics.length&&(!next.start_date||!next.end_date)&&next.tool_route!=='compare_historical_events'&&!['advisory','knowledge_save','policy_definition'].includes(next.request_kind)) {if(!next.start_date)missing.push('start_date');if(!next.end_date)missing.push('end_date');}
   if(next.start_date&&next.end_date){next.date_cutoff=new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/London',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(now));next.current_day_included=next.start_date<=next.date_cutoff&&next.end_date>=next.date_cutoff;}
