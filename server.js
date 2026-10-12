@@ -1,3 +1,4 @@
+import { createShopifySalesKpiService } from './oracle/daily-sales-provider.js';
 import {executeTikTokToolCall} from './oracle/tiktok.js';
 import {createCurrentStockService,createStockGroupLookup,STOCK_RESOLUTION_QUERY} from './oracle/current-stock.js';
 import {createInventoryReadBudget,inventoryDiagnostic} from './shopify/inventory-budget.js';
@@ -175,7 +176,7 @@ const customerOrderIntervalService = createCustomerOrderIntervalService({ bigque
 const onlineCountrySalesService = createOnlineCountrySalesService({ bigquery, project: GOOGLE_PROJECT_ID });
 const platformSalesService = createPlatformSalesService({ bigquery, project: GOOGLE_PROJECT_ID });
 // Bind the live server through the same adapter factory used by the parity CLI.
-const {deviceConversion:deviceSourceConversionService,klaviyo:klaviyoEmailService,social:metaInstagramService}=createOracleProviderDependencies({env:process.env,bigquery,project:GOOGLE_PROJECT_ID});
+const {deviceConversion:deviceSourceConversionService,klaviyo:klaviyoEmailService,social:metaInstagramService,dailySales:dailySalesService}=createOracleProviderDependencies({env:process.env,bigquery,project:GOOGLE_PROJECT_ID,shopifySales:args=>getShopifySalesKpis(args)});
 const categorySalesService = createCategorySalesService({ bigquery, project: GOOGLE_PROJECT_ID });
 const productViewPurchaseService = createProductViewPurchaseService({bigquery});
 const pageviewsPerSessionService=createPageviewsPerSessionService({bigquery,project:GOOGLE_PROJECT_ID,runShopifyql:async(query,reportName)=>runShopifyqlReport(await getShopifyAccessToken(),query,reportName),getShopTimezone:async()=>{const data=await shopifyGraphQL(await getShopifyAccessToken(),'{ shop { ianaTimezone } }');if(!data?.shop?.ianaTimezone)throw new Error('Shopify reporting timezone unavailable');return data.shop.ianaTimezone;}});
@@ -301,17 +302,6 @@ const SHOPIFY_CONVERSION_METRICS = [
   'sessions_that_completed_checkout',
   'conversion_rate',
   'checkout_conversion_rate'
-];
-
-const SHOPIFY_SALES_METRICS = [
-  'orders',
-  'gross_sales',
-  'discounts',
-  'returns',
-  'net_sales',
-  'total_sales',
-  'average_order_value',
-  'net_items_sold'
 ];
 
 const SHOPIFY_PRODUCT_PERFORMANCE_METRICS = [
@@ -633,68 +623,10 @@ ORDER BY ${timeseries} ASC`;
   };
 }
 
-async function getShopifySalesKpis({
-  start_date,
-  end_date,
-  timeseries = 'none',
-  sales_channel = 'Online Store'
-}) {
-  validateShopifyReportDate(start_date, 'start_date');
-  validateShopifyReportDate(end_date, 'end_date');
-
-  if (start_date > end_date) {
-    throw new Error(
-      'start_date must be on or before end_date'
-    );
-  }
-
-  if (
-    !['none', 'day', 'week', 'month'].includes(
-      timeseries
-    )
-  ) {
-    throw new Error(
-      'timeseries must be one of: none, day, week, month'
-    );
-  }
-  if (!['Online Store','Point of Sale'].includes(sales_channel)) throw new Error('sales_channel must be one of: Online Store, Point of Sale');
-
-  const dateRange =
-    `SINCE ${start_date} UNTIL ${end_date}`;
-  const shopifyql = timeseries === 'none'
-    ? `FROM sales
-SHOW ${SHOPIFY_SALES_METRICS.join(', ')}
-WHERE sales_channel = '${sales_channel}'
-${dateRange}`
-    : `FROM sales
-SHOW ${SHOPIFY_SALES_METRICS.join(', ')}
-WHERE sales_channel = '${sales_channel}'
-TIMESERIES ${timeseries}
-${dateRange}
-ORDER BY ${timeseries} ASC`;
-  const token = await getShopifyAccessToken();
-  const rows = await runShopifyqlReport(
-    token,
-    shopifyql,
-    'sales KPI'
-  );
-  const shopData=await shopifyGraphQL(token,'{ shop { currencyCode } }');
-  const currency=shopData?.shop?.currencyCode||null;
-
-  return {
-    start_date,
-    end_date,
-    timeseries,
-    sales_channel,
-    currency,
-    currency_basis:'Authoritative Shopify shop currency metadata.',
-    source_collected_at:null,
-    coverage:null,
-    ...(timeseries === 'none'
-      ? { metrics: rows[0] ?? null }
-      : { periods: rows })
-  };
-}
+const getShopifySalesKpis=createShopifySalesKpiService({
+  runReport:async sql=>runShopifyqlReport(await getShopifyAccessToken(),sql,'sales KPI'),
+  getShop:async()=>{const data=await shopifyGraphQL(await getShopifyAccessToken(),'{ shop { id currencyCode ianaTimezone } }');return data?.shop;}
+});
 
 async function getShopifyProductPerformance({
   start_date,
@@ -4251,6 +4183,7 @@ const ecommerceBaselineOverview=createBaselineOverviewService({
     comparison_end:periods.prior_year.end_date
   }),
   shopifySales:getShopifySalesKpis,
+  dailySales:dailySalesService,
   locationFinance:getSalesByLocation
 });
 const historicalEventComparison=createHistoricalEventComparisonService({

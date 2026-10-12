@@ -27,6 +27,7 @@ test('focused Woo transition validates from fresh and retained broad contexts',(
 test('every deterministic transition route is registered with an executable dispatcher',()=>{
   const prompts=[
     'What is the current stock levels for eye rings?',
+    'Show online sales by weekday this year.',
     'How did Meta ads perform last month?',
     'Which Instagram posts got the most saves this year?',
     'Show TikTok follower trends in September 2026.',
