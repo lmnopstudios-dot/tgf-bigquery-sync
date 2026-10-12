@@ -1,3 +1,4 @@
+import { promotionIntent } from './promotion-context.js';
 import { naturalReportPeriod } from './report-natural-period.js';
 
 export const requestedDimensions=text=>/\b(?:weekdays?|days? of (?:the )?week)\b/i.test(text)?['weekday']:null;
@@ -11,7 +12,9 @@ export function validatePromotionContext(value) {
     return {start_date:p.start_date,end_date:p.end_date};
   });
   if(supplied_periods.length>10)throw Error('Too many promotion windows');
-  return {query:value.query,treatment:value.treatment,pending_dates:Boolean(value.pending_dates),supplied_periods};
+  if(value.pending_endpoint_date&&!/^\d{4}-\d{2}-\d{2}$/.test(value.pending_endpoint_date))throw Error('Invalid pending endpoint date');
+  if(value.endpoint_choice&&!['start_of_day','end_of_day'].includes(value.endpoint_choice))throw Error('Invalid promotion endpoint');
+  return {pending_endpoint_date:value.pending_endpoint_date||null,endpoint_choice:value.endpoint_choice||null,pending_endpoint:Boolean(value.pending_endpoint),query:value.query,treatment:value.treatment,pending_dates:Boolean(value.pending_dates),supplied_periods};
 }
 /** Independent grouping, measure, date and output refinements for an existing sales subject. */
 export function dailySalesContextPatch(base,text,now) {
@@ -19,7 +22,7 @@ export function dailySalesContextPatch(base,text,now) {
   const fresh=weekday&&/\b(?:sales|revenue|orders)\b/i.test(text)&&!/\b(?:sales|revenue) (?:of|for)\b|\b(?:campaigns?|klaviyo|conversion|customers?|flows?)\b/i.test(text);
   const regroup=weekday&&['sales','channel_sales'].includes(base.requested_subject)&&/^(?:by|group|break|show)\b/i.test(text)&&!fresh;
   const retained=base.tool_route==='get_daily_sales_analysis';
-  const refine=retained&&(/^(?:online[.!]?$|in[ -]?store[.!]?$|by |sort |rank |include |exclude |excluding |just |only |for |in |export |download |chart |graph |retry |try again)/i.test(text)||base.promotion_context?.pending_dates&&/\b20\d{2}-\d{2}-\d{2}\b/.test(text)||naturalReportPeriod(text,now)&&/^(?:what about |how about |just |only |for |in |during )?(?:this |last |past |since |20\d{2}|january|february|march|april|may|june|july|august|september|october|november|december)/i.test(text));
+  const refine=retained&&(/^(?:online[.!]?$|in[ -]?store[.!]?$|by |sort |rank |include |exclude |excluding |just |only |for |in |export |download |chart |graph |retry |try again)/i.test(text)||base.promotion_context?.pending_endpoint&&/\b(?:start|beginning|end) of (?:the |that )?(?:day|\d{1,2} [a-z]+|[a-z]+ \d{1,2})\b/i.test(text)||base.promotion_context?.pending_dates&&/\b20\d{2}-\d{2}-\d{2}\b/.test(text)||naturalReportPeriod(text,now)&&/^(?:what about |how about |just |only |for |in |during )?(?:this |last |past |since |20\d{2}|january|february|march|april|may|june|july|august|september|october|november|december)/i.test(text));
   if(!fresh&&!refine&&!regroup)return null;
   // Explicit subjects always belong to the existing governed subject handlers.
   if(!fresh&&/\b(?:campaigns?|klaviyo|customers?|conversion|products?|inventory|stock|countries|country|pendants?|rings?)\b/i.test(text))return null;
@@ -28,11 +31,18 @@ export function dailySalesContextPatch(base,text,now) {
   const today=new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/London',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(now));
   const yesterday=new Date(Date.parse(`${today}T00:00:00Z`)-86400000).toISOString().slice(0,10);
   // Promotion names are context, never implicit date-window instructions.
-  const promotion=text.match(/\b(?:(?:may|early may|spring|summer|winter|black friday)\s+)?(?:bank holiday\s+)?(?:sale|promotion)\b/i);
+  const intent=promotionIntent(text);
+  const promotion=intent?[intent]:null;
+  const endpointAttempt=retained&&base.promotion_context?.pending_endpoint&&text.match(/\b(start|beginning|end) of (?:the |that )?(day|\d{1,2} [a-z]+(?: 20\d{2})?|[a-z]+ \d{1,2}(?: 20\d{2})?)\b/i);
+  const endDate=base.promotion_context?.pending_endpoint_date;
+  const months=['january','february','march','april','may','june','july','august','september','october','november','december'];
+  const namedEnd=endDate?`${Number(endDate.slice(8))} ${months[Number(endDate.slice(5,7))-1]}`:null;
+  const endpointReply=endpointAttempt&&(endpointAttempt[2].toLowerCase()==='day'||namedEnd&&[namedEnd,`${namedEnd} ${endDate.slice(0,4)}`].includes(endpointAttempt[2].toLowerCase()))?endpointAttempt:null;
+  if(endpointReply)patch.promotion_context={...base.promotion_context,endpoint_choice:endpointReply[1].toLowerCase()==='end'?'end_of_day':'start_of_day',pending_endpoint:false,pending_dates:false};
   const dateText=promotion?text.replace(promotion[0],''):text;
   const supplied=text.match(/\b(20\d{2}-\d{2}-\d{2})\s*(?:to|through|–|—)\s*(20\d{2}-\d{2}-\d{2})\b/);
   const promotionReply=retained&&base.promotion_context&&supplied&&(base.promotion_context.pending_dates||/\b(?:sale|promotion)\b/i.test(text));
-  let dates=promotionReply?null:naturalReportPeriod(dateText,now,{referenceYear:continuation?base.start_date?.slice(0,4):null});
+  let dates=promotionReply||endpointAttempt?null:naturalReportPeriod(dateText,now,{referenceYear:continuation?base.start_date?.slice(0,4):null});
   if(promotionReply)patch.promotion_context={...base.promotion_context,pending_dates:false,supplied_periods:[{start_date:supplied[1],end_date:supplied[2]}]};
   if(continuation&&!dates&&/^just\s+[a-z]+[.!]?$/i.test(text))dates=naturalReportPeriod(`${text.replace(/[.!]$/,'')} ${base.start_date?.slice(0,4)||today.slice(0,4)}`,now);
   if(dates&&dates.end_date>=today)dates={...dates,end_date:yesterday,current_day_included:false};
@@ -50,7 +60,7 @@ export function dailySalesContextPatch(base,text,now) {
   if(/\bby month\b/i.test(text))patch.dimensions=['month'];
   const unsupportedMetric=text.match(/\b(gross sales|total sales|refunds|discounts|profit)\b/i);
   if(unsupportedMetric)patch.native_metrics=[unsupportedMetric[1].toLowerCase().replaceAll(' ','_'),'orders'];
-  if(/\b(?:exclude|excluding|without)\s+(?!pos\b|(?:the )?(?:sale|promotion)\b|(?:may )?bank holiday sale\b)([a-z]+)\b/i.test(text))patch.exclusions=[text.match(/\b(?:exclude|excluding|without)\s+([a-z]+)\b/i)[1].toLowerCase()];
+  if(!promotion&&!promotionReply&&/\b(?:exclude|excluding|without)\s+(?!pos\b|(?:the )?(?:sale|promotion)\b|(?:may )?bank holiday sale\b)([a-z]+)\b/i.test(text))patch.exclusions=[text.match(/\b(?:exclude|excluding|without)\s+([a-z]+)\b/i)[1].toLowerCase()];
   if(/\b(?:products?|category|categories|countries|country|pendants?|rings?|earrings?)\b/i.test(text))patch.filters=['additional_population_filter_unresolved'];
   if(/\b(?:least|lowest|ascending|asc)\b/i.test(text))patch.ranking_direction='asc';
   const currency=text.match(/\b(GBP|USD|JPY|EUR)\b/i);if(currency)patch.currencies=[currency[1].toUpperCase()];

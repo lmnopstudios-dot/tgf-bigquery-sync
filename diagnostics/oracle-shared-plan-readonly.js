@@ -8,7 +8,7 @@ import { createShopifySalesKpiService, createDailySalesProvider } from '../oracl
 import { fetchPublishedProducts } from '../oracle/product-priority.js';
 import { selectCataloguePopulation } from '../oracle/product-catalogue-filter.js';
 import { resolveProductReportConfig } from '../oracle/product-report-config.js';
-import { resolvePromotionDates } from '../oracle/weekday-sales.js';
+import { resolvePromotionDates, retrievePromotionContext } from '../oracle/promotion-context.js';
 import { assertEvidenceAgreement } from '../oracle/analysis-route-dispatcher.js';
 import { ORACLE_JOB_DEFAULTS } from '../oracle/analysis-jobs.js';
 
@@ -36,7 +36,7 @@ export async function readOnlyDiagnostic(input,{dailySales,klaviyo,knowledgeServ
     const e=await dailySales({...period,platform:'shopify',channel:'online',reporting_timezone:'Europe/London',currencies:[],source_store:null});
     return {mode:'sales',period:e.period,grain:e.grain,source_store:e.source_store,channel:e.channel,currency:e.currency,reporting_timezone:e.reporting_timezone,timezone_semantics:e.timezone_semantics,coverage:e.coverage,definitions:e.definitions,returned_days:e.rows.length,first_day:e.rows[0]?.date,last_day:e.rows.at(-1)?.date,rows:e.rows};
   }
-  if(input.mode==='promotion')return {mode:'promotion',period,...resolvePromotionDates(await knowledgeService.getBusinessContext({...period,topics:['online','sales','promotion','campaign']}),{query:input.query,treatment:'compare_excluding'},period)};
+  if(input.mode==='promotion')return {mode:'promotion',period,...resolvePromotionDates(await retrievePromotionContext(knowledgeService,{query:input.query},period),{query:input.query,treatment:'compare_excluding'},period)};
   if(input.mode==='campaign'){
     const r=await klaviyo.resolveCampaigns({name:input.name||null,channel:'email',cutoff:input.cutoff||new Date().toISOString()});
     return {mode:'campaign',complete:r.complete,candidates:r.candidates.slice(0,10).map(c=>Object.fromEntries(['entity_id','entity_name','account','channel','status','is_sent','send_time','send_time_semantics','reporting_timezone','reporting_cutoff','retrieved_at'].map(k=>[k,c[k]]))),omitted_candidates:Math.max(0,r.candidates.length-10)};

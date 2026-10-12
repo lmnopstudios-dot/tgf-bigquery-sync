@@ -16,7 +16,7 @@ export function resolveAnalyticalPlan(c) {
     dimensions:c?.dimensions||[],grain:c?.grain||null,
     dates:{start_date:c?.start_date||null,end_date:c?.end_date||null,timezone:c?.time_zone||campaign?.selected?.reporting_timezone||report?.period?.timezone||'Europe/London',cutoff:c?.date_cutoff||null,partial_period:Boolean(c?.partial_period),current_day_included:Boolean(c?.current_day_included),basis:campaign?.date_mode||null},
     comparison:{type:c?.comparison_type||null,start_date:c?.comparison_start_date||null,end_date:c?.comparison_end_date||null,included_periods:c?.included_periods||[]},
-    promotion:c?.promotion_context?{query:c.promotion_context.query,treatment:c.promotion_context.treatment,supplied_periods:c.promotion_context.supplied_periods||[]}:null,exclusions:c?.exclusions||[],
+    promotion:c?.promotion_context?{query:c.promotion_context.query,treatment:c.promotion_context.treatment,...(c.promotion_context.endpoint_choice?{endpoint_choice:c.promotion_context.endpoint_choice}:{}),supplied_periods:c.promotion_context.supplied_periods||[]}:null,exclusions:c?.exclusions||[],
     ranking:report?.sort||{metric:c?.ranking_metric||null,direction:c?.ranking_direction||'desc'},
     presentation:{format:c?.output_preference||null,columns:report?.metrics||[],limit:c?.limit||null},
     pending:{fields:report?.unresolved||c?.unresolved_required_fields||[],campaign:campaign?.selected?null:campaign?.selector||null}

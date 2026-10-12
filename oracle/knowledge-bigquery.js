@@ -56,6 +56,12 @@ export function createKnowledgeService({ bigquery, project, dataset = 'oracle_kn
     add('statuses', 'status IN UNNEST(@statuses)', nonEmptyText(f.status) ? [f.status] : ['confirmed', 'working'], ['STRING']);
     if (nonEmptyText(f.knowledge_type)) add('knowledge_type', 'kind = @knowledge_type', f.knowledge_type, 'STRING');
     if (nonEmptyText(f.text)) add('text', "LOWER(CONCAT(title,' ',content)) LIKE CONCAT('%',LOWER(@text),'%')", f.text, 'STRING');
+    // Internal semantic term search: words may be separated by merchandising
+    // details in titles. Bound it like the governed public text filter.
+    if (nonEmptyArray(f.text_terms)) {
+      if(f.text_terms.length>12||f.text_terms.some(t=>typeof t!=='string'||!t.trim()||t.length>80))throw new Error('Invalid knowledge text terms');
+      add('text_terms', "NOT EXISTS(SELECT 1 FROM UNNEST(@text_terms) term WHERE STRPOS(LOWER(CONCAT(title,' ',content)),LOWER(term))=0)", f.text_terms, ['STRING']);
+    }
     if (nonEmptyArray(f.tags)) add('tags', 'EXISTS(SELECT 1 FROM UNNEST(tags) t WHERE LOWER(t) IN (SELECT LOWER(x) FROM UNNEST(@tags) x))', f.tags, ['STRING']);
     if (nonEmptyText(f.start_date)) {
       predicates.push("COALESCE(effective_from, DATE '0001-01-01') <= @end_date AND COALESCE(effective_to, DATE '9999-12-31') >= @start_date");
