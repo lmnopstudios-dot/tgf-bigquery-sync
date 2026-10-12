@@ -33,7 +33,7 @@ function narrativeDates(text) {
 }
 /** Read-only, bounded interpretation of explicit evidence. Never infer a year,
  * timezone or an ambiguous midnight endpoint. Preserve source bytes for replay. */
-export function interpretPromotionEvent(raw,{endpoint=null,timeZone='Europe/London'}={}) {
+export function interpretPromotionEvent(raw,{endpoint=null,endpointZone=null,timeZone='Europe/London'}={}) {
   const e={...raw,content:raw.content??raw.description??'',effective_from:scalar(raw.effective_from),effective_to:scalar(raw.effective_to)};
   const text=e.content,mentions=narrativeDates(text),phases=[];
   let finish=null,previousEnd=0,conflictingEnd=false;
@@ -49,7 +49,9 @@ export function interpretPromotionEvent(raw,{endpoint=null,timeZone='Europe/Lond
   let start=structured?e.effective_from:starts[0],end=structured?(e.effective_to||e.effective_from):finish?.date;
   if(starts.length&&structured&&starts[0]<start)start=starts[0]; // documented VIP access precedes the public structured range
   if(finish&&/\bmidnight\b/i.test(finish.clause)){
-    const zone=finish.clause.match(/\b(GMT|UTC|BST)\b/i)?.[1]?.toUpperCase();
+    const sourceZone=finish.clause.match(/\b(GMT|UTC|BST)\b/i)?.[1]?.toUpperCase();
+    const zone=endpointZone||sourceZone;
+    if(endpointZone){interpretation.source_endpoint_zone=sourceZone||null;interpretation.user_endpoint_zone=endpointZone;}
     const explicitStart=/\b(?:start|beginning) of\b/i.test(finish.clause),explicitEnd=/\b(?:end) of\b/i.test(finish.clause);
     const choice=explicitStart?'start_of_day':explicitEnd?'end_of_day':endpoint;
     interpretation.endpoint_wording=finish.clause+' '+finish.quote;interpretation.endpoint_zone=zone||null;
@@ -65,7 +67,7 @@ export function interpretPromotionEvent(raw,{endpoint=null,timeZone='Europe/Lond
     // for one hour. Exclude every local day touched, including that partial day.
     end=localDateAt(Date.parse(instant)-1,timeZone).toISOString().slice(0,10);
     interpretation.endpoint_choice=choice;interpretation.end_exclusive=new Date(instant).toISOString();
-    interpretation.disclosure=`${interpretation.endpoint_wording}: ${choice.replaceAll('_',' ')} (${interpretation.end_exclusive}); whole ${timeZone} days touched through ${end} are excluded.`;
+    interpretation.disclosure=`${interpretation.endpoint_wording}${endpointZone?' (request-scoped timezone '+endpointZone+'; stored wording unchanged)':''}: ${choice.replaceAll('_',' ')} (${interpretation.end_exclusive}); whole ${timeZone} days touched through ${end} are excluded.`;
   }else if(finish&&structured&&finish.date!==end){interpretation.status='conflict';return {...e,interpretation};}
   if(!validDate(start)||!validDate(end)||start>end){interpretation.status='temporal_unresolved';interpretation.clarification='What confirmed start and end dates apply to this promotion?';return {...e,interpretation};}
   interpretation.status='confirmed';
@@ -84,7 +86,7 @@ export function resolvePromotionDates(response,request,period) {
   if(!request.supplied_periods?.length&&(!response||response.limited||response.truncated||response.has_more||response.items?.length>=50))return empty('retrieval_failed');
   const queryWords=words(request.query);
   const confirmed=(response?.items||[]).filter(e=>e.kind==='event'&&e.status==='confirmed'&&e.id&&e.source_type&&e.source_reference&&onlinePromotion(e)&&/\b(?:sale|promotion|promo|offer|discount|campaign)\b/i.test(wording(e))&&queryWords.every(w=>words(wording(e)).includes(w)));
-  const events=confirmed.map(e=>interpretPromotionEvent(e,{endpoint:request.endpoint_choice})).filter(e=>{
+  const events=confirmed.map(e=>interpretPromotionEvent(e,{endpoint:request.endpoint_choice,endpointZone:request.endpoint_zone})).filter(e=>{
     if(e.interpretation.status==='confirmed')return overlap(e,period);
     const start=e.interpretation.established_start||e.effective_from;
     const end=e.interpretation.established_end_date||scalar(e.effective_to);
@@ -94,10 +96,10 @@ export function resolvePromotionDates(response,request,period) {
   // same phase/title must agree, rather than silently unioning conflicting dates.
   const groups=new Map();let conflict=events.some(e=>e.interpretation.status==='conflict');
   for(const e of events){const key=/\b(?:vip|early access)\b/i.test(e.title)||e.interpretation.phases.length&&e.interpretation.phases.every(p=>p.phase==='vip')?'vip':'public',range=`${e.effective_from}/${e.effective_to}`;if(groups.has(key)&&groups.get(key)!==range)conflict=true;groups.set(key,range);}
-  if(conflict)return {status:'conflict',events,dates:[]};
+  if(conflict&&!request.calendar_instruction)return {status:'conflict',events,dates:[]};
   if(request.supplied_periods?.length){
-    const supplied=request.supplied_periods.map((p,i)=>({id:`user-supplied-${i}`,title:request.query,effective_from:p.start_date,effective_to:p.end_date,source_type:'human_entered',source_reference:'User-supplied confirmed sale dates'}));
-    return {status:'confirmed',events:supplied,source_events:confirmed,dates:datesIn(period).filter(d=>supplied.some(e=>d>=e.effective_from&&d<=e.effective_to))};
+    const supplied=request.supplied_periods.map((p,i)=>({id:`user-supplied-${i}`,title:request.query,effective_from:p.start_date,effective_to:p.end_date,source_type:'human_entered',source_reference:request.calendar_instruction?'User-selected comparison calendar days':'User-supplied confirmed sale dates'}));
+    return {status:'confirmed',events:supplied,source_events:request.calendar_instruction?events.map(e=>({...e,interpretation:Object.fromEntries(Object.entries(e.interpretation).filter(([k])=>k!=='clarification'))})):confirmed,...(request.calendar_instruction?{comparison_treatment:'user_selected_calendar_days',instruction:request.calendar_instruction,...(conflict?{knowledge_conflict:true}:{})}:{}),dates:datesIn(period).filter(d=>supplied.some(e=>d>=e.effective_from&&d<=e.effective_to))};
   }
   if(!events.length)return empty('no_matching_confirmed_record');
   if(events.some(e=>e.interpretation.status!=='confirmed'))return {status:'temporal_unresolved',events,dates:[],clarification:events.find(e=>e.interpretation.clarification)?.interpretation.clarification};

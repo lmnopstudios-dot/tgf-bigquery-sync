@@ -1,3 +1,4 @@
+import { consumePendingClarification, pendingClarificationKind, explicitKnowledgeSaveIntent } from './clarification-consumption.js';
 import { promotionIntent } from './promotion-context.js';
 import { dailySalesContextPatch, validatePromotionContext, requestedDimensions } from './analytical-refinement.js';
 import { campaignContextPatch, validateCampaignRequest } from './campaign-context.js';
@@ -103,7 +104,7 @@ export function validateAnalysisContext(value={}){
 }
 
 
-export function transitionAnalysisContext(existing, message, {now=Date.now(),reportContext=null}={}){
+function transitionContext(existing, message, {now=Date.now(),reportContext=null}={}){
   let base=validateAnalysisContext(existing||{}); const text=String(message||'').trim(), lower=text.toLowerCase();
   if(/^(?:new (?:question|analysis)|forget that|start over)\b/i.test(text))return transitionAnalysisContext(emptyAnalysisContext(),text.replace(/^(?:new (?:question|analysis)|forget that|start over)\s*[:,.]?\s*/i,''),{now});
   if(reportContext) base=initializeFromReportContext(base,reportContext);
@@ -263,3 +264,19 @@ export function initializeFromReportContext(existing, report={}){
 }
 export function analysisScope(context){if(context==null)return null;const c=validateAnalysisContext(context);if(c.requested_subject==='current_stock')return `Current stock · ${c.entity_query} · ${c.location||'all active locations'}`;if(!c.metrics.length)return null;return [c.metrics.join('/'),c.dimensions.join('/'),c.grain,c.start_date&&`${c.start_date}–${c.end_date}${c.comparison_start_date?` vs ${c.comparison_start_date}–${c.comparison_end_date}`:''}`,c.currencies.join('/'),c.channel_breakdown?'online vs instore':c.channel||'all channels'].filter(Boolean).join(' · ')}
 export function clarificationFor(context){const c=validateAnalysisContext(context);if(c.campaign_request)return null;if(c.failed_subject_switch){if([c.failed_subject_switch.attempted_subject,c.failed_subject_switch.previous_subject].every(s=>['device_conversion','product_sales'].includes(s)))return 'Do you mean conversion rates or product sales for that comparison? The conversion request failed, so I will not reuse the previous product table.';return `Which subject do you mean: ${c.failed_subject_switch.attempted_subject.replaceAll('_',' ')} or ${c.failed_subject_switch.previous_subject.replaceAll('_',' ')}? The subject switch failed; please specify the analysis to retry.`;}if(c.unresolved_required_fields.includes('requested_subject'))return 'Which analysis do you mean? Please specify a supported subject such as sales, customers, product sales, device conversion, shipping countries or Klaviyo email attribution.';if(c.product_report)return productReportClarification(c.product_report);if(c.unresolved_required_fields.includes('channel'))return 'Should the weekday analysis cover online sales or in-store sales?';if(c.unresolved_required_fields.includes('start_date')||c.unresolved_required_fields.includes('end_date')){if(c.tool_route==='get_shopify_online_country_products')return 'What date range would you like? I’ll keep each currency in a separate ranking unless you specify one.';if(c.analysis_type!=='finance')return 'What date range would you like?';return `What date range would you like? I’ll use ${c.currencies[0]||'GBP'} unless you specify another currency.`;}return null}
+
+
+export function transitionAnalysisContext(existing,message,options={}){
+  const base=validateAnalysisContext(existing||{}),text=String(message||'').trim();
+  if(explicitKnowledgeSaveIntent(text))return {context:validateAnalysisContext({...emptyAnalysisContext(),request_kind:'knowledge_save'}),transition:{continuation:false,set:['request_kind'],clear:ANALYSIS_CONTEXT_FIELDS,retain:[],missing_required_fields:[],ready_to_execute:true,applies_to_message:true,clarification_consumed:null}};
+  const consumed=consumePendingClarification(base,text);
+  if(consumed?.rejected)return {context:base,transition:{continuation:true,set:[],clear:[],retain:ANALYSIS_CONTEXT_FIELDS,missing_required_fields:base.unresolved_required_fields,ready_to_execute:false,applies_to_message:true,clarification_consumed:null,clarification_rejected:consumed.rejected}};
+  if(consumed){
+    if(/\b(?:export|download|spreadsheet|xlsx)\b/i.test(text))consumed.context.output_preference='xlsx';
+    else if(/\b(?:chart|graph)\b/i.test(text))consumed.context.output_preference='chart';
+    if(consumed.context.tool_route==='get_daily_sales_analysis'){if(/\b(?:by|rank by|sort by) orders\b/i.test(text))consumed.context.ranking_metric='average_orders_per_day';else if(/\b(?:by|rank by|sort by) (?:sales|revenue)\b/i.test(text))consumed.context.ranking_metric='average_sales_per_day';}
+    const context=validateAnalysisContext(consumed.context),changed=ANALYSIS_CONTEXT_FIELDS.filter(k=>JSON.stringify(base[k])!==JSON.stringify(context[k]));return {context,transition:{continuation:true,set:changed,clear:[],retain:ANALYSIS_CONTEXT_FIELDS.filter(k=>!changed.includes(k)),missing_required_fields:context.unresolved_required_fields,ready_to_execute:!context.unresolved_required_fields.length,applies_to_message:true,clarification_consumed:consumed.kind}};}
+  const result=transitionContext(existing,message,options),pending=pendingClarificationKind(base);
+  if(pending&&result.transition.continuation&&result.transition.applies_to_message&&result.context.requested_subject===base.requested_subject&&result.transition.set.length)result.transition.clarification_consumed=pending;
+  return result;
+}

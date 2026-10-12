@@ -1,3 +1,5 @@
+import { compatibleClarificationEvidence } from './weekday-sales.js';
+import { suppressAnalyticalProposals } from './clarification-consumption.js';
 import { analyticalPlanKey, stableAnalyticalJSON } from './analytical-plan.js';
 import { failedAnalysisResult, contextAfterFailure, resolvedRetryTransition, explicitAnalysisRetry } from './analysis-delivery-state.js';
 import {stockAnswer} from './current-stock.js';
@@ -110,7 +112,7 @@ export function createOracleUiRouter({ knowledgeService, bigquery, project, chat
     failedAnalysisIntents.set(sessionKey(req),{context:attempted,expires_at:now()+15*60*1000});
     saveSessionContext(req,contextAfterFailure(previous,attempted));
   };
-  const cacheEvidence=(req,result,asOf)=>{if(!result.evidence||failedAnalysisResult(result))return;failedAnalysisIntents.delete(sessionKey(req));recentChatEvidence.set(sessionKey(req),{expires_at:now()+15*60*1000,value:{as_of:asOf,answer:String(result.answer||'').slice(0,6000),tools:result.tools||[],evidence:result.evidence}});};
+  const cacheEvidence=(req,result,asOf)=>{if(!result.evidence||failedAnalysisResult(result))return;failedAnalysisIntents.delete(sessionKey(req));recentChatEvidence.set(sessionKey(req),{expires_at:now()+15*60*1000,value:{artifact:result.artifact||null,request_id:result.request_id||req.oracleRequestId,analysis_context:result.analysis_context||sessionContext(req),as_of:asOf,answer:String(result.answer||'').slice(0,6000),tools:result.tools||[],evidence:result.evidence}});};
   const sameAnalysisRequest=(before,after)=>{if((before?.requested_subject||null)!==(after?.requested_subject||null))return false;try{assertResolvedAnalysisContext(before,after);return true;}catch{return false;}};
   const samePendingContext=(left,right)=>stableAnalyticalJSON(validateAnalysisContext(left||{}))===stableAnalyticalJSON(validateAnalysisContext(right||{}));
   const contextWithProductEvidence=(context,evidence)=>{if(context?.requested_subject==='current_stock'&&evidence?.entity_query===context.entity_query){return {...context,pending_product_candidates:(evidence.candidates||[]).slice(0,8).map(c=>({product_ref:c.id,catalogue_titles:[c.title],sources:[],reporting_family_relationships:[]}))};}if(context?.requested_subject!=='product_sales'||evidence?.entity_query!==context.entity_query)return context;const next={...context};if(evidence?.candidates?.length)next.pending_product_candidates=evidence.candidates;if(evidence?.resolved_product_ref)next.product_ref=evidence.resolved_product_ref;return next};
@@ -119,6 +121,7 @@ export function createOracleUiRouter({ knowledgeService, bigquery, project, chat
   const clearAnalysis=(req,res)=>{const key=sessionKey(req);analysisSessions.delete(key);recentChatEvidence.delete(key);unansweredIntents.delete(key);failedAnalysisIntents.delete(key);const value=crypto.randomUUID();scopeGenerations.set(key,value);res?.setHeader('Set-Cookie',`oracle_scope_generation=${value}; Path=/; HttpOnly; SameSite=Strict; Max-Age=28800${env.NODE_ENV==='production'?'; Secure':''}`);};
   const currentJobScope=(req,job)=>generation(req)===(job.payload_json?.scope_generation||'initial');
   const relevantEvidence=(cached,context)=>{if(!cached||cached.expires_at<=now()||!cached.value.evidence)return null;try{assertEvidenceAgreement(context,cached.value.evidence);if(!context?.requested_subject)return null;return cached.value;}catch{return null;}};
+  router.get('/analysis/latest',authenticate,(req,res)=>{const context=sessionContext(req),latest=relevantEvidence(recentChatEvidence.get(sessionKey(req)),context);res.json({success:true,analysis:latest?{...presentAnalyticalAnswer(withOracleCharts(latest),context),analysis_scope:analysisScope(context),scope_generation:generation(req)}:null});});
   const exportOwner=req=>exportOwnerKey(req.oracleUser.sub,sessionSecret);
   if(exportStore) router.get('/exports/:id',authenticate,async(req,res,next)=>{try{await sendPriorityDownload(exportStore,req.params.id,exportOwner(req),res);}catch(error){next(error)}});
   if(exportStore) router.get('/exports/:id/manifest',authenticate,async(req,res,next)=>{try{if(!/^[a-f0-9]{64}$/.test(req.params.id))return res.status(404).json({success:false,error:'Export not found'});const saved=await exportStore.get(req.params.id,exportOwner(req));if(!saved)return res.status(404).json({success:false,error:'Export not found'});
@@ -138,11 +141,12 @@ export function createOracleUiRouter({ knowledgeService, bigquery, project, chat
   if (analysisJobStore && env.ORACLE_ANALYSIS_JOBS_ENABLED === 'true') {
     const worker=createAnalysisJobWorker({store:analysisJobStore,runtimeMs:Number(env.ORACLE_JOB_RUNTIME_MS)||8*60_000,run:async(job,signal)=>{
       const input=job.payload_json;
+      if(input.transition?.clarification_rejected)return {success:true,analysis_context:input.analysis_context,answer:input.transition.clarification_rejected,tools:[],proposals:[],analysis_scope:analysisScope(input.analysis_context)};
       const correlation={request_id:job.request_id,job_id:job.job_id,attempt:Number(job.attempts)||0};
       const onProviderStage=event=>console.info('Oracle durable provider stage:',{...correlation,...event});
-      const answer=await dispatchAnalysisRequest({message:input.message,analysisContext:input.analysis_context,baselineOverview,baselineOptions:{onProviderStage,exportOwner:input.export_owner,requestId:job.request_id,signal,deadlineAt:Date.now()+(Number(env.ORACLE_JOB_RUNTIME_MS)||480_000)-2000,onEvidence:async answer=>{if(await analysisJobStore.checkpoint(job.job_id,{success:true,...answer},job)===false)throw Object.assign(new Error('Lease rejected'),{code:'LEASE_NOT_OWNED'});}},chat,chatOptions:{analysisContext:input.analysis_context,transition:input.transition,recentEvidence:input.recent_evidence,requestId:job.request_id,jobId:job.job_id,attempt:Number(job.attempts)||0,signal,durable:true}});
+      const answer=await dispatchAnalysisRequest({message:input.message,analysisContext:input.analysis_context,baselineOverview,baselineOptions:{recentEvidence:input.recent_evidence,onProviderStage,exportOwner:input.export_owner,requestId:job.request_id,signal,deadlineAt:Date.now()+(Number(env.ORACLE_JOB_RUNTIME_MS)||480_000)-2000,onEvidence:async answer=>{if(await analysisJobStore.checkpoint(job.job_id,{success:true,...answer},job)===false)throw Object.assign(new Error('Lease rejected'),{code:'LEASE_NOT_OWNED'});}},chat,chatOptions:{analysisContext:input.analysis_context,transition:input.transition,recentEvidence:input.recent_evidence,requestId:job.request_id,jobId:job.job_id,attempt:Number(job.attempts)||0,signal,durable:true}});
       let proposals=[],proposal_error=null;
-      try { proposals=answer.artifact?[]:await proposalsFor(input.message,input.created_by,input.temporal_context); } catch(error) { logProposalError(error);proposal_error='Knowledge proposal could not be generated.'; }
+      try { proposals=answer.artifact||suppressAnalyticalProposals(input.analysis_context,input.transition,input.original_message||input.message)?[]:await proposalsFor(input.message,input.created_by,input.temporal_context); } catch(error) { logProposalError(error);proposal_error='Knowledge proposal could not be generated.'; }
       return {success:true,analysis_context:answer.analysis_context||null,answer:answer.answer,presentation:answer.presentation||null,evidence:answer.evidence||null,inline_chart:answer.inline_chart||null,charts:answer.charts||answer.evidence?.chart_specs||[],artifact:answer.artifact||null,proposals,proposal_error,analysis_scope:analysisScope(input.analysis_context),tools:(answer.tools||[]).slice(0,20)};
     }});
     const jobStoreReady=analysisJobStore.setup();
@@ -158,7 +162,7 @@ export function createOracleUiRouter({ knowledgeService, bigquery, project, chat
       if((req.body.new_question===true||/^(?:new (?:question|analysis)|forget that|start over)\b/i.test(req.body.message)))clearAnalysis(req,res);
       const previous=sessionContext(req),result=requestTransition(req,previous,req.body.message,{now:now(),reportContext:req.body.report_context||null});
       if(result.transition.applies_to_message)saveSessionContext(req,result.context);
-      const cached=recentChatEvidence.get(sessionKey(req)),recent=relevantEvidence(cached,result.context);
+      const cached=recentChatEvidence.get(sessionKey(req)),recent=relevantEvidence(cached,result.context)||cached?.expires_at>now()&&compatibleClarificationEvidence(cached.value,result.context)||null;
       const pending=result.context.requested_subject===previous.requested_subject?unansweredIntents.get(sessionKey(req)):null;
       const effectiveMessage=pending?`${pending.message}\n\nUser follow-up: ${req.body.message}`:req.body.message;
       const owner=ownerKey(parseCookies(req.headers.cookie).oracle_session,sessionSecret);
@@ -187,16 +191,16 @@ export function createOracleUiRouter({ knowledgeService, bigquery, project, chat
       const previous=sessionContext(req);
       const result=requestTransition(req,previous,req.body.message,{now:now(),reportContext:req.body.report_context||null});
       console.info('Oracle analysis context transition:',{request_id:id,deployed_revision:env.RENDER_GIT_COMMIT||'unavailable',stage:'scope_resolution',requested_subject:result.context.requested_subject,resolved_subject:result.context.requested_subject,selected_route:result.context.tool_route,requested_periods:result.context.included_periods.length||undefined,period_start:result.context.start_date,period_end:result.context.end_date,continuation:result.transition.continuation,changed_fields:result.transition.set,cleared_fields:result.transition.clear,retained_field_names:result.transition.retain,missing_required_field_names:result.transition.missing_required_fields,ready_to_execute:result.transition.ready_to_execute});
-      const clarification=(!result.context.campaign_request&&campaignDateClarification(req.body.message,messageTemporalContext))||(result.transition.applies_to_message?clarificationFor(result.context):null);
+      const clarification=result.transition.clarification_rejected||(!result.context.campaign_request&&campaignDateClarification(req.body.message,messageTemporalContext))||(result.transition.applies_to_message?clarificationFor(result.context):null);
       const key=sessionKey(req),cached=recentChatEvidence.get(key);
-      const recentEvidence=relevantEvidence(cached,result.context);
+      const recentEvidence=relevantEvidence(cached,result.context)||cached?.expires_at>now()&&compatibleClarificationEvidence(cached.value,result.context)||null;
       const retainedPending=unansweredIntents.get(key);
       const pending=result.context.requested_subject===previous.requested_subject?retainedPending:null;
       const effectiveMessage=pending?`${pending.message}\n\nUser follow-up: ${req.body.message}`:req.body.message;
       const chatStarted=Date.now();
       let answer;
       try {
-        answer=clarification?{answer:clarification,tools:[]}:await dispatchAnalysisRequest({message:pending?effectiveMessage:req.body.message,analysisContext:result.transition.applies_to_message?result.context:null,baselineOverview,baselineOptions:{onEvidence:async partial=>{assertEvidenceAgreement(partial.analysis_context||result.context,partial.evidence);if(requestGeneration===generation(req))cacheEvidence(req,partial,new Date(now()).toISOString());},exportOwner:exportOwner(req),requestId:id,deadlineAt:requestStarted+60_000,signal:cancellation.signal,onProviderStage:event=>console.info('Oracle interactive provider stage:',{request_id:id,...event})},chat,chatOptions:{analysisContext:result.transition.applies_to_message?result.context:null,transition:result.transition,recentEvidence,pendingIntent:pending?.message||null,requestId:id,signal:cancellation.signal}});
+        answer=clarification?{answer:clarification,tools:[]}:await dispatchAnalysisRequest({message:pending?effectiveMessage:req.body.message,analysisContext:result.transition.applies_to_message?result.context:null,baselineOverview,baselineOptions:{recentEvidence,onEvidence:async partial=>{assertEvidenceAgreement(partial.analysis_context||result.context,partial.evidence);if(requestGeneration===generation(req))cacheEvidence(req,partial,new Date(now()).toISOString());},exportOwner:exportOwner(req),requestId:id,deadlineAt:requestStarted+60_000,signal:cancellation.signal,onProviderStage:event=>console.info('Oracle interactive provider stage:',{request_id:id,...event})},chat,chatOptions:{analysisContext:result.transition.applies_to_message?result.context:null,transition:result.transition,recentEvidence,pendingIntent:pending?.message||null,requestId:id,signal:cancellation.signal}});
         console.info('Oracle UI stage outcome:',stageOutcome({id,stage:'agent_request',startedAt:chatStarted,outcome:'success',extra:{tool_count:(answer.tools||[]).length}}));
       } catch(error) {
         if(requestGeneration===generation(req))rememberFailure(req,previous,result.context,req.body.message);
@@ -217,7 +221,7 @@ export function createOracleUiRouter({ knowledgeService, bigquery, project, chat
       else if(requestGeneration===generation(req))unansweredIntents.delete(key);
       let proposals = [], proposal_error = null;
       const proposalStarted=Date.now();
-      try { proposals = answer.artifact||clarification&&campaignDateClarification(req.body.message,messageTemporalContext)?[]:await proposalsFor(req.body.message, req.oracleUser.sub, messageTemporalContext); console.info('Oracle UI stage outcome:',stageOutcome({id,stage:'knowledge_proposals',startedAt:proposalStarted,outcome:'success',extra:{proposal_count:proposals.length}})); }
+      try { proposals = answer.artifact||suppressAnalyticalProposals(result.context,result.transition,req.body.message)||clarification&&campaignDateClarification(req.body.message,messageTemporalContext)?[]:await proposalsFor(req.body.message, req.oracleUser.sub, messageTemporalContext); console.info('Oracle UI stage outcome:',stageOutcome({id,stage:'knowledge_proposals',startedAt:proposalStarted,outcome:'success',extra:{proposal_count:proposals.length}})); }
       catch (error) { logProposalError(error); console.error('Oracle UI stage outcome:',stageOutcome({id,stage:'knowledge_proposals',startedAt:proposalStarted,outcome:'failed',error})); proposal_error = 'Knowledge proposal could not be generated.'; }
       console.info('Oracle UI stage outcome:',stageOutcome({id,stage:'ui_response',startedAt:requestStarted,outcome:'success'}));
       res.json({ success: true, answer: answer.answer, presentation:answer.presentation||null, evidence:answer.evidence||null, inline_chart:answer.inline_chart||null,charts:answer.charts||answer.evidence?.chart_specs||[], artifact:answer.artifact||null, proposals, proposal_error, scope_generation:generation(req), analysis_scope:analysisScope(sessionContext(req)) });

@@ -14,7 +14,9 @@ export function validatePromotionContext(value) {
   if(supplied_periods.length>10)throw Error('Too many promotion windows');
   if(value.pending_endpoint_date&&!/^\d{4}-\d{2}-\d{2}$/.test(value.pending_endpoint_date))throw Error('Invalid pending endpoint date');
   if(value.endpoint_choice&&!['start_of_day','end_of_day'].includes(value.endpoint_choice))throw Error('Invalid promotion endpoint');
-  return {pending_endpoint_date:value.pending_endpoint_date||null,endpoint_choice:value.endpoint_choice||null,pending_endpoint:Boolean(value.pending_endpoint),query:value.query,treatment:value.treatment,pending_dates:Boolean(value.pending_dates),supplied_periods};
+  if(value.endpoint_zone&&!['GMT','UTC','BST'].includes(value.endpoint_zone))throw Error('Invalid endpoint timezone');
+  if(value.calendar_instruction!=null&&(typeof value.calendar_instruction!=='string'||value.calendar_instruction.length>2000))throw Error('Invalid calendar instruction');
+  return {...(value.endpoint_zone?{endpoint_zone:value.endpoint_zone}:{}),...(value.calendar_instruction?{calendar_instruction:value.calendar_instruction}:{}),pending_endpoint_date:value.pending_endpoint_date||null,endpoint_choice:value.endpoint_choice||null,pending_endpoint:Boolean(value.pending_endpoint),query:value.query,treatment:value.treatment,pending_dates:Boolean(value.pending_dates),supplied_periods};
 }
 /** Independent grouping, measure, date and output refinements for an existing sales subject. */
 export function dailySalesContextPatch(base,text,now) {
