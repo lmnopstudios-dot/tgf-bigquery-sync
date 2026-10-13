@@ -12,7 +12,7 @@ const split=sql=>{
   for(let i=0;i<sql.length;i++){const c=sql[i];if(quote){if(c===quote)quote=null;continue;}if(c==="'"||c==='"'){quote=c;continue;}if(c==='('||c==='[')depth++;if(c===')'||c===']')depth--;if(c===','&&depth===0){parts.push(sql.slice(start,i));start=i+1;}}
   parts.push(sql.slice(start));return parts;
 };
-const object=columns=>`json_object(${split(columns).flatMap(col=>{const m=col.trim().match(/^([\s\S]+)\s+([a-z_]+)$/);if(!m)throw Error('Unsupported STRUCT column: '+col);return [`'${m[2]}'`,m[1]];}).join(',')})`;
+const object=(columns,requireAs=false)=>`json_object(${split(columns).flatMap(col=>{const m=col.trim().match(/^([\s\S]+)\s+([a-z_]+)$/);if(!m)throw Error('Unsupported STRUCT column: '+col);if(requireAs&&!/\sAS$/i.test(m[1]))throw Error('STRUCT field aliases require AS: '+col);return [`'${m[2]}'`,m[1].replace(/\sAS$/i,'')];}).join(',')})`;
 
 export function fixtureBigQuery(components,{failCoverage=false}={}) {
   const db=new DatabaseSync(':memory:');const calls=[];
@@ -40,7 +40,7 @@ export function fixtureBigQuery(components,{failCoverage=false}={}) {
       // BigQuery STRUCT and array literals -> SQLite JSON; parse balanced brackets.
       for(let idx=sql.indexOf('STRUCT(');idx>=0;idx=sql.indexOf('STRUCT(')){
         let end=idx+7,depth=1;for(;depth;end++){if(sql[end]==='(')depth++;if(sql[end]===')')depth--;}
-        sql=sql.slice(0,idx)+object(sql.slice(idx+7,end-1))+sql.slice(end);
+        sql=sql.slice(0,idx)+object(sql.slice(idx+7,end-1),true)+sql.slice(end);
       }
       sql=sql.replace(/\[([\s\S]*?)\]/g,(_,inner)=>`json_array(${inner})`);
       const start=sql.indexOf('(SELECT AS STRUCT '),end=sql.indexOf('\n      FROM joined)',start);
