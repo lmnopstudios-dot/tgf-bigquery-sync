@@ -1,3 +1,4 @@
+import { resolveExecutionPlan } from './analytical-capabilities.js';
 import { deliverOracleResult, safeDeliveryId } from './result-delivery.js';
 import { normalizeOracleResult, oracleResultContent } from '../public/oracle/result-contract.js';
 import { assertProductArtifact } from './product-artifact-validation.js';
@@ -147,8 +148,8 @@ export function createOracleUiRouter({ knowledgeService, bigquery, project, chat
     const invalid=messageError(req.body);if(invalid)return res.status(invalid.status).json({success:false,code:invalid.code,error:invalid.error});
     const previous=req.body.new_question===true?emptyAnalysisContext():sessionContext(req);
     const result=requestTransition(req,previous,req.body.message,{now:now(),reportContext:req.body.report_context||null});
-    const durable=result.transition.applies_to_message&&['export_product_priorities','get_order_value_analysis'].includes(result.context.tool_route);
-    res.json({success:true,route:durable?'job':oracleRequestRoute(req.body.message)});
+    const execution=resolveExecutionPlan(result.context);
+    res.json({success:true,route:execution.delivery||oracleRequestRoute(req.body.message)});
   });
   router.post('/analysis/clear',authenticate,protectWrite,json,(req,res)=>{clearAnalysis(req,res);res.json({success:true,analysis_scope:null,scope_generation:generation(req)})});
   // Durable jobs remain opt-in until the production-shaped enqueue/claim/finish/poll

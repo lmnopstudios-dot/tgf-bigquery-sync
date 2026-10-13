@@ -1,3 +1,5 @@
+import { orderValueRuntimeBinding } from './oracle/runtime-capability-bindings.js';
+import { createOracleBaselineDispatcher } from './oracle/baseline-dispatcher.js';
 import { deliverOracleResult, agentResultForUi } from './oracle/result-delivery.js';
 import { createShopifySalesKpiService } from './oracle/daily-sales-provider.js';
 import {executeTikTokToolCall} from './oracle/tiktok.js';
@@ -4208,7 +4210,7 @@ const productEvidenceReport=createProductEvidenceReportService({
 const generalAnalytics=createGeneralAnalyticsService({loadReport:ecommerceReportV2,inspectProductHistory:createReadOnlyProductHistory({bigquery,project:GOOGLE_PROJECT_ID})});
 const {artifactStore:priorityExportStore,service:productPriorityExport}=createProductionPriorityDependencies({bigquery,project:GOOGLE_PROJECT_ID});
 const currentStock=createCurrentStockService({graphql:shopifyGraphQL,getToken:getShopifyAccessToken,lookupGroup:createStockGroupLookup({bigquery,project:GOOGLE_PROJECT_ID}),locationSelector:oracleInventoryLocationSelector,log:diagnostic=>console.info('Oracle inventory read:',diagnostic)});
-baselineOverview=async(message,options={})=>await currentStock(message,options)||await productPriorityExport(message,options)||await generalAnalytics(message,options)||await historicalEventComparison(message)||await ecommerceBaselineOverview(message,options)||await productEvidenceReport(message);
+baselineOverview=createOracleBaselineDispatcher({currentStock,productPriorityExport,generalAnalytics,historicalEventComparison,ecommerceBaselineOverview,productEvidenceReport});
 
 async function getSalesByLocation({
   start_date,
@@ -4650,7 +4652,8 @@ app.get(
       status: 'ok',
       service:
         'TGF BigQuery Sync',
-      revision: DEPLOYED_GIT_REVISION
+      revision: DEPLOYED_GIT_REVISION,
+      oracle_capabilities: {order_values:orderValueRuntimeBinding({orderValues:orderValueService,baselineOverview})}
     });
   }
 );

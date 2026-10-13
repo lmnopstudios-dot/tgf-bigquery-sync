@@ -8,10 +8,16 @@ export const OPERATION_REQUIREMENTS=Object.freeze({
   profit_optimization:['compatible_product_costs','compatible_fulfilment_costs'],
   optional_product_enrichment:['published_destination_prices','no_inferred_basket_relationships']
 });
+export function individualOrderQuestion(message) {
+  return /\border\s+#?(?=[A-Z0-9._/-]*\d)[A-Z0-9][A-Z0-9._/-]*\b/i.test(String(message||''))&&/\b(?:details?|look\s*up|shipping|charges?|status|show|get|find)\b/i.test(String(message||''))&&!/\b(?:orders|population|distribution|bands|compare thresholds)\b/i.test(String(message||''));
+}
 export function requestedAnalyticalOperations(message) {
   const text=String(message||'');
+  if(individualOrderQuestion(text))return null;
   const bands=/\b(?:order[ -]?value|basket[ -]?(?:value|size)|merchandise (?:amount|value))\b[\s\S]{0,100}\b(?:bands?|distribution|buckets?|ranges?)\b|\b(?:bands?|distribution|buckets?)\b[\s\S]{0,100}\b(?:order|basket|merchandise)[ -]?(?:values?|amounts?|sizes?)\b/i.test(text);
-  const scenarios=/\bthresholds?\b/i.test(text)&&(/\b(?:compar[ei]|alternativ[es]|scenarios?|rais[ei]|lower|chang[ei])\w*\b/i.test(text)||[...text.matchAll(/£\s*\d+(?:\.\d+)?/g)].length>1);
+  const moneyCount=[...text.matchAll(/£\s*\d+(?:\.\d+)?/g)].length;
+  const shippingComparison=/\b(?:free[ -]?(?:shipping|delivery)|(?:shipping|delivery) (?:threshold|minimum)|(?:order|basket)[ -]?value)\b/i.test(text)&&moneyCount>1&&/\b(?:compare|versus|vs|instead|from|lower|raise|reduce|change|alternatives?|what if)\b/i.test(text);
+  const scenarios=shippingComparison||/\bthresholds?\b/i.test(text)&&(/\b(?:compar[ei]|alternativ[es]|scenarios?|rais[ei]|lower|chang[ei])\w*\b/i.test(text)||[...text.matchAll(/£\s*\d+(?:\.\d+)?/g)].length>1);
   const monetaryPopulation=bands||scenarios&&/\b(?:shipping|delivery|orders?|basket|merchandise)\b/i.test(text);
   if(!monetaryPopulation)return null;
   return {version:1,charge_domain:/\b(?:shipping|delivery)\b/i.test(text),operations:[...(bands?['numeric_bands']:[]),...(scenarios?['threshold_scenarios']:[]),...(/\bprofit|optimal|optimi[sz]/i.test(text)?['profit_optimization']:[]),...(/\badd[ -]?ons?|products?\b/i.test(text)?['optional_product_enrichment']:[])],
