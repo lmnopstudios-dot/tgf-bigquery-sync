@@ -27,9 +27,9 @@ export function orderValueTraceSql(project) {
   const allMasks=components.map(([alias],i)=>`SELECT order_id,${1<<i} component_bit FROM ${alias}`).join('\nUNION ALL\n');
   const masks=components.map(([alias,,field],i)=>`SELECT order_id,${1<<i} component_bit FROM ${alias} WHERE ${period(field)}`).join('\nUNION ALL\n');
   const combinations=[['locations_financials',3],['locations_status',5],['locations_geography',9],['financials_status',6],['financials_geography',10],['status_geography',12],['all_components',15]];
-  const intersections=combinations.map(([name,mask])=>`STRUCT('${name}' intersection,COUNTIF((component_mask & ${mask})=${mask}) orders)`).join(',\n');
+  const intersections=combinations.map(([name,mask])=>`STRUCT('${name}' AS intersection,COUNTIF((component_mask & ${mask})=${mask}) AS orders)`).join(',\n');
   const stages=[['date_scope','TRUE'],...ORDER_VALUE_FILTER_STAGES.map(([name],i)=>[name,ORDER_VALUE_FILTER_STAGES.slice(0,i+1).map(([,p])=>p).join(' AND ')])];
-  const counts=stages.map(([name,predicate],i)=>`STRUCT(${i} stage_index,'${name}' stage,COUNTIF(${predicate}) surviving_orders,COUNTIF((${predicate}) IS NULL) unknown_predicate_orders)`).join(',\n');
+  const counts=stages.map(([name,predicate],i)=>`STRUCT(${i} AS stage_index,'${name}' AS stage,COUNTIF(${predicate}) AS surviving_orders,COUNTIF((${predicate}) IS NULL) AS unknown_predicate_orders)`).join(',\n');
   return `${population}, component_metrics AS (${aggregates}), period_presence AS (${masks}),
     presence AS (SELECT order_id,BIT_OR(component_bit) component_mask FROM period_presence GROUP BY order_id),
     all_presence_rows AS (${allMasks}),

@@ -7,8 +7,26 @@ import { executeGovernedAgentAnalysis, assertEvidenceAgreement } from '../oracle
 import { diagnoseOrderValues } from '../diagnostics/oracle-order-values.js';
 import { numericDistribution } from '../oracle/numeric-distribution.js';
 import { orderValueSourceBindings } from '../oracle/order-value-bindings.js';
-
+import { orderValueTraceSql } from '../oracle/order-value-trace.js';
 const testSQL=(name,fn)=>test(name,{skip:!sqlFixtureAvailable},fn);
+
+testSQL('trace STRUCT fields require explicit AS in all intersection arrays and filter stages',async()=>{
+  const sql=orderValueTraceSql('gf-full-data');
+  assert.equal(sql.split('\n')[134].trim(),"(SELECT [STRUCT('locations_financials' AS intersection,COUNTIF((component_mask & 3)=3) AS orders),");
+  assert.equal((sql.match(/ AS intersection,/g)||[]).length,21);
+  for(const field of ['stage_index','stage','surviving_orders','unknown_predicate_orders'])assert.equal((sql.match(new RegExp(' AS '+field+'[,)]','g'))||[]).length,11);
+  const bq=fixtureBigQuery({});
+  // Reject the old BigQuery-invalid form before the SQLite translation masks it.
+  await assert.rejects(bq.createQueryJob({query:sql.replace(/ AS intersection/g,' intersection')}),/STRUCT field aliases require AS/);
+  await assert.rejects(bq.createQueryJob({query:sql.replace(/ AS stage_index/g,' stage_index')}),/STRUCT field aliases require AS/);
+  const report=await diagnoseOrderValues({start:'2026-09-01',end:'2026-09-30'},{bigquery:bq,project:'gf-full-data',env:{}});
+  const traceCalls=bq.calls.filter(c=>c.query.includes('component_metrics AS')&&c.query===sql);
+  assert.equal(traceCalls.length,2);
+  assert.equal(traceCalls[0].dryRun,true);
+  for(const call of traceCalls){assert.equal(call.maximumBytesBilled,'1000000000');assert.equal(call.jobTimeoutMs,30000);assert.equal(call.useLegacySql,false);}
+  assert.equal(report.checks.find(c=>c.stage==='population_trace').status,'fulfilled');
+});
+
 const now=Date.parse('2026-10-13T10:00:00Z');
 const message='Assess UK online GBP free shipping for September 2026. Compare £250 with £200 and £225, assuming purchasing behaviour stays unchanged. Show affected order counts, recorded shipping charges and the separate hypothetical £8 calculation.';
 const period={start:'2026-09-01',end:'2026-09-30'};
