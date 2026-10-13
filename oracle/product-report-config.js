@@ -1,3 +1,4 @@
+import { normalizeCatalogueFilter } from './product-catalogue-filter.js';
 import { naturalReportPeriod } from './report-natural-period.js';
 // Capability boundary for the existing published-product export. Provider bindings
 // describe persisted governed evidence, not promises of arbitrary query support.
@@ -23,10 +24,12 @@ const fail=()=>{throw Object.assign(new Error('Invalid product report configurat
 const validDate=value=>/^\d{4}-\d{2}-\d{2}$/.test(value||'')&&!Number.isNaN(Date.parse(`${value}T00:00:00Z`))&&new Date(`${value}T00:00:00Z`).toISOString().slice(0,10)===value;
 export function validateProductReportConfig(value){
   if(!value||typeof value!=='object'||Array.isArray(value))return fail();
-  const keys=['version','population','period','channel','metrics','currency','sort','output_format','priority_preset','unresolved','unsupported_requirements','catalogue_filter','period_defaulted'];
+  const keys=['version','population','period','channel','metrics','currency','sort','output_format','priority_preset','unresolved','unsupported_requirements','catalogue_filter','period_defaulted','catalogue_choices'];
   if(Object.keys(value).some(key=>!keys.includes(key))||value.version!==1)return fail();
   const filter=value.catalogue_filter??null;
-  if(filter&&(!filter.term||typeof filter.term!=='string'||filter.term.length>160||!['term','source'].every(k=>Object.hasOwn(filter,k))||Object.keys(filter).some(k=>!['term','source','ready_to_ship'].includes(k))||![null,'collection','product_type','tag'].includes(filter.source)||filter.ready_to_ship!==undefined&&typeof filter.ready_to_ship!=='boolean'))return fail();
+  if(filter&&(!filter.term||typeof filter.term!=='string'||filter.term.length>160||!['term','source'].every(k=>Object.hasOwn(filter,k))||Object.keys(filter).some(k=>!['term','source','ready_to_ship','collection_id'].includes(k))||![null,'collection','product_type','tag'].includes(filter.source)||filter.ready_to_ship!==undefined&&typeof filter.ready_to_ship!=='boolean'))return fail();
+  if(filter?.collection_id&& (filter.source!=='collection'||!/^gid:\/\/shopify\/Collection\/[1-9]\d*$/.test(filter.collection_id)))return fail();
+  if(value.catalogue_choices!==undefined&&(!Array.isArray(value.catalogue_choices)||value.catalogue_choices.length>24||value.catalogue_choices.some(c=>!['collection','product_type','tag'].includes(c?.source)||typeof c.value!=='string'||c.value.length>160||c.collection_id&&!/^gid:\/\/shopify\/Collection\/[1-9]\d*$/.test(c.collection_id))))return fail();
   if(value.period_defaulted!==undefined&&typeof value.period_defaulted!=='boolean')return fail();
   const p=value.population,d=value.period,s=value.sort;
   if(!p||p.kind!=='current_online_published'||Object.keys(p).some(k=>!['kind','product_ids','limit'].includes(k))||p.limit!==null&&(!Number.isInteger(p.limit)||p.limit<1||p.limit>10000))return fail();
@@ -39,9 +42,19 @@ export function validateProductReportConfig(value){
   if(!Array.isArray(value.unresolved)||value.unresolved.some(x=>!['sort_metric','currency','metrics'].includes(x))||!Array.isArray(value.unsupported_requirements)||value.unsupported_requirements.some(x=>typeof x!=='string'||x.length>160))return fail();
   if(s.metric&&PRODUCT_REPORT_CAPABILITIES[s.metric]?.money&&!value.currency&&!value.unresolved.includes('currency'))return fail();
   if(s.metric&&s.metric!=='priority'&&!value.metrics.includes(s.metric))return fail();
-  return {version:1,catalogue_filter:filter?{term:filter.term,source:filter.source,...(filter.ready_to_ship?{ready_to_ship:true}:{})}:null,period_defaulted:value.period_defaulted??false,population:{kind:p.kind,product_ids:p.product_ids?[...new Set(p.product_ids)].sort((a,b)=>BigInt(a)<BigInt(b)?-1:BigInt(a)>BigInt(b)?1:0):null,limit:p.limit},period:{start_date:d.start_date,end_date:d.end_date,timezone:d.timezone},channel:value.channel,metrics:[...value.metrics],currency:value.currency,sort:{metric:s.metric,direction:s.direction},output_format:value.output_format,priority_preset:value.priority_preset,unresolved:[...new Set(value.unresolved)].sort(),unsupported_requirements:[...new Set(value.unsupported_requirements)].sort()};
+  return {version:1,catalogue_filter:filter?{term:filter.term,source:filter.source,...(filter.collection_id?{collection_id:filter.collection_id}:{}),...(filter.ready_to_ship?{ready_to_ship:true}:{})}:null,...(value.catalogue_choices?.length?{catalogue_choices:value.catalogue_choices.map(c=>({source:c.source,value:c.value,...(c.collection_id?{collection_id:c.collection_id}:{})}))}:{}),period_defaulted:value.period_defaulted??false,population:{kind:p.kind,product_ids:p.product_ids?[...new Set(p.product_ids)].sort((a,b)=>BigInt(a)<BigInt(b)?-1:BigInt(a)>BigInt(b)?1:0):null,limit:p.limit},period:{start_date:d.start_date,end_date:d.end_date,timezone:d.timezone},channel:value.channel,metrics:[...value.metrics],currency:value.currency,sort:{metric:s.metric,direction:s.direction},output_format:value.output_format,priority_preset:value.priority_preset,unresolved:[...new Set(value.unresolved)].sort(),unsupported_requirements:[...new Set(value.unsupported_requirements)].sort()};
 }
-export const productReportConfigKey=value=>JSON.stringify(validateProductReportConfig(value));
+export function normalizedProductReportScope(value){const c=validateProductReportConfig(value);delete c.catalogue_choices;c.catalogue_filter=normalizeCatalogueFilter(c.catalogue_filter);return c;}
+export const productReportConfigKey=value=>JSON.stringify(normalizedProductReportScope(value));
+export function productReportMismatchField(expected,actual){
+  if(!actual)return 'report_config';
+  const left=normalizedProductReportScope(expected),right=normalizedProductReportScope(actual);
+  for(const field of Object.keys(left))if(JSON.stringify(left[field])!==JSON.stringify(right[field])){
+    if(left[field]&&right[field]&&typeof left[field]==='object'&&!Array.isArray(left[field]))for(const key of Object.keys(left[field]))if(JSON.stringify(left[field][key])!==JSON.stringify(right[field][key]))return `report_config.${field}.${key}`;
+    return `report_config.${field}`;
+  }
+  return null;
+}
 const escape=value=>value.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
 function mentionedMetrics(text){
   // Consume longest aliases first: “net sales” must not become ordinary sales.
@@ -52,6 +65,7 @@ function mentionedMetrics(text){
 }
 export function isProductReportRequest(text,previous=null){
   text=String(text||'');
+  if(previous?.catalogue_choices?.length&&/^(?:(?:use|choose|pick|select)\s+)?(?:(?:option|choice|number)\s+)?#?\d+\s*[.!]?$/i.test(text))return true;
   if(previous&&(/^(?:only|use)\s+(?:ready[ -]to[ -]ship|collection|product type|tag)\b/i.test(text)||/\bexport all products instead\b/i.test(text)))return true;
   if(/\b(?:export|download)\b/i.test(text)&&!/\b(?:customers?|orders?|campaigns?|countries|conversion)\b/i.test(text)&&/\b(?:Shopify|products?)\b|\b(?:pendants?|rings?|earrings?|ready[ -]to[ -]ship)\b/i.test(text))return true;
   if(!/\b(?:export|download)\b/i.test(text)&&/\b(?:customers?|before|after|next)\b|\b(?:first|second|third|nth)\s+(?:purchase|order)\b/i.test(text))return false;
@@ -83,6 +97,14 @@ export function resolveProductReportConfig(message,{previous=null,period=null,de
   else if(namedSource)config.catalogue_filter={term:namedSource[2].trim(),source:namedSource[1].toLowerCase().replace('tagged','tag').replace(' ','_')};
   else if(category){if(continuation&&/^ready[ -]to[ -]ship$/i.test(category[1])&&config.catalogue_filter)config.catalogue_filter.ready_to_ship=true;else config.catalogue_filter={term:category[1].toLowerCase(),source:null};}
   else if(!continuation&&!priority&&unknown&&!/^(?:all |published |products?\b|top |current |priority)/i.test(unknown))config.catalogue_filter={term:unknown.trim(),source:null};
+  if(continuation&&(selection||namedSource)&&previous.catalogue_filter?.ready_to_ship)config.catalogue_filter.ready_to_ship=true;
+  const ordinal=text.match(/^(?:(?:use|choose|pick|select)\s+)?(?:(?:option|choice|number)\s+)?#?(\d+)\s*[.!]?$/i);
+  const offered=previous?.catalogue_choices||[];
+  const matches=selection?offered.filter(c=>c.source===config.catalogue_filter.source&&normalizeCatalogueFilter({term:c.value,source:c.source}).term===normalizeCatalogueFilter(config.catalogue_filter).term):[];
+  const chosen=ordinal?offered[Number(ordinal[1])-1]:matches.length===1?matches[0]:null;
+  if(selection&&!chosen&&previous?.catalogue_filter?.collection_id&&normalizeCatalogueFilter(previous.catalogue_filter).term===normalizeCatalogueFilter(config.catalogue_filter).term&&config.catalogue_filter.source===previous.catalogue_filter.source)config.catalogue_filter.collection_id=previous.catalogue_filter.collection_id;
+  if(chosen)config.catalogue_filter={term:chosen.value,source:chosen.source,...(chosen.collection_id?{collection_id:chosen.collection_id}:{}),...(previous.catalogue_filter?.ready_to_ship?{ready_to_ship:true}:{})};
+  if(chosen||selection||namedSource||!continuation)delete config.catalogue_choices;
   const rolling=text.match(/\blast\s+(\d{1,4})\s+(?:completed\s+)?days?\b/i);
   period??=naturalReportPeriod(text,now);
   if(rolling){const end=new Date(`${defaultPeriod.end_date}T00:00:00Z`),start=new Date(+end-(Number(rolling[1])-1)*86400000);period={start_date:start.toISOString().slice(0,10),end_date:defaultPeriod.end_date};}

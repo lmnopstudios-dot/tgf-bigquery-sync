@@ -1,3 +1,6 @@
+import { createHash } from 'node:crypto';
+import { createSession } from '../oracle/ui-security.js';
+import { assertProductArtifact } from '../oracle/product-artifact-validation.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
@@ -15,13 +18,13 @@ const url=id=>`https://www.thegreatfroglondon.com/products/p-${id}`;
 const product=(id,type,tags=[],collections=[])=>({id:`gid://shopify/Product/${id}`,title:`Product ${id}`,productType:type,tags,collections:{nodes:collections,pageInfo:{hasNextPage:false,endCursor:null}},status:'ACTIVE',publishedAt:'2026-01-01',onlineStoreUrl:url(id),seo:{description:''}});
 // Deliberately misleading titles, unmatched pendant analytics, duplicate root across pages.
 const products=[product(1,'Pendants',['ready-to-ship']),product(2,'Rings',['ready-to-ship']),product(3,'Earrings'),product(4,'Gift vouchers'),product(5,'Pendants')];products[1].title='Pendant title on a ring';
-function serviceFixture(nodes=products){
-  const artifactStore=createMemoryExportStore(),calls=[],providerCalls=[];
-  const graphql=async(query,args)=>{calls.push({query,args});return {products:{nodes:args.cursor?[...nodes.slice(2),nodes[0]]:nodes.slice(0,2),pageInfo:{hasNextPage:!args.cursor,endCursor:args.cursor?null:'second'}}};};
-  const loadSources=async(dates,args)=>{providerCalls.push({dates,args});return {sales:{status:'available',complete:true,rows:[{product_id:'1',units_sold:8},{product_id:'2',units_sold:100},{product_id:'4',units_sold:200}]},traffic:{status:'available',complete:true,rows:[{landing_path:'/products/p-1',sessions:5},{landing_path:'/products/p-2',sessions:1000}]},organic:{status:'available',complete:true,rows:[{page:url(1),clicks:3}]}};};
+function serviceFixture(nodes=products,{reorder=false,paged=false}={}){
+  const memory=createMemoryExportStore(),artifactStore=reorder?{put:memory.put,get:async(...args)=>{const value=await memory.get(...args);return value?JSON.parse(sortedJSON(value)):null;}}:memory,calls=[],providerCalls=[];
+  const graphql=async(query,args)=>{calls.push({query,args});if(paged){const offset=Number(args.cursor||0),end=Math.min(nodes.length,offset+90);return {products:{nodes:nodes.slice(offset,end),pageInfo:{hasNextPage:end<nodes.length,endCursor:end<nodes.length?String(end):null}}};}return {products:{nodes:args.cursor?[...nodes.slice(2),nodes[0]]:nodes.slice(0,2),pageInfo:{hasNextPage:!args.cursor,endCursor:args.cursor?null:'second'}}};};
+  const loadSources=async(dates,args)=>{providerCalls.push({dates,args});if(paged)return {sales:{status:'available',complete:true,rows:nodes.map(p=>({product_id:p.id.split('/').at(-1),units_sold:Number(p.id.split('/').at(-1))}))}};return {sales:{status:'available',complete:true,rows:[{product_id:'1',units_sold:8},{product_id:'2',units_sold:100},{product_id:'4',units_sold:200}]},traffic:{status:'available',complete:true,rows:[{landing_path:'/products/p-1',sessions:5},{landing_path:'/products/p-2',sessions:1000}]},organic:{status:'available',complete:true,rows:[{page:url(1),clicks:3}]}};};
   return {artifactStore,calls,providerCalls,graphql,loadSources,service:createProductPriorityService({graphql,loadSources,artifactStore,now:()=>NOW})};
 }
-async function fixture(durable){const f=serviceFixture(),app=express(),store=durable?createMemoryAnalysisJobStore():null;app.use('/api/oracle',createOracleUiRouter({generateProposals:async()=>[],knowledgeService:{},bigquery:{},project:'fixture',baselineOverview:f.service,exportStore:f.artifactStore,analysisJobStore:store,chat:async()=>assert.fail('must use governed route'),env:{...env,...(durable?{ORACLE_ANALYSIS_JOBS_ENABLED:'true',ORACLE_JOB_RUNTIME_MS:'10000'}:{})},now:()=>NOW}));const server=await new Promise(resolve=>{const s=app.listen(0,'127.0.0.1',()=>resolve(s));}),base=`http://127.0.0.1:${server.address().port}/api/oracle`,request=(path,options={})=>fetch(base+path,options);const login=await request('/auth/login',{method:'POST',headers:{origin:new URL(base).origin,'content-type':'application/json'},body:JSON.stringify({password:env.ORACLE_UI_PASSWORD})}),auth=await login.json(),cookie=login.headers.getSetCookie().map(x=>x.split(';')[0]).join('; '),headers={cookie,origin:new URL(base).origin,'content-type':'application/json','x-csrf-token':auth.csrf};return {...f,store,server,request,headers};}
+async function fixture(durable,nodes=products,options={}){const f=serviceFixture(nodes,options),app=express(),store=durable?createMemoryAnalysisJobStore():null;app.use('/api/oracle',createOracleUiRouter({generateProposals:async()=>[],knowledgeService:{},bigquery:{},project:'fixture',baselineOverview:f.service,exportStore:f.artifactStore,analysisJobStore:store,chat:async()=>assert.fail('must use governed route'),env:{...env,...(durable?{ORACLE_ANALYSIS_JOBS_ENABLED:'true',ORACLE_JOB_RUNTIME_MS:'10000'}:{})},now:()=>NOW}));const server=await new Promise(resolve=>{const s=app.listen(0,'127.0.0.1',()=>resolve(s));}),base=`http://127.0.0.1:${server.address().port}/api/oracle`,request=(path,options={})=>fetch(base+path,options);const login=await request('/auth/login',{method:'POST',headers:{origin:new URL(base).origin,'content-type':'application/json'},body:JSON.stringify({password:env.ORACLE_UI_PASSWORD})}),auth=await login.json(),cookie=login.headers.getSetCookie().map(x=>x.split(';')[0]).join('; '),headers={cookie,origin:new URL(base).origin,'content-type':'application/json','x-csrf-token':auth.csrf};return {...f,store,server,request,headers};}
 async function send(f,durable,message,id=crypto.randomUUID()){const response=await f.request(durable?'/jobs':'/chat',{method:'POST',headers:{...f.headers,'x-request-id':id},body:JSON.stringify({message})});assert.equal(response.status,durable?202:200);const submitted=await response.json();if(!durable)return submitted;for(let n=0;n<200;n++){const r=await f.request(`/jobs/${submitted.job_id}`,{headers:{cookie:f.headers.cookie}}),body=await r.json();if(body.status==='completed')return {...body,job_id:submitted.job_id};if(body.status==='failed')assert.fail(JSON.stringify(body));await new Promise(r=>setTimeout(r,10));}assert.fail('job timeout');}
 async function assertRows(f,result,ids){assert.deepEqual(result.evidence.rows.map(r=>r.product_id),ids);assert.deepEqual(result.evidence.catalogue_selection.matching_product_ids.slice().sort(),ids.slice().sort());assert.equal(result.artifact.row_count,ids.length);const download=await f.request(result.artifact.download_url.replace('/api/oracle',''),{headers:{cookie:f.headers.cookie}});assert.equal(download.status,200);const wb=new ExcelJS.Workbook();await wb.xlsx.load(Buffer.from(await download.arrayBuffer()));assert.equal(wb.worksheets[0].rowCount,ids.length+1);assert.deepEqual(wb.worksheets[0].getColumn(2).values.slice(2).map(x=>x.hyperlink),ids.map(url));return wb.worksheets[0];}
 for(const durable of [false,true])test(`${durable?'durable':'interactive'} exact clarification, IDs, XLSX, retry, refresh and refinements`,async t=>{const f=await fixture(durable);t.after(()=>f.server.close());
@@ -65,4 +68,54 @@ test('HTTP refresh rejects a legacy completed export whose saved context already
   delete job.result_json.evidence.catalogue_selection;
   const response=await f.request(`/jobs/${result.job_id}`,{headers:{cookie:f.headers.cookie}});
   assert.equal(response.status,500);const body=await response.json();assert.equal(body.code,'ORACLE_REQUEST_FAILED');assert.equal(body.artifact,undefined);
+});
+
+// BigQuery JSON objects do not preserve insertion order. Exercise that storage
+// boundary with the actual shared service, router, worker and workbook reader.
+function sortedJSON(value){return JSON.stringify(value,(_,v)=>v&&typeof v==='object'&&!Array.isArray(v)?Object.fromEntries(Object.entries(v).sort(([a],[b])=>a.localeCompare(b))):v);}
+const collectionId='gid://shopify/Collection/658285396295';
+const productionProducts=Array.from({length:600},(_,i)=>product(i+1,i<75?'Pendants':'Rings',i>=125&&i<200?['Pendants']:[],i>=25&&i<100?[{id:collectionId,title:'Pendants',handle:'pendants'}]:[]));
+for(const durable of [false,true])for(const reply of ['Use collection pendants.','Choose option 2'])test(`${durable?'durable':'interactive'} production-shaped ambiguity -> ${reply} -> verified persisted export`,async t=>{
+  const f=await fixture(durable,productionProducts,{reorder:true,paged:true});t.after(()=>f.server.close());
+  const first=await send(f,durable,'Export Shopify pendants ranked by units sold this year.');
+  assert.match(first.answer,/different Shopify populations/);assert.ok(!first.artifact);assert.equal(f.providerCalls.length,0);assert.equal(f.calls.length,7);
+  // Equal counts, distinct actual IDs: product type 1..75, collection 26..100.
+  const route=await (await f.request('/analysis/route',{method:'POST',headers:f.headers,body:JSON.stringify({message:reply})})).json();assert.equal(route.route,'job');
+  const requestId=crypto.randomUUID(),result=await send(f,durable,reply,requestId),ids=Array.from({length:75},(_,i)=>String(100-i));
+  await assertRows(f,result,ids);assert.equal(result.evidence.report_config.catalogue_filter.collection_id,collectionId);
+  assert.equal(result.evidence.catalogue_selection.bindings[0].collection_id,collectionId);
+  assert.equal(result.evidence.population_count,75);assert.equal(result.evidence.catalogue.retrieved_product_count,600);
+  assert.deepEqual(result.evidence.rows.map(p=>p.metrics.units_sold),ids.map(Number));
+  assert.equal(result.evidence.applied_dates.start_date,'2026-01-01');assert.equal(result.evidence.applied_dates.end_date,'2026-10-09');
+  assertEvidenceAgreement({...(transitionAnalysisContext(null,'Export Shopify pendants ranked by units sold this year.',{now:NOW}).context),product_report:result.evidence.report_config},result.evidence);
+  const count=f.calls.length,retry=await send(f,durable,reply,requestId);await assertRows(f,retry,ids);assert.equal(f.calls.length,count);
+  const manifest=await f.request(`/exports/${result.artifact.id}/manifest?report_config=${encodeURIComponent(JSON.stringify(result.evidence.report_config))}`,{headers:{cookie:f.headers.cookie}});assert.equal(manifest.status,200);assert.equal((await manifest.json()).artifact.id,result.artifact.id);assert.equal(f.calls.length,count);
+  const unauth=await f.request(result.artifact.download_url.replace('/api/oracle',''));assert.equal(unauth.status,401);const other=await f.request(result.artifact.download_url.replace('/api/oracle',''),{headers:{cookie:`oracle_session=${createSession('different-owner',env.ORACLE_UI_SESSION_SECRET)}`}});assert.equal(other.status,404);
+  if(durable){const job=f.store.jobs.get(result.job_id);job.status='failed';job.result_json=null;job.error_code='DELIVERY_FAILED';const recovered=await (await f.request(`/jobs/${result.job_id}`,{headers:{cookie:f.headers.cookie}})).json();assert.equal(recovered.recovered_persisted_export,true);await assertRows(f,recovered,ids);assert.equal(f.calls.length,count);}
+  const refined=await send(f,durable,'Sort by units sold ascending.');await assertRows(f,refined,ids.slice().reverse());assert.equal(refined.evidence.report_config.catalogue_filter.collection_id,collectionId);assert.deepEqual(refined.evidence.applied_dates,result.evidence.applied_dates);
+  const dates=await send(f,durable,'For last year.');assert.equal(dates.evidence.applied_dates.start_date,'2025-01-01');assert.equal(dates.evidence.applied_dates.end_date,'2025-12-31');assert.equal(dates.evidence.report_config.catalogue_filter.collection_id,collectionId);
+});
+for(const [reply,ids] of [['Use product type pendants.',Array.from({length:75},(_,i)=>String(75-i))],['Use tag pendants.',Array.from({length:75},(_,i)=>String(200-i))]])test(`source provenance and exact IDs: ${reply}`,async t=>{
+  const f=await fixture(true,productionProducts,{reorder:true,paged:true});t.after(()=>f.server.close());await send(f,true,'Export Shopify pendants');const metric=await send(f,true,'Units sold.');assert.match(metric.answer,/different Shopify populations/);const result=await send(f,true,reply);await assertRows(f,result,ids);assert.equal(result.evidence.catalogue_selection.bindings[0].source,reply.includes('tag')?'tag':'product_type');
+});
+test('filter normalization preserves strict membership, stable identity and requested scope',async()=>{
+  const f=serviceFixture(productionProducts,{reorder:true,paged:true}),initial=context('Export Shopify pendants ranked by units sold this year.'),a=await f.service('initial',{analysisContext:initial,exportOwner:'owner',requestId:'initial'}),c=transitionAnalysisContext(a.analysis_context,'Use collection pendants.',{now:NOW}).context;
+  const result=await f.service('selected',{analysisContext:c,exportOwner:'owner',requestId:'selected'});assertEvidenceAgreement(c,result.evidence);
+  for(const patch of [{source:'product_type',term:'pendants'},{source:'collection',term:'pendants',collection_id:'gid://shopify/Collection/999'},{source:null,term:'rings'},null])assert.throws(()=>assertEvidenceAgreement(c,{...result.evidence,catalogue_selection:{...result.evidence.catalogue_selection,filter:patch}}),e=>e.code==='EVIDENCE_SCOPE_MISMATCH'&&e.scope_field==='catalogue_selection.filter');
+  assert.notEqual(JSON.stringify(result.evidence.catalogue_selection.filter),JSON.stringify(c.product_report.catalogue_filter));
+  const changedDates={...result.evidence,report_config:{...result.evidence.report_config,period:{...result.evidence.report_config.period,end_date:'2026-10-08'}}};assert.throws(()=>assertEvidenceAgreement(c,changedDates),e=>e.scope_field==='report_config.period.end_date');
+  const reordered={...result.evidence,catalogue_selection:{...result.evidence.catalogue_selection,filter:{collection_id:collectionId,source:'collection',term:'PENDANT',ready_to_ship:false}}};assertEvidenceAgreement(c,reordered);
+});
+test('identical ID populations avoid clarification and retain each native binding',async()=>{
+  const f=serviceFixture([product(1,'Pendants',[],[{id:collectionId,title:'Pendants',handle:'pendants'}]),product(2,'Pendants',[],[{id:collectionId,title:'Pendants',handle:'pendants'}])]);const result=await f.service('report',{analysisContext:context('Export Shopify pendants by units sold.'),exportOwner:'owner',requestId:'same'});assert.deepEqual(result.evidence.rows.map(x=>x.product_id).sort(),['1','2']);assert.deepEqual(result.evidence.catalogue_selection.bindings.map(x=>x.source),['product_type','collection']);
+});
+
+test('recovery rejects corrupted bytes, wrong workbook population and missing collection membership',async()=>{
+  const f=serviceFixture(productionProducts,{reorder:true,paged:true}),initial=context('Export Shopify pendants ranked by units sold this year.'),a=await f.service('initial',{analysisContext:initial,exportOwner:'owner',requestId:'initial'}),c=transitionAnalysisContext(a.analysis_context,'Use collection pendants.',{now:NOW}).context;
+  const result=await f.service('selected',{analysisContext:c,exportOwner:'owner',requestId:'selected'}),saved=await f.artifactStore.get(result.artifact.id,'owner');
+  await assertProductArtifact(saved);
+  await assert.rejects(assertProductArtifact({...saved,xlsx_base64:'AAAA'}),e=>e.scope_field==='artifact.sha256');
+  const wb=new ExcelJS.Workbook();await wb.xlsx.load(Buffer.from(saved.xlsx_base64,'base64'));wb.worksheets[0].getCell('B2').value={text:url(2),hyperlink:url(2)};const buffer=Buffer.from(await wb.xlsx.writeBuffer());
+  await assert.rejects(assertProductArtifact({...saved,xlsx_base64:buffer.toString('base64'),sha256:createHash('sha256').update(buffer).digest('hex')}),e=>e.scope_field==='artifact.product_ids');
+  const rows=saved.envelope.rows.map((p,i)=>i? p:{...p,collections:[]});await assert.rejects(assertProductArtifact({...saved,envelope:{...saved.envelope,rows}}),e=>e.code==='EVIDENCE_SCOPE_MISMATCH');
 });

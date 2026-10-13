@@ -1,3 +1,4 @@
+import { normalizeCatalogueFilter } from './product-catalogue-filter.js';
 import { DAILY_SALES_CONTRACT } from './daily-sales-provider.js';
 import { PRODUCT_REPORT_CAPABILITIES } from './product-report-config.js';
 import { createHash } from 'node:crypto';
@@ -9,7 +10,7 @@ export function resolveAnalyticalPlan(c) {
   return {
     version:1, subject:c?.requested_subject||null,
     entities:{selected:campaign?.selected||c?.product_ref||null,candidates:campaign?.candidates||c?.pending_product_candidates||[],query:c?.entity_query||campaign?.name||null},
-    population:{catalogue_filter:report?.catalogue_filter||null,selection:report?.population||null,filters:c?.filters||[]},
+    population:{catalogue_filter:normalizeCatalogueFilter(report?.catalogue_filter),selection:report?.population||null,filters:c?.filters||[]},
     scope:{platform:c?.platform||null,source_store:c?.source_store||null,channel:c?.channel||null,channel_breakdown:Boolean(c?.channel_breakdown),currencies:c?.currencies||[],currency:report?.currency||null},
     metrics:report?.metrics||campaign?.requested_metrics||(c?.native_metrics?.length?c.native_metrics:c?.metrics)||[],
     metric_definitions:report?Object.fromEntries(report.metrics.map(m=>[m,PRODUCT_REPORT_CAPABILITIES[m]?.definition||'Unavailable'])):c?.tool_route==='get_daily_sales_analysis'?DAILY_SALES_CONTRACT.definitions:null,
@@ -29,6 +30,7 @@ export function stableAnalyticalJSON(value){
 export function analyticalPlanKey(plan) {
   // Asking for a chart/download does not change the evidence population.
   const {presentation,pending,...scope}=plan;
+  if(scope.population)scope.population={...scope.population,catalogue_filter:normalizeCatalogueFilter(scope.population.catalogue_filter)};
   return createHash('sha256').update(stableAnalyticalJSON(scope)).digest('hex');
 }
 export function assertPlanAgreement(context,evidence) {
