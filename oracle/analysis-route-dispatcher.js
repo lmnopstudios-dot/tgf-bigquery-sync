@@ -1,3 +1,5 @@
+import { requestedAnalyticalOperations, unsupportedOperationResult } from './requested-operations.js';
+import { deliverOracleResult } from './result-delivery.js';
 import { assertWeekdayEvidence } from './weekday-sales.js';
 import { resolveAnalyticalPlan, analyticalPlanKey, assertPlanAgreement } from './analytical-plan.js';
 import { resolveExecutionPlan } from './analytical-capabilities.js';
@@ -93,6 +95,8 @@ function disclosePeriod(result,context){
 }
 export async function dispatchAnalysisRequest({message,analysisContext,baselineOverview=null,baselineOptions,chat,chatOptions}){
   const context=analysisContext==null?null:validateAnalysisContext(analysisContext);
+  const requested=requestedAnalyticalOperations(message);
+  if(requested){baselineOptions?.onProviderStage?.({stage:'capability_selection',status:'unsupported',operation_count:requested.operations.length});return deliverOracleResult(await unsupportedOperationResult(requested,context||transitionAnalysisContext(null,message).context,baselineOptions),context);}
   const execution=resolveExecutionPlan(context,ANALYSIS_ROUTE_DISPATCHERS);
   if(execution.limitation)return {answer:execution.limitation,analysis_unavailable:true,tools:[]};
   const clarification=context?clarificationFor(context):null;if(clarification)return {answer:clarification,tools:[]};
@@ -101,13 +105,15 @@ export async function dispatchAnalysisRequest({message,analysisContext,baselineO
   try{assertResolvedAnalysisContext(context,result?.analysis_context);assertEvidenceAgreement(result?.analysis_context||context,result?.evidence);baselineOptions?.onProviderStage?.({stage:'evidence_validation',status:'success'});}catch(error){baselineOptions?.onProviderStage?.({stage:'evidence_validation',status:'failed',code:'EVIDENCE_SCOPE_MISMATCH',scope_field:error.scope_field||'analytical_scope'});throw error;}
   if(result?.evidence&&context?.requested_subject&&!result.evidence.report_config)result={...result,evidence:{...result.evidence,analytical_plan:resolveAnalyticalPlan(result.analysis_context||context)}};
   await baselineOptions?.onEvidence?.(result);
-  return presentAnalyticalAnswer(withOracleCharts(disclosePeriod(result,result?.analysis_context||context)),result?.analysis_context||context);
+  try{return deliverOracleResult(presentAnalyticalAnswer(withOracleCharts(disclosePeriod(result,result?.analysis_context||context)),result?.analysis_context||context),result?.analysis_context||context);}catch{return deliverOracleResult({...result,answer:null,presentation:null,partial:true},result?.analysis_context||context);}
 }
 
 /** Shared deterministic /agent entrypoint; a null result continues existing model tooling. */
 export async function executeGovernedAgentAnalysis({message,analysisContext,baselineOverview,baselineOptions={},scopeResolved=false,now=Date.now()}){
   const resolved=scopeResolved?{context:validateAnalysisContext(analysisContext||{})}:transitionAnalysisContext(analysisContext,message,{now});
   baselineOptions.onProviderStage?.({stage:'scope_resolution',resolved_subject:resolved.context.requested_subject,selected_route:resolved.context.tool_route,start_date:resolved.context.start_date,end_date:resolved.context.end_date});
+  const requested=requestedAnalyticalOperations(message);
+  if(requested)return deliverOracleResult(await unsupportedOperationResult(requested,resolved.context,baselineOptions),resolved.context);
   const execution=resolveExecutionPlan(resolved.context,ANALYSIS_ROUTE_DISPATCHERS);
   if(execution.limitation)return {answer:execution.limitation,analysis_unavailable:true,tools:[]};
   const clarification=clarificationFor(resolved.context);
@@ -118,5 +124,5 @@ export async function executeGovernedAgentAnalysis({message,analysisContext,base
   assertEvidenceAgreement(result.analysis_context||resolved.context,result.evidence);
   if(result.evidence&&!result.evidence.report_config)result={...result,evidence:{...result.evidence,analytical_plan:resolveAnalyticalPlan(result.analysis_context||resolved.context)}};
   await baselineOptions.onEvidence?.(result);
-  return presentAnalyticalAnswer(withOracleCharts(disclosePeriod(result,result.analysis_context||resolved.context)),result.analysis_context||resolved.context);
+  try{return deliverOracleResult(presentAnalyticalAnswer(withOracleCharts(disclosePeriod(result,result.analysis_context||resolved.context)),result.analysis_context||resolved.context),result.analysis_context||resolved.context,{artifactBase:baselineOptions.downloadBase||'/api/oracle/exports'});}catch{return deliverOracleResult({...result,answer:null,presentation:null,partial:true},result.analysis_context||resolved.context,{artifactBase:baselineOptions.downloadBase||'/api/oracle/exports'});}
 }

@@ -178,14 +178,14 @@ function supportingMetadata(e) {
 
 /** Unknown contracts retain their original answer. Never hide an unknown limitation. */
 export function presentAnalyticalAnswer(result, context={}) {
-  if(!result?.answer || !result.evidence) return result;
+  if(!result?.evidence) return result;
   if(result.evidence.subject==='current_stock')return result;
   context=context||{};
   const e=result.evidence, view=e.ambiguous ? [`Several products match **${text(e.entity_query)}**. Choose one to view its sales.`, ...(e.candidates || []).map((c,i)=>`${i+1}. **${text(c.catalogue_titles?.[0] || 'Unnamed product')}** — ${text(c.sources?.map(s=>[s.source_platform,s.source_store].filter(Boolean).join(' / ')).join('; ') || 'Source unavailable')}`)] : businessView(e);
   if(!view)return result;
   const original=result.presentation?.supporting_markdown ?? result.answer;
   // Flatten our existing accordions so the strict renderer never needs arbitrary HTML.
-  const supporting=String(original).replace(/^<details>\s*$/gm,'').replace(/^<\/details>\s*$/gm,'').replace(/^<summary>([^<>]+)<\/summary>\s*$/gm,'### $1');
+  const supporting=String(original||'').replace(/^<details>\s*$/gm,'').replace(/^<\/details>\s*$/gm,'').replace(/^<summary>([^<>]+)<\/summary>\s*$/gm,'### $1');
   const periods=Array.isArray(e.periods)?e.periods:e.periods?.current?[e.periods.current,e.periods.previous_period].filter(Boolean):e.requested_periods || e.sections?.map(s=>s.period).filter(Boolean) || [];
   const scope=context.start_date ? `${period(context)}${context.comparison_start_date?`; compared with ${period({start_date:context.comparison_start_date,end_date:context.comparison_end_date})}`:''}` : [...new Set(periods.map(period))].join('; ');
   const lines=view.filter(Boolean);
