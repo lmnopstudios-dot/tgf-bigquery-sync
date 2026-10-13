@@ -9,9 +9,9 @@ export function deliverOracleResult(input,context, {present=presentAnalyticalAns
   let result=normalizeOracleResult(input);
   const prior=result.delivery?.version===RESULT_VERSION?result.delivery:null;
   let content=oracleResultContent(result,{artifactBase}),code=['EMPTY_TERMINAL_RESULT','PRESENTATION_FAILED','EVIDENCE_RENDER_FAILED','RESULT_SERIALIZATION_FAILED'].includes(prior?.code)?prior.code:null;
-  if(!content.deliverable&&result.evidence){
+  if(result.evidence&&(!content.deliverable||!result.answer?.trim()&&!result.presentation?.summary_markdown?.trim())){
     try{result=present({...result,answer:''},context);content=oracleResultContent(result,{artifactBase});}catch{code='PRESENTATION_FAILED';}
-    if(!content.deliverable){
+    if(!content.deliverable||code==='PRESENTATION_FAILED'){
       const entries=result.evidence.kind==='governed_tool_results'&&Array.isArray(result.evidence.results)?result.evidence.results:[{name:'governed_evidence',result:result.evidence}];
       try{result={...result,answer:evidenceSummary(entries,{unavailable:result.evidence.unavailable||[]}),partial:true};}catch{code='EVIDENCE_RENDER_FAILED';}
       content=oracleResultContent(result,{artifactBase});

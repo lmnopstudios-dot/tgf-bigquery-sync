@@ -52,5 +52,5 @@ export function suppressAnalyticalProposals(context,transition,message){
   const instruction=/^(?:please\s+)?(?:show|give|compare|graph|chart|export|download|retry|try again|use|choose|pick|select|include|exclude|excluding|omit|remove|leave out|sort|rank|by|only|just|account for|since|from|which|what|how|can you|could you)\b/i.test(text);
   const fieldAnswer=/^(?:20\d{2}-\d{2}-\d{2}|\d{1,2}\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)|GBP|USD|EUR|JPY|online|in[ -]store|units sold|product sales|landing(?:-page)? sessions|organic clicks|organic impressions)\b/i.test(text);
   const consumed=transition?.clarification_consumed&&(transition.clarification_consumed!=='scope'||instruction||fieldAnswer);
-  return Boolean(consumed||transition?.applies_to_message&&context?.requested_subject&&context?.request_kind!=='knowledge_save'&&instruction);
+  return Boolean(context?.tool_route==='get_order_value_analysis'||consumed||transition?.applies_to_message&&context?.requested_subject&&context?.request_kind!=='knowledge_save'&&instruction);
 }

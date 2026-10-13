@@ -6,6 +6,7 @@ export const OPERATION_REQUIREMENTS=Object.freeze({
   numeric_bands:['complete_unique_population','governed_numeric_measure','exact_boundaries'],
   threshold_scenarios:['numeric_bands','observed_charge','eligibility_semantics','exceptions_and_unknowns'],
   profit_optimization:['compatible_product_costs','compatible_fulfilment_costs'],
+  behaviour_forecast:['validated_behaviour_model','compatible_population'],
   optional_product_enrichment:['published_destination_prices','no_inferred_basket_relationships']
 });
 export function individualOrderQuestion(message) {
@@ -20,7 +21,7 @@ export function requestedAnalyticalOperations(message) {
   const scenarios=shippingComparison||/\bthresholds?\b/i.test(text)&&(/\b(?:compar[ei]|alternativ[es]|scenarios?|rais[ei]|lower|chang[ei])\w*\b/i.test(text)||[...text.matchAll(/£\s*\d+(?:\.\d+)?/g)].length>1);
   const monetaryPopulation=bands||scenarios&&/\b(?:shipping|delivery|orders?|basket|merchandise)\b/i.test(text);
   if(!monetaryPopulation)return null;
-  return {version:1,charge_domain:/\b(?:shipping|delivery)\b/i.test(text),operations:[...(bands?['numeric_bands']:[]),...(scenarios?['threshold_scenarios']:[]),...(/\bprofit|optimal|optimi[sz]/i.test(text)?['profit_optimization']:[]),...(/\badd[ -]?ons?|products?\b/i.test(text)?['optional_product_enrichment']:[])],
+  return {version:1,charge_domain:/\b(?:shipping|delivery)\b/i.test(text),operations:[...(bands?['numeric_bands']:[]),...(scenarios?['threshold_scenarios']:[]),...(/\bprofit|optimal|optimi[sz]/i.test(text)?['profit_optimization']:[]),...(/\b(?:forecast|elasticity)\b|\b(?:conversion|demand|purchasing|basket size)\b[^.;]{0,60}\b(?:drops?|falls?|rises?|increases?|decreases?|uplift|[0-9]+\s*%)\b/i.test(text)?['behaviour_forecast']:[]),...(/\badd[ -]?ons?|products?\b/i.test(text)?['optional_product_enrichment']:[])],
     parameters:{monetary_values:[...new Set([...text.matchAll(/£\s*(\d+(?:\.\d+)?)/g)].map(m=>Number(m[1])))].slice(0,20),unchanged_behaviour:/unchanged|same (?:purchas|behavio)/i.test(text)},
     population:{shipping_destination:/\bUK|United Kingdom\b/i.test(text)?'GB':null,channel:/\bonline\b/i.test(text)?'online':null,currency:text.match(/\b(GBP|USD|EUR|JPY)\b/i)?.[1]?.toUpperCase()||(/£/.test(text)?'GBP':null)},
     completed_days:/completed day|through yesterday|up to yesterday/i.test(text),

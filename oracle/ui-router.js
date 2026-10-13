@@ -265,6 +265,8 @@ export function createOracleUiRouter({ knowledgeService, bigquery, project, chat
   router.post('/propose', authenticate, protectWrite, json, async (req, res) => {
     try {
       if (typeof req.body?.message !== 'string' || !req.body.message.trim() || req.body.message.length > 12000) return res.status(400).json({ success: false, error: 'message must be a non-empty string of at most 12000 characters' });
+      const resolved=requestTransition(req,sessionContext(req),req.body.message,{now:now()});
+      if(suppressAnalyticalProposals(resolved.context,resolved.transition,req.body.message))return res.json({success:true,proposals:[],clarification:null});
       const temporalContext=resolveKnowledgeDates(req.body.message,{timestamp:now(),timeZone:'Europe/London'}),clarification=campaignDateClarification(req.body.message,temporalContext);
       res.json({ success: true, proposals: clarification?[]:await proposalsFor(req.body.message, req.oracleUser.sub, temporalContext), clarification });
     } catch (error) { logProposalError(error); res.status(503).json({ success: false, error: 'Knowledge proposal could not be generated.' }); }

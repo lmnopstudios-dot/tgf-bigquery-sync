@@ -1,3 +1,4 @@
+import { orderValueBusinessView } from './order-value-analysis.js';
 const LABELS={
   search_shopify_products:'Current catalogue',
   get_shopify_product_performance:'Online Store product sales',
@@ -42,6 +43,8 @@ export function evidenceSummary(entries,{unavailable=[]}={}){
   const sections=[];
   let validatedSectionCount=0;
   for(const entry of entries){
+    if(entry.result?.kind==='governed_order_values'){sections.push(orderValueBusinessView(entry.result).join('\n\n'));validatedSectionCount++;continue;}
+
     if(entry.result?.success===false){
       const stage=String(entry.result.failed_stage||'evidence retrieval').replaceAll('_',' '),code=String(entry.result.code||'TOOL_FAILED').slice(0,80);
       sections.push(`### ${LABELS[entry.name]||'Governed evidence'} unavailable\n- **Failed stage:** ${stage}.\n- **Status:** ${code}; ${entry.result.retryable?'an explicit retry is allowed.':'not retryable.'}\n- No analytical rows, zero-stock findings, or zero-opportunity conclusion were accepted from this error result.`);

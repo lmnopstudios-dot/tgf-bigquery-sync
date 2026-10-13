@@ -16,11 +16,12 @@ export function resolveExecutionPlan(context,bindings) {
   const plan=resolveAnalyticalPlan(context),capability=ANALYTICAL_CAPABILITIES[context?.tool_route]||null;
   let limitation=null;
   if(context?.tool_route==='get_order_value_analysis'){
-    if(plan.scope.platform!=='shopify'||plan.scope.channel!=='online'||context.source_store&&context.source_store!=='shopify')limitation='Order-value evidence currently supports the governed Shopify online population only. Other store populations have not been combined.';
+    if(!['shopify','all',null].includes(plan.scope.platform)||plan.scope.channel!=='online'||context.source_store&&context.source_store!=='shopify')limitation='Order-value evidence currently supports the governed Shopify online population only. Other store populations have not been combined. No population retrieval was attempted. Specify Shopify online for a scoped analysis, or request a supported source-specific report.';
     else if(!plan.numeric_operation)limitation='Numeric operation parameters are required.';
     else if(plan.scope.currencies.length>1)limitation='Choose one currency for this order-value population; currencies cannot be combined.';
-    else if(plan.population.filters.length||plan.exclusions.length||plan.comparison.start_date||plan.comparison.included_periods.length)limitation='These additional filters or period comparisons have no verified order-value binding. Confirmed promotion exclusions are supported.';
-    else if(plan.dates.start_date>plan.dates.end_date)limitation='There are no completed days in this requested period.';
+    else if(plan.population.filters.length||plan.exclusions.length)limitation='These additional eligibility filters or calendar exclusions have no verified order-value binding. Clarify the required filter or use a supported population; no retrieval was attempted. Confirmed promotion exclusions are supported.';
+    else if(plan.dates.start_date>plan.dates.end_date)limitation='There are no completed days in this requested period. Choose a window ending before today.';
+    else if((Date.parse(plan.dates.end_date)-Date.parse(plan.dates.start_date))/86400000>=1464)limitation='Order-value analysis supports at most four disjoint 366-day reads. Choose a period of at most 1,464 days; no population retrieval was attempted.';
   } else if(context?.tool_route==='get_daily_sales_analysis'){
     if(plan.metrics.some(m=>!capability.metrics.includes(m)))limitation=`The daily binding supports net sales and source-native orders; ${plan.metrics.filter(m=>!capability.metrics.includes(m)).join(', ')} is unavailable for this analysis.`;
     else if(plan.dates.start_date>plan.dates.end_date)limitation='There are no completed days in this requested period at the runtime cutoff.';
@@ -29,5 +30,7 @@ export function resolveExecutionPlan(context,bindings) {
     else if(plan.comparison.start_date||plan.comparison.included_periods.length)limitation='A second reporting-period comparison is unavailable in this weekday binding; promotion exclusions use the same reporting window.';
     else if(plan.population.filters.length||plan.exclusions.length)limitation='Additional population or calendar exclusions are unavailable in this daily binding; confirmed promotion dates can be compared separately.';
   } else if(plan.dimensions.includes('weekday'))limitation='The selected governed capability cannot supply compatible daily evidence for weekday grouping.';
-  return {plan,capability,limitation,delivery:context?.unresolved_required_fields?.length||limitation?'chat':capability?.preferred_transport||null,execute:bindings?.[context?.tool_route]||null};
+  const components=(plan.requested_operations||[]).map(operation=>({operation,status:limitation?'blocked':capability?.operations?.includes(operation)?(operation==='numeric_bands'?'supported':'conditional'):'unsupported',blocker:limitation||(operation==='profit_optimization'?'Profit optimization requires compatible product and fulfilment costs; supply those costs before requesting a profit recommendation.':operation==='behaviour_forecast'?'A user-supplied behaviour change is an unverified scenario assumption. A validated behaviour model is required for forecasts; the displayed arithmetic keeps existing orders and behaviour unchanged.':null)}));
+  if(context?.tool_route==='get_order_value_analysis'&&(plan.comparison.start_date||plan.comparison.included_periods.length))components.push({operation:'period_comparison',status:'unsupported',blocker:'The additional period comparison has no verified order-value binding. The primary requested window is retained; request each comparison window separately.'});
+  return {plan,capability,limitation,components,delivery:context?.unresolved_required_fields?.length||limitation?'chat':capability?.preferred_transport||null,execute:bindings?.[context?.tool_route]||null};
 }

@@ -101,7 +101,10 @@ export async function dispatchAnalysisRequest({message,analysisContext,baselineO
   const requested=requestedAnalyticalOperations(message);
   if(requested&&context?.tool_route!=='get_order_value_analysis'){baselineOptions?.onProviderStage?.({stage:'capability_selection',status:'unsupported',operation_count:requested.operations.length});return deliverOracleResult(await unsupportedOperationResult(requested,context||transitionAnalysisContext(null,message).context,baselineOptions),context);}
   const execution=resolveExecutionPlan(context,ANALYSIS_ROUTE_DISPATCHERS);
-  if(execution.limitation)return {answer:execution.limitation,analysis_unavailable:true,tools:[]};
+  if(execution.limitation){
+    baselineOptions?.onProviderStage?.({stage:'capability_selection',status:'blocked',selected_route:context?.tool_route||'general_agent',provider_calls:0,component_count:execution.components.length});
+    return deliverOracleResult({answer:execution.limitation,analysis_unavailable:true,tools:[],capability_selection:{components:execution.components,retrieval:'not_attempted'}},context);
+  }
   const clarification=context?clarificationFor(context):null;if(clarification)return {answer:clarification,tools:[]};
   baselineOptions?.onProviderStage?.({stage:'capability_selection',selected_route:context?.tool_route||'general_agent',registered:Boolean(execution.capability),delivery:execution.delivery||'chat',status:'selected'});
   const binding=execution.execute||baselineThenAgent;
@@ -119,7 +122,10 @@ export async function executeGovernedAgentAnalysis({message,analysisContext,base
   const requested=requestedAnalyticalOperations(message);
   if(requested&&resolved.context.tool_route!=='get_order_value_analysis')return deliverOracleResult(await unsupportedOperationResult(requested,resolved.context,baselineOptions),resolved.context);
   const execution=resolveExecutionPlan(resolved.context,ANALYSIS_ROUTE_DISPATCHERS);
-  if(execution.limitation)return {answer:execution.limitation,analysis_unavailable:true,tools:[]};
+  if(execution.limitation){
+    baselineOptions.onProviderStage?.({stage:'capability_selection',status:'blocked',selected_route:resolved.context.tool_route||'general_agent',provider_calls:0,component_count:execution.components.length});
+    return deliverOracleResult({answer:execution.limitation,analysis_unavailable:true,tools:[],capability_selection:{components:execution.components,retrieval:'not_attempted'}},resolved.context);
+  }
   const clarification=clarificationFor(resolved.context);
   if(clarification)return {answer:clarification,tools:[]};
   baselineOptions.onProviderStage?.({stage:'capability_selection',selected_route:resolved.context.tool_route||'general_agent',registered:Boolean(execution.capability),delivery:execution.delivery||'chat',status:'selected'});
