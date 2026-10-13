@@ -1,3 +1,4 @@
+import { mergeRequestedOperations } from './requested-operations.js';
 import { normalizeCatalogueFilter } from './product-catalogue-filter.js';
 import { naturalReportPeriod } from './report-natural-period.js';
 // Capability boundary for the existing published-product export. Provider bindings
@@ -69,7 +70,7 @@ export function isProductReportRequest(text,previous=null){
   if(previous&&(/^(?:only|use)\s+(?:ready[ -]to[ -]ship|collection|product type|tag)\b/i.test(text)||/\bexport all products instead\b/i.test(text)))return true;
   if(/\b(?:export|download)\b/i.test(text)&&!/\b(?:customers?|orders?|campaigns?|countries|conversion)\b/i.test(text)&&/\b(?:Shopify|products?)\b|\b(?:pendants?|rings?|earrings?|ready[ -]to[ -]ship)\b/i.test(text))return true;
   if(!/\b(?:export|download)\b/i.test(text)&&/\b(?:customers?|before|after|next)\b|\b(?:first|second|third|nth)\s+(?:purchase|order)\b/i.test(text))return false;
-  if(previous&&!/\b(?:klaviyo|campaigns?|flows?|customers?|conversion|countries|country)\b/i.test(text)&&((mentionedMetrics(text).length&&/^(?:add|include|sort|rank|only|use|units|sales value)\b/i.test(text))||(/^(?:what about|just|only|for|in|this year|last year|change (?:the )?dates)\b/i.test(text)&&naturalReportPeriod(text,Date.now()))||/^(?:top \d+|all (?:published (?:Shopify )?)?products|only product ids?|online|xlsx|GBP|USD|EUR|JPY)\b/i.test(text)))return true;
+  if(previous&&!/\b(?:klaviyo|campaigns?|flows?|customers?|conversion|countries|country)\b/i.test(text)&&((mentionedMetrics(text).length&&/\b(?:add|also|calculate|include|sort|rank|only|use|units|sales value)\b/i.test(text))||(/^(?:what about|just|only|for|in|this year|last year|change (?:the )?dates)\b/i.test(text)&&naturalReportPeriod(text,Date.now()))||/^(?:top \d+|all (?:published (?:Shopify )?)?products|only product ids?|online|xlsx|GBP|USD|EUR|JPY)\b/i.test(text)))return true;
   if(!/\b(?:export|download|report)\b/i.test(text)&&/\b(?:countries|country|locations)\b/i.test(text))return false;
   return /\bproducts?\b/i.test(text)&&/\b(?:export|download|show|report|list|ranked|rank|top[ -]selling|top \d+)\b/i.test(text)&&! /\b(?:inventory|stock|collections?)\b/i.test(text)||/\b(?:photography|content)\b/i.test(text)&&/\bpriority list\b/i.test(text);
 }
@@ -112,7 +113,7 @@ export function resolveProductReportConfig(message,{previous=null,period=null,de
   if(period)config.period={start_date:period.start_date,end_date:period.end_date,timezone:'Europe/London'};
   const requested=mentionedMetrics(text),sortText=text.match(/\b(?:(?:sort(?:ed)?|rank(?:ed)?)\s+(?:products?\s+)?by|in order of)\s+(.+?)(?:[.;]|$)/i)?.[1];
   const sorting=sortText?mentionedMetrics(sortText)[0]:null;
-  if(requested.length){config.unresolved=config.unresolved.filter(x=>x!=='metrics');config.metrics=continuation&&/^(?:add|include|sort|rank)\b/i.test(text)?[...new Set([...config.metrics,...requested])]:requested;}
+  if(requested.length){config.unresolved=config.unresolved.filter(x=>x!=='metrics');config.metrics=continuation&&/\b(?:add|also|include|sort|rank)\b/i.test(text)?mergeRequestedOperations(config.metrics,requested,text):requested;}
   if(continuation&&config.unresolved.includes('sort_metric')){const chosen=requested.find(m=>['units_sold','product_sales'].includes(m));if(chosen){config.sort.metric=chosen;config.unresolved=config.unresolved.filter(x=>x!=='sort_metric');}}
   if(!requested.length&&!continuation&&!priority&&!/\btop[ -]selling\b/i.test(text))config.unresolved.push('metrics');
   if(continuation&&requested.length&&/^(?:only|use)\b/i.test(text)&&!requested.includes(config.sort.metric)){config.sort.metric=requested.find(m=>!PRODUCT_REPORT_CAPABILITIES[m].money)??(config.currency?requested[0]:null);}

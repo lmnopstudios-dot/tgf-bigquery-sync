@@ -114,7 +114,7 @@ for(const message of [FULL,ORIGINAL])for(const durable of [false,true])test(`${m
 
 test('other supplied behavioural assumptions remain unverified; supported arithmetic survives',async()=>{
   const f=fixture(),message=SHORT+' Assume conversion drops by 5% and forecast next year revenue.';
-  const r=await f.run(message);verify(r,f,{start:'2026-09-01',end:'2026-09-30',thresholds:[250,200,225],full:false});assert.equal(r.partial,true);assert.equal(r.evidence.components.find(x=>x.operation==='behaviour_forecast').status,'unsupported');assert.match(r.answer,/user-supplied behaviour change is an unverified scenario assumption/);assert.match(r.answer,/behaviour unchanged/);
+  const r=await f.run(message);verify(r,f,{start:'2026-09-01',end:'2026-09-30',thresholds:[250,200,225],full:false});assert.equal(r.partial,true);assert.equal(r.evidence.components.find(x=>x.operation==='behaviour_forecast').status,'unavailable');assert.match(r.answer,/user-supplied behaviour change is an unverified scenario assumption/);assert.match(r.answer,/behaviour unchanged/);
 });
 test('broader source request and supplied parameters survive chart/export refinements',()=>{
   let c=apply('For Shopify and Woo UK online GBP orders in September 2026, compare free shipping at £250 versus £200 and £225. Use an illustrative £12 charge.');const key=analyticalPlanKey(resolveAnalyticalPlan(c));

@@ -22,6 +22,9 @@ export const ORDER_VALUE_DEFINITIONS=Object.freeze({
   zeros:'Finance collector coerces absent money fields to zero. Stored zero amounts/charges are ambiguous and treated as unknown; proven zero is supported only with independent evidence.',
   scenarios:'Threshold equality qualifies. Existing orders and behaviour unchanged. Observed-basis scenarios are conditional, not verified shipping-rule eligibility or forecasts. Hypothetical fee is supplied charge × affected orders, not an expected revenue gain/loss.',
   charge_completeness:'charge_total_complete describes known charges and known observed amounts within the retrieved affected-order calculation only. It does not verify population coverage, shipping rules, delivery cost, margin or profit. evidence_complete additionally requires verified population coverage.',
+  observed_merchandise_statistics:'Exact weighted sum, mean and median of unique eligible order merchandise subtotals, never estimated from bands. Valid nonnegative amount denominator and unknown amount count disclosed; static across threshold scenarios. Stored ambiguous zeros remain unknown.',
+  basket_gaps:'Per threshold, gap = threshold minus observed amount. Positive gaps only; intervals (0,10], (10,25], (25,50], with cumulative within-10/25/50 counts. Equality at threshold qualifies and has no positive gap; unknown values excluded and counted separately.',
+  shipping_forgone:'Partial known recorded shipping charge sum for orders with known observed amount >= each threshold, divided by all such eligible orders including unknown charges. Conditional amount, not delivery cost or expected lost revenue.',
   coverage:'Represented dates and component matches describe collected evidence only. No authoritative complete-population reconciliation is available.'
 });
 export const ORDER_VALUE_FILTER_STAGES=Object.freeze([
@@ -74,8 +77,9 @@ export function orderValueHistogramSql(project) {
   return `${orderValuePopulationSql(project)}
   SELECT CAST(order_date AS STRING) date,
     IF(@basis='observed_subtotal',NULLIF(original_subtotal_presentment,0),NULLIF(original_total_presentment,0)) amount,
-    NULLIF(original_shipping_presentment,0) shipping_charge,COUNT(*) orders
-  FROM eligible GROUP BY 1,2,3 ORDER BY 1,2,3 LIMIT ${ORDER_VALUE_ROW_BOUND+1}`;
+    NULLIF(original_shipping_presentment,0) shipping_charge,COUNT(*) orders,
+    NULLIF(original_subtotal_presentment,0) merchandise_amount
+  FROM eligible GROUP BY 1,2,3,5 ORDER BY 1,2,3 LIMIT ${ORDER_VALUE_ROW_BOUND+1}`;
 }
 export function orderValueCoverageSql(project) {
   return `${orderValuePopulationSql(project)}

@@ -1,4 +1,4 @@
-import { OPERATION_REQUIREMENTS, requestedAnalyticalOperations, individualOrderQuestion } from './requested-operations.js';
+import { OPERATION_REQUIREMENTS, requestedAnalyticalOperations, individualOrderQuestion, metricOperations, mergeRequestedOperations } from './requested-operations.js';
 import { orderValueContextPatch } from './order-value-context.js';
 import { validateNumericOperation } from './numeric-distribution.js';
 import { consumePendingClarification, pendingClarificationKind, explicitKnowledgeSaveIntent } from './clarification-consumption.js';
@@ -115,6 +115,11 @@ function transitionContext(existing, message, {now=Date.now(),reportContext=null
   if(/^(?:new (?:question|analysis)|forget that|start over)\b/i.test(text))return transitionAnalysisContext(emptyAnalysisContext(),text.replace(/^(?:new (?:question|analysis)|forget that|start over)\s*[:,.]?\s*/i,''),{now});
   if(individualOrderQuestion(text)){const context=emptyAnalysisContext();return {context,transition:{continuation:false,set:[],clear:ANALYSIS_CONTEXT_FIELDS,retain:[],missing_required_fields:[],ready_to_execute:false,applies_to_message:true}};}
   if(reportContext) base=initializeFromReportContext(base,reportContext);
+  const additions=metricOperations(text);
+  if(base.tool_route&&base.tool_route!=='get_order_value_analysis'&&additions.length&&/\b(?:add|also|now|calculate|compute|include|give|show|instead|only)\b/i.test(text)&&!/\b(?:shipping|basket gaps?|order-value bands?|new analysis)\b/i.test(text)){
+    const context=validateAnalysisContext({...base,requested_operations:mergeRequestedOperations(base.requested_operations,additions,text)});
+    return {context,transition:{continuation:true,set:['requested_operations'],clear:[],retain:ANALYSIS_CONTEXT_FIELDS.filter(k=>k!=='requested_operations'),missing_required_fields:context.unresolved_required_fields,ready_to_execute:!context.unresolved_required_fields.length,applies_to_message:true}};
+  }
   const daily=orderValueContextPatch(base,text,now)||dailySalesContextPatch(base,text,now);
   if(daily){const context=validateAnalysisContext({...emptyAnalysisContext(),...daily.patch});const changed=ANALYSIS_CONTEXT_FIELDS.filter(k=>JSON.stringify(base[k])!==JSON.stringify(context[k]));return {context,transition:{continuation:daily.continuation,set:changed,clear:changed.filter(k=>context[k]==null),retain:ANALYSIS_CONTEXT_FIELDS.filter(k=>!changed.includes(k)),missing_required_fields:context.unresolved_required_fields,ready_to_execute:!context.unresolved_required_fields.length,applies_to_message:true}};}
   const campaign=campaignContextPatch(base,text,now);

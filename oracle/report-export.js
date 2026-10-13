@@ -10,7 +10,7 @@ export function reportCsv(rows) {
 export async function reportWorkbook(report) {
   const workbook = new ExcelJS.Workbook();
   workbook.creator = 'The Great Frog Oracle'; workbook.created = new Date(report.generated_at);
-  const sheets = [['Summary', report.kpis], ['Sales', report.trend], ['Products', report.products], ['Context', report.context]];
+  const sheets = [['Summary', report.kpis], ['Sales', report.trend], ['Products', report.products], ['Context', report.context], ...(report.additional_sheets||[])];
   for (const [name, rows] of sheets) {
     if (!rows?.length) continue;
     const sheet = workbook.addWorksheet(name);

@@ -1,3 +1,4 @@
+import { safeReadFailure } from './read-failure.js';
 import { assertProductArtifact } from './product-artifact-validation.js';
 import { selectCataloguePopulation, assertCatalogueSelection } from './product-catalogue-filter.js';
 import { presentAnalyticalAnswer } from './answer-presentation.js';
@@ -75,7 +76,7 @@ export async function fetchPublishedProducts(graphql,{signal,inspectClassificati
     seen.add(next);cursor=next;
   }while(true);
   return {products:[...products.values()],complete:true,pages,publication_contract:'ACTIVE/UNLISTED + publishedAt + non-null onlineStoreUrl (Online Store publication; not inventory availability)'};
-  }catch(error){if(signal?.aborted){const failureCode=signal.reason?.name==='TimeoutError'?'CATALOGUE_TIMEOUT':'CATALOGUE_CANCELLED';onProviderStage?.({stage:'priority_catalogue_page',status:'failed',code:failureCode,...diagnostic()});throw Object.assign(new Error('Catalogue cancelled'),{code:failureCode,failed_stage:'priority_catalogue',...diagnostic()});}onProviderStage?.({stage:'priority_catalogue_page',status:'failed',code:code(error),...(Number.isInteger(error.status)?{http_status:error.status}:{}),...diagnostic()});return{products:[...products.values()],complete:false,pages,error_code:code(error),...bigQueryErrorDiagnostic(error),...(Number.isInteger(error.status)?{status:error.status}:{}),publication_contract:'ACTIVE/UNLISTED + publishedAt + non-null onlineStoreUrl'};}
+  }catch(error){if(signal?.aborted){const failureCode=signal.reason?.name==='TimeoutError'?'CATALOGUE_TIMEOUT':'CATALOGUE_CANCELLED';onProviderStage?.({stage:'priority_catalogue_page',status:'failed',code:failureCode,...diagnostic()});throw Object.assign(new Error('Catalogue cancelled'),{code:failureCode,failed_stage:'priority_catalogue',...diagnostic()});}onProviderStage?.({stage:'priority_catalogue_page',status:'failed',code:code(error),...(Number.isInteger(error.status)?{http_status:error.status}:{}),...diagnostic()});return{products:[...products.values()],complete:false,pages,error_code:code(error),safe_failure:safeReadFailure(error,'published_prices'),...bigQueryErrorDiagnostic(error),...(Number.isInteger(error.status)?{status:error.status}:{}),publication_contract:'ACTIVE/UNLISTED + publishedAt + non-null onlineStoreUrl'};}
 }
 const code=error=>/^[A-Z0-9_]{1,64}$/.test(String(error?.code||''))?String(error.code):'SOURCE_FAILED';
 const numeric=value=>value!==null&&value!==undefined&&value!==''&&Number.isFinite(Number(value))?Number(value):null;
