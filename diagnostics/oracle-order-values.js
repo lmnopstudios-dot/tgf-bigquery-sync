@@ -22,13 +22,22 @@ export async function diagnoseOrderValues(input,{bigquery,project}){
   if(!location)return {...report,population_status:'query_failure'};
   report.location=location;
   report.datasets=[{project,dataset:'shopify_data',actual_location:location}];
-  const schemas=await check('schema_inspection',async()=>{const [rows]=await bigquery.query({query:`SELECT table_name,column_name,data_type,is_nullable FROM \`${project}.shopify_data.INFORMATION_SCHEMA.COLUMNS\` WHERE table_name IN ('order_locations','order_financials','order_customers','order_shipping_geography') ORDER BY table_name,ordinal_position LIMIT 200`,location,maximumBytesBilled:'10000000',jobTimeoutMs:30000,useLegacySql:false});return rows;});
+  const schemas=await check('schema_inspection',async()=>{const [rows]=await bigquery.query({query:`SELECT table_name,column_name,data_type,is_nullable FROM \`${project}.shopify_data.INFORMATION_SCHEMA.COLUMNS\` WHERE table_name IN ('order_locations','order_financials','order_customers','order_shipping_geography') ORDER BY table_name,ordinal_position LIMIT 200`,location,maximumBytesBilled:'104857600',jobTimeoutMs:30000,useLegacySql:false});return rows;});
   report.schemas=schemas;
   report.schema_contract=schemas?inspectOrderValueSchema(schemas):null;
   const args={start_date:input.start,end_date:input.end,platform:'shopify',source_store:null,channel:'online',time_zone:'Europe/London',country:'GB',currency:'GBP',basis:'observed_subtotal',assumed_charge:8};
   const options={...orderValueQueryOptions(args,location),jobTimeoutMs:30000};
   report.parameter_contract=options.types; // Types only; never parameter values.
-  for(const [stage,query] of [['population_dry_run',orderValueHistogramSql(project)],['coverage_dry_run',orderValueCoverageSql(project)]])await check(stage,async()=>{const [job]=await bigquery.createQueryJob({...options,query,dryRun:true});return {valid:true,total_bytes_processed:job.metadata?.statistics?.totalBytesProcessed||null};});
+  let populationValid=false,coverageValid=false;
+  for(const [stage,query] of [['population_dry_run',orderValueHistogramSql(project)],['coverage_dry_run',orderValueCoverageSql(project)]]){
+    if(stage==='coverage_dry_run'&&!populationValid){report.checks.push({stage,status:'blocked',blocked_by:'population_dry_run'});continue;}
+    const result=await check(stage,async()=>{const [job]=await bigquery.createQueryJob({...options,query,dryRun:true});return {valid:true,total_bytes_processed:job.metadata?.statistics?.totalBytesProcessed||null};});
+    if(stage==='population_dry_run')populationValid=!!result;else coverageValid=!!result;
+  }
+  if(!populationValid||!coverageValid){
+    for(const stage of ['join_uniqueness','population_query','coverage_query'])report.checks.push({stage,status:'blocked',blocked_by:!populationValid?'population_dry_run':'coverage_dry_run'});
+    return {...report,population_status:'query_failure'};
+  }
   await check('join_uniqueness',async()=>{const [rows]=await bigquery.query({...options,query:`${orderValuePopulationSql(project)} SELECT 'shopify' source_platform,'shopify' source_store,COUNT(*) joined_rows,COUNT(DISTINCT order_id) distinct_source_orders,COUNT(*)-COUNT(DISTINCT order_id) excess_join_rows FROM scoped`});return rows;});
   const data=await check('population_query',()=>createOracleProviderDependencies({bigquery,project,env:{}}).orderValues(args,{maximumMs:30000}));
   // The provider result contains aggregate groups; report only calculated summaries.
