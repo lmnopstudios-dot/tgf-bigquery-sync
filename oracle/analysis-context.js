@@ -1,3 +1,4 @@
+import { individualOrderQuestion } from './requested-operations.js';
 import { orderValueContextPatch } from './order-value-context.js';
 import { validateNumericOperation } from './numeric-distribution.js';
 import { consumePendingClarification, pendingClarificationKind, explicitKnowledgeSaveIntent } from './clarification-consumption.js';
@@ -110,6 +111,7 @@ export function validateAnalysisContext(value={}){
 function transitionContext(existing, message, {now=Date.now(),reportContext=null}={}){
   let base=validateAnalysisContext(existing||{}); const text=String(message||'').trim(), lower=text.toLowerCase();
   if(/^(?:new (?:question|analysis)|forget that|start over)\b/i.test(text))return transitionAnalysisContext(emptyAnalysisContext(),text.replace(/^(?:new (?:question|analysis)|forget that|start over)\s*[:,.]?\s*/i,''),{now});
+  if(individualOrderQuestion(text)){const context=emptyAnalysisContext();return {context,transition:{continuation:false,set:[],clear:ANALYSIS_CONTEXT_FIELDS,retain:[],missing_required_fields:[],ready_to_execute:false,applies_to_message:true}};}
   if(reportContext) base=initializeFromReportContext(base,reportContext);
   const daily=orderValueContextPatch(base,text,now)||dailySalesContextPatch(base,text,now);
   if(daily){const context=validateAnalysisContext({...emptyAnalysisContext(),...daily.patch});const changed=ANALYSIS_CONTEXT_FIELDS.filter(k=>JSON.stringify(base[k])!==JSON.stringify(context[k]));return {context,transition:{continuation:daily.continuation,set:changed,clear:changed.filter(k=>context[k]==null),retain:ANALYSIS_CONTEXT_FIELDS.filter(k=>!changed.includes(k)),missing_required_fields:context.unresolved_required_fields,ready_to_execute:!context.unresolved_required_fields.length,applies_to_message:true}};}

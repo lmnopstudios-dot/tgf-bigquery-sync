@@ -1,3 +1,4 @@
+import { boundedEvidenceRead } from './bounded-evidence-read.js';
 import { createHash } from 'node:crypto';
 import { numericDistribution, minorUnits, validateNumericOperation } from './numeric-distribution.js';
 import { ORDER_VALUE_DEFINITIONS } from './order-value-provider.js';
@@ -45,7 +46,7 @@ export function assertOrderValueEvidence(context,e) {
 export async function answerOrderValues({context,provider,productPrices,knowledgeService,exportStore,exportOwner,requestId,onEvidence,onProviderStage,signal,deadlineAt,now=()=>new Date()}){
   const operation=validateNumericOperation(context.numeric_operation),period={start_date:context.start_date,end_date:context.end_date};
   const args={...period,platform:context.platform,source_store:context.source_store,channel:context.channel,time_zone:context.time_zone,country:context.geography,currency:context.currencies[0],basis:operation.basis,assumed_charge:operation.assumed_charge};
-  const results=await Promise.allSettled([Promise.resolve().then(()=>{if(!provider)throw Error('Provider unavailable');return provider(args);}),Promise.resolve().then(()=>context.promotion_context?retrievePromotionContext(knowledgeService,context.promotion_context,period):null),Promise.resolve().then(()=>operation.enrich_products&&context.geography==='GB'&&productPrices?productPrices({signal,deadlineAt,onProviderStage}):null)]);
+  const results=await Promise.allSettled([Promise.resolve().then(()=>{if(!provider)throw Error('Provider unavailable');return provider(args,{signal,deadlineAt,onProviderStage});}),boundedEvidenceRead(()=>context.promotion_context?retrievePromotionContext(knowledgeService,context.promotion_context,period):null,{signal,deadlineAt}),boundedEvidenceRead(()=>operation.enrich_products&&context.geography==='GB'&&productPrices?productPrices({signal,deadlineAt,onProviderStage}):null,{signal,deadlineAt})]);
   const data=results[0].status==='fulfilled'?results[0].value:null,limitations=[];
   if(data){const expected={...args,source_store:'shopify'};if(stableAnalyticalJSON(data.scope)!==stableAnalyticalJSON(expected))mismatch();}
   if(!data)limitations.push(`Population retrieval unavailable (${results[0].reason?.code||'ORDER_VALUE_RETRIEVAL_FAILED'}). Retry or narrow the period; no aggregate sales substitute was used.`);
@@ -59,8 +60,8 @@ export async function answerOrderValues({context,provider,productPrices,knowledg
   if(data?.coverage?.eligible_orders!=null&&Number(data.coverage.eligible_orders)!==sections[0].population)mismatch();
   evidence.chart_datasets=chartDatasets(evidence);
   assertOrderValueEvidence(analysis_context,evidence);
-  let result=withOracleCharts({analysis_context,analysis_unavailable:!data,partial:Boolean(data&&results.some(r=>r.status==='rejected')),answer:orderValueBusinessView(evidence).join('\n\n')+'\n\n'+JSON.stringify({definitions:evidence.definitions,coverage:evidence.coverage,promotion:evidence.promotion}),tools:['get_order_value_analysis'],evidence});
-  onProviderStage?.({stage:'order_value_validation',status:data?'success':'unavailable'});await onEvidence?.(result);
+  let result=withOracleCharts({analysis_context,analysis_unavailable:!data,partial:Boolean(data&&(results.some(r=>r.status==='rejected')||data.coverage?.coverage_retrieval==='rejected')),answer:orderValueBusinessView(evidence).join('\n\n')+'\n\n'+JSON.stringify({definitions:evidence.definitions,coverage:evidence.coverage,promotion:evidence.promotion}),tools:['get_order_value_analysis'],evidence});
+  onProviderStage?.({stage:'order_value_validation',status:data?'success':'unavailable',aggregate_groups:source_rows.length,synthesis_path:'validated_aggregate',model_calls:0});await onEvidence?.(result);
   if(context.output_preference==='xlsx'){
     if(!exportStore||!exportOwner||!requestId)return {...result,answer:result.answer+'\n\nExport storage is unavailable; retrieved figures are retained.'};
     const id=priorityArtifactId(exportOwner,requestId);

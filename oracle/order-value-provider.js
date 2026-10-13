@@ -1,3 +1,4 @@
+import { boundedEvidenceRead } from './bounded-evidence-read.js';
 import { assertDatasetIdentifier, datasetLocation } from '../bigquery/dataset-location.js';
 import { MATRIXIFY_APP_ID } from './online-country-sales.js';
 
@@ -83,12 +84,15 @@ export function validateOrderValueScope(args) {
   return args;
 }
 export function createOrderValueProvider({bigquery,project}) {
-  return async args=>{
+  return async (args,options={})=>{
     validateOrderValueScope(args);
-    const location=await datasetLocation(bigquery,project,'shopify_data');
-    const options={params:{start_date:args.start_date,end_date:args.end_date,country:args.country,currency:args.currency,basis:args.basis,assumed_charge:args.assumed_charge??8,matrixify_app_id:MATRIXIFY_APP_ID},maximumBytesBilled:'1000000000',useLegacySql:false,location,jobTimeoutMs:60000,labels:{component:'oracle_order_value_read'}};
-    const results=await Promise.allSettled([bigquery.query({...options,query:orderValueHistogramSql(project)}),bigquery.query({...options,query:orderValueCoverageSql(project)})]);
-    if(results[0].status==='rejected')throw Object.assign(Error('Order-value population retrieval failed'),{code:'ORDER_VALUE_RETRIEVAL_FAILED'});
+    const location=await boundedEvidenceRead(()=>datasetLocation(bigquery,project,'shopify_data'),options);
+    const queryOptions={params:{start_date:args.start_date,end_date:args.end_date,country:args.country,currency:args.currency,basis:args.basis,assumed_charge:args.assumed_charge??8,matrixify_app_id:MATRIXIFY_APP_ID},maximumBytesBilled:'1000000000',useLegacySql:false,location,labels:{component:'oracle_order_value_read'}};
+    let providerCalls=0;
+    const read=query=>boundedEvidenceRead(timeoutMs=>{providerCalls++;return bigquery.query({...queryOptions,query,jobTimeoutMs:Math.max(1,Math.floor(timeoutMs))});},options);
+    const results=await Promise.allSettled([read(orderValueHistogramSql(project)),read(orderValueCoverageSql(project))]);
+    options.onProviderStage?.({stage:'aggregate_provider',selected_route:'get_order_value_analysis',provider_calls:providerCalls,population_status:results[0].status,coverage_status:results[1].status});
+    if(results[0].status==='rejected')throw Object.assign(Error('Order-value population retrieval failed'),{code:['ORACLE_AGENT_DEADLINE','REQUEST_CANCELLED'].includes(results[0].reason?.code)?results[0].reason.code:'ORDER_VALUE_RETRIEVAL_FAILED'});
     const rows=results[0].value[0];if(rows.length>ORDER_VALUE_ROW_BOUND)throw Object.assign(Error('Order-value aggregate read exceeds bound; narrow the period'),{code:'ORDER_VALUE_READ_BOUND'});
     return {scope:{...args,source_store:'shopify'},rows,definitions:ORDER_VALUE_DEFINITIONS,coverage:{...(results[1].status==='fulfilled'?results[1].value[0][0]:{}),complete:false,coverage_retrieval:results[1].status,population_complete:'unverified'},collected_at:new Date().toISOString()};
   };

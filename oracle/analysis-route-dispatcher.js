@@ -16,6 +16,7 @@ const baselineThenAgent = async ({message,baselineOverview,baselineOptions,chat,
 const governedBaseline = async ({message,baselineOverview,baselineOptions}) => {
   const result=await baselineOverview?.(message,baselineOptions);
   if(result)return result;
+  if(baselineOptions?.analysisContext?.tool_route==='get_order_value_analysis')return {answer:'Order-value aggregate capability is unavailable from the current evidence binding; no individual-order fallback was used.',analysis_unavailable:true,tools:[]};
   throw Object.assign(new Error('The governed analysis route has no executable evidence binding.'),{code:'ANALYSIS_ROUTE_UNAVAILABLE'});
 };
 
@@ -102,6 +103,7 @@ export async function dispatchAnalysisRequest({message,analysisContext,baselineO
   const execution=resolveExecutionPlan(context,ANALYSIS_ROUTE_DISPATCHERS);
   if(execution.limitation)return {answer:execution.limitation,analysis_unavailable:true,tools:[]};
   const clarification=context?clarificationFor(context):null;if(clarification)return {answer:clarification,tools:[]};
+  baselineOptions?.onProviderStage?.({stage:'capability_selection',selected_route:context?.tool_route||'general_agent',registered:Boolean(execution.capability),delivery:execution.delivery||'chat',status:'selected'});
   const binding=execution.execute||baselineThenAgent;
   let result=await binding({message,baselineOverview,baselineOptions:{...baselineOptions,analysisContext:analysisContext??context},chat,chatOptions});
   try{assertResolvedAnalysisContext(context,result?.analysis_context);assertEvidenceAgreement(result?.analysis_context||context,result?.evidence);baselineOptions?.onProviderStage?.({stage:'evidence_validation',status:'success'});}catch(error){baselineOptions?.onProviderStage?.({stage:'evidence_validation',status:'failed',code:'EVIDENCE_SCOPE_MISMATCH',scope_field:error.scope_field||'analytical_scope'});throw error;}
@@ -120,8 +122,12 @@ export async function executeGovernedAgentAnalysis({message,analysisContext,base
   if(execution.limitation)return {answer:execution.limitation,analysis_unavailable:true,tools:[]};
   const clarification=clarificationFor(resolved.context);
   if(clarification)return {answer:clarification,tools:[]};
+  baselineOptions.onProviderStage?.({stage:'capability_selection',selected_route:resolved.context.tool_route||'general_agent',registered:Boolean(execution.capability),delivery:execution.delivery||'chat',status:'selected'});
   let result=await baselineOverview(message,{...baselineOptions,analysisContext:resolved.context});
-  if(!result)return null;
+  if(!result){
+    if(resolved.context.tool_route==='get_order_value_analysis')return {answer:'Order-value aggregate capability is unavailable from the current evidence binding; no individual-order fallback was used.',analysis_unavailable:true,tools:[]};
+    return null;
+  }
   assertResolvedAnalysisContext(resolved.context,result.analysis_context);
   assertEvidenceAgreement(result.analysis_context||resolved.context,result.evidence);
   if(result.evidence&&!result.evidence.report_config)result={...result,evidence:{...result.evidence,analytical_plan:resolveAnalyticalPlan(result.analysis_context||resolved.context)}};
