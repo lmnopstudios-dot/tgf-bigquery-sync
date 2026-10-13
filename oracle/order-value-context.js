@@ -1,3 +1,4 @@
+import { requestsInStoreChannel } from './channel-scope.js';
 import { naturalReportPeriod } from './report-natural-period.js';
 import { validateNumericOperation } from './numeric-distribution.js';
 import { requestedAnalyticalOperations } from './requested-operations.js';
@@ -45,7 +46,7 @@ export function orderValueContextPatch(base,text,now) {
   if(/\bshopify\b/i.test(text)&&!/\b(?:woocommerce|woo)\b/i.test(text))patch.platform='shopify';
   if(/\b(?:woocommerce|woo)\b/i.test(text))patch.platform=/\bshopify\b/i.test(text)?'all':'woo';
   if(/\b(?:all|both|across)\s+(?:platforms?|stores?|sources?)\b/i.test(text))patch.platform='all';
-  if(/\b(?:pos|in[ -]?store)\b/i.test(text)&&!/\b(?:exclude|excluding|without)\s+(?:pos|in[ -]?store)\b/i.test(text)){patch.channel=/\bonline\b/i.test(text)?null:'instore';patch.channel_breakdown=patch.channel===null;}
+  if(requestsInStoreChannel(text)){patch.channel=/\bonline\b/i.test(text)?null:'instore';patch.channel_breakdown=patch.channel===null;}
   if(/\bsquare\b/i.test(text))patch.platform=/\b(?:shopify|woocommerce|woo)\b/i.test(text)?'all':'square';
   const sourceRequest=text.replace(/\b(?:do not|don't|never|without|not)\s+(?:combine|combined|pool|pooled|merge)\b[^.;\n]*/gi,'');
   if(/\b(?:combine|combined|pool|pooled|merge)\b[^.;\n]{0,120}\b(?:platforms?|stores?|sources?|shopify|woocommerce|woo|square)\b/i.test(sourceRequest))patch.filters=[...new Set([...(patch.filters||[]),'combined_source_population'])];

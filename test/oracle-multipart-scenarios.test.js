@@ -1,4 +1,5 @@
 import test from 'node:test';
+import { readFileSync } from 'node:fs';
 import assert from 'node:assert/strict';
 import express from 'express';
 import ExcelJS from 'exceljs';
@@ -17,8 +18,10 @@ import { createMemoryExportStore } from '../oracle/product-priority-storage.js';
 import { suppressAnalyticalProposals } from '../oracle/clarification-consumption.js';
 
 const NOW=Date.parse('2026-10-13T10:00:00Z');
-// Repository multipart acceptance fixture; verbatim production wording is unverified.
+// Condensed multipart fixture; the verbatim original is loaded separately below.
 export const FULL='UK online GBP orders this year through the latest completed day. £25 order-value bands from £100 to £350. £250 shipping threshold compared with £175/£200/£225/£275/£300. Recorded shipping charges separately from an illustrative £8 assumption. Price-compatible add-on opportunities. Confirmed May sale context. Coverage and financial-basis limitations.';
+const ORIGINAL=readFileSync(new URL('./fixtures/uk-shipping-original.txt',import.meta.url),'utf8').trimEnd();
+const ORIGINAL_THRESHOLDS=[175,200,225,250,275,300];
 const SHORT='Assess UK online GBP free shipping for September 2026. Compare £250 with £200 and £225, assuming purchasing behaviour stays unchanged. Show recorded shipping charges and the separate hypothetical £8 calculation.';
 const apply=(text,prior=null)=>transitionAnalysisContext(prior,text,{now:NOW}).context;
 function fixture({populationFailure=false,empty=false,promotionFailure=false,priceFailure=false}={}){
@@ -42,7 +45,7 @@ function fixture({populationFailure=false,empty=false,promotionFailure=false,pri
 }
 function verify(r,f,{fee=8,baseline=250,start='2026-01-01',end='2026-10-12',thresholds=[250,175,200,225,275,300],full=true,windows=1}={}){
   const e=r.evidence;
-  assert.equal(e.kind,'governed_order_values');assert.equal(e.operation.baseline,baseline);assert.equal(e.operation.assumed_charge,fee);assert.deepEqual(e.operation.thresholds,thresholds);
+  assert.equal(e.kind,'governed_order_values');assert.equal(e.retrieval[0].attempted,true);assert.equal(e.operation.baseline,baseline);assert.equal(e.operation.assumed_charge,fee);assert.deepEqual(e.operation.thresholds,thresholds);
   assert.equal(e.sections[0].population,6*windows);assert.equal(e.sections[0].unknown_values,windows);
   const scenario=e.sections[0].scenarios.find(s=>s.threshold===200);assert.equal(scenario.affected_orders,3*windows);assert.equal(scenario.recorded_shipping_charges,16*windows);assert.equal(scenario.unknown_charge_orders,windows);assert.equal(scenario.hypothetical_fee,3*fee*windows);
   assert.match(r.answer,/Threshold/);assert.match(r.answer,/Observed value band/);assert.match(r.answer,/Shopify-only collected history/);assert.match(r.answer,/shipping-rule basis is unverified/);assert.match(r.answer,/not a confirmed business policy/);
@@ -90,22 +93,23 @@ test('recovered evidence, charts, export and failed presentation reuse one valid
   const altered=structuredClone(r.evidence);altered.analytical_plan.numeric_operation.assumed_charge=9;assert.throws(()=>assertEvidenceAgreement(r.analysis_context,altered),e=>e.code==='EVIDENCE_SCOPE_MISMATCH');
   const oldPlan=resolveAnalyticalPlan({...c,requested_operations:[]});const legacy=structuredClone(oldPlan);delete legacy.requested_operations;assert.equal(analyticalPlanKey(oldPlan),analyticalPlanKey(legacy));
 });
-for(const durable of [false,true])test(`full acceptance and optional proposals across authenticated ${durable?'durable persistence and polling':'interactive and latest recovery'}`,async t=>{
+for(const message of [FULL,ORIGINAL])for(const durable of [false,true])test(`${message===ORIGINAL?'verbatim original':'full fixture'} acceptance and optional proposals across authenticated ${durable?'durable persistence and polling':'interactive and latest recovery'}`,async t=>{
   const f=fixture(),app=express();let proposals=0;
   app.use('/api/oracle',createOracleUiRouter({baselineOverview:f.baseline,chat:()=>assert.fail('model fallback'),knowledgeService:f.knowledgeService,exportStore:f.exports,analysisJobStore:createMemoryAnalysisJobStore(),generateProposals:async()=>{proposals++;throw Error('secret proposal');},env:{ORACLE_UI_PASSWORD:'fixture',ORACLE_UI_SESSION_SECRET:'fixture-secret-long-enough-32-characters',ORACLE_ANALYSIS_JOBS_ENABLED:String(durable)},now:()=>NOW}));
   const server=await new Promise((resolve,reject)=>{const s=app.listen(0,'127.0.0.1',()=>resolve(s));s.on('error',reject);});t.after(()=>{server.closeAllConnections();server.close();});const base=`http://127.0.0.1:${server.address().port}/api/oracle`,origin=new URL(base).origin;
   const login=await fetch(base+'/auth/login',{method:'POST',headers:{origin,'content-type':'application/json'},body:JSON.stringify({password:'fixture'})}),auth=await login.json(),cookie=login.headers.getSetCookie().map(x=>x.split(';')[0]).join('; '),headers={cookie,origin,'content-type':'application/json','x-csrf-token':auth.csrf};let sequence=0;
   const post=async(path,body)=>{const response=await fetch(base+path,{method:'POST',headers:{...headers,'x-request-id':`multipart-${durable}-${++sequence}`},body:JSON.stringify(body)});return {response,data:await response.json()};};
-  const preflight=await post('/propose',{message:FULL});assert.equal(preflight.response.status,200);assert.deepEqual(preflight.data.proposals,[]);assert.equal(preflight.data.clarification,null);assert.equal(proposals,0);assert.equal(f.calls.length,0);
-  const route=await post('/analysis/route',{message:FULL});assert.equal(route.data.route,'job');let {response,data}=await post(durable?'/jobs':'/chat',{message:FULL});assert.equal(response.status,durable?202:200);
+  const preflight=await post('/propose',{message});assert.equal(preflight.response.status,200);assert.deepEqual(preflight.data.proposals,[]);assert.equal(preflight.data.clarification,null);assert.equal(proposals,0);assert.equal(f.calls.length,0);
+  const route=await post('/analysis/route',{message});assert.equal(route.data.route,'job');let {response,data}=await post(durable?'/jobs':'/chat',{message});assert.equal(response.status,durable?202:200);
   if(durable){const jobId=data.job_id;for(let n=0;n<250;n++){data=await(await fetch(base+'/jobs/'+jobId,{headers})).json();if(data.status==='completed')break;assert.notEqual(data.status,'failed');await new Promise(resolve=>setTimeout(resolve,10));}assert.equal(data.status,'completed');const poll=await(await fetch(base+'/jobs/'+jobId,{headers})).json();assert.deepEqual(poll.evidence,data.evidence);assert.match(poll.answer,/Small pendant/);}
   else {const latest=await(await fetch(base+'/analysis/latest',{headers})).json();assert.deepEqual(latest.analysis.evidence,data.evidence);assert.match(latest.analysis.answer,/Threshold/);}
-  verify(data,f);assert.deepEqual(data.proposals,[]);assert.equal(proposals,0);
+  if(message===ORIGINAL){assert.equal(data.analysis_context.geography,'GB');assert.equal(data.analysis_context.channel,'online');assert.deepEqual(data.analysis_context.currencies,['GBP']);}
+  verify(data,f,{thresholds:message===ORIGINAL?ORIGINAL_THRESHOLDS:undefined});assert.deepEqual(data.proposals,[]);assert.equal(proposals,0);
   // Explicit save remains separate. A proposal-generation failure cannot block the analysis.
-  const explicit=FULL+' Save the UK shipping policy to knowledge.';assert.equal(suppressAnalyticalProposals(apply(explicit),{},explicit),false);f.calls.length=0;
+  const explicit=message+' Save the UK shipping policy to knowledge.';assert.equal(suppressAnalyticalProposals(apply(explicit),{},explicit),false);f.calls.length=0;
   let saved=await post(durable?'/jobs':'/chat',{message:explicit});assert.equal(saved.response.status,durable?202:200);
   if(durable){const id=saved.data.job_id;for(let n=0;n<250;n++){saved.data=await(await fetch(base+'/jobs/'+id,{headers})).json();if(saved.data.status==='completed')break;assert.notEqual(saved.data.status,'failed');await new Promise(resolve=>setTimeout(resolve,10));}assert.equal(saved.data.status,'completed');}
-  verify(saved.data,f);assert.equal(saved.data.proposal_error,'Knowledge proposal could not be generated.');assert.equal(proposals,1);
+  verify(saved.data,f,{thresholds:message===ORIGINAL?ORIGINAL_THRESHOLDS:undefined});assert.equal(saved.data.proposal_error,'Knowledge proposal could not be generated.');assert.equal(proposals,1);
 });
 
 test('other supplied behavioural assumptions remain unverified; supported arithmetic survives',async()=>{
@@ -128,12 +132,12 @@ test('bounded incident diagnostics expose only scope, stage and result metadata'
   const r=await inspectAnalysisIncident({bigquery:{dataset:()=>({getMetadata:async()=>[{location:'EU'}]}),query:async args=>{read=args;return [[{job_id:'j',status:'completed',route:'get_order_value_analysis',subject:'order_values',platform:null,source_store:'shopify',channel:'online',geography:'GB',currency:'GBP',population_attempted:'true',retrieval_failed:'true',population_status:'rejected',promotion_status:'fulfilled',prices_status:'incomplete',retrieval_stage:'population_query',retrieval_code:'ORDER_VALUE_RETRIEVAL_FAILED',retrieval_reason:'invalidQuery',answer_characters:100,section_count:0}]];}},project:'fixture',dataset:'jobs',table:'oracle',requestId:'r',jobId:'j'});
   assert.equal(r.context.platform,null);assert.equal(r.retrieval.population_attempted,true);assert.equal(r.retrieval.retrieval_failed,true);assert.equal(r.retrieval.reason,'invalidQuery');assert.match(read.query,/LIMIT 1/);assert.match(read.query,/JSON_VALUE.*population_status/);assert.equal(read.maximumBytesBilled,'100000000');assert.equal(read.jobTimeoutMs,'15000');assert.doesNotMatch(read.query,/SELECT \*|source_rows|assumed_charge|customer|\b(?:INSERT|UPDATE|DELETE|MERGE)\b/i);assert.doesNotMatch(JSON.stringify(r),/sql|params|customer|£/);
 });
-test('full direct HTTP agent bridge executes the supplied validated plan with unspecified platform',async t=>{
+for(const message of [FULL,ORIGINAL])test(`${message===ORIGINAL?'verbatim original':'full fixture'} direct HTTP agent bridge executes the shared context`,async t=>{
   const {governedAgentRequest}=await import('../oracle/agent-request.js');const f=fixture(),app=express();app.use(express.json());
   app.post('/agent',async(req,res,next)=>{try{res.json(await executeGovernedAgentAnalysis({message:req.body.message,analysisContext:req.body.analysis_context,scopeResolved:req.body.scope_resolved,baselineOverview:f.baseline,now:NOW}));}catch(error){next(error);}});
   const server=await new Promise((resolve,reject)=>{const s=app.listen(0,'127.0.0.1',()=>resolve(s));s.on('error',reject);});t.after(()=>{server.closeAllConnections();server.close();});
-  const context={...apply(FULL),platform:null,channel:null},request=governedAgentRequest(FULL,{analysisContext:context},Date.now()+10000);
-  const response=await fetch(`http://127.0.0.1:${server.address().port}/agent`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(request)});assert.equal(response.status,200);verify(await response.json(),f);
+  const context=message===ORIGINAL?apply(message):{...apply(message),platform:null,channel:null},request=governedAgentRequest(message,{analysisContext:context},Date.now()+10000);
+  const response=await fetch(`http://127.0.0.1:${server.address().port}/agent`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(request)});assert.equal(response.status,200);verify(await response.json(),f,{thresholds:message===ORIGINAL?ORIGINAL_THRESHOLDS:undefined});
 });
 
 for(const channel of [null,'online'])test(`full request with unspecified platform and ${channel||'unspecified'} channel attempts scoped population retrieval`,async()=>{
@@ -169,4 +173,12 @@ test('lease-owned unspecified-scope full request persists recoverable scoped evi
 test('a prohibition on combining sources does not block the supported scoped analysis',async()=>{
   const message=FULL+' Do not combine Shopify and Woo populations.',f=fixture(),c=apply(message);
   assert.equal(resolveExecutionPlan(c).limitation,null);verify(await f.run(message,c),f);
+});
+
+test('verbatim original resolves UK online GBP and attempts population retrieval through shared context/dispatcher',async()=>{
+  assert.ok(ORIGINAL.startsWith('Assess our UK online free-shipping threshold.'));assert.doesNotMatch(ORIGINAL,/Shopify/i);
+  const context=apply(ORIGINAL);assert.equal(context.geography,'GB');assert.equal(context.channel,'online');assert.equal(context.channel_breakdown,false);assert.deepEqual(context.currencies,['GBP']);
+  assert.equal(context.start_date,'2026-01-01');assert.equal(context.end_date,'2026-10-12');assert.equal(context.tool_route,'get_order_value_analysis');assert.equal(resolveExecutionPlan(context).limitation,null);
+  const f=fixture(),r=await f.run(ORIGINAL,context);verify(r,f,{thresholds:ORIGINAL_THRESHOLDS});assert.equal(r.evidence.retrieval[0].attempted,true);
+  assert.equal(f.prices.length,1);assert.equal(f.knowledge.length,1);assert.doesNotMatch(r.answer,/No population retrieval was attempted/);
 });

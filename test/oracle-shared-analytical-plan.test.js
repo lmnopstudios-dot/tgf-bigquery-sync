@@ -164,3 +164,12 @@ test('product export → selected campaign → weekday sales → conversion exec
   r=await send(f,r.context,QUESTION);assert.equal(dailyCalls.length,1);assert.equal(r.evidence.rows[4].average_sales_per_day_excluding_sale,150);assert.equal(r.context.campaign_request,null);
   const before=calls.length;r=await send(f,r.context,'Monthly mobile and desktop conversion rates this year.');assert.equal(r.evidence.kind,'governed_device_conversion');assert.equal(r.evidence.sections.length,10);assert.ok(calls.slice(before).every(c=>!c.query.includes('klaviyo')&&!c.query.includes('order_line_items')));assert.equal(r.context.promotion_context,null);
 });
+
+test('listed POS exclusions do not widen either weekday or order-value online scope',()=>{
+  for(const subject of ['Show online sales by weekday this year.','UK online GBP free-shipping threshold £250 versus £200 this year.']){
+    for(const exclusion of ['Exclude non-UK and POS orders.','Exclude returns, staff orders and in-store sales.','Without POS orders.']){
+      const c=apply(null,subject+' '+exclusion);assert.equal(c.channel,'online');assert.equal(c.channel_breakdown,false);
+    }
+    const mixed=apply(null,subject+' Exclude returns, but include POS orders.');assert.notEqual(mixed.channel,'online');assert.ok(resolveExecutionPlan(mixed).limitation);
+  }
+});

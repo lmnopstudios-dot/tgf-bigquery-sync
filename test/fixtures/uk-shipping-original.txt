@@ -1,0 +1,20 @@
+Assess our UK online free-shipping threshold.
+Currently, UK delivery costs £8 below £250 and is free at £250 or above. Use this year’s evidence through the latest completed day.
+Order values
+Show UK online GBP orders in £25 bands from £100 to £350, with wider bands outside that range. Include order counts and percentages where the full eligible population is available.
+Use the merchandise value that actually determines shipping eligibility. Establish whether this is after discounts and includes VAT; keep shipping charges separate. Exclude non-UK and POS orders.
+Threshold scenarios
+Compare the current £250 threshold with £175, £200, £225, £275 and £300.
+For each, show:
+\- Orders that would newly qualify for free shipping or lose eligibility.
+\- Estimated shipping revenue forgone or gained on those existing orders, assuming purchasing behavior stays unchanged.
+\- Actual recorded shipping charges where available. Separate an illustrative £8-per-order calculation from observed charges.
+Do not assume every order below £250 paid £8: check free-shipping discounts, exceptions and missing evidence.
+Add-on opportunity
+Focus on orders £10–£75 below £250. Show how much customers would need to add to qualify.
+Identify current published products at suitable UK prices that could bridge those gaps. Use existing product and basket evidence to suggest relevant add-ons; do not retrieve inventory or invent product relationships.
+Highlight where the additional spend needed exceeds the £8 delivery saving. Do not assume customers will add an item just to receive free shipping.
+Recommendation
+Explain what the evidence supports about keeping or testing a different threshold. Show the May sale separately where confirmed dates support it.
+Keep shipping-fee revenue distinct from carrier costs and profit. If product margins and actual fulfilment costs are unavailable, state that a profit-optimal threshold cannot yet be calculated.
+Lead with a short recommendation and compact scenario table. Put definitions, coverage and supporting evidence in Show details. No collection, backfill or mutation.
