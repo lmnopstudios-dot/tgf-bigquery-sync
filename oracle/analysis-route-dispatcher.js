@@ -1,10 +1,10 @@
 import { assertWeekdayEvidence } from './weekday-sales.js';
 import { resolveAnalyticalPlan, analyticalPlanKey, assertPlanAgreement } from './analytical-plan.js';
 import { resolveExecutionPlan } from './analytical-capabilities.js';
-import { assertCatalogueSelection } from './product-catalogue-filter.js';
+import { catalogueFilterKey, scopeMismatch, assertCatalogueSelection } from './product-catalogue-filter.js';
 import { presentAnalyticalAnswer } from './answer-presentation.js';
 import { withOracleCharts } from './evidence-charts.js';
-import { productReportConfigKey, resolveProductReportConfig } from './product-report-config.js';
+import { productReportMismatchField, resolveProductReportConfig } from './product-report-config.js';
 import { ANALYSIS_TOOL_ROUTES, validateAnalysisContext, clarificationFor, transitionAnalysisContext } from './analysis-context.js';
 
 const baselineThenAgent = async ({message,baselineOverview,baselineOptions,chat,chatOptions}) =>
@@ -52,9 +52,9 @@ export function assertEvidenceAgreement(contextValue,evidence,requestMessage=nul
   if(context?.tool_route==='get_daily_sales_analysis'&&evidence&&!evidence.analytical_plan)throw Object.assign(new Error('Recovered daily evidence has no validated plan'),{code:'EVIDENCE_SCOPE_MISMATCH'});
   if(context?.tool_route==='get_daily_sales_analysis'&&evidence)assertWeekdayEvidence(context,evidence);
   if(context?.product_report&&evidence){
-    if(requestMessage){const inferred=resolveProductReportConfig(requestMessage,{previous:context.product_report,defaultPeriod:context.product_report.period}).config.catalogue_filter;if(inferred&&JSON.stringify(inferred)!==JSON.stringify(context.product_report.catalogue_filter))throw Object.assign(new Error('Recovered export lost the original category request'),{code:'EVIDENCE_SCOPE_MISMATCH',failed_stage:'evidence_validation'});}
+    if(requestMessage){const inferred=resolveProductReportConfig(requestMessage,{previous:context.product_report,defaultPeriod:context.product_report.period}).config.catalogue_filter;if(inferred&&catalogueFilterKey(inferred)!==catalogueFilterKey(context.product_report.catalogue_filter)&&!(inferred.source===null&&catalogueFilterKey({...context.product_report.catalogue_filter,source:null,collection_id:undefined})===catalogueFilterKey(inferred)))throw Object.assign(new Error('Recovered export lost the original category request'),{code:'EVIDENCE_SCOPE_MISMATCH',failed_stage:'evidence_validation'});}
     assertCatalogueSelection(evidence,context.product_report);
-    if(!evidence.report_config||productReportConfigKey(context.product_report)!==productReportConfigKey(evidence.report_config))throw Object.assign(new Error('Retrieved export does not agree with the full report configuration.'),{code:'EVIDENCE_SCOPE_MISMATCH',failed_stage:'evidence_validation'});
+    const mismatch=productReportMismatchField(context.product_report,evidence.report_config);if(mismatch)throw scopeMismatch(mismatch);
   }
   if(!evidence||!context?.requested_subject)return true;
   const actual=evidence.requested_subject||evidence.subject||({sales_baseline:'sales'}[evidence.selected_intent])||({shopify_operational_sales_baseline:'sales',governed_device_conversion:'device_conversion',focused_woo_historical_conversion:'woo_traffic_conversion',independent_calendar_month_comparison:'calendar_period_comparison',woo_shopify_platform_comparison:'platform_sales',woo_shopify_monthly_platform_comparison:'platform_sales'}[evidence.kind]);
@@ -98,7 +98,7 @@ export async function dispatchAnalysisRequest({message,analysisContext,baselineO
   const clarification=context?clarificationFor(context):null;if(clarification)return {answer:clarification,tools:[]};
   const binding=execution.execute||baselineThenAgent;
   let result=await binding({message,baselineOverview,baselineOptions:{...baselineOptions,analysisContext:analysisContext??context},chat,chatOptions});
-  try{assertResolvedAnalysisContext(context,result?.analysis_context);assertEvidenceAgreement(result?.analysis_context||context,result?.evidence);baselineOptions?.onProviderStage?.({stage:'evidence_validation',status:'success'});}catch(error){baselineOptions?.onProviderStage?.({stage:'evidence_validation',status:'failed',code:'EVIDENCE_SCOPE_MISMATCH'});throw error;}
+  try{assertResolvedAnalysisContext(context,result?.analysis_context);assertEvidenceAgreement(result?.analysis_context||context,result?.evidence);baselineOptions?.onProviderStage?.({stage:'evidence_validation',status:'success'});}catch(error){baselineOptions?.onProviderStage?.({stage:'evidence_validation',status:'failed',code:'EVIDENCE_SCOPE_MISMATCH',scope_field:error.scope_field||'analytical_scope'});throw error;}
   if(result?.evidence&&context?.requested_subject&&!result.evidence.report_config)result={...result,evidence:{...result.evidence,analytical_plan:resolveAnalyticalPlan(result.analysis_context||context)}};
   await baselineOptions?.onEvidence?.(result);
   return presentAnalyticalAnswer(withOracleCharts(disclosePeriod(result,result?.analysis_context||context)),result?.analysis_context||context);
