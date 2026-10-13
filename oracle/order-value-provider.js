@@ -11,6 +11,7 @@ export function orderValueQueryOptions(args,location) {
 }
 
 export const ORDER_VALUE_DEFINITIONS=Object.freeze({
+  dates:"Latest location snapshot created_at TIMESTAMP converted to Europe/London business date, inclusive start/end. Null created_at is excluded; no fallback to financial, customer, geography, updated_at or synced_at. Snapshots selected over all collected history before date filtering.",
   identity:'Shopify/shopify/order_id; latest component snapshot per order before joins; no line-item or refund one-to-many joins.',
   population:'Direct valid shippingAddress.countryCodeV2; retail_location_id IS NULL (existing governed online proxy, not positive Online Store attribution); exclude Matrixify; uncancelled paid, partially_paid or partially_refunded; fully refunded/unpaid excluded.',
   observed_subtotal:'Collected Shopify subtotalPriceSet.presentmentMoney.amount: observed discounted subtotal, shipping excluded. Tax inclusion and shipping-rule basis unverified. Do not subtract total discounts or add total tax again.',
@@ -18,9 +19,22 @@ export const ORDER_VALUE_DEFINITIONS=Object.freeze({
   charges:'Collected totalShippingPriceSet.presentmentMoney.amount; separate original recorded shipping charges, before shipping-refund allocation. Not delivery cost, margin or profit.',
   zeros:'Finance collector coerces absent money fields to zero. Stored zero amounts/charges are ambiguous and treated as unknown; proven zero is supported only with independent evidence.',
   scenarios:'Threshold equality qualifies. Existing orders and behaviour unchanged. Observed-basis scenarios are conditional, not verified shipping-rule eligibility or forecasts. Hypothetical fee is supplied charge × affected orders, not an expected revenue gain/loss.',
+  charge_completeness:'charge_total_complete describes known charges and known observed amounts within the retrieved affected-order calculation only. It does not verify population coverage, shipping rules, delivery cost, margin or profit. evidence_complete additionally requires verified population coverage.',
   coverage:'Represented dates and component matches describe collected evidence only. No authoritative complete-population reconciliation is available.'
 });
-export function orderValuePopulationSql(project) {
+export const ORDER_VALUE_FILTER_STAGES=Object.freeze([
+  ['financial_match','financial_matched'],
+  ['status_match','customer_matched'],
+  ['geography_match','geography_matched'],
+  ['valid_geography',"geography_status='valid'"],
+  ['country','shipping_country_code=@country'],
+  ['currency','presentment_currency=@currency'],
+  ['online_proxy','retail_location_id IS NULL'],
+  ['not_matrixify','(source_app_id IS NULL OR source_app_id!=@matrixify_app_id)'],
+  ['uncancelled','cancelled_at IS NULL AND finance_cancelled_at IS NULL'],
+  ['financial_status',"LOWER(display_financial_status) IN ('paid','partially_paid','partially_refunded')"]
+]);
+export function orderValueSnapshotSql(project) {
   assertDatasetIdentifier(project);
   const table=name=>`\`${project}.shopify_data.${name}\``;
   // Analytic ORDER BY accepts scalar expressions, not a whole-row range variable.
@@ -35,21 +49,23 @@ export function orderValuePopulationSql(project) {
     SELECT * FROM ${table('order_customers')} QUALIFY ROW_NUMBER() OVER(PARTITION BY order_id ORDER BY synced_at DESC,${snapshot('order_customers')} DESC)=1
   ), geography AS (
     SELECT * FROM ${table('order_shipping_geography')} QUALIFY ROW_NUMBER() OVER(PARTITION BY order_id ORDER BY synced_at DESC,${snapshot('order_shipping_geography')} DESC)=1
-  ), scoped AS (
+  )`;
+}
+export function orderValuePopulationSql(project) {
+  return `${orderValueSnapshotSql(project)}, joined AS (
     SELECT l.order_id,DATE(l.created_at,'Europe/London') order_date,
+      l.created_at location_created_at,f.created_at financial_created_at,
+      c.order_created_at status_created_at,g.order_created_at geography_created_at,
       f.order_id IS NOT NULL financial_matched,c.order_id IS NOT NULL customer_matched,g.order_id IS NOT NULL geography_matched,
       g.geography_status,g.shipping_country_code,f.presentment_currency,
       l.retail_location_id,l.source_app_id,c.display_financial_status,c.cancelled_at,f.cancelled_at finance_cancelled_at,
       f.original_subtotal_presentment,f.original_total_presentment,f.original_shipping_presentment,
       f.synced_at financial_collected_at,l.synced_at location_collected_at,g.synced_at geography_collected_at,c.synced_at status_collected_at
     FROM locations l LEFT JOIN financials f USING(order_id) LEFT JOIN customers c USING(order_id) LEFT JOIN geography g USING(order_id)
-    WHERE DATE(l.created_at,'Europe/London') BETWEEN DATE(@start_date) AND DATE(@end_date)
+  ), scoped AS (
+    SELECT * FROM joined WHERE order_date BETWEEN DATE(@start_date) AND DATE(@end_date)
   ), eligible AS (
-    SELECT * FROM scoped WHERE financial_matched AND customer_matched AND geography_status='valid'
-      AND shipping_country_code=@country AND presentment_currency=@currency
-      AND retail_location_id IS NULL AND (source_app_id IS NULL OR source_app_id!=@matrixify_app_id)
-      AND cancelled_at IS NULL AND finance_cancelled_at IS NULL
-      AND LOWER(display_financial_status) IN ('paid','partially_paid','partially_refunded')
+    SELECT * FROM scoped WHERE ${ORDER_VALUE_FILTER_STAGES.map(([,predicate])=>predicate).join(' AND ')}
   )`;
 }
 export function orderValueHistogramSql(project) {
@@ -77,7 +93,7 @@ export function orderValueCoverageSql(project) {
     (SELECT MIN(order_date) FROM eligible) first_eligible_date,(SELECT MAX(order_date) FROM eligible) last_eligible_date,
     COUNTIF(retail_location_id IS NOT NULL) excluded_pos,COUNTIF(source_app_id=@matrixify_app_id) excluded_migrated,
     COUNTIF(cancelled_at IS NOT NULL OR finance_cancelled_at IS NOT NULL) excluded_cancelled,
-    COUNTIF(LOWER(display_financial_status) NOT IN ('paid','partially_paid','partially_refunded')) excluded_financial_status,
+    COUNTIF(display_financial_status IS NULL OR LOWER(display_financial_status) NOT IN ('paid','partially_paid','partially_refunded')) excluded_financial_status,
     (SELECT COUNT(*)-COUNT(DISTINCT order_id) FROM \`${project}.shopify_data.order_locations\` WHERE DATE(created_at,'Europe/London') BETWEEN DATE(@start_date) AND DATE(@end_date)) duplicate_location_rows,
     (SELECT COUNT(*)-COUNT(DISTINCT order_id) FROM \`${project}.shopify_data.order_financials\` WHERE DATE(created_at,'Europe/London') BETWEEN DATE(@start_date) AND DATE(@end_date)) duplicate_financial_rows,
     (SELECT COUNT(*)-COUNT(DISTINCT order_id) FROM \`${project}.shopify_data.order_customers\` WHERE DATE(order_created_at,'Europe/London') BETWEEN DATE(@start_date) AND DATE(@end_date)) duplicate_status_rows,

@@ -1,7 +1,7 @@
 /** Only allowlisted machine fields leave the retrieval boundary. Never retain messages. */
 const codes=new Set(['ORACLE_AGENT_DEADLINE','REQUEST_CANCELLED','ORDER_VALUE_READ_BOUND','EVIDENCE_SCOPE_MISMATCH']);
 const reasons=new Set(['invalidQuery','invalid','notFound','accessDenied','billingNotEnabled','billingTierLimitExceeded','jobBillingTierLimitExceeded','resourcesExceeded','quotaExceeded','rateLimitExceeded','backendError','internalError','jobTimeout','stopped']);
-const stages=new Set(['dataset_location','population_query','coverage_query','schema_inspection','population_dry_run','coverage_dry_run','join_uniqueness','promotion','published_prices']);
+const stages=new Set(['dataset_location','population_query','coverage_query','schema_inspection','population_dry_run','coverage_dry_run','join_uniqueness','population_trace_dry_run','population_trace','promotion','published_prices']);
 export function safeReadFailure(error,stage) {
   if(error?.safe_failure)return safeReadFailure(error.safe_failure,stage);
   const nested=error?.response?.data?.error;
