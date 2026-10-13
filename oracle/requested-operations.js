@@ -1,0 +1,46 @@
+import { retrievePromotionContext, resolvePromotionDates } from './promotion-context.js';
+
+// Semantic operations may be requested for any monetary distribution. These
+// declarations do not make period totals an order-level evidence capability.
+export const OPERATION_REQUIREMENTS=Object.freeze({
+  numeric_bands:['complete_unique_population','governed_numeric_measure','exact_boundaries'],
+  threshold_scenarios:['numeric_bands','observed_charge','eligibility_semantics','exceptions_and_unknowns'],
+  profit_optimization:['compatible_product_costs','compatible_fulfilment_costs'],
+  optional_product_enrichment:['published_destination_prices','no_inferred_basket_relationships']
+});
+export function requestedAnalyticalOperations(message) {
+  const text=String(message||'');
+  const bands=/\b(?:order[ -]?value|basket[ -]?(?:value|size)|merchandise (?:amount|value))\b[\s\S]{0,100}\b(?:bands?|distribution|buckets?|ranges?)\b|\b(?:bands?|distribution|buckets?)\b[\s\S]{0,100}\b(?:order|basket|merchandise)[ -]?(?:values?|amounts?|sizes?)\b/i.test(text);
+  const scenarios=/\bthresholds?\b/i.test(text)&&(/\b(?:compar[ei]|alternativ[es]|scenarios?|rais[ei]|lower|chang[ei])\w*\b/i.test(text)||[...text.matchAll(/£\s*\d+(?:\.\d+)?/g)].length>1);
+  const monetaryPopulation=bands||scenarios&&/\b(?:shipping|delivery|orders?|basket|merchandise)\b/i.test(text);
+  if(!monetaryPopulation)return null;
+  return {version:1,charge_domain:/\b(?:shipping|delivery)\b/i.test(text),operations:[...(bands?['numeric_bands']:[]),...(scenarios?['threshold_scenarios']:[]),...(/\bprofit|optimal|optimi[sz]/i.test(text)?['profit_optimization']:[]),...(/\badd[ -]?ons?|products?\b/i.test(text)?['optional_product_enrichment']:[])],
+    parameters:{monetary_values:[...new Set([...text.matchAll(/£\s*(\d+(?:\.\d+)?)/g)].map(m=>Number(m[1])))].slice(0,20),unchanged_behaviour:/unchanged|same (?:purchas|behavio)/i.test(text)},
+    population:{shipping_destination:/\bUK|United Kingdom\b/i.test(text)?'GB':null,channel:/\bonline\b/i.test(text)?'online':null,currency:/\bGBP\b|£/.test(text)?'GBP':null},
+    completed_days:/completed day|through yesterday|up to yesterday/i.test(text),
+    promotion_query:text.match(/\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+(?:sale|promotion)\b/i)?.[0]||null};
+}
+
+/** Fail closed before unrelated aggregates/model calls; optional context is
+ * read through the existing governed service, independently of core support. */
+export async function unsupportedOperationResult(request,context,{knowledgeService,operationKnowledgeService}={}) {
+  if(!request)return null;
+  knowledgeService=operationKnowledgeService||knowledgeService;
+  const period={start_date:context?.start_date,end_date:context?.end_date};
+  if(request.completed_days&&context?.current_day_included&&period.end_date)period.end_date=new Date(Date.parse(period.end_date+'T12:00:00Z')-86400000).toISOString().slice(0,10);
+  const lines=['The requested order-value analysis is unavailable from the current governed evidence bindings.',
+    'Order-value bands require a complete population of unique orders with a governed merchandise measure, discounts, tax semantics and the requested destination, channel and currency filters verified together. Period sales totals and average order value cannot supply this distribution.',
+    request.charge_domain?'Threshold comparisons require shipping-eligibility merchandise amounts, exact non-overlapping boundaries, separate recorded shipping charges, free-shipping exceptions and unknown values. A supplied delivery charge is an illustrative assumption; raising a threshold does not establish that every affected customer would pay it. No historical shipping-revenue effect has been calculated.':'Threshold comparisons require exact non-overlapping boundaries, governed measures, exceptions and unknown values. No scenario effect has been calculated.',
+    'Unchanged-behaviour scenarios would describe historical revenue effects only. Conversion, basket uplift, future profit and a profit-optimal threshold are unverified without compatible product and fulfilment costs.'];
+  if(period.start_date&&period.end_date)lines.push(`Requested window: ${period.start_date} to ${period.end_date}, inclusive (Europe/London; ${request.completed_days?'completed days':'current-day completeness unverified'}).`);
+  if(request.operations.includes('optional_product_enrichment'))lines.push('Add-on suggestions are unavailable in this result: current published UK prices and relevant basket relationships have not been verified. No inventory was queried.');
+  let promotion=null;
+  if(request.promotion_query&&period.start_date&&period.end_date){
+    const promotionRequest={query:request.promotion_query,treatment:'context'};
+    try{promotion=resolvePromotionDates(await retrievePromotionContext(knowledgeService,promotionRequest,period),promotionRequest,period);}catch{promotion={status:'retrieval_failed',events:[]};}
+    const events=promotion?.events||[];
+    if(promotion?.status==='confirmed')lines.push('Confirmed promotion context: '+events.map(e=>`${String(e.title||'Online promotion').replace(/[<>\r\n]/g,' ').slice(0,160)} (${e.effective_from} to ${e.effective_to})`).join('; ')+'. These dates provide context; no causal sale effect or threshold adjustment is inferred.');
+    else lines.push('Requested promotion context could not be confirmed for this window. Its effect has not been inferred.');
+  }
+  return {answer:lines.join('\n\n'),analysis_unavailable:true,partial:Boolean(promotion?.status==='confirmed'),tools:promotion?['search_knowledge']:[],capability_selection:{version:1,operations:request.operations,unsupported_operations:request.operations.filter(x=>x!=='optional_product_enrichment'),population:request.population,parameters:request.parameters},evidence:promotion?{kind:'governed_capability_limitation',requested_subject:context?.requested_subject||null,promotion}:null};
+}

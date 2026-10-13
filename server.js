@@ -1,3 +1,4 @@
+import { deliverOracleResult, agentResultForUi } from './oracle/result-delivery.js';
 import { createShopifySalesKpiService } from './oracle/daily-sales-provider.js';
 import {executeTikTokToolCall} from './oracle/tiktok.js';
 import {createCurrentStockService,createStockGroupLookup,STOCK_RESOLUTION_QUERY} from './oracle/current-stock.js';
@@ -7915,8 +7916,8 @@ app.post(
         });
       }
       const suppliedContext=req.body?.analysis_context;
-      const baselineAnswer=await executeGovernedAgentAnalysis({message,analysisContext:suppliedContext,scopeResolved:req.body?.scope_resolved===true,baselineOverview,baselineOptions:{exportOwner:exportOwnerKey('direct-agent',SYNC_SECRET),requestId:id,downloadBase:'/agent/exports',deadlineAt:deadlineAt-12_000,signal:cancellation.signal,onProviderStage:event=>console.info('Oracle direct provider stage:',{request_id:id,deployed_revision:process.env.RENDER_GIT_COMMIT||'unavailable',...event})}});
-      if(baselineAnswer)return res.json({success:true,answer:baselineAnswer.answer,presentation:baselineAnswer.presentation||null,evidence:baselineAnswer.evidence,tools_used:baselineAnswer.tools,inline_chart:baselineAnswer.inline_chart||null,charts:baselineAnswer.charts||[],artifact:baselineAnswer.artifact||null,request_id:id});
+      const baselineAnswer=await executeGovernedAgentAnalysis({message,analysisContext:suppliedContext,scopeResolved:req.body?.scope_resolved===true,baselineOverview,baselineOptions:{operationKnowledgeService:knowledgeService,exportOwner:exportOwnerKey('direct-agent',SYNC_SECRET),requestId:id,downloadBase:'/agent/exports',deadlineAt:deadlineAt-12_000,signal:cancellation.signal,onProviderStage:event=>console.info('Oracle direct provider stage:',{request_id:id,deployed_revision:process.env.RENDER_GIT_COMMIT||'unavailable',...event})}});
+      if(baselineAnswer)return res.json({success:true,...baselineAnswer,answer:baselineAnswer.answer,presentation:baselineAnswer.presentation||null,evidence:baselineAnswer.evidence,tools_used:baselineAnswer.tools,inline_chart:baselineAnswer.inline_chart||null,charts:baselineAnswer.charts||[],artifact:baselineAnswer.artifact||null,request_id:id});
 
       const currentDate = new Date()
         .toISOString()
@@ -8368,12 +8369,11 @@ Important rules:
       }
 
       console.info('Agent stage outcome:',stageOutcome({id,stage:'agent_response',startedAt:requestStarted,outcome:'success',extra:{proposed_call_count:callBudget.proposed,dispatched_call_count:callBudget.dispatched,tool_rounds:toolRounds}}));
-      res.json({
-        success: true,
-        answer: response.output_text,
-        tools_used: [...toolsUsed],
-        ...withOracleCharts({answer:response.output_text,evidence:{kind:'governed_tool_results',results:completedEvidence}})
-      });
+      const terminalResult={answer:response.output_text,evidence:{kind:'governed_tool_results',results:completedEvidence}};
+      let delivered;
+      try{delivered=deliverOracleResult(withOracleCharts(terminalResult),undefined,{artifactBase:'/agent/exports'});}catch{delivered=deliverOracleResult({...terminalResult,answer:null,partial:true},undefined,{artifactBase:'/agent/exports'});}
+      console.info('Oracle presentation readiness:',{request_id:id,stage:'presentation_readiness',status:delivered.delivery.status,schema_version:delivered.delivery.version,answer_present:true,evidence_count:completedEvidence.length});
+      res.json({success:true,tools_used:[...toolsUsed],...delivered});
     } catch (error) {
       console.error('Agent stage outcome:',stageOutcome({id,stage,startedAt:requestStarted,outcome:'failed',error}));
 
@@ -8434,7 +8434,7 @@ if (process.env.ORACLE_UI_PASSWORD || process.env.ORACLE_UI_SESSION_SECRET) {
         const safeStage=/^[a-z][a-z0-9_]{0,63}$/.test(String(payload.failed_stage||''))?payload.failed_stage:'agent_request';
         throw Object.assign(new Error('Oracle agent request rejected'),{name:'ApiError',code:safeCode,status:response.status,failed_stage:safeStage,durable});
       }
-      return { answer: payload.answer, presentation:payload.presentation||null, charts:payload.charts||payload.evidence?.chart_specs||[], tools: payload.tools_used || [], evidence:payload.evidence||null,artifact:payload.artifact||null, inline_chart: payload.inline_chart || null };
+      return agentResultForUi(payload);
     }
   }));
   app.use('/oracle', express.static(new URL('./public/oracle', import.meta.url).pathname, { index: 'index.html' }));

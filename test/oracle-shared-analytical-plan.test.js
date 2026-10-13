@@ -124,7 +124,7 @@ for(const durable of [false,true])test(`weekday conversation, owned XLSX downloa
   const noAuth=await fetch(base.replace('/api/oracle','')+r.artifact.download_url);assert.equal(noAuth.status,401);
   f.state.failure=true;const failed=await submit('Just September.');assert.equal(failed.evidence.retrieval_failed,true);assert.match((await(await fetch(base+'/session',{headers:{cookie}})).json()).analysis_scope,/2026-01-01–2026-10-11/);
   f.state.failure=false;const explicitRetry=await submit('Retry that request.');assert.deepEqual(explicitRetry.evidence.periods,[{start_date:'2026-09-01',end_date:'2026-09-30'}]);
-  if(durable){const original=jobStore.jobs.get(r.job_id);original.result_json.evidence.dimensions=['month'];assert.equal((await fetch(base+'/jobs/'+r.job_id,{headers:{cookie}})).status,500);}
+  if(durable){const original=jobStore.jobs.get(r.job_id);original.result_json.evidence.dimensions=['month'];assert.equal((await fetch(base+'/jobs/'+r.job_id,{headers:{cookie}})).status,409);}
 
 });
 

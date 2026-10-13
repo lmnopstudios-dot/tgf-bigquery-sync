@@ -105,5 +105,5 @@ test('durable storage failure is explicit and cannot fall back to ephemeral down
 test('failed-job artifact recovery validates saved evidence before reporting completion',async t=>{
   const f=await fixture(true);t.after(()=>f.server.close());const result=await send(f,true,'invalid-recovery'),job=f.jobs.jobs.get(result.job_id);job.status='failed';job.result_json=null;job.error_code='EVIDENCE_SCOPE_MISMATCH';
   const get=f.store.get.bind(f.store);f.store.get=async(...args)=>{const saved=await get(...args);return saved?{...saved,envelope:{...saved.envelope,subject:'sales'}}:null;};
-  const response=await f.request(`/api/oracle/jobs/${result.job_id}`,{headers:{cookie:f.headers.cookie}});assert.equal(response.status,500);const body=await response.json();assert.notEqual(body.status,'completed');assert.notEqual(body.recovered_persisted_export,true);
+  const response=await f.request(`/api/oracle/jobs/${result.job_id}`,{headers:{cookie:f.headers.cookie}});assert.equal(response.status,409);const body=await response.json();assert.notEqual(body.status,'completed');assert.notEqual(body.recovered_persisted_export,true);
 });

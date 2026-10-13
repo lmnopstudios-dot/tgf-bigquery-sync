@@ -1,3 +1,5 @@
+import { normalizeOracleResult } from '../public/oracle/result-contract.js';
+import { deliverOracleResult } from './result-delivery.js';
 import crypto from 'node:crypto';
 
 export const JOB_SCHEMA = [
@@ -67,7 +69,7 @@ export function inspectJobTableSchema(fields=[],expected=JOB_SCHEMA,limit=SCHEMA
 }
 
 const value = date => date?.value || date || null;
-const normalize = row => row && ({...row,payload_json:typeof row.payload_json==='string'?JSON.parse(row.payload_json):row.payload_json,result_json:typeof row.result_json==='string'?JSON.parse(row.result_json):row.result_json,created_at:value(row.created_at),updated_at:value(row.updated_at),lease_until:value(row.lease_until)});
+const normalize = row => row && ({...row,payload_json:typeof row.payload_json==='string'?JSON.parse(row.payload_json):row.payload_json,result_json:row.result_json==null?null:normalizeOracleResult(row.result_json),created_at:value(row.created_at),updated_at:value(row.updated_at),lease_until:value(row.lease_until)});
 
 /** Durable BigQuery queue. A lease is acquired atomically; stale running work is
  * failed rather than replayed because model/tool calls are not transactional. */
@@ -121,12 +123,14 @@ export function createAnalysisJobWorker({store,run,pollMs=1000,leaseMs=9*60_000,
       try{
         const timeout=new Promise((_,reject)=>{runtimeTimer=setTimeout(()=>{activeController.abort(new Error('runtime'));reject(Object.assign(new Error('runtime'),{code:'JOB_RUNTIME_EXCEEDED'}));},runtimeMs)});
         stage='analysis';result=await Promise.race([run(job,controller.signal),timeout]);
+        stage='presentation_readiness';result=deliverOracleResult(result,job.payload_json?.analysis_context);
+        logger.info?.('Oracle job worker stage:',{...context,stage,status:result.delivery.status,schema_version:result.delivery.version,answer_present:true,evidence_present:result.delivery.evidence_present,artifact_present:result.delivery.artifact_present});
         stage='evidence_checkpoint';
         if(await store.checkpoint?.(job.job_id,result,job)===false)throw Object.assign(new Error('Lease rejected'),{code:'LEASE_NOT_OWNED'});
         logger.info?.('Oracle job worker stage:',{...context,stage,status:'success'});
         stage='finish';
         if(await store.finish(job.job_id,result,job)===false)throw Object.assign(new Error('Lease rejected'),{code:'LEASE_NOT_OWNED'});
-        logger.info?.('Oracle job worker stage:',{...context,stage,status:'success'});
+        logger.info?.('Oracle job worker stage:',{...context,stage,status:'success',terminal_write_accepted:true,presentation_ready:true,browser_delivery_verified:false});
       }catch(error){
         const failedStage=safeStage(error?.failed_stage||error?.stage||stage,'analysis');
         logger.error('Oracle job worker stage failed:',diagnostic(error,failedStage));

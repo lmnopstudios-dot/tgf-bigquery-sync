@@ -67,7 +67,7 @@ test('HTTP refresh rejects a legacy completed export whose saved context already
   delete job.result_json.evidence.report_config.catalogue_filter;
   delete job.result_json.evidence.catalogue_selection;
   const response=await f.request(`/jobs/${result.job_id}`,{headers:{cookie:f.headers.cookie}});
-  assert.equal(response.status,500);const body=await response.json();assert.equal(body.code,'ORACLE_REQUEST_FAILED');assert.equal(body.artifact,undefined);
+  assert.equal(response.status,409);const body=await response.json();assert.equal(body.code,'EVIDENCE_SCOPE_MISMATCH');assert.equal(body.artifact,undefined);
 });
 
 // BigQuery JSON objects do not preserve insertion order. Exercise that storage
