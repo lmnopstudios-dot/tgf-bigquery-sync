@@ -1,3 +1,4 @@
+import { messageIntent, nonAnalyticalResult } from './message-intent.js';
 import { assertOrderValueEvidence } from './order-value-analysis.js';
 import { requestedAnalyticalOperations, unsupportedOperationResult } from './requested-operations.js';
 import { deliverOracleResult } from './result-delivery.js';
@@ -11,7 +12,7 @@ import { productReportMismatchField, resolveProductReportConfig } from './produc
 import { ANALYSIS_TOOL_ROUTES, validateAnalysisContext, clarificationFor, transitionAnalysisContext } from './analysis-context.js';
 
 const baselineThenAgent = async ({message,baselineOverview,baselineOptions,chat,chatOptions}) =>
-  await baselineOverview?.(message,baselineOptions) || await chat(message,chatOptions);
+  await baselineOverview?.(message,baselineOptions) || await chat(chatOptions?.suppliedMessage||message,chatOptions);
 
 const governedBaseline = async ({message,baselineOverview,baselineOptions}) => {
   const result=await baselineOverview?.(message,baselineOptions);
@@ -97,6 +98,11 @@ function disclosePeriod(result,context){
   return {...result,answer:`**Resolved dates:** ${context.start_date} to ${context.end_date}${context.comparison_start_date?` versus ${context.comparison_start_date} to ${context.comparison_end_date}`:''}, inclusive (Europe/London). Current day ${context.current_day_included?'included; evidence through the runtime cutoff may be partial':'excluded'}. Runtime cutoff: ${context.date_cutoff}.\n\n${result.answer}`};
 }
 export async function dispatchAnalysisRequest({message,analysisContext,baselineOverview=null,baselineOptions,chat,chatOptions}){
+  const nonAnalysis=nonAnalyticalResult(message);
+  if(nonAnalysis){if(nonAnalysis.answer)return deliverOracleResult(nonAnalysis,null);return chat?await chat(message,{...chatOptions,analysisContext:null,toolsAllowed:false}):{answer:'Please specify the text edit you would like.',tools:[]};}
+  const intent=messageIntent(message);
+  if(intent.document&&!transitionAnalysisContext(null,intent.instruction).context.tool_route)return deliverOracleResult(await chat(message,{...chatOptions,analysisContext:null,toolsAllowed:false}),null);
+  if(intent.document){analysisContext=transitionAnalysisContext(null,intent.instruction).context;chatOptions={...chatOptions,suppliedMessage:message,analysisContext};message=intent.instruction;}
   const context=analysisContext==null?null:validateAnalysisContext(analysisContext);
   const requested=requestedAnalyticalOperations(message);
   if(requested&&context?.tool_route!=='get_order_value_analysis'){baselineOptions?.onProviderStage?.({stage:'capability_selection',status:'unsupported',operation_count:requested.operations.length});return deliverOracleResult(await unsupportedOperationResult(requested,context||transitionAnalysisContext(null,message).context,baselineOptions),context);}
@@ -117,6 +123,11 @@ export async function dispatchAnalysisRequest({message,analysisContext,baselineO
 
 /** Shared deterministic /agent entrypoint; a null result continues existing model tooling. */
 export async function executeGovernedAgentAnalysis({message,analysisContext,baselineOverview,baselineOptions={},scopeResolved=false,now=Date.now()}){
+  const nonAnalysis=nonAnalyticalResult(message);
+  if(nonAnalysis){if(nonAnalysis.answer)return deliverOracleResult(nonAnalysis,null);return null;}
+  const intent=messageIntent(message);
+  if(intent.document&&!transitionAnalysisContext(null,intent.instruction,{now}).context.tool_route)return null;
+  if(intent.document){analysisContext=transitionAnalysisContext(null,intent.instruction,{now}).context;scopeResolved=true;message=intent.instruction;}
   const resolved=scopeResolved?{context:validateAnalysisContext(analysisContext||{})}:transitionAnalysisContext(analysisContext,message,{now});
   baselineOptions.onProviderStage?.({stage:'scope_resolution',resolved_subject:resolved.context.requested_subject,selected_route:resolved.context.tool_route,start_date:resolved.context.start_date,end_date:resolved.context.end_date});
   const requested=requestedAnalyticalOperations(message);

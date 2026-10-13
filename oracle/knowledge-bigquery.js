@@ -7,12 +7,13 @@ function normalizeValue(value) {
   // BigQuery DATE values are returned as BigQueryDate instances whose JSON shape
   // is { value: "YYYY-MM-DD" }.  Keep the service boundary independent of the
   // client library representation without changing arbitrary JSON objects.
-  if (value?.constructor?.name === 'BigQueryDate' && typeof value.value === 'string') return value.value;
+  if (['BigQueryDate','BigQueryTimestamp','BigQueryDatetime'].includes(value?.constructor?.name) && typeof value.value === 'string') return value.value;
+  if (value instanceof Date) return value.toISOString();
   if (Array.isArray(value)) return value.map(normalizeValue);
   if (typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([key, child]) => [key, normalizeValue(child)]));
   return value;
 }
-export const normalizeKnowledgeRows = rows => rows.map(row => normalizeValue(row));
+export const normalizeKnowledgeRows = rows => rows.map(row => {const normalized=normalizeValue(row);for(const field of ['recorded_at','created_at','updated_at','effective_from','effective_to','start_date','end_date'])if(typeof normalized[field]?.value==='string')normalized[field]=normalized[field].value;return normalized;});
 const present = value => value !== null && value !== undefined;
 const nonEmptyText = value => present(value) && String(value).trim() !== '';
 const nonEmptyArray = value => Array.isArray(value) && value.length > 0;

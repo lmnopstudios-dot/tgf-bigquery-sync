@@ -1,3 +1,4 @@
+import { messageIntent } from './message-intent.js';
 import crypto from 'node:crypto';
 import { validateKnowledgeItem, validateMemory } from './knowledge.js';
 
@@ -63,7 +64,7 @@ assertStrictToolSchema();
 export const PROPOSAL_INSTRUCTIONS = `You structure durable business assertions into a small, useful set of governed record proposals. You never save or write anything. An explicit request to save is not required: an ordinary brief may contain durable assertions worth proposing for human review.
 Return an empty proposals list for questions, comparisons, analytical requests, casual conversation, or text without new durable assertions. A persistence request strengthens intent but never authorizes a write. For mixed input, propose only assertions.
 Compare every candidate with the supplied existing governed records. Omit an equivalent existing claim. When the same subject or titled event has materially changed, propose the changed claim and set supersedes to the exact existing record ID so the UI presents a linked update.
-Preserve material dates, times, offers, exclusions, qualifications, and provenance. Relative dates are resolved in the supplied temporal_context from the original message timestamp: copy those effective dates exactly and do not reinterpret them. Prefer a campaign record plus channel/store/cutoff records when that aids future retrieval; do not make dozens of micro-records. DATE fields are YYYY-MM-DD; retain time-of-day in descriptions. Campaign plans are human-entered context, never measured performance. Timeless definitions have null effective dates. Never request an analysis date range or invent a currency while proposing knowledge.
+Preserve material dates, times, offers, exclusions, qualifications, and provenance. Relative dates are resolved in the supplied temporal_context from the original message timestamp: copy those effective dates exactly and do not reinterpret them. Prefer a campaign record plus channel/store/cutoff records when that aids future retrieval; do not make dozens of micro-records. DATE fields are YYYY-MM-DD; retain time-of-day in descriptions. Campaign plans are human-entered context, never measured performance. Timeless definitions have null effective dates. Example customer-facing promises, quoted today/tomorrow and delivery lead times are not implementation dates. Preserve their wording in descriptions; leave implementation dates null unless independently stated. temporal_context applies only to the assertion it actually dates, never to every candidate. Never request an analysis date range or invent a currency while proposing knowledge.
 Use business_document only when the user clearly identifies pasted email/document content, with a concise non-fabricated reference; otherwise human_entered. Never invent metadata.
 Uncertain assertions must be working hypotheses (memory kind, memory_type hypothesis) or omitted, never confirmed. Confirmed memories require governed evidence references; user attestation alone supports only working memory. Do not include chain-of-thought or raw tool output.
 Do not infer causation. In particular, chronology about made-to-order Christmas delivery is context, not a cause of sales.
@@ -72,6 +73,7 @@ Titles must be concise descriptions, never raw instructions/questions. Use only 
 export function needsProposalGeneration(message) {
   const text = String(message || '').trim();
   if (!text) return false;
+  const intent=messageIntent(text);if(intent.document)return intent.knowledge;
   if (/\b(?:save|remember|record|store|add)\b/i.test(text)) return true;
   // This deliberately recognizes only obvious, wholly non-assertive requests. It
   // does not attempt extraction; everything ambiguous is left to the model.
