@@ -16,7 +16,10 @@ export function resolveExecutionPlan(context,bindings) {
   const plan=resolveAnalyticalPlan(context),capability=ANALYTICAL_CAPABILITIES[context?.tool_route]||null;
   let limitation=null;
   if(context?.tool_route==='get_order_value_analysis'){
-    if(!['shopify','all',null].includes(plan.scope.platform)||plan.scope.channel!=='online'||context.source_store&&context.source_store!=='shopify')limitation='Order-value evidence currently supports the governed Shopify online population only. Other store populations have not been combined. No population retrieval was attempted. Specify Shopify online for a scoped analysis, or request a supported source-specific report.';
+    // Unspecified scope permits the disclosed Shopify online subset. Explicit
+    // source/channel constraints still block incompatible population reads.
+    if(!['shopify','all',null].includes(plan.scope.platform)||!['online',null].includes(plan.scope.channel)||plan.scope.channel_breakdown||context.source_store&&context.source_store!=='shopify')limitation='Order-value evidence currently supports the governed Shopify online population only. Other store populations have not been combined. No population retrieval was attempted. Specify Shopify online for a scoped analysis, or request a supported source-specific report.';
+    else if(plan.population.filters.includes('combined_source_population'))limitation='A combined order-value population across sources has no compatible governed binding. Request separate source-specific reports; no population retrieval was attempted.';
     else if(!plan.numeric_operation)limitation='Numeric operation parameters are required.';
     else if(plan.scope.currencies.length>1)limitation='Choose one currency for this order-value population; currencies cannot be combined.';
     else if(plan.population.filters.length||plan.exclusions.length)limitation='These additional eligibility filters or calendar exclusions have no verified order-value binding. Clarify the required filter or use a supported population; no retrieval was attempted. Confirmed promotion exclusions are supported.';

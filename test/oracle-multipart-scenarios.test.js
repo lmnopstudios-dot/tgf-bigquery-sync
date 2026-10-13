@@ -12,12 +12,12 @@ import { dispatchAnalysisRequest, executeGovernedAgentAnalysis, assertEvidenceAg
 import { deliverOracleResult } from '../oracle/result-delivery.js';
 import { oracleResultContent } from '../public/oracle/result-contract.js';
 import { createOracleUiRouter } from '../oracle/ui-router.js';
-import { createMemoryAnalysisJobStore } from '../oracle/analysis-jobs.js';
+import { createMemoryAnalysisJobStore, createAnalysisJobWorker } from '../oracle/analysis-jobs.js';
 import { createMemoryExportStore } from '../oracle/product-priority-storage.js';
 import { suppressAnalyticalProposals } from '../oracle/clarification-consumption.js';
 
 const NOW=Date.parse('2026-10-13T10:00:00Z');
-// Acceptance wording from the supplied request, kept intact (including clause order).
+// Repository multipart acceptance fixture; verbatim production wording is unverified.
 export const FULL='UK online GBP orders this year through the latest completed day. £25 order-value bands from £100 to £350. £250 shipping threshold compared with £175/£200/£225/£275/£300. Recorded shipping charges separately from an illustrative £8 assumption. Price-compatible add-on opportunities. Confirmed May sale context. Coverage and financial-basis limitations.';
 const SHORT='Assess UK online GBP free shipping for September 2026. Compare £250 with £200 and £225, assuming purchasing behaviour stays unchanged. Show recorded shipping charges and the separate hypothetical £8 calculation.';
 const apply=(text,prior=null)=>transitionAnalysisContext(prior,text,{now:NOW}).context;
@@ -132,6 +132,41 @@ test('full direct HTTP agent bridge executes the supplied validated plan with un
   const {governedAgentRequest}=await import('../oracle/agent-request.js');const f=fixture(),app=express();app.use(express.json());
   app.post('/agent',async(req,res,next)=>{try{res.json(await executeGovernedAgentAnalysis({message:req.body.message,analysisContext:req.body.analysis_context,scopeResolved:req.body.scope_resolved,baselineOverview:f.baseline,now:NOW}));}catch(error){next(error);}});
   const server=await new Promise((resolve,reject)=>{const s=app.listen(0,'127.0.0.1',()=>resolve(s));s.on('error',reject);});t.after(()=>{server.closeAllConnections();server.close();});
-  const context={...apply(FULL),platform:null},request=governedAgentRequest(FULL,{analysisContext:context},Date.now()+10000);
+  const context={...apply(FULL),platform:null,channel:null},request=governedAgentRequest(FULL,{analysisContext:context},Date.now()+10000);
   const response=await fetch(`http://127.0.0.1:${server.address().port}/agent`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(request)});assert.equal(response.status,200);verify(await response.json(),f);
+});
+
+for(const channel of [null,'online'])test(`full request with unspecified platform and ${channel||'unspecified'} channel attempts scoped population retrieval`,async()=>{
+  const f=fixture(),c={...apply(FULL),platform:null,channel};
+  const r=await executeGovernedAgentAnalysis({message:FULL,analysisContext:c,scopeResolved:true,baselineOverview:f.baseline,now:NOW});
+  verify(r,f);assert.equal(r.evidence.retrieval[0].attempted,true);
+  assert.equal(r.analysis_context.platform,null);assert.equal(r.analysis_context.channel,channel);
+  assert.match(r.answer,/Shopify-only collected history/);
+  const recovered=deliverOracleResult({result_json:JSON.stringify({...r,answer:null,presentation:null})},r.analysis_context);
+  verify(recovered,f);assert.equal(f.calls.length,2);
+  assert.throws(()=>assertEvidenceAgreement({...r.analysis_context,channel:'instore'},r.evidence),e=>e.code==='EVIDENCE_SCOPE_MISMATCH');
+});
+
+test('explicit unsupported sources and combined channels/populations remain blocked',async()=>{
+  for(const qualifier of ['Square online','Woo online','online and in-store','online; combine Shopify and Woo into one population']){
+    const message=FULL.replace('UK online','UK '+qualifier),f=fixture(),c=apply(message);
+    assert.ok(resolveExecutionPlan(c).limitation,qualifier);
+    const r=await f.run(message,c);assert.equal(f.calls.length,0);assert.equal(r.capability_selection.retrieval,'not_attempted');
+    for(const follow of ['Graph that.','Export that.'])assert.ok(resolveExecutionPlan(apply(follow,c)).limitation);
+  }
+});
+
+test('lease-owned unspecified-scope full request persists recoverable scoped evidence',async()=>{
+  const f=fixture(),context={...apply(FULL),platform:null,channel:null};
+  const store=createMemoryAnalysisJobStore([{job_id:'scope-job',owner_key:'owner',request_id:'scope-request',status:'queued',payload_json:{message:FULL,analysis_context:context},attempts:0,cancel_requested:false}]);
+  const worker=createAnalysisJobWorker({store,logger:{info(){},error(){}},run:async job=>dispatchAnalysisRequest({message:job.payload_json.message,analysisContext:job.payload_json.analysis_context,baselineOverview:f.baseline,baselineOptions:{exportOwner:'owner',requestId:'scope-request',onEvidence:async r=>{assert.notEqual(await store.checkpoint(job.job_id,r,job),false);}},chat:()=>assert.fail('model fallback')})});
+  await worker.tick();const saved=await store.get('scope-job','owner');assert.equal(saved.status,'completed');
+  verify(saved.result_json,f);assert.equal(saved.result_json.evidence.retrieval[0].attempted,true);
+  const recovered=deliverOracleResult({...saved,result_json:{...saved.result_json,answer:null,presentation:null}},saved.result_json.analysis_context);
+  verify(recovered,f);assert.equal(f.calls.length,2);
+});
+
+test('a prohibition on combining sources does not block the supported scoped analysis',async()=>{
+  const message=FULL+' Do not combine Shopify and Woo populations.',f=fixture(),c=apply(message);
+  assert.equal(resolveExecutionPlan(c).limitation,null);verify(await f.run(message,c),f);
 });
