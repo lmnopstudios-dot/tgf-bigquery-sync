@@ -1,5 +1,6 @@
 // Execute generated snapshot/join/date/filter SQL against typed production-shaped
 // fixtures. This adapter covers the used SQL subset, not BigQuery dry-run acceptance.
+import { BigQuery } from '@google-cloud/bigquery';
 import { createRequire } from 'node:module';
 const require=createRequire(import.meta.url);
 let DatabaseSync;
@@ -15,7 +16,7 @@ const split=sql=>{
 const object=(columns,requireAs=false)=>`json_object(${split(columns).flatMap(col=>{const m=col.trim().match(/^([\s\S]+)\s+([a-z_]+)$/);if(!m)throw Error('Unsupported STRUCT column: '+col);if(requireAs&&!/\sAS$/i.test(m[1]))throw Error('STRUCT field aliases require AS: '+col);return [`'${m[2]}'`,m[1].replace(/\sAS$/i,'')];}).join(',')})`;
 
 export function fixtureBigQuery(components,{failCoverage=false}={}) {
-  const db=new DatabaseSync(':memory:');const calls=[];
+  const db=new DatabaseSync(':memory:');const calls=[];const sdk=new BigQuery({projectId:'fixture'});
   db.function('DATE',{varargs:true},(value,zone='UTC')=>value==null?null:new Intl.DateTimeFormat('en-CA',{timeZone:zone,year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(value)));
   db.function('IF',(condition,yes,no)=>condition?yes:no);
   db.function('SNAPSHOT',{varargs:true},(...values)=>JSON.stringify(values));
@@ -29,7 +30,8 @@ export function fixtureBigQuery(components,{failCoverage=false}={}) {
     let sql=input.replace(/`[^`]+\.shopify_data\.([a-z_]+)`/g,'$1')
       .replace(/TO_JSON_STRING\(STRUCT\(([^)]+)\)\)/g,'SNAPSHOT($1)')
       .replace(/SELECT \* FROM (order_[a-z_]+) QUALIFY ROW_NUMBER\(\) OVER\((.*?)\)=1/g,'SELECT * FROM (SELECT *,ROW_NUMBER() OVER($2) snapshot_rank FROM $1) WHERE snapshot_rank=1')
-      .replace(/AS STRING/g,'AS TEXT');
+      .replace(/AS STRING/g,'AS TEXT')
+      .replace(/DATE '([0-9-]+)'/g,"DATE('$1')");
     for(let idx=sql.indexOf('COUNTIF(');idx>=0;idx=sql.indexOf('COUNTIF(')){
       let end=idx+8,depth=1;for(;depth;end++){if(sql[end]==='(')depth++;if(sql[end]===')')depth--;}
       sql=sql.slice(0,idx)+'COALESCE(countif('+sql.slice(idx+8,end-1)+'),0)'+sql.slice(end);
@@ -53,7 +55,7 @@ export function fixtureBigQuery(components,{failCoverage=false}={}) {
     calls.push(o);
     if(o.query.includes('INFORMATION_SCHEMA'))return [Object.entries(ORDER_VALUE_SCHEMA).flatMap(([table_name,cols])=>Object.entries(cols).map(([column_name,data_type])=>({table_name,column_name,data_type,is_nullable:'YES'})))];
     if(failCoverage&&o.query.includes('represented_location_orders'))throw {code:403,errors:[{reason:'accessDenied'}]};
-    const sql=translate(o.query);const params=Object.fromEntries(Object.entries(o.params||{}).filter(([k])=>sql.includes('@'+k)));
+    const sql=translate(o.query).replace(/TYPEOF\(@([a-z_]+)\)/g,(_,name)=>`'${o.types?.[name]||'STRING'}'`);const params=Object.fromEntries((o.params?sdk.buildQueryParams_(o.params,o.types).params:[]).filter(p=>sql.includes('@'+p.name)).map(p=>[p.name,p.parameterValue.value??null]));
     const rows=db.prepare(sql).all(params).map(row=>({...row}));
     if(o.query.includes('component_metrics AS'))for(const row of rows)for(const key of ['components','period_intersections','all_snapshot_intersections','period_candidate_intersections','filter_stages','join_and_date_scope']){
       row[key]=JSON.parse(row[key]);if(Array.isArray(row[key]))row[key]=row[key].map(v=>typeof v==='string'?JSON.parse(v):v);

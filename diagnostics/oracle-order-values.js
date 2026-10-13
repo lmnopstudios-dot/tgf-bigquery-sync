@@ -29,7 +29,10 @@ export async function diagnoseOrderValues(input,{bigquery,project,env=process.en
   report.schema_contract=schemas?inspectOrderValueSchema(schemas):null;
   const args={start_date:input.start,end_date:input.end,platform:'shopify',source_store:null,channel:'online',time_zone:'Europe/London',country:'GB',currency:'GBP',basis:'observed_subtotal',assumed_charge:8};
   const options={...orderValueQueryOptions(args,location),jobTimeoutMs:30000};
-  report.parameter_contract=options.types; // Types only; never parameter values.
+  report.parameter_contract=options.types;
+  // Validated dates are non-secret scope evidence; other parameter values stay private.
+  report.bound_dates={start_date:options.params.start_date,end_date:options.params.end_date};
+  report.date_predicate="order_date BETWEEN DATE(@start_date) AND DATE(@end_date); order_date = DATE(l.created_at,'Europe/London')";
   let populationValid=false,coverageValid=false;
   for(const [stage,query] of [['population_dry_run',orderValueHistogramSql(project)],['coverage_dry_run',orderValueCoverageSql(project)]]){
     if(stage==='coverage_dry_run'&&!populationValid){report.checks.push({stage,status:'blocked',blocked_by:'population_dry_run'});continue;}

@@ -18,7 +18,7 @@ function fixture({fail=null,rows=[{date:'2026-09-01',amount:'200',shipping_charg
  const bq={dataset:(name,options)=>{assert.equal(name,'shopify_data');assert.equal(options.projectId,'fixture');return {getMetadata:async()=>{if(fail==='dataset_location')throw privateError('notFound',404);return [{location:'europe-west2'}];}};},createQueryJob:async o=>{calls.push(o);if(fail==='dry_run')throw privateError();return [{metadata:{statistics:{totalBytesProcessed:'100'}}}];},query:async o=>{
    calls.push(o);assert.equal(o.location,'EUROPE-WEST2');assert.ok(Number(o.maximumBytesBilled)<=1e9);assert.ok(o.jobTimeoutMs<=45000);
    if(o.query.includes('INFORMATION_SCHEMA'))return [schemas];
-   const serialized=sdk.buildQueryParams_(o.params,o.types);assert.equal(serialized.parameterMode,'named');for(const p of serialized.params)assert.equal(p.parameterType.type,o.types[p.name]);
+   const serialized=sdk.buildQueryParams_(o.params,o.types);assert.equal(serialized.parameterMode,'named');for(const p of serialized.params){assert.equal(p.parameterType.type,o.types[p.name]);if(['start_date','end_date'].includes(p.name))assert.equal(p.parameterValue.value,args[p.name]);}
    if(o.query.includes('excess_join_rows'))return [[{source_platform:'shopify',source_store:'shopify',joined_rows:5,distinct_source_orders:5,excess_join_rows:0}]];
    if(o.query.includes('GROUP BY 1,2,3')){if(fail==='population_query')throw privateError();return [rows];}
    if(fail==='coverage_query')throw privateError();return [[coverage]];
@@ -27,9 +27,9 @@ function fixture({fail=null,rows=[{date:'2026-09-01',amount:'200',shipping_charg
  const baseline=createBaselineOverviewService({...dependencies,now:()=>new Date(now)});
  return {calls,bq,dependencies,run:()=>executeGovernedAgentAnalysis({message:prompt,baselineOverview:baseline,now})};
 }
-test('production factory query parameters serialize through real BigQuery SDK with DATE/NUMERIC contract and actual location',async()=>{
+test('production factory query parameters serialize through real BigQuery SDK with STRING date/NUMERIC contract and actual location',async()=>{
  const f=fixture(),r=await f.dependencies.orderValues(args);assert.equal(r.rows.length,2);assert.equal(f.calls.length,2);
- assert.deepEqual(f.calls[0].types,{start_date:'DATE',end_date:'DATE',country:'STRING',currency:'STRING',basis:'STRING',assumed_charge:'NUMERIC',matrixify_app_id:'STRING'});
+ assert.deepEqual(f.calls[0].types,{start_date:'STRING',end_date:'STRING',country:'STRING',currency:'STRING',basis:'STRING',assumed_charge:'NUMERIC',matrixify_app_id:'STRING'});
  assert.deepEqual(inspectOrderValueSchema(schema),{valid:true,missing:[],incompatible:[]});
  assert.equal(inspectOrderValueSchema(schema.filter(r=>r.column_name!=='original_shipping_presentment')).missing[0].column,'original_shipping_presentment');
  assert.equal(inspectOrderValueSchema(schema.map(r=>r.column_name==='original_subtotal_presentment'?{...r,data_type:'STRING'}:r)).incompatible.length,1);
