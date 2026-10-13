@@ -1,4 +1,4 @@
-import { individualOrderQuestion } from './requested-operations.js';
+import { OPERATION_REQUIREMENTS, requestedAnalyticalOperations, individualOrderQuestion } from './requested-operations.js';
 import { orderValueContextPatch } from './order-value-context.js';
 import { validateNumericOperation } from './numeric-distribution.js';
 import { consumePendingClarification, pendingClarificationKind, explicitKnowledgeSaveIntent } from './clarification-consumption.js';
@@ -22,7 +22,7 @@ const FIELDS = new Set([
   ,'journey_intent','entry_product_classification','subsequent_product_classification','excluded_product_titles','include_unclassified_products','first_order_semantic','cohort_entry_start','cohort_entry_end','observation_end','minimum_order_sequence','maximum_order_sequence','within_days','journey_group_by'
   ,'event_name','event_count'
   ,'requested_subject','included_periods','exclusions','contextual_event_mentions','placement_context'
-  ,'numeric_operation','native_metrics','dimensions','time_zone','source_store','ranking_metric','ranking_direction','promotion_context','campaign_request','failed_subject_switch'
+  ,'requested_operations','numeric_operation','native_metrics','dimensions','time_zone','source_store','ranking_metric','ranking_direction','promotion_context','campaign_request','failed_subject_switch'
   ,'product_report','email_report_kind','social_scope'
   ,'entity_query','explanation_requested','pending_product_candidates'
 ]);
@@ -34,7 +34,7 @@ const TOOL_ROUTES = new Set(ANALYSIS_TOOL_ROUTES);
 const MONTHS = {jan:1,january:1,feb:2,february:2,mar:3,march:3,apr:4,april:4,may:5,jun:6,june:6,jul:7,july:7,aug:8,august:8,sep:9,sept:9,september:9,oct:10,october:10,nov:11,november:11,dec:12,december:12};
 
 export const ANALYSIS_CONTEXT_FIELDS = Object.freeze([...FIELDS]);
-export function emptyAnalysisContext(){return {numeric_operation:null,analysis_type:null,metrics:[],start_date:null,end_date:null,requested_end_period:null,grain:null,comparison_type:null,comparison_start_date:null,comparison_end_date:null,currencies:[],channel:null,channel_breakdown:false,location:null,platform:null,geography:null,customer_segment:null,product_ref:null,filters:[],sort:null,limit:null,report_section:null,output_preference:null,partial_period:false,date_cutoff:null,current_day_included:false,unresolved_required_fields:[],tool_route:null,request_kind:null,advisory_topic:null,journey_intent:null,entry_product_classification:null,subsequent_product_classification:null,excluded_product_titles:[],include_unclassified_products:false,first_order_semantic:null,cohort_entry_start:null,cohort_entry_end:null,observation_end:null,minimum_order_sequence:null,maximum_order_sequence:null,within_days:null,journey_group_by:null,event_name:null,event_count:null,requested_subject:null,included_periods:[],exclusions:[],contextual_event_mentions:[],placement_context:null,entity_query:null,explanation_requested:false,pending_product_candidates:[],product_report:null,email_report_kind:null,social_scope:null,failed_subject_switch:null,campaign_request:null,native_metrics:[],dimensions:[],time_zone:null,source_store:null,ranking_metric:null,ranking_direction:null,promotion_context:null}}
+export function emptyAnalysisContext(){return {requested_operations:[],numeric_operation:null,analysis_type:null,metrics:[],start_date:null,end_date:null,requested_end_period:null,grain:null,comparison_type:null,comparison_start_date:null,comparison_end_date:null,currencies:[],channel:null,channel_breakdown:false,location:null,platform:null,geography:null,customer_segment:null,product_ref:null,filters:[],sort:null,limit:null,report_section:null,output_preference:null,partial_period:false,date_cutoff:null,current_day_included:false,unresolved_required_fields:[],tool_route:null,request_kind:null,advisory_topic:null,journey_intent:null,entry_product_classification:null,subsequent_product_classification:null,excluded_product_titles:[],include_unclassified_products:false,first_order_semantic:null,cohort_entry_start:null,cohort_entry_end:null,observation_end:null,minimum_order_sequence:null,maximum_order_sequence:null,within_days:null,journey_group_by:null,event_name:null,event_count:null,requested_subject:null,included_periods:[],exclusions:[],contextual_event_mentions:[],placement_context:null,entity_query:null,explanation_requested:false,pending_product_candidates:[],product_report:null,email_report_kind:null,social_scope:null,failed_subject_switch:null,campaign_request:null,native_metrics:[],dimensions:[],time_zone:null,source_store:null,ranking_metric:null,ranking_direction:null,promotion_context:null}}
 
 function contextValidationError(field,rule,message=`invalid ${field}`){const error=Object.assign(new Error(message),{code:'INVALID_ANALYSIS_CONTEXT',validation_field:field,validation_rule:rule});return error}
 
@@ -61,6 +61,8 @@ export function validateAnalysisContext(value={}){
   out.source_store=typeof value.source_store==='string'?value.source_store.slice(0,160):null;
   out.ranking_metric=['average_sales_per_day','average_orders_per_day'].includes(value.ranking_metric)?value.ranking_metric:null;
   out.ranking_direction=['asc','desc'].includes(value.ranking_direction)?value.ranking_direction:null;
+  if(value.requested_operations!=null&&(!Array.isArray(value.requested_operations)||value.requested_operations.some(x=>!Object.hasOwn(OPERATION_REQUIREMENTS,x))))throw contextValidationError('requested_operations','supported_operation');
+  out.requested_operations=[...new Set(value.requested_operations||[])];
   out.numeric_operation=value.numeric_operation==null?null:validateNumericOperation(value.numeric_operation);
   out.promotion_context=validatePromotionContext(value.promotion_context);
   out.campaign_request=validateCampaignRequest(value.campaign_request);
@@ -247,9 +249,9 @@ function transitionContext(existing, message, {now=Date.now(),reportContext=null
     const context={...emptyAnalysisContext(),unresolved_required_fields:['requested_subject']};
     return {context,transition:{continuation:false,set:[],clear:ANALYSIS_CONTEXT_FIELDS,retain:[],missing_required_fields:['requested_subject'],ready_to_execute:false,applies_to_message:true}};
   }
-  if(set.requested_subject&&set.requested_subject!==base.requested_subject)clear.push('numeric_operation','native_metrics','dimensions','time_zone','source_store','ranking_metric','ranking_direction','promotion_context','campaign_request','social_scope','entity_query','product_ref','pending_product_candidates','explanation_requested','output_preference','failed_subject_switch','email_report_kind','placement_context');
+  if(set.requested_subject&&set.requested_subject!==base.requested_subject)clear.push('requested_operations','numeric_operation','native_metrics','dimensions','time_zone','source_store','ranking_metric','ranking_direction','promotion_context','campaign_request','social_scope','entity_query','product_ref','pending_product_candidates','explanation_requested','output_preference','failed_subject_switch','email_report_kind','placement_context');
   if(set.tool_route&&set.tool_route!=='export_product_priorities')clear.push('product_report');
-  if(set.tool_route&&set.tool_route!==base.tool_route)clear.push('numeric_operation','native_metrics','dimensions','time_zone','source_store','ranking_metric','ranking_direction','promotion_context');
+  if(set.tool_route&&set.tool_route!==base.tool_route)clear.push('requested_operations','numeric_operation','native_metrics','dimensions','time_zone','source_store','ranking_metric','ranking_direction','promotion_context');
   const effectiveClear=clear.filter(key=>!Object.hasOwn(set,key));const next={...base,...set};if(next.analysis_type==='customer_journey'){next.first_order_semantic=next.first_order_semantic||'first_observed_ever';if(next.start_date){next.cohort_entry_start=next.start_date;next.cohort_entry_end=next.end_date;next.observation_end=next.end_date;}}for(const key of effectiveClear) next[key]=emptyAnalysisContext()[key];
   const promotion=promotionIntent(text);
   if(promotion&&['sales','channel_sales','product_sales'].includes(next.requested_subject))next.promotion_context={query:promotion,treatment:'compare_excluding'};
@@ -273,7 +275,7 @@ export function clarificationFor(context){const c=validateAnalysisContext(contex
 
 export function transitionAnalysisContext(existing,message,options={}){
   const base=validateAnalysisContext(existing||{}),text=String(message||'').trim();
-  if(explicitKnowledgeSaveIntent(text))return {context:validateAnalysisContext({...emptyAnalysisContext(),request_kind:'knowledge_save'}),transition:{continuation:false,set:['request_kind'],clear:ANALYSIS_CONTEXT_FIELDS,retain:[],missing_required_fields:[],ready_to_execute:true,applies_to_message:true,clarification_consumed:null}};
+  if(explicitKnowledgeSaveIntent(text)&&!requestedAnalyticalOperations(text))return {context:validateAnalysisContext({...emptyAnalysisContext(),request_kind:'knowledge_save'}),transition:{continuation:false,set:['request_kind'],clear:ANALYSIS_CONTEXT_FIELDS,retain:[],missing_required_fields:[],ready_to_execute:true,applies_to_message:true,clarification_consumed:null}};
   const consumed=consumePendingClarification(base,text);
   if(consumed?.rejected)return {context:base,transition:{continuation:true,set:[],clear:[],retain:ANALYSIS_CONTEXT_FIELDS,missing_required_fields:base.unresolved_required_fields,ready_to_execute:false,applies_to_message:true,clarification_consumed:null,clarification_rejected:consumed.rejected}};
   if(consumed){
