@@ -1,8 +1,14 @@
+import { safeReadFailure, readFailureError } from './read-failure.js';
 import { boundedEvidenceRead } from './bounded-evidence-read.js';
 import { assertDatasetIdentifier, datasetLocation } from '../bigquery/dataset-location.js';
 import { MATRIXIFY_APP_ID } from './online-country-sales.js';
 
 export const ORDER_VALUE_ROW_BOUND=50000;
+export const ORDER_VALUE_PARAMETER_TYPES=Object.freeze({start_date:'DATE',end_date:'DATE',country:'STRING',currency:'STRING',basis:'STRING',assumed_charge:'NUMERIC',matrixify_app_id:'STRING'});
+export function orderValueQueryOptions(args,location) {
+  return {params:{start_date:args.start_date,end_date:args.end_date,country:args.country,currency:args.currency,basis:args.basis,assumed_charge:args.assumed_charge??8,matrixify_app_id:MATRIXIFY_APP_ID},types:{...ORDER_VALUE_PARAMETER_TYPES},maximumBytesBilled:'1000000000',useLegacySql:false,location,labels:{component:'oracle_order_value_read'}};
+}
+
 export const ORDER_VALUE_DEFINITIONS=Object.freeze({
   identity:'Shopify/shopify/order_id; latest component snapshot per order before joins; no line-item or refund one-to-many joins.',
   population:'Direct valid shippingAddress.countryCodeV2; retail_location_id IS NULL (existing governed online proxy, not positive Online Store attribution); exclude Matrixify; uncancelled paid, partially_paid or partially_refunded; fully refunded/unpaid excluded.',
@@ -86,14 +92,15 @@ export function validateOrderValueScope(args) {
 export function createOrderValueProvider({bigquery,project}) {
   return async (args,options={})=>{
     validateOrderValueScope(args);
-    const location=await boundedEvidenceRead(()=>datasetLocation(bigquery,project,'shopify_data'),options);
-    const queryOptions={params:{start_date:args.start_date,end_date:args.end_date,country:args.country,currency:args.currency,basis:args.basis,assumed_charge:args.assumed_charge??8,matrixify_app_id:MATRIXIFY_APP_ID},maximumBytesBilled:'1000000000',useLegacySql:false,location,labels:{component:'oracle_order_value_read'}};
+    let location;
+    try{location=await boundedEvidenceRead(()=>datasetLocation(bigquery,project,'shopify_data'),options);}catch(error){throw readFailureError(error,'dataset_location');}
+    const queryOptions=orderValueQueryOptions(args,location);
     let providerCalls=0;
     const read=query=>boundedEvidenceRead(timeoutMs=>{providerCalls++;return bigquery.query({...queryOptions,query,jobTimeoutMs:Math.max(1,Math.floor(timeoutMs))});},options);
     const results=await Promise.allSettled([read(orderValueHistogramSql(project)),read(orderValueCoverageSql(project))]);
     options.onProviderStage?.({stage:'aggregate_provider',selected_route:'get_order_value_analysis',provider_calls:providerCalls,population_status:results[0].status,coverage_status:results[1].status});
-    if(results[0].status==='rejected')throw Object.assign(Error('Order-value population retrieval failed'),{code:['ORACLE_AGENT_DEADLINE','REQUEST_CANCELLED'].includes(results[0].reason?.code)?results[0].reason.code:'ORDER_VALUE_RETRIEVAL_FAILED'});
+    if(results[0].status==='rejected')throw readFailureError(results[0].reason,'population_query');
     const rows=results[0].value[0];if(rows.length>ORDER_VALUE_ROW_BOUND)throw Object.assign(Error('Order-value aggregate read exceeds bound; narrow the period'),{code:'ORDER_VALUE_READ_BOUND'});
-    return {scope:{...args,source_store:'shopify'},rows,definitions:ORDER_VALUE_DEFINITIONS,coverage:{...(results[1].status==='fulfilled'?results[1].value[0][0]:{}),complete:false,coverage_retrieval:results[1].status,population_complete:'unverified'},collected_at:new Date().toISOString()};
+    return {scope:{...args,source_store:'shopify'},rows,definitions:ORDER_VALUE_DEFINITIONS,coverage:{...(results[1].status==='fulfilled'?results[1].value[0][0]:{}),complete:false,coverage_retrieval:results[1].status,...(results[1].status==='rejected'?{failure:safeReadFailure(results[1].reason,'coverage_query')}:{}),population_complete:'unverified'},collected_at:new Date().toISOString()};
   };
 }

@@ -72,7 +72,7 @@ function verify(result,f,{partial=false,ambiguous=false}={}){
   assert.doesNotMatch(result.answer,/what date range/i);
   assert.equal(result.evidence.entity_query,PRODUCT);
   assert.equal(result.evidence.subject,'product_sales');
-  assert.match(result.answer,/2026-09-30 to 2026-10-06/);
+  assert.match(result.answer,/30 September 2026–6 October 2026/);
   assert.match(result.answer,/Current day included/);
   assert.match(result.answer,/<details>\n<summary>Show details<\/summary>/);
   assert.doesNotMatch(result.answer.split('<details>')[0],/No Woo relationship|Runtime cutoff|source_product_ref/);
