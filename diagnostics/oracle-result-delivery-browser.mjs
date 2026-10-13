@@ -1,6 +1,7 @@
 // Offline acceptance of actual worker, authenticated API, polling and full UI.
 // ORACLE_BROWSER_DRIVER=/path/to/playwright-core/index.mjs node diagnostics/oracle-result-delivery-browser.mjs
 import assert from 'node:assert/strict';
+import { createBaselineOverviewService } from '../oracle/baseline-overview.js';
 import express from 'express';
 import {fileURLToPath} from 'node:url';
 import {mkdir} from 'node:fs/promises';
@@ -23,7 +24,7 @@ const cases=[
 let executions=0;
 const app=express();app.use('/oracle',express.static(root+'public/oracle'));
 const secret='fixture-session-secret-with-enough-bytes';
-app.use('/api/oracle',createOracleUiRouter({knowledgeService:{searchKnowledge:async()=>({items:[{kind:'event',status:'confirmed',id:'may-sale',title:'May online sale',content:'Online sale.',effective_from:'2026-05-01',effective_to:'2026-05-04',date_precision:'range',source_type:'human',source_reference:'confirmed-fixture',tags:['online']}]})},project:'p',bigquery:{},analysisJobStore:store,generateProposals:async()=>[],chat:async message=>{executions++;const item=cases[Number(message.match(/case (\d+)/)?.[1])];return item?.input||{};},env:{ORACLE_UI_PASSWORD:'fixture',ORACLE_UI_SESSION_SECRET:secret,ORACLE_ANALYSIS_JOBS_ENABLED:'true'}}));
+app.use('/api/oracle',createOracleUiRouter({baselineOverview:createBaselineOverviewService({}),knowledgeService:{searchKnowledge:async()=>({items:[{kind:'event',status:'confirmed',id:'may-sale',title:'May online sale',content:'Online sale.',effective_from:'2026-05-01',effective_to:'2026-05-04',date_precision:'range',source_type:'human',source_reference:'confirmed-fixture',tags:['online']}]})},project:'p',bigquery:{},analysisJobStore:store,generateProposals:async()=>[],chat:async message=>{executions++;const item=cases[Number(message.match(/case (\d+)/)?.[1])];return item?.input||{};},env:{ORACLE_UI_PASSWORD:'fixture',ORACLE_UI_SESSION_SECRET:secret,ORACLE_ANALYSIS_JOBS_ENABLED:'true'}}));
 const server=await new Promise(resolve=>{const s=app.listen(0,'127.0.0.1',()=>resolve(s));});
 const browser=await chromium.launch({executablePath:process.env.ORACLE_CHROMIUM||'/usr/bin/chromium',headless:true,args:['--no-sandbox']});
 const output=process.env.ORACLE_BROWSER_OUTPUT||'/tmp/oracle-result-delivery-browser';await mkdir(output,{recursive:true});
@@ -49,7 +50,7 @@ try{
   await page.locator('#new-question').click();
   await page.locator('#message').fill('Analyse UK online GBP order-value bands this year through the latest completed day. Current free shipping threshold £250; delivery £8 below. Compare thresholds £175, £200, £225, £275 and £300 under unchanged purchasing behaviour. Include add-on products and May sale context. No collection or mutation.');
   await page.locator('#send').click();await page.waitForFunction(()=>!document.querySelector('#send').disabled);
-  const shipping=await page.locator('.analytical-answer').last().innerText();assert.match(shipping,/order-value analysis is unavailable/);assert.match(shipping,/Confirmed promotion context/);assert.match(shipping,/Add-on suggestions are unavailable/);
+  const shipping=await page.locator('.analytical-answer').last().innerText();assert.match(shipping,/Order-value evidence could not be retrieved/);assert.match(shipping,/Promotion exclusions are unavailable/);assert.match(shipping,/Current published UK price enrichment is unavailable/);
   await page.screenshot({path:`${output}/${name}-shipping.png`,fullPage:true});
   // A terminal persistence failure must deliver checkpoint evidence, stop busy
   // state, and retain the authoritative failed status.

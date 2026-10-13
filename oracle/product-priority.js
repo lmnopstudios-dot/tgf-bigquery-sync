@@ -28,14 +28,16 @@ export function canonicalProductUrl(value){
   try{const u=new URL(value);if(u.protocol!=='https:'||u.username||u.password||u.port||!/^\/products\/[^/]+\/?$/.test(u.pathname))return null;u.search='';u.hash='';u.pathname=u.pathname.replace(/\/$/,'');return u.href;}catch{return null;}
 }
 export const PUBLISHED_PRODUCTS_QUERY=`query OraclePublishedProducts($cursor:String){products(first:100,after:$cursor,sortKey:ID){nodes{id title status publishedAt onlineStoreUrl seo{description}} pageInfo{hasNextPage endCursor}}}`;
-export async function fetchPublishedProducts(graphql,{signal,inspectClassification=false,includeSeo=true,deadlineAt,onProviderStage}={}){
+export async function fetchPublishedProducts(graphql,{signal,inspectClassification=false,includeSeo=true,destinationPrices=false,maxPages=Infinity,deadlineAt,onProviderStage}={}){
   const started=Date.now();
   if(Number.isFinite(deadlineAt)){const remaining=deadlineAt-Date.now();if(remaining<=0)throw Object.assign(new Error('Catalogue deadline'),{code:'CATALOGUE_TIMEOUT',failed_stage:'priority_catalogue'});signal=signal?AbortSignal.any([signal,AbortSignal.timeout(Math.ceil(remaining))]):AbortSignal.timeout(Math.ceil(remaining));}
   const diagnostic=()=>({page_count:pages,item_count:products.size,elapsed_ms:Date.now()-started,deadline_remaining_ms:Number.isFinite(deadlineAt)?Math.max(0,deadlineAt-Date.now()):null});
   const products=new Map(),seen=new Set();let cursor=null,pages=0;
   try{do{
     signal?.throwIfAborted();
-    const baseQuery=includeSeo?PUBLISHED_PRODUCTS_QUERY:PUBLISHED_PRODUCTS_QUERY.replace('seo{description}','');
+    if(pages>=maxPages)throw Object.assign(Error('Catalogue page bound'),{code:'CATALOGUE_READ_BOUND'});
+    let baseQuery=includeSeo?PUBLISHED_PRODUCTS_QUERY:PUBLISHED_PRODUCTS_QUERY.replace('seo{description}','');
+    if(destinationPrices)baseQuery=baseQuery.replace('onlineStoreUrl','onlineStoreUrl variants(first:100){nodes{id contextualPricing(context:{country:GB}){price{amount currencyCode}}} pageInfo{hasNextPage}}');
     const data=await graphql(inspectClassification?baseQuery.replace(includeSeo?'seo{description}':'onlineStoreUrl', (includeSeo?'':'onlineStoreUrl ')+ 'productType tags collections(first:5){nodes{id title handle} pageInfo{hasNextPage endCursor}}'+(includeSeo?' seo{description}':'')):baseQuery,{cursor},{signal});const connection=data?.products;
     if(!Array.isArray(connection?.nodes)||typeof connection?.pageInfo?.hasNextPage!=='boolean')throw Object.assign(new Error('Invalid catalogue page'),{code:'CATALOGUE_PAGE_INVALID'});
     pages++;
@@ -60,6 +62,10 @@ export async function fetchPublishedProducts(graphql,{signal,inspectClassificati
         }
       }
       const row={...(inspectClassification?{product_type:p.productType,tags:p.tags,collections}:{}),product_id:id,title:p.title,url,meta_description:typeof p.seo?.description==='string'?p.seo.description:null,meta_description_verified:typeof p.seo?.description==='string'};
+      if(destinationPrices){
+        if(!Array.isArray(p.variants?.nodes)||p.variants.pageInfo?.hasNextPage!==false)throw Object.assign(Error('Destination variant prices incomplete'),{code:'DESTINATION_PRICES_INCOMPLETE'});
+        row.destination_prices=p.variants.nodes.flatMap(v=>v.contextualPricing?.price?.currencyCode==='GBP'&&v.contextualPricing.price.amount!=null?[{variant_id:v.id,price:v.contextualPricing.price.amount,currency:'GBP',country:'GB'}]:[]);
+      }
       if(products.has(id)&&JSON.stringify(products.get(id))!==JSON.stringify(row))throw Object.assign(new Error('Conflicting product'),{code:'CATALOGUE_PRODUCT_CONFLICT'});
       products.set(id,row);
     }

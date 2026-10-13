@@ -1,3 +1,6 @@
+import { createOrderValueProvider } from './order-value-provider.js';
+import { fetchPublishedProducts } from './product-priority.js';
+import { createPriorityShopifyTransport } from './product-priority-production.js';
 import { createDailySalesProvider } from './daily-sales-provider.js';
 import {createTikTokService} from './tiktok.js';
 import {createMetaInstagramService} from './meta-instagram.js';
@@ -10,5 +13,5 @@ import {createDeviceSourceConversionService} from './device-source-conversion.js
 export function createOracleProviderDependencies({env=process.env,bigquery=null,project=null,dataset=null,dryRun=false,shopifySales=null}={}){
   const client=bigquery&&project?{bigquery,project}:createBigQueryClient(env);
   const conversionDataset=dataset||ga4Dataset(env.GA4_DATASET);
-  return Object.freeze({...client,conversionDataset,dailySales:createDailySalesProvider({shopifySales}),social:((meta,tiktok)=>(name,args)=>name==='get_tiktok_performance'?tiktok(name,args):meta(name,args))(createMetaInstagramService({...client,env}),createTikTokService(client)),klaviyo:createKlaviyoEmailService(client),deviceConversion:createDeviceSourceConversionService({...client,dataset:conversionDataset,dryRun})});
+  return Object.freeze({...client,conversionDataset,orderValues:createOrderValueProvider(client),productPrices:options=>{let calls=0;const transport=createPriorityShopifyTransport({shop:env.SHOPIFY_SHOP,clientId:env.SHOPIFY_CLIENT_ID,clientSecret:env.SHOPIFY_CLIENT_SECRET});return fetchPublishedProducts((...args)=>{if(++calls>25)throw Object.assign(Error('Catalogue call bound'),{code:'CATALOGUE_READ_BOUND'});return transport(...args);},{...options,includeSeo:false,inspectClassification:true,destinationPrices:true,maxPages:7});},dailySales:createDailySalesProvider({shopifySales}),social:((meta,tiktok)=>(name,args)=>name==='get_tiktok_performance'?tiktok(name,args):meta(name,args))(createMetaInstagramService({...client,env}),createTikTokService(client)),klaviyo:createKlaviyoEmailService(client),deviceConversion:createDeviceSourceConversionService({...client,dataset:conversionDataset,dryRun})});
 }

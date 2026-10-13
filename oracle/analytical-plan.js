@@ -14,6 +14,7 @@ export function resolveAnalyticalPlan(c) {
     scope:{platform:c?.platform||null,source_store:c?.source_store||null,channel:c?.channel||null,channel_breakdown:Boolean(c?.channel_breakdown),currencies:c?.currencies||[],currency:report?.currency||null},
     metrics:report?.metrics||campaign?.requested_metrics||(c?.native_metrics?.length?c.native_metrics:c?.metrics)||[],
     metric_definitions:report?Object.fromEntries(report.metrics.map(m=>[m,PRODUCT_REPORT_CAPABILITIES[m]?.definition||'Unavailable'])):c?.tool_route==='get_daily_sales_analysis'?DAILY_SALES_CONTRACT.definitions:null,
+    numeric_operation:c?.numeric_operation||null,
     dimensions:c?.dimensions||[],grain:c?.grain||null,
     dates:{start_date:c?.start_date||null,end_date:c?.end_date||null,timezone:c?.time_zone||campaign?.selected?.reporting_timezone||report?.period?.timezone||'Europe/London',cutoff:c?.date_cutoff||null,partial_period:Boolean(c?.partial_period),current_day_included:Boolean(c?.current_day_included),basis:campaign?.date_mode||null},
     comparison:{type:c?.comparison_type||null,start_date:c?.comparison_start_date||null,end_date:c?.comparison_end_date||null,included_periods:c?.included_periods||[]},

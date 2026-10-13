@@ -1,3 +1,4 @@
+import { orderValueBusinessView } from './order-value-analysis.js';
 import { weekdayBusinessView } from './weekday-sales.js';
 import { isCampaignPurchaseMetric } from './campaign-context.js';
 import {socialBusinessView} from './social-analysis.js';
@@ -97,6 +98,7 @@ function deviceTrend(e) {
   return lines;
 }
 function businessView(e) {
+  if(e.kind==='governed_order_values')return orderValueBusinessView(e);
   if(e.kind==='governed_weekday_sales')return weekdayBusinessView(e);
   if(e.kind==='governed_social')return socialBusinessView(e);
   if(['governed_product_sales','governed_channel_sales','governed_sales_explanation'].includes(e.kind)) return sales(e);
@@ -166,6 +168,7 @@ function businessView(e) {
 function supportingMetadata(e) {
   const keys=['promotion','applied_exclusions','retrieved_daily_rows','analytical_plan','periods','requested_periods','applied_dates','cutoff_date','time_zone','channel','currencies','resolved_product_ref','selected_candidate','history','coverage','retrieval','placement','definitions','classification_boundary','ranking_status','ranking_method','provider_provenance','evidence_availability','comparison_compatible','comparison_period'];
   const metadata=Object.fromEntries(keys.filter(key=>e[key]!=null).map(key=>[key,e[key]]));
+  if(e.kind==='governed_order_values'){metadata.operation=e.operation;metadata.calculations=e.sections;}
   if(e.kind==='governed_weekday_sales'){metadata.weekday_calculations=e.rows;metadata.eligible_daily_evidence=e.source_rows;}
   if(e.kind==='governed_product_sales') {
     metadata.metric_definitions={sales:'Persisted source-native line-item sales; operational evidence, not canonical finance.',units:'Sum of source-native line quantity in this product/source/channel/currency/month population.',orders_containing_product:'Distinct source order IDs containing the product in the same product/source/store/channel/currency/month population; not a unit count.'};
