@@ -1,3 +1,4 @@
+import { requestsInStoreChannel } from './channel-scope.js';
 import { promotionIntent } from './promotion-context.js';
 import { naturalReportPeriod } from './report-natural-period.js';
 
@@ -52,7 +53,7 @@ export function dailySalesContextPatch(base,text,now) {
   if(!dates&&continuation&&patch.end_date>=today)patch.end_date=yesterday;
   if(/\b(?:woocommerce|woo)\b/i.test(text))patch.platform='woo';
   if(/\bonline\b/i.test(text))patch.channel='online';
-  if(/\b(?:pos|in[ -]?store)\b/i.test(text)&&!/\b(?:exclude|excluding|without)\s+(?:pos|in[ -]?store)\b/i.test(text))patch.channel=/\bonline\b/i.test(text)?null:'instore';
+  if(requestsInStoreChannel(text))patch.channel=/\bonline\b/i.test(text)?null:'instore';
   if(promotion&&!promotionReply&&!/\b(?:include|add)\b[\s\S]{0,25}\b(?:sale|promotion)\b/i.test(text))patch.promotion_context={query:promotion[0].toLowerCase(),treatment:'compare_excluding'};
   if(/\binclude (?:the )?(?:sale|promotion) (?:again|too)\b/i.test(text)&&base.promotion_context)patch.promotion_context={...base.promotion_context,treatment:'include'};
   if(/\b(?:by|rank (?:by)?|sort (?:by)?)\s+orders\b/i.test(text))patch.ranking_metric='average_orders_per_day';
