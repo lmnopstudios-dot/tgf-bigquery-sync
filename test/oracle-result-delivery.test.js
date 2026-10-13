@@ -1,3 +1,4 @@
+import { createBaselineOverviewService } from '../oracle/baseline-overview.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import express from 'express';
@@ -72,8 +73,8 @@ test('authenticated polling recovers all wire forms, protects owners and rejects
 test('interactive and durable shipping acceptance disclose limits without querying unrelated aggregates',async()=>{
   const message='Analyse UK online GBP order-value bands this year through the latest completed day. Current free shipping threshold £250; delivery £8 below. Compare £175, £200, £225, £275 and £300. Use unchanged purchasing behaviour, relevant add-on products and May sale context.';
   const context=transitionAnalysisContext(null,message,{now:Date.parse('2026-10-13T12:00:00Z')}).context;let reads=0;
-  const result=await dispatchAnalysisRequest({message,analysisContext:context,baselineOverview:()=>{throw Error('unrelated totals')},chat:()=>{throw Error('model must not fabricate scenarios')},baselineOptions:{knowledgeService:{searchKnowledge:async()=>{reads++;return {items:[{kind:'event',status:'confirmed',id:'may',title:'May online sale',content:'Online sale.',effective_from:'2026-05-01',effective_to:'2026-05-04',date_precision:'range',source_type:'human',source_reference:'confirmed-record',tags:['online']}]};}}}});
-  assert.equal(reads,1);assert.match(result.answer,/2026-10-12/);assert.match(result.answer,/Confirmed promotion context/);assert.match(result.answer,/raising a threshold/);assert.match(result.answer,/Add-on suggestions are unavailable/);assert.equal(result.analysis_unavailable,true);assert.deepEqual(result.capability_selection.population,{shipping_destination:'GB',channel:'online',currency:'GBP'});
+  const result=await dispatchAnalysisRequest({message,analysisContext:context,baselineOverview:createBaselineOverviewService({knowledgeService:{searchKnowledge:async()=>{reads++;return {items:[]};}}}),chat:()=>{throw Error('model must not fabricate scenarios')},baselineOptions:{knowledgeService:{searchKnowledge:async()=>{reads++;return {items:[{kind:'event',status:'confirmed',id:'may',title:'May online sale',content:'Online sale.',effective_from:'2026-05-01',effective_to:'2026-05-04',date_precision:'range',source_type:'human',source_reference:'confirmed-record',tags:['online']}]};}}}});
+  assert.equal(reads,1);assert.match(result.answer,/2026-10-12/);assert.match(result.answer,/could not be retrieved/);assert.match(result.answer,/Current published UK price enrichment is unavailable/);assert.equal(result.evidence.retrieval_failed,true);assert.equal(result.evidence.country,'GB');
   assert.equal(requestedAnalyticalOperations('Compare sales this month with last month.'),null);
   const different= requestedAnalyticalOperations('Order value buckets for online USD orders.');assert.deepEqual(different.operations,['numeric_bands']);
 });
@@ -86,8 +87,8 @@ test('metadata-only incident inspection binds both IDs and bounds query without 
 test('optional governed promotion failure preserves explicit capability limitations, never substitutes sales',async()=>{
   const message='Compare shipping thresholds £100 and £200 for online UK GBP order-value bands this year through the latest completed day, with May sale context.';
   const context=transitionAnalysisContext(null,message,{now:Date.parse('2026-10-13T12:00:00Z')}).context;
-  const result=await dispatchAnalysisRequest({message,analysisContext:context,baselineOptions:{operationKnowledgeService:{searchKnowledge:async()=>{throw Error('private source error')}}},baselineOverview:()=>assert.fail('no unrelated reads'),chat:()=>assert.fail('no model replay')});
-  assert.match(result.answer,/could not be confirmed/);assert.equal(result.evidence.promotion.status,'retrieval_failed');assert.equal(result.delivery.status,'limitation');assert.doesNotMatch(JSON.stringify(result),/private source error/);
+  const result=await dispatchAnalysisRequest({message,analysisContext:context,baselineOptions:{operationKnowledgeService:{searchKnowledge:async()=>{throw Error('private source error')}}},baselineOverview:createBaselineOverviewService({knowledgeService:{searchKnowledge:async()=>{throw Error('private source error')}}}),chat:()=>assert.fail('no model replay')});
+  assert.match(result.answer,/Promotion exclusions are unavailable/);assert.equal(result.evidence.promotion.status,'retrieval_failed');assert.equal(result.delivery.status,'limitation');assert.doesNotMatch(JSON.stringify(result),/private source error/);
 });
 
 test('internal model synthesis failure remains a partial answer through worker persistence',async()=>{

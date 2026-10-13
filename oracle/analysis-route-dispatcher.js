@@ -1,3 +1,4 @@
+import { assertOrderValueEvidence } from './order-value-analysis.js';
 import { requestedAnalyticalOperations, unsupportedOperationResult } from './requested-operations.js';
 import { deliverOracleResult } from './result-delivery.js';
 import { assertWeekdayEvidence } from './weekday-sales.js';
@@ -23,7 +24,7 @@ const governedBaseline = async ({message,baselineOverview,baselineOptions}) => {
 // route names, so a deterministic transition cannot silently become orphaned.
 export const ANALYSIS_ROUTE_DISPATCHERS = Object.freeze(Object.fromEntries(ANALYSIS_TOOL_ROUTES.map(route=>[
   route,
-  ['get_shopify_inventory_by_location','get_meta_performance','get_instagram_performance','get_woocommerce_device_conversion','get_governed_device_conversion','get_general_sales_analysis','get_daily_sales_analysis','export_product_priorities','get_klaviyo_email_performance','get_klaviyo_click_purchase_opportunities','compare_klaviyo_email_with_shopify_referrer'].includes(route)
+  ['get_order_value_analysis','get_shopify_inventory_by_location','get_meta_performance','get_instagram_performance','get_woocommerce_device_conversion','get_governed_device_conversion','get_general_sales_analysis','get_daily_sales_analysis','export_product_priorities','get_klaviyo_email_performance','get_klaviyo_click_purchase_opportunities','compare_klaviyo_email_with_shopify_referrer'].includes(route)
     ? governedBaseline
     : baselineThenAgent
 ])));
@@ -32,7 +33,7 @@ export const ANALYSIS_ROUTE_DISPATCHERS = Object.freeze(Object.fromEntries(ANALY
 export function assertResolvedAnalysisContext(submittedValue,resolvedValue){
   if(!submittedValue?.requested_subject||!resolvedValue)return true;
   const submitted=validateAnalysisContext(submittedValue),resolved=validateAnalysisContext(resolvedValue),expected=resolveAnalyticalPlan(submitted),actual=resolveAnalyticalPlan(resolved);
-  if(submitted.tool_route==='get_daily_sales_analysis'){
+  if(['get_daily_sales_analysis','get_order_value_analysis'].includes(submitted.tool_route)){
     if(!submitted.source_store)expected.scope.source_store=actual.scope.source_store;
     if(!submitted.currencies.length)expected.scope.currencies=actual.scope.currencies;
   }
@@ -51,6 +52,7 @@ export function assertResolvedAnalysisContext(submittedValue,resolvedValue){
 export function assertEvidenceAgreement(contextValue,evidence,requestMessage=null){
   const context=contextValue==null?null:validateAnalysisContext(contextValue);
   assertPlanAgreement(context,evidence);
+  if(context?.tool_route==='get_order_value_analysis'&&evidence)assertOrderValueEvidence(context,evidence);
   if(context?.tool_route==='get_daily_sales_analysis'&&evidence&&!evidence.analytical_plan)throw Object.assign(new Error('Recovered daily evidence has no validated plan'),{code:'EVIDENCE_SCOPE_MISMATCH'});
   if(context?.tool_route==='get_daily_sales_analysis'&&evidence)assertWeekdayEvidence(context,evidence);
   if(context?.product_report&&evidence){
@@ -96,7 +98,7 @@ function disclosePeriod(result,context){
 export async function dispatchAnalysisRequest({message,analysisContext,baselineOverview=null,baselineOptions,chat,chatOptions}){
   const context=analysisContext==null?null:validateAnalysisContext(analysisContext);
   const requested=requestedAnalyticalOperations(message);
-  if(requested){baselineOptions?.onProviderStage?.({stage:'capability_selection',status:'unsupported',operation_count:requested.operations.length});return deliverOracleResult(await unsupportedOperationResult(requested,context||transitionAnalysisContext(null,message).context,baselineOptions),context);}
+  if(requested&&context?.tool_route!=='get_order_value_analysis'){baselineOptions?.onProviderStage?.({stage:'capability_selection',status:'unsupported',operation_count:requested.operations.length});return deliverOracleResult(await unsupportedOperationResult(requested,context||transitionAnalysisContext(null,message).context,baselineOptions),context);}
   const execution=resolveExecutionPlan(context,ANALYSIS_ROUTE_DISPATCHERS);
   if(execution.limitation)return {answer:execution.limitation,analysis_unavailable:true,tools:[]};
   const clarification=context?clarificationFor(context):null;if(clarification)return {answer:clarification,tools:[]};
@@ -113,7 +115,7 @@ export async function executeGovernedAgentAnalysis({message,analysisContext,base
   const resolved=scopeResolved?{context:validateAnalysisContext(analysisContext||{})}:transitionAnalysisContext(analysisContext,message,{now});
   baselineOptions.onProviderStage?.({stage:'scope_resolution',resolved_subject:resolved.context.requested_subject,selected_route:resolved.context.tool_route,start_date:resolved.context.start_date,end_date:resolved.context.end_date});
   const requested=requestedAnalyticalOperations(message);
-  if(requested)return deliverOracleResult(await unsupportedOperationResult(requested,resolved.context,baselineOptions),resolved.context);
+  if(requested&&resolved.context.tool_route!=='get_order_value_analysis')return deliverOracleResult(await unsupportedOperationResult(requested,resolved.context,baselineOptions),resolved.context);
   const execution=resolveExecutionPlan(resolved.context,ANALYSIS_ROUTE_DISPATCHERS);
   if(execution.limitation)return {answer:execution.limitation,analysis_unavailable:true,tools:[]};
   const clarification=clarificationFor(resolved.context);

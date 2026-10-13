@@ -16,7 +16,7 @@ export function requestedAnalyticalOperations(message) {
   if(!monetaryPopulation)return null;
   return {version:1,charge_domain:/\b(?:shipping|delivery)\b/i.test(text),operations:[...(bands?['numeric_bands']:[]),...(scenarios?['threshold_scenarios']:[]),...(/\bprofit|optimal|optimi[sz]/i.test(text)?['profit_optimization']:[]),...(/\badd[ -]?ons?|products?\b/i.test(text)?['optional_product_enrichment']:[])],
     parameters:{monetary_values:[...new Set([...text.matchAll(/£\s*(\d+(?:\.\d+)?)/g)].map(m=>Number(m[1])))].slice(0,20),unchanged_behaviour:/unchanged|same (?:purchas|behavio)/i.test(text)},
-    population:{shipping_destination:/\bUK|United Kingdom\b/i.test(text)?'GB':null,channel:/\bonline\b/i.test(text)?'online':null,currency:/\bGBP\b|£/.test(text)?'GBP':null},
+    population:{shipping_destination:/\bUK|United Kingdom\b/i.test(text)?'GB':null,channel:/\bonline\b/i.test(text)?'online':null,currency:text.match(/\b(GBP|USD|EUR|JPY)\b/i)?.[1]?.toUpperCase()||(/£/.test(text)?'GBP':null)},
     completed_days:/completed day|through yesterday|up to yesterday/i.test(text),
     promotion_query:text.match(/\b(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+(?:sale|promotion)\b/i)?.[0]||null};
 }
