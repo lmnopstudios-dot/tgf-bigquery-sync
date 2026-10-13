@@ -56,3 +56,28 @@ test('bounded diagnostic executes exact queries, reports source-qualified join u
  const dry=fixture({fail:'dry_run',schemas:schema.filter(r=>r.column_name!=='original_shipping_presentment')}),dryReport=await diagnoseOrderValues({start:'2026-09-01',end:'2026-09-30'},{bigquery:dry.bq,project:'fixture'});assert.equal(dryReport.schema_contract.valid,false);assert.equal(dryReport.checks.find(c=>c.stage==='population_dry_run').failure.bigquery_reason,'invalidQuery');
  const f=fixture({fail:'population_query'}),r=await diagnoseOrderValues({start:'2026-09-01',end:'2026-09-30'},{bigquery:f.bq,project:'fixture'});assert.equal(r.population_status,'query_failure');assert.equal(r.population,undefined);assert.doesNotMatch(JSON.stringify(r),/private/);
 });
+
+test('common SQL validation failure blocks all dependent queries',async()=>{
+ const f=fixture({fail:'dry_run'}),r=await diagnoseOrderValues({start:'2026-09-01',end:'2026-09-30'},{bigquery:f.bq,project:'fixture'});
+ assert.equal(f.calls.length,2);
+ for(const stage of ['coverage_dry_run','join_uniqueness','population_query','coverage_query'])assert.equal(r.checks.find(c=>c.stage===stage).status,'blocked');
+ assert.equal(r.population,undefined);
+});
+test('schema query is independent, bounded and preserves nested sanitized failures',async()=>{
+ const f=fixture();const query=f.bq.query;
+ f.bq.query=async o=>{if(o.query.includes('INFORMATION_SCHEMA')){assert.equal(o.maximumBytesBilled,'104857600');assert.equal(o.location,'EUROPE-WEST2');throw {response:{status:403,data:{error:{errors:[{reason:'accessDenied',message:'private customer'}]}}}};}return query(o);};
+ const r=await diagnoseOrderValues({start:'2026-09-01',end:'2026-09-30'},{bigquery:f.bq,project:'fixture'});
+ const failure=r.checks.find(c=>c.stage==='schema_inspection').failure;
+ assert.equal(failure.http_status,403);assert.equal(failure.bigquery_reason,'accessDenied');assert.equal(r.population_status,'retrieved');assert.equal(r.schemas,null);assert.doesNotMatch(JSON.stringify(r),/private customer/);
+});
+
+test('all four snapshot tie-breaks serialize explicit governed fields in every shared query',async()=>{
+ const f=fixture();await diagnoseOrderValues({start:'2026-09-01',end:'2026-09-30'},{bigquery:f.bq,project:'fixture'});
+ for(const call of f.calls.filter(c=>!c.query.includes('INFORMATION_SCHEMA'))){
+  for(const [table,columns] of Object.entries(ORDER_VALUE_SCHEMA)){
+   assert.ok(call.query.includes(`TO_JSON_STRING(STRUCT(${Object.keys(columns).join(',')}))`));
+   assert.ok(!call.query.includes(`TO_JSON_STRING(${table})`));
+  }
+  assert.equal((call.query.match(/QUALIFY ROW_NUMBER/g)||[]).length,4);
+ }
+});

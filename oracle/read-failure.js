@@ -1,11 +1,12 @@
 /** Only allowlisted machine fields leave the retrieval boundary. Never retain messages. */
 const codes=new Set(['ORACLE_AGENT_DEADLINE','REQUEST_CANCELLED','ORDER_VALUE_READ_BOUND','EVIDENCE_SCOPE_MISMATCH']);
-const reasons=new Set(['invalidQuery','invalid','notFound','accessDenied','billingNotEnabled','resourcesExceeded','quotaExceeded','rateLimitExceeded','backendError','internalError','jobTimeout','stopped']);
+const reasons=new Set(['invalidQuery','invalid','notFound','accessDenied','billingNotEnabled','billingTierLimitExceeded','jobBillingTierLimitExceeded','resourcesExceeded','quotaExceeded','rateLimitExceeded','backendError','internalError','jobTimeout','stopped']);
 const stages=new Set(['dataset_location','population_query','coverage_query','schema_inspection','population_dry_run','coverage_dry_run','join_uniqueness','promotion','published_prices']);
 export function safeReadFailure(error,stage) {
   if(error?.safe_failure)return safeReadFailure(error.safe_failure,stage);
-  const source=error?.errors?.find(e=>reasons.has(e.reason))||error;
-  const status=Number(error?.http_status??error?.response?.status??error?.code);
+  const nested=error?.response?.data?.error;
+  const source=[...(Array.isArray(error?.errors)?error.errors:[]),...(Array.isArray(nested?.errors)?nested.errors:[])].find(e=>reasons.has(e.reason))||nested||error;
+  const status=Number(error?.http_status??error?.response?.status??nested?.code??error?.code);
   const position=String(source?.message||'').match(/\[(\d{1,6}):(\d{1,6})\]/);
   const stored=error?.statement_location;
   const location=position?{line:Number(position[1]),column:Number(position[2])}:stored&&Number.isInteger(stored.line)&&Number.isInteger(stored.column)&&stored.line>0&&stored.line<=999999&&stored.column>0&&stored.column<=999999?{line:stored.line,column:stored.column}:null;

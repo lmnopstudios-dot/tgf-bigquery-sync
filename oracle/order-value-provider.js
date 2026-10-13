@@ -1,3 +1,4 @@
+import { ORDER_VALUE_SCHEMA } from './order-value-schema.js';
 import { safeReadFailure, readFailureError } from './read-failure.js';
 import { boundedEvidenceRead } from './bounded-evidence-read.js';
 import { assertDatasetIdentifier, datasetLocation } from '../bigquery/dataset-location.js';
@@ -22,14 +23,18 @@ export const ORDER_VALUE_DEFINITIONS=Object.freeze({
 export function orderValuePopulationSql(project) {
   assertDatasetIdentifier(project);
   const table=name=>`\`${project}.shopify_data.${name}\``;
+  // Analytic ORDER BY accepts scalar expressions, not a whole-row range variable.
+  // Tie-break only on governed fields; rows equal on these fields are equivalent
+  // for every downstream calculation, without serializing private columns.
+  const snapshot = name => `TO_JSON_STRING(STRUCT(${Object.keys(ORDER_VALUE_SCHEMA[name]).join(',')}))`;
   return `WITH locations AS (
-    SELECT * FROM ${table('order_locations')} QUALIFY ROW_NUMBER() OVER(PARTITION BY order_id ORDER BY updated_at DESC,synced_at DESC,TO_JSON_STRING(order_locations) DESC)=1
+    SELECT * FROM ${table('order_locations')} QUALIFY ROW_NUMBER() OVER(PARTITION BY order_id ORDER BY updated_at DESC,synced_at DESC,${snapshot('order_locations')} DESC)=1
   ), financials AS (
-    SELECT * FROM ${table('order_financials')} QUALIFY ROW_NUMBER() OVER(PARTITION BY order_id ORDER BY updated_at DESC,synced_at DESC,TO_JSON_STRING(order_financials) DESC)=1
+    SELECT * FROM ${table('order_financials')} QUALIFY ROW_NUMBER() OVER(PARTITION BY order_id ORDER BY updated_at DESC,synced_at DESC,${snapshot('order_financials')} DESC)=1
   ), customers AS (
-    SELECT * FROM ${table('order_customers')} QUALIFY ROW_NUMBER() OVER(PARTITION BY order_id ORDER BY synced_at DESC,TO_JSON_STRING(order_customers) DESC)=1
+    SELECT * FROM ${table('order_customers')} QUALIFY ROW_NUMBER() OVER(PARTITION BY order_id ORDER BY synced_at DESC,${snapshot('order_customers')} DESC)=1
   ), geography AS (
-    SELECT * FROM ${table('order_shipping_geography')} QUALIFY ROW_NUMBER() OVER(PARTITION BY order_id ORDER BY synced_at DESC,TO_JSON_STRING(order_shipping_geography) DESC)=1
+    SELECT * FROM ${table('order_shipping_geography')} QUALIFY ROW_NUMBER() OVER(PARTITION BY order_id ORDER BY synced_at DESC,${snapshot('order_shipping_geography')} DESC)=1
   ), scoped AS (
     SELECT l.order_id,DATE(l.created_at,'Europe/London') order_date,
       f.order_id IS NOT NULL financial_matched,c.order_id IS NOT NULL customer_matched,g.order_id IS NOT NULL geography_matched,
