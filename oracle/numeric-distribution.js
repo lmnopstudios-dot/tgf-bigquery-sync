@@ -17,7 +17,7 @@ export function validateNumericOperation(value={}) {
 }
 /** Weighted, full retrieved population; unknown amounts remain in the denominator.
  * Input weights must come from unique source-qualified orders, never line joins. */
-export function numericDistribution(rows,operation) {
+export function numericDistribution(rows,operation,coverage={}) {
   const config=validateNumericOperation(operation),edges=config.edges.map(minorUnits),base=minorUnits(config.baseline),fee=minorUnits(config.assumed_charge);
   const bands=edges.map((lower,i)=>({lower:majorUnits(lower),upper:majorUnits(edges[i+1]),orders:0}));
   const scenarios=config.thresholds.map(threshold=>({threshold,newly_eligible:0,losing_eligibility:0,affected_orders:0,recorded_charge_minor:0,known_charge_orders:0,unknown_charge_orders:0,zero_charge_orders:0,non_standard_charge_orders:0,hypothetical_charge_minor:0}));
@@ -38,5 +38,7 @@ export function numericDistribution(rows,operation) {
     const gap=base-amount;if(gap>=1000&&gap<=7500)gaps.set(gap,(gaps.get(gap)||0)+count);
   }
   const safe=n=>{if(!Number.isSafeInteger(n))throw Error('Monetary accumulation exceeds precision');return majorUnits(n);};
-  return {population,unknown_values,bands:bands.map(b=>({...b,population_share:population?b.orders/population:null})),scenarios:scenarios.map(({recorded_charge_minor,hypothetical_charge_minor,...s})=>({...s,recorded_shipping_charges:s.known_charge_orders?safe(recorded_charge_minor):s.affected_orders?null:0,hypothetical_fee:safe(hypothetical_charge_minor),charge_total_complete:s.unknown_charge_orders===0})),gaps:[...gaps].sort((a,b)=>a[0]-b[0]).map(([gap,orders])=>({spend_needed:majorUnits(gap),orders,saving:config.assumed_charge,spend_exceeds_saving:gap>fee}))};
+  const verified=coverage.complete===true&&coverage.population_complete==='verified';
+  const unavailable=population===0&&!verified;
+  return {population,unknown_values,population_status:population?'retrieved':verified?'verified_empty_eligible_population':'unverified_empty_population',bands:bands.map(b=>({...b,population_share:population?b.orders/population:null})),scenarios:scenarios.map(({recorded_charge_minor,hypothetical_charge_minor,...s})=>({...s,recorded_shipping_charges:unavailable?null:s.known_charge_orders?safe(recorded_charge_minor):s.affected_orders?null:0,hypothetical_fee:unavailable?null:safe(hypothetical_charge_minor),charge_total_complete:!unavailable&&unknown_values===0&&s.unknown_charge_orders===0,evidence_complete:verified&&unknown_values===0&&s.unknown_charge_orders===0})),gaps:[...gaps].sort((a,b)=>a[0]-b[0]).map(([gap,orders])=>({spend_needed:majorUnits(gap),orders,saving:config.assumed_charge,spend_exceeds_saving:gap>fee}))};
 }

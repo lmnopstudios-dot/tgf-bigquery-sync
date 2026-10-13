@@ -1,3 +1,4 @@
+import { orderValueSourceBindings } from '../oracle/order-value-bindings.js';
 /** Read-only runtime factory/selection acceptance. No server or collector import. */
 import {createOracleProviderDependencies} from '../oracle/provider-dependencies.js';
 import {createBaselineOverviewService} from '../oracle/baseline-overview.js';
@@ -15,5 +16,5 @@ for(const next of [null,'Try £175','Just August','Show the bands','Export that'
  const execution=resolveExecutionPlan(context);
  selections.push({selected_route:context.tool_route,delivery:execution.delivery,period:{start_date:context.start_date,end_date:context.end_date},country:context.geography,currencies:context.currencies,channel:context.channel,basis:context.numeric_operation?.basis,thresholds:context.numeric_operation?.thresholds,assumed_charge:context.numeric_operation?.assumed_charge,limitation:Boolean(execution.limitation)});
 }
-console.log(JSON.stringify({read_only:true,provider_calls:0,deployed_revision:process.env.RENDER_GIT_COMMIT||null,binding:orderValueRuntimeBinding({orderValues:providers.orderValues,baselineOverview}),selections}));
+console.log(JSON.stringify({read_only:true,provider_calls:0,deployed_revision:process.env.RENDER_GIT_COMMIT||null,sources:orderValueSourceBindings(providers),binding:orderValueRuntimeBinding({orderValues:providers.orderValues,baselineOverview}),selections}));
 if(selections.some(s=>s.selected_route!=='get_order_value_analysis'||s.limitation))process.exitCode=1;
