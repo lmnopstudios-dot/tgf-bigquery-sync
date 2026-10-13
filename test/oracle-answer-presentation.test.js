@@ -32,7 +32,7 @@ test('production empty product uses shared provider, dispatch and direct agent p
     assert.match(primary(r),/Purchases attributable to the cart cross-sell could not be verified/);
     assert.doesNotMatch(primary(r),/No Woo relationship|Runtime cutoff|provider|query|successful_empty_retrieval/);
     assert.match(r.answer,/<details>\n<summary>Show details<\/summary>/);
-    assert.match(r.answer,/2026-09-30 to 2026-10-06/);
+    assert.match(r.answer,/30 September 2026–6 October 2026/);
     assert.match(r.answer,/Runtime cutoff: 2026-10-06/);
     assert.equal(r.evidence.availability,'successful_empty_retrieval');
     assert.deepEqual(presentAnalyticalAnswer(JSON.parse(JSON.stringify(r)),ctx),JSON.parse(JSON.stringify(r)));
@@ -76,7 +76,7 @@ test('provisional export keeps unranked products unavailable and full artifact u
 
 test('rendered supporting metadata omits credential and query values, unknown contracts preserve answer',()=>{
   const r=present({kind:'governed_product_sales',rows:[],coverage:{complete:false,token:'sensitive',query_text:'private sql',stored_at:'2026-10-06'}});
-  assert.doesNotMatch(r.answer,/sensitive|private sql/);assert.match(r.answer,/stored_at/);
+  assert.doesNotMatch(r.answer,/sensitive|private sql/);assert.match(r.answer,/Stored At/);
   const unknown={answer:'A material new-provider limitation.',evidence:{kind:'future_contract',rows:[]}};
   assert.strictEqual(presentAnalyticalAnswer(unknown),unknown);
 });
@@ -93,4 +93,15 @@ test('direct native conversion keeps measured rates, session volume and full sou
   const source={periods:{before_start:'2025-09-01',before_end:'2025-09-30',after_start:'2026-09-01',after_end:'2026-09-30'},rows:[{period:'before',device_type:'mobile',sessions:100,numerator:5,rate:0.05},{period:'after',device_type:'mobile',sessions:200,numerator:20,rate:0.1,measurement_change_warning:'Native collection change'}]};
   const r=presentNativeConversionAnswer({answer:'Native numerator / denominator definitions and coverage.',route:{tool:'compare_device_conversion_by_traffic_source',args:{}},result:source});
   assert.match(primary(r),/WooCommerce/);assert.match(primary(r),/Shopify/);assert.match(primary(r),/Sessions/);assert.match(primary(r),/5%/);assert.match(primary(r),/10%/);assert.match(primary(r),/not a like-for-like comparison/);assert.match(primary(r),/Session measurement changed/);assert.strictEqual(r.evidence.source_evidence,source);
+});
+
+for(const kind of ['shopify_customer_comparison','shopify_shipping_country_comparison','native_conversion_breakdown','governed_device_conversion'])test(`shared ${kind} failure is concise, safe and actionable`,()=>{
+  const evidence={kind,sections:[{period:PERIOD,status:'rejected',rows:[]}],failure:{stage:'population_query',code:'ORDER_VALUE_RETRIEVAL_FAILED',http_status:403,bigquery_reason:'accessDenied',statement_location:null},coverage:{complete:false,missing_components:2}};
+  const r=presentAnalyticalAnswer({answer:'Exact definitions and diagnostic codes stay here.\n\n{"metadata":"internal"}',evidence});
+  assert.equal((primary(r).match(/could not be retrieved/g)||[]).length,1);assert.match(primary(r),/dataset read and query permissions/);assert.doesNotMatch(r.answer,/```json|"metadata"|Some periods could not|Available conversion rates/);assert.strictEqual(r.evidence,evidence);
+});
+test('shared partial failure retains supported sections and valid artifacts',()=>{
+  const artifact={download_url:'/api/oracle/exports/'+'b'.repeat(64)};
+  const evidence={kind:'shopify_customer_comparison',sections:[{period:PERIOD,status:'fulfilled',result:{overall:{customers:12,new_customers:7,returning_customers:5,orders:15}}},{period:{start_date:'2026-08-01',end_date:'2026-08-31'},status:'rejected'}]};
+  const r=presentAnalyticalAnswer({answer:'Supporting customer definitions.\n\n```json\n{"internal":true}\n```',evidence,artifact});assert.match(primary(r),/12/);assert.match(primary(r),/Some periods could not be retrieved/);assert.strictEqual(r.artifact,artifact);assert.strictEqual(r.evidence,evidence);assert.match(r.answer,/Supporting customer definitions/);assert.doesNotMatch(r.answer,/"internal"|```json/);
 });

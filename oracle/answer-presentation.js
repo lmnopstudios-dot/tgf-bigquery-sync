@@ -1,3 +1,4 @@
+import { safeReadFailure, readFailureAction } from './read-failure.js';
 import { orderValueBusinessView } from './order-value-analysis.js';
 import { weekdayBusinessView } from './weekday-sales.js';
 import { isCampaignPurchaseMetric } from './campaign-context.js';
@@ -71,7 +72,7 @@ function sectionsSummary(e, type) {
   const noCountryRows=type==='country'&&!sections.some(s=>rowsOf(s.result || s.value || s).some(r=>r.country_code));
   lines.push(allFailed?(type==='conversion'?'Conversion figures could not be retrieved.':type==='customers'?'Customer figures could not be retrieved.':'Sales could not be retrieved.'):noCountryRows?'No sales records were found for named shipping destinations.':type==='customers'?'Customer figures are shown for each period.':type==='conversion'?'Available conversion rates are shown by device and period.':type==='country'?'Sales by shipping destination are shown below.':'Available sales are shown by period and source.');
   lines.push(table(type==='customers'?['Period','Platform','Customers','New customers','Returning customers','Orders']:type==='conversion'?['Period','Platform','Device / source','Sessions','Conversion']:['Period',type==='country'?'Country':'Source','Orders','Net sales'], rows));
-  if(sections.some(failed)) lines.push('Some periods could not be retrieved. Available periods remain shown; unavailable figures are not zero.');
+  if(!allFailed&&sections.some(failed)) lines.push('Some periods could not be retrieved. Available periods remain shown; unavailable figures are not zero.');
   if(type==='customers') lines.push('New and returning classifications may not reconcile to distinct customers. These figures do not establish retention or a first-ever purchase across platforms; monthly counts cannot be added as annual unique customers.');
   if(type==='conversion') {
     if(new Set(sections.map(s=>s.definition).filter(Boolean)).size>1) lines.push('Conversion definitions differ across platforms; the rates are not a like-for-like comparison.');
@@ -88,10 +89,11 @@ function sectionsSummary(e, type) {
 }
 function deviceTrend(e) {
   const sections=[...(e.sections||[])].sort((a,b)=>a.period.start_date.localeCompare(b.period.start_date));
-  const lines=['Available conversion rates are shown by device and month.',table(['Month','Mobile','Desktop'],sections.map(s=>[s.period.start_date.slice(0,7),...['mobile','desktop'].map(device=>failed(s)?'Unavailable':rate(s.rows?.find(r=>r.device_type===device)?.rate))]),sections.length)];
+  const allFailed=sections.length>0&&sections.every(failed);
+  const lines=[allFailed?'Conversion figures could not be retrieved.':'Available conversion rates are shown by device and month.',table(['Month','Mobile','Desktop'],sections.map(s=>[s.period.start_date.slice(0,7),...['mobile','desktop'].map(device=>failed(s)?'Unavailable':rate(s.rows?.find(r=>r.device_type===device)?.rate))]),sections.length)];
   for(const change of e.changes||[])lines.push(`${change.device_type}: ${numeric(change.percentage_point_change)==null?'change unavailable':`${numeric(change.percentage_point_change).toFixed(2)} percentage points`} (${change.comparison_period.start_date.slice(0,7)} → ${change.current_period.start_date.slice(0,7)}).`);
   if((e.changes||[]).length)lines.push('These are descriptive rate changes; causal impact is unverified.');
-  if(sections.some(failed))lines.push('Some periods could not be retrieved. Available periods remain shown; unavailable figures are not zero.');
+  if(!allFailed&&sections.some(failed))lines.push('Some periods could not be retrieved. Available periods remain shown; unavailable figures are not zero.');
   if(new Set(sections.map(s=>s.definition)).size>1)lines.push('Conversion definitions differ across platforms; the rates are not a like-for-like comparison.');
   if(sections.some(s=>s.rows?.some(r=>r.rate==null)))lines.push('Partial or incomplete periods have unavailable rates because complete coverage and compatible numerators and denominators could not be verified.');
   lines.push(...new Set(sections.flatMap(s=>s.limitations||[])));
@@ -166,17 +168,28 @@ function businessView(e) {
 // Only analytical metadata is rendered. Full provider evidence stays in the response;
 // credentials, query payloads and person-level rows never become a display dump.
 function supportingMetadata(e) {
-  const keys=['promotion','applied_exclusions','retrieved_daily_rows','analytical_plan','periods','requested_periods','applied_dates','cutoff_date','time_zone','channel','currencies','resolved_product_ref','selected_candidate','history','coverage','retrieval','placement','definitions','classification_boundary','ranking_status','ranking_method','provider_provenance','evidence_availability','comparison_compatible','comparison_period'];
+  const keys=['definitions','coverage','retrieval','promotion','applied_exclusions','retrieved_daily_rows','time_zone','channel','currencies','resolved_product_ref','selected_candidate','history','placement','classification_boundary','ranking_status','ranking_method','provider_provenance','evidence_availability','comparison_compatible','comparison_period'];
   const metadata=Object.fromEntries(keys.filter(key=>e[key]!=null).map(key=>[key,e[key]]));
-  if(e.kind==='governed_order_values'){metadata.operation=e.operation;metadata.calculations=e.sections;}
+  if(e.kind==='governed_order_values'){metadata.operation=e.operation;}
   if(e.kind==='governed_weekday_sales'){metadata.weekday_calculations=e.rows;metadata.eligible_daily_evidence=e.source_rows;}
   if(e.kind==='governed_product_sales') {
     metadata.metric_definitions={sales:'Persisted source-native line-item sales; operational evidence, not canonical finance.',units:'Sum of source-native line quantity in this product/source/channel/currency/month population.',orders_containing_product:'Distinct source order IDs containing the product in the same product/source/store/channel/currency/month population; not a unit count.'};
     metadata.product_sources=(e.source_rows || []).map(r=>Object.fromEntries(['source_platform','source_store','source_product_id','source_variant_ids','mapping_method','mapping_status','coverage','source_collected_at','provenance'].filter(k=>r[k]!=null).map(k=>[k,r[k]])));
   }
   if(e.sections)metadata.sections=e.sections.map(s=>({period:s.period || s.applied_period,status:s.status,definition:s.definition,coverage:s.coverage || s.result?.coverage,source_collected_at:s.result?.source_collected_at,storage:s.storage,provenance:s.provenance}));
-  const json=JSON.stringify(metadata,(key,value)=>/password|secret|token|authorization|cookie|sql|query|customer_id|email_address/i.test(key)?undefined:value,2);
-  return json==='{}'?'':`### Supporting metadata\n\n\`\`\`json\n${json.replaceAll('`','\\u0060')}\n\`\`\``;
+  const rows=[];
+  const hidden=/password|secret|token|authorization|cookie|sql|query|customer_id|email_address|params|parameters|message|analytical_plan|resolved_product_ref|selected_candidate/i;
+  const label=k=>k.replaceAll('_',' ').replace(/\b\w/g,c=>c.toUpperCase());
+  const visit=(value,path,depth)=>{
+    if(rows.length>=80||depth>4)return;
+    if(value==null)return;
+    if(Array.isArray(value)){value.slice(0,12).forEach((v,i)=>visit(v,`${path} ${i+1}`,depth+1));return;}
+    if(typeof value==='object'){for(const [key,v] of Object.entries(value))if(!hidden.test(key))visit(v,path?`${path} / ${label(key)}`:label(key),depth+1);return;}
+    rows.push([path,typeof value==='boolean'?(value?'Yes':'No'):String(value).slice(0,600)]);
+  };
+  visit(metadata,'',0);
+  if(e.failure){const f=safeReadFailure(e.failure,e.failure.stage);visit(f,'Retrieval failure',0);}
+  return rows.length?'### Definitions and coverage\n\n'+table(['Definition / coverage','Evidence'],rows,80):'';
 }
 
 /** Unknown contracts retain their original answer. Never hide an unknown limitation. */
@@ -188,15 +201,20 @@ export function presentAnalyticalAnswer(result, context={}) {
   if(!view)return result;
   const original=result.presentation?.supporting_markdown ?? result.answer;
   // Flatten our existing accordions so the strict renderer never needs arbitrary HTML.
-  const supporting=String(original||'').replace(/^<details>\s*$/gm,'').replace(/^<\/details>\s*$/gm,'').replace(/^<summary>([^<>]+)<\/summary>\s*$/gm,'### $1');
+  let supporting=String(original||'').replace(/^<details>\s*$/gm,'').replace(/^<\/details>\s*$/gm,'').replace(/^<summary>([^<>]+)<\/summary>\s*$/gm,'### $1');
   const periods=Array.isArray(e.periods)?e.periods:e.periods?.current?[e.periods.current,e.periods.previous_period].filter(Boolean):e.requested_periods || e.sections?.map(s=>s.period).filter(Boolean) || [];
   const scope=context.start_date ? `${period(context)}${context.comparison_start_date?`; compared with ${period({start_date:context.comparison_start_date,end_date:context.comparison_end_date})}`:''}` : [...new Set(periods.map(period))].join('; ');
   const lines=view.filter(Boolean);
-  if(scope) lines.push(`Dates: ${scope}.`);
+  if(scope&&!lines.some(line=>/Dates:|Metrics:.*Dates:/.test(line))) lines.push(`Dates: ${scope}.`);
+  if(e.failure&&!lines.includes(readFailureAction(e.failure)))lines.push(readFailureAction(e.failure));
   if(e.kind==='governed_device_conversion'?e.sections?.some(s=>s.period?.start_date<=e.cutoff_date&&s.period?.end_date>=e.cutoff_date):(context.current_day_included || e.partial_current_month))lines.push('Today’s data may still be incomplete.');
   const currencies=new Set([...(e.rows||[]).map(r=>r.currency),...(e.metric_rows||[]).map(r=>r.currency),...(e.sections||[]).flatMap(s=>rowsOf(s.result||s.value||s).map(r=>r.currency))].filter(Boolean));
   if(currencies.size>1)lines.push('Currencies are shown separately and have not been converted or combined.');
-  const exact=context.date_cutoff?`Requested/applied dates: ${context.start_date} to ${context.end_date}${context.comparison_start_date?` versus ${context.comparison_start_date} to ${context.comparison_end_date}`:''}, inclusive (Europe/London). Current day ${context.current_day_included?'included':'excluded'}. Runtime cutoff: ${context.date_cutoff}.`:'';
+  const exact=context.date_cutoff?`Periods are inclusive (Europe/London). Current day ${context.current_day_included?'included':'excluded'}. Runtime cutoff: ${context.date_cutoff}.`:'';
+  // Retain unique supported sections, while removing generated summaries and raw dumps.
+  supporting=supporting.replace(/```(?:json)?\s*\n[\s\S]*?```/g,'').replace(/^\s*\{.*\}\s*$/gm,'');
+  const primary=new Set(lines.map(line=>line.trim()));
+  supporting=supporting.split(/\n\s*\n/).filter(part=>!primary.has(part.trim())&&!/^(?:Dates:|Requested\/applied dates:|\*\*Resolved dates:)/.test(part.trim())&&!(e.retrieval_failed&&/could not be retrieved|Population retrieval unavailable/.test(part))).join('\n\n');
   const details=[exact,supporting,supportingMetadata(e)].filter(Boolean).join('\n\n');
   return {...result,answer:lines.join('\n\n')+`\n\n<details>\n<summary>Show details</summary>\n\n${details}\n\n</details>`,presentation:{version:1,supporting_markdown:original,summary_markdown:lines.join('\n\n')}};
 }
