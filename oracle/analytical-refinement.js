@@ -1,4 +1,5 @@
 import { requestsInStoreChannel } from './channel-scope.js';
+import { mergeRequestedOperations } from './requested-operations.js';
 import { promotionIntent } from './promotion-context.js';
 import { naturalReportPeriod } from './report-natural-period.js';
 
@@ -25,7 +26,8 @@ export function dailySalesContextPatch(base,text,now) {
   const fresh=weekday&&/\b(?:sales|revenue|orders)\b/i.test(text)&&!/\b(?:sales|revenue) (?:of|for)\b|\b(?:campaigns?|klaviyo|conversion|customers?|flows?)\b/i.test(text);
   const regroup=weekday&&['sales','channel_sales'].includes(base.requested_subject)&&/^(?:by|group|break|show)\b/i.test(text)&&!fresh;
   const retained=base.tool_route==='get_daily_sales_analysis';
-  const refine=retained&&(/^(?:online[.!]?$|in[ -]?store[.!]?$|by |sort |rank |include |exclude |excluding |just |only |for |in |export |download |chart |graph |retry |try again)/i.test(text)||base.promotion_context?.pending_endpoint&&/\b(?:start|beginning|end) of (?:the |that )?(?:day|\d{1,2} [a-z]+|[a-z]+ \d{1,2})\b/i.test(text)||base.promotion_context?.pending_dates&&/\b20\d{2}-\d{2}-\d{2}\b/.test(text)||naturalReportPeriod(text,now)&&/^(?:what about |how about |just |only |for |in |during )?(?:this |last |past |since |20\d{2}|january|february|march|april|may|june|july|august|september|october|november|december)/i.test(text));
+  const metricRefinement=/\b(?:add|include|calculate|compute|show|give|also|now|instead|only)\b/i.test(text)&&/\b(?:gross sales|net sales|total sales|refunds|discounts|profit|orders)\b/i.test(text)&&!/\b(?:campaigns?|klaviyo|conversion|customers?|products?|inventory|stock)\b/i.test(text);
+  const refine=retained&&(metricRefinement||/^(?:online[.!]?$|in[ -]?store[.!]?$|by |sort |rank |include |exclude |excluding |just |only |for |in |export |download |chart |graph |retry |try again)/i.test(text)||base.promotion_context?.pending_endpoint&&/\b(?:start|beginning|end) of (?:the |that )?(?:day|\d{1,2} [a-z]+|[a-z]+ \d{1,2})\b/i.test(text)||base.promotion_context?.pending_dates&&/\b20\d{2}-\d{2}-\d{2}\b/.test(text)||naturalReportPeriod(text,now)&&/^(?:what about |how about |just |only |for |in |during )?(?:this |last |past |since |20\d{2}|january|february|march|april|may|june|july|august|september|october|november|december)/i.test(text));
   if(!fresh&&!refine&&!regroup)return null;
   // Explicit subjects always belong to the existing governed subject handlers.
   if(!fresh&&/\b(?:campaigns?|klaviyo|customers?|conversion|products?|inventory|stock|countries|country|pendants?|rings?)\b/i.test(text))return null;
@@ -61,8 +63,9 @@ export function dailySalesContextPatch(base,text,now) {
   if(/\b(?:export|download|spreadsheet|xlsx)\b/i.test(text))patch.output_preference='xlsx';
   if(/\b(?:chart|graph)\b/i.test(text)&&!/\b(?:export|download|spreadsheet|xlsx)\b/i.test(text))patch.output_preference='chart';
   if(/\bby month\b/i.test(text))patch.dimensions=['month'];
-  const unsupportedMetric=text.match(/\b(gross sales|total sales|refunds|discounts|profit)\b/i);
-  if(unsupportedMetric)patch.native_metrics=[unsupportedMetric[1].toLowerCase().replaceAll(' ','_'),'orders'];
+  const askedMetrics=[...text.matchAll(/\b(gross sales|net sales|total sales|refunds|discounts|profit|orders)\b/gi)].map(m=>m[1].toLowerCase().replaceAll(' ','_'));
+  if(askedMetrics.length&&metricRefinement&&!/^(?:by|rank|sort)\b/i.test(text))patch.native_metrics=mergeRequestedOperations(continuation?base.native_metrics:[],askedMetrics,text);
+  else if(askedMetrics.some(m=>!['net_sales','orders'].includes(m)))patch.native_metrics=[...new Set([...askedMetrics,'orders'])];
   if(!promotion&&!promotionReply&&/\b(?:exclude|excluding|without)\s+(?!pos\b|(?:the )?(?:sale|promotion)\b|(?:may )?bank holiday sale\b)([a-z]+)\b/i.test(text))patch.exclusions=[text.match(/\b(?:exclude|excluding|without)\s+([a-z]+)\b/i)[1].toLowerCase()];
   if(/\b(?:products?|category|categories|countries|country|pendants?|rings?|earrings?)\b/i.test(text))patch.filters=['additional_population_filter_unresolved'];
   if(/\b(?:least|lowest|ascending|asc)\b/i.test(text))patch.ranking_direction='asc';

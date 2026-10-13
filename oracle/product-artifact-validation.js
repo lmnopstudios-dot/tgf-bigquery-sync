@@ -6,13 +6,13 @@ import { assertCatalogueSelection, scopeMismatch } from './product-catalogue-fil
 export async function assertProductArtifact(artifact){
   const e=artifact?.envelope;
   if(e?.kind==='governed_order_values'){
-    const {assertOrderValueEvidence}=await import('./order-value-analysis.js');
+    const {assertOrderValueEvidence,orderValueGapRows,orderValueWorkbookTables}=await import('./order-value-analysis.js');
     if(!artifact.analysis_context)throw scopeMismatch('artifact.analysis_context');
     assertOrderValueEvidence(artifact.analysis_context,e);
     const bytes=Buffer.from(artifact.xlsx_base64||'','base64');
     if(createHash('sha256').update(bytes).digest('hex')!==artifact.sha256)throw scopeMismatch('artifact.sha256');
     const wb=new ExcelJS.Workbook();try{await wb.xlsx.load(bytes);}catch{throw scopeMismatch('artifact.workbook');}
-    const expected=[['Summary',e.rows],['Sales',e.sections.flatMap(s=>s.bands.map(b=>({comparison:s.label,...b})))],['Products',e.candidates],['Context',e.sections.flatMap(s=>s.gaps.map(g=>({comparison:s.label,...g})))]];
+    const expected=[['Summary',e.rows],['Sales',e.sections.flatMap(s=>s.bands.map(b=>({comparison:s.label,...b})))],['Products',e.candidates],['Context',orderValueGapRows(e.sections)],...orderValueWorkbookTables(e)];
     for(const [name,rows] of expected){
       if(!rows.length)continue;
       const sheet=wb.getWorksheet(name),keys=[...new Set(rows.flatMap(Object.keys))];
