@@ -4,6 +4,7 @@ import { createBigQueryClient } from '../bigquery/client.js';
 import { datasetLocation } from '../bigquery/dataset-location.js';
 import { orderValueSnapshotSql, orderValuePopulationSql, orderValueQueryOptions, validateOrderValueScope } from '../oracle/order-value-provider.js';
 import { safeReadFailure } from '../oracle/read-failure.js';
+import { boundedEvidenceRead } from '../oracle/bounded-evidence-read.js';
 
 export function validateShippingEvidenceInput(input) {
   if(Object.keys(input).some(k=>!['start','end'].includes(k)))throw Error('Only --start and --end are allowed');
@@ -110,7 +111,8 @@ export function shippingRefundEvidenceSql(project) {
 }
 export async function diagnoseShippingEvidence(input,{bigquery,project}) {
   validateShippingEvidenceInput(input);
-  const location=await datasetLocation(bigquery,project,'shopify_data');
+  const read=work=>boundedEvidenceRead(work,{maximumMs:30000});
+  const location=await read(()=>datasetLocation(bigquery,project,'shopify_data'));
   const args={start_date:input.start,end_date:input.end,country:'GB',currency:'GBP',basis:'observed_subtotal'};
   const options={...orderValueQueryOptions(args,location),jobTimeoutMs:30000};
   const report={read_only:true,aggregate_only:true,period:input,location,financial_evidence_complete:false,
@@ -121,14 +123,14 @@ export async function diagnoseShippingEvidence(input,{bigquery,project}) {
       recovery:'No original totalShippingPriceSet or shipping-line payload is retained in these tables. Transactions describe payments; refund shipping lines describe refunds, not the original charge. Positive refund amounts can contradict free-shipping claims but cannot establish original charge or prove zero.',
       market:'Shipping country and presentment currency are separate filters; neither shop currency, customer address nor market is a substitute.',
       retail:'Null retailLocation is the governed proxy, not positive Online Store attribution. Cross-snapshot disagreements are evidence to investigate, not permission to alter eligibility.'},checks:[]};
-  const [schemas]=await bigquery.query({...options,query:`SELECT table_name,column_name,data_type,is_nullable FROM \`${project}.shopify_data.INFORMATION_SCHEMA.COLUMNS\` WHERE table_name IN ('order_locations','order_financials','order_customers','order_shipping_geography','order_refunds') ORDER BY table_name,ordinal_position LIMIT 300`});
+  const [schemas]=await read(()=>bigquery.query({...options,query:`SELECT table_name,column_name,data_type,is_nullable FROM \`${project}.shopify_data.INFORMATION_SCHEMA.COLUMNS\` WHERE table_name IN ('order_locations','order_financials','order_customers','order_shipping_geography','order_refunds') ORDER BY table_name,ordinal_position LIMIT 300`}));
   report.schemas=schemas;
   const reads=[['shipping',shippingEvidenceSql(project),12],['population_audit',shippingPopulationAuditSql(project),2000]];
   if(['refund_id','order_id','synced_at','presentment_currency','refund_shipping_subtotal_presentment','refund_shipping_lines_json'].every(column=>schemas.some(r=>r.table_name==='order_refunds'&&r.column_name===column)))
     reads.push(['shipping_refunds',shippingRefundEvidenceSql(project),3]);
   else report.checks.push({stage:'shipping_refunds',status:'blocked',reason:'Required refund evidence columns absent; absence is not evidence of no shipping refunds.'});
   for(const [stage,query,maxRows] of reads) {
-    try {await bigquery.createQueryJob({...options,query,dryRun:true});const [rows]=await bigquery.query({...options,query});
+    try {await read(()=>bigquery.createQueryJob({...options,query,dryRun:true}));const [rows]=await read(()=>bigquery.query({...options,query}));
       if(rows.length>maxRows)throw Object.assign(Error('Aggregate row bound exceeded'),{code:'SHIPPING_EVIDENCE_ROW_BOUND'});
       report[stage]=rows;report.checks.push({stage,status:'fulfilled'});
     }catch(error){report.checks.push({stage,status:'rejected',failure:safeReadFailure(error,stage)});}
