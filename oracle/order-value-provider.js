@@ -5,7 +5,9 @@ import { assertDatasetIdentifier, datasetLocation } from '../bigquery/dataset-lo
 import { MATRIXIFY_APP_ID } from './online-country-sales.js';
 
 export const ORDER_VALUE_ROW_BOUND=50000;
-export const ORDER_VALUE_PARAMETER_TYPES=Object.freeze({start_date:'DATE',end_date:'DATE',country:'STRING',currency:'STRING',basis:'STRING',assumed_charge:'NUMERIC',matrixify_app_id:'STRING'});
+// The SDK extracts .value for explicit DATE parameters; plain ISO strings must
+// use STRING, then DATE(@parameter) in SQL, as onlineCountrySalesSql does.
+export const ORDER_VALUE_PARAMETER_TYPES=Object.freeze({start_date:'STRING',end_date:'STRING',country:'STRING',currency:'STRING',basis:'STRING',assumed_charge:'NUMERIC',matrixify_app_id:'STRING'});
 export function orderValueQueryOptions(args,location) {
   return {params:{start_date:args.start_date,end_date:args.end_date,country:args.country,currency:args.currency,basis:args.basis,assumed_charge:args.assumed_charge??8,matrixify_app_id:MATRIXIFY_APP_ID},types:{...ORDER_VALUE_PARAMETER_TYPES},maximumBytesBilled:'1000000000',useLegacySql:false,location,labels:{component:'oracle_order_value_read'}};
 }
