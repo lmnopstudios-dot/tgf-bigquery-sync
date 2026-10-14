@@ -1,3 +1,4 @@
+import { messageIntent } from './message-intent.js';
 const DAY = 86_400_000;
 const MONTHS = new Map(['january','february','march','april','may','june','july','august','september','october','november','december'].map((name,index)=>[name,index+1]));
 const iso = date => date.toISOString().slice(0,10);
@@ -6,6 +7,10 @@ const addDays = (date, days) => new Date(date.getTime()+days*DAY);
 export function localDateAt(timestamp, timeZone='Europe/London') {
   const parts=Object.fromEntries(new Intl.DateTimeFormat('en-GB',{timeZone,year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date(timestamp)).filter(x=>x.type!=='literal').map(x=>[x.type,x.value]));
   return new Date(Date.UTC(Number(parts.year),Number(parts.month)-1,Number(parts.day)));
+}
+
+export function knowledgeAssertionText(message) {
+  return String(message||'').replace(/```[\s\S]*?```|"[^"]*"|“[^”]*”|‘[^’]*’|(?<!\w)'[^'\n]+'(?!\w)|^\s*>.*$/gm,'').split(/\n|(?<=[.!?])\s+/).filter(line=>! /\b(?:example|customer-facing|messaging (?:says|reads)|message (?:says|reads)|delivery promise|order by|for example|e\.g\.)\b/i.test(line)).join(' ');
 }
 
 function explicitRange(text, reference) {
@@ -19,7 +24,7 @@ function explicitRange(text, reference) {
 }
 
 export function resolveKnowledgeDates(message, {timestamp=Date.now(),timeZone='Europe/London'}={}) {
-  const text=String(message||''),today=localDateAt(timestamp,timeZone);
+  const text=knowledgeAssertionText(message),today=localDateAt(timestamp,timeZone);
   let found=explicitRange(text,today);
   const phrase=pattern=>text.match(pattern)?.[0];
   if(!found){
@@ -32,12 +37,19 @@ export function resolveKnowledgeDates(message, {timestamp=Date.now(),timeZone='E
       found={original_wording:wording,effective_start:iso(start),effective_end:iso(end),precision:start.getTime()===end.getTime()?'day':'range'};
     }
   }
+  if(!found){
+    const single=text.match(/\b(20\d{2}-\d{2}-\d{2})\b/);
+    const named=text.match(/\b(\d{1,2})(?:st|nd|rd|th)?\s+(?:of\s+)?(January|February|March|April|May|June|July|August|September|October|November|December)\s+(20\d{2})\b/i);
+    const date=single?.[1]||(named?iso(new Date(Date.UTC(Number(named[3]),MONTHS.get(named[2].toLowerCase())-1,Number(named[1])))):null);
+    if(date)found={original_wording:single?.[0]||named[0],effective_start:date,effective_end:date,precision:'day'};
+  }
   if(!found)return null;
   if(found.effective_start>found.effective_end)return {ambiguous:true,original_wording:found.original_wording,clarification:'What start and end dates should this campaign use?'};
   return {...found,time_zone:timeZone,message_timestamp:new Date(timestamp).toISOString()};
 }
 
 export function campaignDateClarification(message,resolution) {
+  if(messageIntent(message).blocked)return null;
   if(resolution?.ambiguous)return resolution.clarification;
   if(!resolution&&/\b(?:campaign|promotion|promo|pushing|launch)\b/i.test(String(message||''))&&/\b(?:soon|later|around|sometime|for a while)\b/i.test(String(message||'')))return 'What start and end dates should this campaign use?';
   return null;

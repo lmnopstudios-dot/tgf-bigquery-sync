@@ -1,3 +1,5 @@
+import { messageIntent } from './message-intent.js';
+import { isHistoricalEventComparison } from './historical-event-comparison.js';
 import { OPERATION_REQUIREMENTS, requestedAnalyticalOperations, individualOrderQuestion, metricOperations, mergeRequestedOperations } from './requested-operations.js';
 import { orderValueContextPatch } from './order-value-context.js';
 import { validateNumericOperation } from './numeric-distribution.js';
@@ -204,7 +206,7 @@ function transitionContext(existing, message, {now=Date.now(),reportContext=null
     if(explicitSubject){clear.push('failed_subject_switch');for(const key of ['tool_route','platform','comparison_type','comparison_start_date','comparison_end_date','geography','customer_segment','product_ref','report_section','advisory_topic','journey_intent','entry_product_classification','subsequent_product_classification','event_name','event_count'])clear.push(key);set.requested_subject=explicitSubject;set.metrics=[explicitSubject];set.analysis_type=explicitSubject==='customers'?'customers':explicitSubject==='sales'?'finance':'ecommerce';if(explicitSubject==='sales'){set.tool_route='get_shopify_operational_sales_baseline';set.channel_breakdown=!(/\bonline\b/i.test(text)&&!/\b(?:pos|point of sale|in[ -]?store)\b/i.test(text));if(!set.channel_breakdown)set.channel='online';clear.push('channel','currencies');}else if(explicitSubject==='shipping_countries'){set.tool_route='get_online_country_sales';set.geography='direct_shipping_country';set.channel='online';}else if(explicitSubject==='customers')set.tool_route='get_shopify_customer_kpis';else if(explicitSubject==='search_console')set.tool_route='get_search_console_evidence';}
     const explicitPlatformComparison=/\b(?:shopify|native shopify)\b[\s\S]*\b(?:woocommerce|woo)\b|\b(?:woocommerce|woo)\b[\s\S]*\bshopify\b/i.test(text)&&/\b(?:compare|comparison|versus|vs\.?|with)\b/i.test(text)&&/\b(?:sales|revenue|orders?)\b/i.test(text);
     if(explicitPlatformComparison){for(const key of ['tool_route','geography','customer_segment','product_ref','report_section','included_periods'])clear.push(key);set.requested_subject='platform_sales';set.analysis_type='finance';set.metrics=['sales','refunds'];set.platform='shopify+woo';set.channel='online';set.channel_breakdown=false;set.comparison_type='explicit_platform_periods';set.filters=['exclude_pos','exclude_matrixify'];}
-    const historicalEvent=!excludedBlackFriday&&!set.included_periods&&/\bblack\s+friday\b/i.test(text)&&/\b(?:last|previous|recent|compare|comparison|overview|sales?|years?)\b/i.test(text);
+    const historicalEvent=!excludedBlackFriday&&!set.included_periods&&isHistoricalEventComparison(text);
     if(historicalEvent){const count=lower.match(/\blast\s+(\d{1,2})\s+(?:black\s+friday\s+)?(?:sales?|years?)\b/);set.event_name='Black Friday';set.event_count=Math.max(1,Math.min(Number(count?.[1]||3),5));set.tool_route='compare_historical_events';set.metrics=['sales','refunds','customers','products','ecommerce_performance'];set.analysis_type='ecommerce';set.channel='online';clear.push('start_date','end_date','requested_end_period','comparison_start_date','comparison_end_date');}
     else if(base.tool_route==='compare_historical_events'&&/\blast\s+(\d{1,2})\s+years?\b/i.test(text)){set.event_count=Math.max(1,Math.min(Number(text.match(/\blast\s+(\d{1,2})\s+years?\b/i)[1]),5));}
     const advisory=isStockClearanceAdvisory(text,base);
@@ -279,7 +281,8 @@ export function clarificationFor(context){const c=validateAnalysisContext(contex
 
 
 export function transitionAnalysisContext(existing,message,options={}){
-  const base=validateAnalysisContext(existing||{}),text=String(message||'').trim();
+  const base=validateAnalysisContext(existing||{}),intent=messageIntent(message),text=intent.document?intent.instruction:String(message||'').trim();
+  if(intent.blocked)return {context:validateAnalysisContext({...emptyAnalysisContext(),request_kind:intent.knowledge?'knowledge_save':null}),transition:{continuation:false,set:[],clear:ANALYSIS_CONTEXT_FIELDS,retain:[],missing_required_fields:[],ready_to_execute:false,applies_to_message:true}};
   if(explicitKnowledgeSaveIntent(text)&&!requestedAnalyticalOperations(text))return {context:validateAnalysisContext({...emptyAnalysisContext(),request_kind:'knowledge_save'}),transition:{continuation:false,set:['request_kind'],clear:ANALYSIS_CONTEXT_FIELDS,retain:[],missing_required_fields:[],ready_to_execute:true,applies_to_message:true,clarification_consumed:null}};
   const consumed=consumePendingClarification(base,text);
   if(consumed?.rejected)return {context:base,transition:{continuation:true,set:[],clear:[],retain:ANALYSIS_CONTEXT_FIELDS,missing_required_fields:base.unresolved_required_fields,ready_to_execute:false,applies_to_message:true,clarification_consumed:null,clarification_rejected:consumed.rejected}};
@@ -288,7 +291,7 @@ export function transitionAnalysisContext(existing,message,options={}){
     else if(/\b(?:chart|graph)\b/i.test(text))consumed.context.output_preference='chart';
     if(consumed.context.tool_route==='get_daily_sales_analysis'){if(/\b(?:by|rank by|sort by) orders\b/i.test(text))consumed.context.ranking_metric='average_orders_per_day';else if(/\b(?:by|rank by|sort by) (?:sales|revenue)\b/i.test(text))consumed.context.ranking_metric='average_sales_per_day';}
     const context=validateAnalysisContext(consumed.context),changed=ANALYSIS_CONTEXT_FIELDS.filter(k=>JSON.stringify(base[k])!==JSON.stringify(context[k]));return {context,transition:{continuation:true,set:changed,clear:[],retain:ANALYSIS_CONTEXT_FIELDS.filter(k=>!changed.includes(k)),missing_required_fields:context.unresolved_required_fields,ready_to_execute:!context.unresolved_required_fields.length,applies_to_message:true,clarification_consumed:consumed.kind}};}
-  const result=transitionContext(existing,message,options),pending=pendingClarificationKind(base);
+  const result=transitionContext(existing,text,options),pending=pendingClarificationKind(base);
   if(pending&&result.transition.continuation&&result.transition.applies_to_message&&result.context.requested_subject===base.requested_subject&&result.transition.set.length)result.transition.clarification_consumed=pending;
   return result;
 }

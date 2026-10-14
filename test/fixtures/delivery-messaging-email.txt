@@ -1,0 +1,12 @@
+Hi Billy,
+Just a heads up I’ve added the turn around time messaging to the product pages and cart.
+For RTS items it shows order by 10am today/tomorrow for a delivery date 2 days from the cut off for UK orders. 
+So for example on the 13th of October they see either... 
+ORDER BY 10AM TODAY GET IT BY 15TH OCT
+ORDER BY 10AM TOMORROW GET IT BY 16TH OCT
+For International orders they see a delivery date 4 days from cut-off.
+It’s coded so it takes into account weekends and bank holidays so the dates will be extended based on the fact there is no distro on those days and also extra shipping time required.
+If the customer adds a made to order item and a RTS item to the cart then the message there says ‘Your order ships together - approx * weeks” - dependent on the longest made to order time applied to any product in the cart.
+Hopefully this will work out, let me know if you foresee any issues. Ideally we can keep this messaging consistent, but I understand it may need to change during super busy periods like the Black Friday sale.
+Best,
+Stuart

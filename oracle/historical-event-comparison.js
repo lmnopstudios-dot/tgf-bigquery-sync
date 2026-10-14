@@ -1,3 +1,5 @@
+import { storedTemporal, provenanceCode } from './event-presentation.js';
+import { messageIntent } from './message-intent.js';
 const DATE=/^\d{4}-\d{2}-\d{2}$/;
 const BF=/\bblack\s+friday\b/i;
 
@@ -7,22 +9,22 @@ export const REVIEWED_CAMPAIGN_PHASES=Object.freeze({
   'ev_f9521f60-1aaf-41f6-a540-4e4bf00082dd':Object.freeze({campaign:'black-friday-2025',phase:'public',label:'Public campaign',expected_start:'2025-11-28',expected_end:'2025-11-30'})
 });
 
-const iso=value=>value?.value||value||null;
+const iso=storedTemporal;
 const n=value=>value==null||value===''?null:Number.isFinite(Number(value))?Number(value):null;
 const fmt=value=>value==null?'unavailable':Number(value).toLocaleString('en-GB',{maximumFractionDigits:2});
 const money=(value,currency)=>value==null?'unavailable':`${currency} ${fmt(value)}`;
 const days=(start,end)=>Math.round((Date.parse(`${end}T00:00:00Z`)-Date.parse(`${start}T00:00:00Z`))/86400000)+1;
 const safeCode=error=>String(error?.code||error?.name||'SOURCE_FAILED').replace(/[^A-Za-z0-9_.-]/g,'').slice(0,60);
-const provenance=item=>({status:item.status,source_type:item.source_type||null,source_reference:item.source_reference||null,recorded_at:item.recorded_at||null});
+const provenance=item=>({status:item.status,source_type:item.source_type||null,source_reference:item.source_reference||null,recorded_at:iso(item.recorded_at)});
 
 export function isHistoricalEventComparison(message){
-  const text=String(message||'');
+  const intent=messageIntent(message);if(intent.blocked)return false;const text=intent.instruction;
   // Event names mentioned as an exclusion or as context must never outrank an
   // explicit calendar-period request.  Keep this guard here (the deterministic
   // route itself), rather than relying only on the UI context classifier: /agent,
   // durable workers and the interactive UI all call this service directly.
-  const negative=/(?:\bexclude(?:d|s|ing)?\b|\bexcept\b|\boutside\b|\bnot\b)[\s\S]{0,40}\bblack\s+friday\b|\bblack\s+friday\b[\s\S]{0,24}\b(?:context only|as context)\b/i.test(text);
-  return !negative&&BF.test(text)&&/\b(?:last|previous|recent|compare|comparison|overview|sales?|years?)\b/i.test(text);
+  const negative=/(?:\bexclud(?:e|ed|es|ing)\b|\bexcept\b|\boutside\b|\bnot\b)[\s\S]{0,40}\bblack\s+friday\b|\bblack\s+friday\b[\s\S]{0,24}\b(?:context only|as context)\b/i.test(text);
+  return !negative&&BF.test(text)&&/\b(?:compare|comparison|contrast|analyse|analyze|report|overview)\b/i.test(intent.actionText);
 }
 
 function normalize(item){
@@ -70,11 +72,11 @@ function failureDiagnostic(error){const detail=Array.isArray(error?.errors)?erro
 function onlineRows(report){const rows=report?.online_sales?.rows||report?.rows||[];const seen=new Set();return rows.filter(row=>{const key=`${row.currency}|${row.source_platform}|${row.source_store}`;if(seen.has(key))return false;seen.add(key);return true;}).flatMap(row=>(row.source_coverage||[]).map(source=>({...source,currency:row.currency})));}
 function renderEvent(section){
   const {event,report}=section,lines=[`## ${event.name} (${event.year})`,`**Applied full-campaign period:** ${event.start_date} to ${event.end_date} (${event.duration_days} days).`];
-  for(const phase of event.phases)lines.push(`- **${phase.phase_label}:** ${phase.start_date} to ${phase.end_date}; confirmed ${phase.id}; ${phase.provenance.source_type||'source type unavailable'}; ${phase.provenance.source_reference||'source reference unavailable'}; recorded ${phase.provenance.recorded_at||'time unavailable'}.`);
+  for(const phase of event.phases)lines.push(`- **${phase.phase_label}:** ${phase.start_date} to ${phase.end_date}; confirmed ${provenanceCode(phase.id)}; ${provenanceCode(phase.provenance.source_type)}; ${provenanceCode(phase.provenance.source_reference)}; recorded ${phase.provenance.recorded_at||'time unavailable'}.`);
   if(event.campaign_context)lines.push(`- **Campaign context:** ${event.campaign_context}`);
   if(section.status!=='fulfilled')return lines.concat(`- **Sales evidence unavailable:** ${section.error_code}; this campaign failed independently and no zero was substituted.`);
   const rows=onlineRows(report);if(!rows.length)lines.push('- No governed online sales rows were returned; missing evidence is not zero.');
-  for(const row of rows){const orders=n(row.eligible_orders),sales=n(row.eligible_sales);lines.push(`- **${row.source_platform}/${row.source_store} · ${row.currency}:** eligible online orders ${fmt(orders)}; operational net sales ${money(sales,row.currency)}; sales/order ${money(orders>0?sales/orders:null,row.currency)}; sales/day ${money(sales==null?null:sales/event.duration_days,row.currency)}; orders/day ${orders==null?'unavailable':fmt(orders/event.duration_days)}.`);}
+  for(const row of rows){const orders=n(row.eligible_orders),sales=n(row.eligible_sales);lines.push(`- **${provenanceCode(`${row.source_platform}/${row.source_store}`)} · ${row.currency}:** eligible online orders ${fmt(orders)}; operational net sales ${money(sales,row.currency)}; sales/order ${money(orders>0?sales/orders:null,row.currency)}; sales/day ${money(sales==null?null:sales/event.duration_days,row.currency)}; orders/day ${orders==null?'unavailable':fmt(orders/event.duration_days)}.`);}
   const conversion=report?.conversion?.current,compat=report?.conversion?.comparability?.current??report?.conversion?.compatible;
   if(conversion&&compat===true)lines.push(`- **Compatible online traffic:** sessions ${fmt(conversion.sessions)}; conversion ${conversion.conversion_rate==null?'unavailable':`${(Number(conversion.conversion_rate)*100).toFixed(2)}%`}.`);else lines.push('- **Conversion:** unavailable because compatible traffic evidence for this exact campaign period was not established.');
   return lines;

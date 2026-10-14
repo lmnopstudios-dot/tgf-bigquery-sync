@@ -1,3 +1,4 @@
+import { messageIntent } from './message-intent.js';
 import { resolveExecutionPlan } from './analytical-capabilities.js';
 import { deliverOracleResult, safeDeliveryId } from './result-delivery.js';
 import { normalizeOracleResult, oracleResultContent } from '../public/oracle/result-contract.js';
@@ -86,9 +87,10 @@ export function createOracleUiRouter({ knowledgeService, bigquery, project, chat
     const candidates = await generateProposals({ message, existing, evidence: [], temporalContext });
     return candidates.slice(0, 12).map(candidate => {
       try {
-        if(temporalContext&&!temporalContext.ambiguous&&candidate.kind==='event'&&/campaign|marketing|promotion|social/i.test(`${candidate.event_type} ${candidate.title} ${candidate.description}`))candidate={...candidate,effective_from:temporalContext.effective_start,effective_to:temporalContext.effective_end,date_precision:temporalContext.precision};
+        if(messageIntent(message).document&&!temporalContext)candidate={...candidate,effective_from:null,effective_to:null,...(candidate.kind==='event'?{date_precision:'unknown'}:{})};
+        if(!messageIntent(message).document&&temporalContext&&!temporalContext.ambiguous&&candidate.kind==='event'&&/campaign|marketing|promotion|social/i.test(`${candidate.event_type} ${candidate.title} ${candidate.description}`))candidate={...candidate,effective_from:temporalContext.effective_start,effective_to:temporalContext.effective_end,date_precision:temporalContext.precision};
         const wrapper=normalizeModelProposal(candidate, { createdBy, existing });
-        return temporalContext&&!temporalContext.ambiguous?{...wrapper,date_resolution:{original_wording:temporalContext.original_wording,effective_start:temporalContext.effective_start,effective_end:temporalContext.effective_end,time_zone:temporalContext.time_zone,message_timestamp:temporalContext.message_timestamp}}:wrapper;
+        return temporalContext&&!temporalContext.ambiguous&&candidate.kind==='event'&&candidate.effective_from===temporalContext.effective_start?{...wrapper,date_resolution:{original_wording:temporalContext.original_wording,effective_start:temporalContext.effective_start,effective_end:temporalContext.effective_end,time_zone:temporalContext.time_zone,message_timestamp:temporalContext.message_timestamp}}:wrapper;
       }
       catch (error) { error.phase = 'proposal_validation'; logProposalError(error); return invalidProposal(candidate); }
     }).filter(proposal => proposal.validity !== 'already_known');
@@ -268,7 +270,7 @@ export function createOracleUiRouter({ knowledgeService, bigquery, project, chat
       const resolved=requestTransition(req,sessionContext(req),req.body.message,{now:now()});
       if(suppressAnalyticalProposals(resolved.context,resolved.transition,req.body.message))return res.json({success:true,proposals:[],clarification:null});
       const temporalContext=resolveKnowledgeDates(req.body.message,{timestamp:now(),timeZone:'Europe/London'}),clarification=campaignDateClarification(req.body.message,temporalContext);
-      res.json({ success: true, proposals: clarification?[]:await proposalsFor(req.body.message, req.oracleUser.sub, temporalContext), clarification });
+      res.json({ success: true, proposals: clarification?[]:await proposalsFor(messageIntent(req.body.message).document&&!messageIntent(req.body.message).analytical?'Propose knowledge records from this document:\n'+req.body.message:req.body.message, req.oracleUser.sub, temporalContext), clarification });
     } catch (error) { logProposalError(error); res.status(503).json({ success: false, error: 'Knowledge proposal could not be generated.' }); }
   });
   const approve = kindScope => async (req, res) => {

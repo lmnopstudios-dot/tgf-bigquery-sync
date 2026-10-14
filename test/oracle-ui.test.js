@@ -238,7 +238,7 @@ test('made-to-order size M/N question answers immediately without date or curren
   assert.equal(response.status,200);assert.equal(calls.length,1);assert.equal(calls[0].message,question);assert.match(body.answer,/M is ready to ship and N is made to order/);assert.doesNotMatch(body.answer,/date range|GBP|USD|currency/i);
 });
 
-test('explicit timeless-definition save request reaches chat and proposal generation without date scope',async t=>{
+test('explicit timeless-definition save request reaches proposals without analytical execution or date scope',async t=>{
   const message='Please propose and save a timeless operational definition for made-to-order availability.';
   const calls=[],proposalCalls=[];
   const knowledgeService={searchKnowledge:async()=>({items:[]}),searchMemory:async()=>({items:[]})};
@@ -247,8 +247,7 @@ test('explicit timeless-definition save request reaches chat and proposal genera
   const server=await new Promise(resolve=>{const value=app.listen(0,()=>resolve(value))});t.after(()=>server.close());
   const base=`http://127.0.0.1:${server.address().port}/api/oracle`,request=(path,options={})=>fetch(base+path,options),auth=await login(request,base),headers={cookie:auth.cookie,origin:new URL(base).origin,'content-type':'application/json','x-csrf-token':auth.csrf};
   const response=await request('/chat',{method:'POST',headers,body:JSON.stringify({message})}),body=await response.json();
-  assert.equal(response.status,200);assert.equal(calls.length,1);assert.equal(calls[0].value,message);
-  assert.deepEqual(calls[0].conversation.analysisContext.metrics,[]);assert.deepEqual(calls[0].conversation.analysisContext.currencies,[]);assert.equal(calls[0].conversation.analysisContext.start_date,null);
+  assert.equal(response.status,200);assert.equal(calls.length,0);assert.deepEqual(body.tools,[]);
   assert.equal(proposalCalls.length,1);assert.equal(body.proposals.length,1);assert.equal(body.proposals[0].kind,'definition');assert.doesNotMatch(body.answer,/date range|GBP|USD/);
 });
 
