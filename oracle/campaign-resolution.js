@@ -4,7 +4,7 @@ const day=(instant,zone)=>new Intl.DateTimeFormat('en-CA',{timeZone:zone,year:'n
 export async function resolveCampaignContext(context,provider){
   const request=structuredClone(context.campaign_request);
   const pending=answer=>({answer,tools:[],analysis_context:validateAnalysisContext({...context,campaign_request:request}),clarification:true});
-  const missing=()=>{const asked=request.clarification_attempted;request.clarification_attempted=true;return pending(asked?'The supplied clarification is retained, but governed send metadata still cannot verify the campaign. Campaign attribution is unavailable for now.':'Campaign send metadata is unavailable. Please provide the campaign name or send date. I’ll retain the requested campaign attribution metrics.');};
+  const missing=()=>{const asked=request.clarification_attempted;request.clarification_attempted=true;return pending(asked?'The supplied clarification is retained, but governed send metadata still cannot verify the campaign. Campaign attribution is unavailable for now.':'Campaign send metadata is unavailable. Please provide the campaign name or identifier (or a verified send date for the retained campaign). I’ll retain the requested campaign attribution metrics.');};
   if(!request.selected&&!request.metadata_attempted){
     request.metadata_attempted=true;
     let result;
@@ -26,7 +26,7 @@ export async function resolveCampaignContext(context,provider){
     return pending(request.send_date?'The send date is retained, but no campaign identity is supported by the available metadata. Campaign-attributed counts are unavailable until that identity can be verified.':'Please select an identifiable campaign from the retained candidates, or provide its name.');
   }
   const c=request.selected;
-  if(request.date_mode!=='since_send'&&!context.start_date)return pending(`What date range would you like for ${esc(c.entity_name)} (ID ${esc(c.entity_id)}, ${esc(c.account)}, ${esc(c.channel)})? You can use the campaign’s send date.`);
+  if(!context.start_date)request.date_mode='since_send';
   if(request.date_mode==='since_send'){
     if(!c.send_time&&!request.send_date)return missing();
     const timezone=c.reporting_timezone||'Europe/London',start=request.send_date||day(c.send_time,timezone),runtime=day(request.cutoff,timezone),end=c.reporting_cutoff&&c.reporting_cutoff<runtime?c.reporting_cutoff:runtime;

@@ -5,6 +5,19 @@ import { assertCatalogueSelection, scopeMismatch } from './product-catalogue-fil
 // Recovery checks stored bytes, not just a successful persistence marker.
 export async function assertProductArtifact(artifact){
   const e=artifact?.envelope;
+  if(e?.kind==='governed_klaviyo_campaign_set'){
+    const {assertCampaignSetEvidence,campaignWorkbookRows}=await import('./campaign-set-analysis.js');
+    const {assertPlanAgreement}=await import('./analytical-plan.js');
+    if(!artifact.analysis_context)throw scopeMismatch('artifact.analysis_context');
+    assertPlanAgreement(artifact.analysis_context,e);assertCampaignSetEvidence(artifact.analysis_context,e);
+    const bytes=Buffer.from(artifact.xlsx_base64||'','base64');
+    if(createHash('sha256').update(bytes).digest('hex')!==artifact.sha256)throw scopeMismatch('artifact.sha256');
+    const wb=new ExcelJS.Workbook();try{await wb.xlsx.load(bytes);}catch{throw scopeMismatch('artifact.workbook');}
+    const rows=campaignWorkbookRows(e),keys=Object.keys(rows[0]),sheet=wb.getWorksheet('Campaigns');
+    if(!sheet||sheet.rowCount!==rows.length+1)throw scopeMismatch('artifact.rows');
+    for(const [i,row] of rows.entries())for(const [j,key] of keys.entries())if((sheet.getRow(i+2).getCell(j+1).value??null)!==(row[key]??null))throw scopeMismatch('artifact.metrics');
+    return true;
+  }
   if(e?.kind==='governed_order_values'){
     const {assertOrderValueEvidence,orderValueGapRows,orderValueWorkbookTables}=await import('./order-value-analysis.js');
     if(!artifact.analysis_context)throw scopeMismatch('artifact.analysis_context');

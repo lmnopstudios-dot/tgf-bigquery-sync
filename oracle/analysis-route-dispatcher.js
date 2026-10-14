@@ -1,3 +1,4 @@
+import { assertCampaignSetEvidence } from './campaign-set-analysis.js';
 import { messageIntent, nonAnalyticalResult } from './message-intent.js';
 import { assertOrderValueEvidence } from './order-value-analysis.js';
 import { requestedAnalyticalOperations, unsupportedOperationResult } from './requested-operations.js';
@@ -42,7 +43,11 @@ export function assertResolvedAnalysisContext(submittedValue,resolvedValue){
   if(submitted.campaign_request){
     if(!submitted.campaign_request.selected){expected.entities.selected=actual.entities.selected;expected.dates.timezone=actual.dates.timezone;}
     expected.entities.candidates=actual.entities.candidates;
-    if(submitted.campaign_request.date_mode==='since_send'){
+    if(!submitted.campaign_request.selected_entities.length){expected.entities.selected_entities=actual.entities.selected_entities;if(!submitted.campaign_request.account)expected.entities.scope.account=actual.entities.scope.account;if(!submitted.campaign_request.channel)expected.entities.scope.channel=actual.entities.scope.channel;}
+    if(!submitted.campaign_request.comparison_entities.length)expected.entities.comparison_entities=actual.entities.comparison_entities;
+    if(!submitted.campaign_request.reporting_windows.length)expected.entities.reporting_windows=actual.entities.reporting_windows;
+    if(submitted.campaign_request.date_mode==='since_send'||!submitted.start_date&&actual.dates.basis==='since_send'){
+      expected.dates.basis=actual.dates.basis;
       expected.dates.start_date=actual.dates.start_date;expected.dates.end_date=actual.dates.end_date;
       expected.dates.cutoff=actual.dates.cutoff;expected.dates.current_day_included=actual.dates.current_day_included;expected.dates.partial_period=actual.dates.partial_period;
     }
@@ -67,6 +72,7 @@ export function assertEvidenceAgreement(contextValue,evidence,requestMessage=nul
   if(actual!==context.requested_subject)throw Object.assign(new Error('Retrieved evidence does not agree with the resolved analytical subject.'),{code:'EVIDENCE_SCOPE_MISMATCH',failed_stage:'evidence_validation'});
   if(evidence.metrics&&context.metrics.some(metric=>!evidence.metrics.includes(metric)))throw Object.assign(new Error('Retrieved evidence does not agree with the resolved analytical metrics.'),{code:'EVIDENCE_SCOPE_MISMATCH',failed_stage:'evidence_validation'});
   if(evidence.periods?.length&&context.start_date&&!evidence.periods.some(period=>period.start_date===context.start_date&&period.end_date===context.end_date))throw Object.assign(new Error('Retrieved evidence does not agree with the resolved analytical period.'),{code:'EVIDENCE_SCOPE_MISMATCH',failed_stage:'evidence_validation'});
+  if(evidence.kind==='governed_klaviyo_campaign_set'){assertCampaignSetEvidence(context,evidence);return true;}
   if(['device_conversion','klaviyo_email','meta_ads','instagram'].includes(context.requested_subject)){
     const expected=[{start_date:context.start_date,end_date:context.end_date},...(context.comparison_start_date?[{start_date:context.comparison_start_date,end_date:context.comparison_end_date}]:[])];
     const key=p=>`${p?.start_date}/${p?.end_date}`;

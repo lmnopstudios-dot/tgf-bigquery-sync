@@ -1,3 +1,4 @@
+import { campaignSetBusinessView } from './campaign-set-analysis.js';
 import { safeReadFailure, readFailureAction } from './read-failure.js';
 import { orderValueBusinessView } from './order-value-analysis.js';
 import { weekdayBusinessView } from './weekday-sales.js';
@@ -133,6 +134,7 @@ function businessView(e) {
       'Unresolved shipping destinations are excluded from named-country rankings.'];
   }
   if(e.kind==='shopify_operational_sales_baseline')return ['Available sales figures are shown by channel and period.',table(['Period','Channel','Metric','Value'],(e.metric_rows||[]).filter(r=>['net_sales','orders','net_items_sold','average_order_value'].includes(r.metric)).map(r=>[period(r.period),r.channel,({net_sales:'Net sales',orders:'Orders',net_items_sold:'Units sold',average_order_value:'Average order value'})[r.metric],r.unit==='money'?money(r.value,r.currency):number(r.value)])),...(e.sections?.some(failed)?['Some periods could not be retrieved; their figures are unavailable.']:[]),'Unverified coverage limits completeness. These are operational sales figures.'];
+  if(e.kind==='governed_klaviyo_campaign_set')return campaignSetBusinessView(e);
   if(e.kind==='governed_klaviyo_email'&&e.campaign)return [
     `Campaign: ${text(e.campaign.entity_name||e.campaign.entity_id)} (ID ${text(e.campaign.entity_id)}; ${text(e.campaign.account)}; ${text(e.campaign.channel)}).`,
     `Actual send: ${text(e.campaign.send_time||'unavailable; supplied date retained in request')}. Timezone: ${text(e.campaign.reporting_timezone)}. Supported reporting cutoff: ${text(e.campaign.reporting_cutoff)}.`,
@@ -205,7 +207,7 @@ export function presentAnalyticalAnswer(result, context={}) {
   const periods=Array.isArray(e.periods)?e.periods:e.periods?.current?[e.periods.current,e.periods.previous_period].filter(Boolean):e.requested_periods || e.sections?.map(s=>s.period).filter(Boolean) || [];
   const scope=context.start_date ? `${period(context)}${context.comparison_start_date?`; compared with ${period({start_date:context.comparison_start_date,end_date:context.comparison_end_date})}`:''}` : [...new Set(periods.map(period))].join('; ');
   const lines=view.filter(Boolean);
-  if(scope&&!lines.some(line=>/Dates:|Metrics:.*Dates:/.test(line))) lines.push(`Dates: ${scope}.`);
+  if(scope&&e.kind!=='governed_klaviyo_campaign_set'&&!lines.some(line=>/Dates:|Metrics:.*Dates:/.test(line))) lines.push(`Dates: ${scope}.`);
   if(e.failure&&!lines.includes(readFailureAction(e.failure)))lines.push(readFailureAction(e.failure));
   if(e.kind==='governed_device_conversion'?e.sections?.some(s=>s.period?.start_date<=e.cutoff_date&&s.period?.end_date>=e.cutoff_date):(context.current_day_included || e.partial_current_month))lines.push('Today’s data may still be incomplete.');
   const currencies=new Set([...(e.rows||[]).map(r=>r.currency),...(e.metric_rows||[]).map(r=>r.currency),...(e.sections||[]).flatMap(s=>rowsOf(s.result||s.value||s).map(r=>r.currency))].filter(Boolean));
