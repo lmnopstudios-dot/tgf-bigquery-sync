@@ -6,7 +6,7 @@ import { validateNumericOperation } from './numeric-distribution.js';
 import { consumePendingClarification, pendingClarificationKind, explicitKnowledgeSaveIntent } from './clarification-consumption.js';
 import { promotionIntent } from './promotion-context.js';
 import { dailySalesContextPatch, validatePromotionContext, requestedDimensions } from './analytical-refinement.js';
-import { campaignContextPatch, validateCampaignRequest } from './campaign-context.js';
+import { campaignContextPatch, validateCampaignRequest, sinceSend } from './campaign-context.js';
 import {currentStockScope} from './current-stock.js';
 import {socialContextPatch,validateSocialScope} from './social-context.js';
 import { classifyKlaviyoQuestion } from './klaviyo-email.js';
@@ -292,6 +292,6 @@ export function transitionAnalysisContext(existing,message,options={}){
     if(consumed.context.tool_route==='get_daily_sales_analysis'){if(/\b(?:by|rank by|sort by) orders\b/i.test(text))consumed.context.ranking_metric='average_orders_per_day';else if(/\b(?:by|rank by|sort by) (?:sales|revenue)\b/i.test(text))consumed.context.ranking_metric='average_sales_per_day';}
     const context=validateAnalysisContext(consumed.context),changed=ANALYSIS_CONTEXT_FIELDS.filter(k=>JSON.stringify(base[k])!==JSON.stringify(context[k]));return {context,transition:{continuation:true,set:changed,clear:[],retain:ANALYSIS_CONTEXT_FIELDS.filter(k=>!changed.includes(k)),missing_required_fields:context.unresolved_required_fields,ready_to_execute:!context.unresolved_required_fields.length,applies_to_message:true,clarification_consumed:consumed.kind}};}
   const result=transitionContext(existing,text,options),pending=pendingClarificationKind(base);
-  if(pending&&result.transition.continuation&&result.transition.applies_to_message&&result.context.requested_subject===base.requested_subject&&result.transition.set.length)result.transition.clarification_consumed=pending;
+  if(pending&&result.transition.continuation&&result.transition.applies_to_message&&result.context.requested_subject===base.requested_subject&&(result.transition.set.length||pending==='campaign'&&sinceSend(text)))result.transition.clarification_consumed=pending;
   return result;
 }

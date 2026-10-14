@@ -9,7 +9,7 @@ export function resolveAnalyticalPlan(c) {
   const report=c?.product_report, campaign=c?.campaign_request;
   return {
     version:1, subject:c?.requested_subject||null,
-    entities:{selected:campaign?.selected||c?.product_ref||null,candidates:campaign?.candidates||c?.pending_product_candidates||[],query:c?.entity_query||campaign?.name||null},
+    entities:{...(campaign?{scope:{entity_type:campaign.entity_type,source:campaign.source,rule:campaign.selector,count:campaign.count,offset:campaign.offset,ordering_basis:campaign.ordering_basis,account:campaign.account,channel:campaign.channel,selection_cutoff:campaign.cutoff,compare_previous:campaign.compare_previous},selected_entities:campaign.selected_entities,comparison_entities:campaign.comparison_entities,reporting_windows:campaign.reporting_windows}:{}),selected:campaign?.selected||c?.product_ref||null,candidates:campaign?.candidates||c?.pending_product_candidates||[],query:c?.entity_query||campaign?.name||null},
     population:{catalogue_filter:normalizeCatalogueFilter(report?.catalogue_filter),selection:report?.population||null,filters:c?.filters||[]},
     scope:{...(c?.tool_route==='get_order_value_analysis'?{shipping_destination:c?.geography||null}:{}),platform:c?.platform||null,source_store:c?.source_store||null,channel:c?.channel||null,channel_breakdown:Boolean(c?.channel_breakdown),currencies:c?.currencies||[],currency:report?.currency||null},
     metrics:report?.metrics||campaign?.requested_metrics||(c?.native_metrics?.length?c.native_metrics:c?.metrics)||[],
@@ -19,9 +19,9 @@ export function resolveAnalyticalPlan(c) {
     dates:{start_date:c?.start_date||null,end_date:c?.end_date||null,timezone:c?.time_zone||campaign?.selected?.reporting_timezone||report?.period?.timezone||'Europe/London',cutoff:c?.date_cutoff||null,partial_period:Boolean(c?.partial_period),current_day_included:Boolean(c?.current_day_included),basis:campaign?.date_mode||null},
     comparison:{type:c?.comparison_type||null,start_date:c?.comparison_start_date||null,end_date:c?.comparison_end_date||null,included_periods:c?.included_periods||[]},
     promotion:c?.promotion_context?{query:c.promotion_context.query,treatment:c.promotion_context.treatment,...(c.promotion_context.endpoint_choice?{endpoint_choice:c.promotion_context.endpoint_choice}:{}),...(c.promotion_context.endpoint_zone?{endpoint_zone:c.promotion_context.endpoint_zone}:{}),supplied_periods:c.promotion_context.supplied_periods||[]}:null,exclusions:c?.exclusions||[],
-    ranking:report?.sort||{metric:c?.ranking_metric||null,direction:c?.ranking_direction||'desc'},
+    ranking:report?.sort||{metric:campaign?.ranking_metric||c?.ranking_metric||null,direction:c?.ranking_direction||'desc'},
     presentation:{format:c?.output_preference||null,columns:report?.metrics||[],limit:c?.limit||null},
-    pending:{fields:report?.unresolved||c?.unresolved_required_fields||[],campaign:campaign?.selected?null:campaign?.selector||null}
+    pending:{fields:report?.unresolved||c?.unresolved_required_fields||[],campaign:campaign?.selected||campaign?.selected_entities?.length?null:campaign?.selector||null}
   };
 }
 export function stableAnalyticalJSON(value){
@@ -42,5 +42,12 @@ export function assertPlanAgreement(context,evidence) {
   // Legacy order-value envelopes carry country separately. Accept only that
   // validated destination when upgrading their saved plan; never infer a new one.
   if(context.tool_route==='get_order_value_analysis'&&!Object.hasOwn(recorded.scope||{},'shipping_destination')&&evidence.country===context.geography)recorded={...recorded,scope:{...recorded.scope,shipping_destination:evidence.country}};
+  // Upgrade only an original single-campaign envelope. Every legacy identity,
+  // date, metric and population field must still agree with validated context.
+  const campaign=context.campaign_request;
+  if(campaign&&campaign.count===1&&campaign.offset===0&&!campaign.selected_entities.length&&!campaign.compare_previous&&!Object.hasOwn(recorded.entities||{},'scope')){
+    const entities=resolveAnalyticalPlan(context).entities;
+    recorded={...recorded,entities:{...recorded.entities,scope:entities.scope,selected_entities:entities.selected_entities,comparison_entities:entities.comparison_entities,reporting_windows:entities.reporting_windows}};
+  }
   if(analyticalPlanKey(resolveAnalyticalPlan(context))!==analyticalPlanKey(recorded))throw Object.assign(new Error('Saved evidence differs from the validated analytical plan.'),{code:'EVIDENCE_SCOPE_MISMATCH',failed_stage:'evidence_validation'});
 }

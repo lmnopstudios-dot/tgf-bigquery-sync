@@ -1,3 +1,4 @@
+import { answerCampaignSet } from './campaign-set-analysis.js';
 import { isCampaignPurchaseMetric } from './campaign-context.js';
 import { resolveCampaignContext } from './campaign-resolution.js';
 import { evidenceNumber } from './numeric-evidence.js';
@@ -6,7 +7,9 @@ const esc=value=>String(value??'Unavailable').replaceAll('|','\\|').replaceAll('
 const display=value=>{const n=evidenceNumber(value);return n==null?'Unavailable':n.toLocaleString('en-GB',{maximumFractionDigits:2});};
 
 /** Governed attribution evidence, never an incremental-sales estimate. */
-export async function answerKlaviyoAnalysis({context,provider,onProviderStage}){
+export async function answerKlaviyoAnalysis({context,provider,onProviderStage,...options}){
+  if(context.campaign_request?.selection_blocked)return {answer:'Choose between 1 and 10 sent campaigns for this bounded analysis.',tools:[],clarification:true,analysis_context:context};
+  if(context.campaign_request&&(context.campaign_request.count>1||context.campaign_request.offset>0||context.campaign_request.selected_entities.length||context.campaign_request.compare_previous||context.output_preference==='xlsx'||context.campaign_request.ranking_metric||context.campaign_request.requested_metrics.includes('clicks')))return answerCampaignSet({context,provider,onProviderStage,...options});
   if(context.campaign_request){const resolved=await resolveCampaignContext(context,provider);if(!resolved.context)return resolved;context=resolved.context;}
   if(context.comparison_start_date){
     const periods=[{start_date:context.start_date,end_date:context.end_date},{start_date:context.comparison_start_date,end_date:context.comparison_end_date}],results=[];

@@ -4,6 +4,7 @@ export const explicitKnowledgeSaveIntent=text=>/^(?:please\s+)?(?:save|remember|
 export function pendingClarificationKind(c){
   if(c.promotion_context?.pending_dates||c.promotion_context?.pending_endpoint)return 'promotion';
   if(c.pending_product_candidates?.length&&!c.product_ref)return 'product_selection';
+  if(c.campaign_request?.selected_entities?.length)return c.campaign_request.candidates?.length?'campaign':null;
   if(c.campaign_request&&(!c.start_date||!c.end_date)||c.campaign_request?.candidates?.length||c.campaign_request?.metadata_attempted&&(!c.campaign_request.selected||!c.campaign_request.selected.send_time))return 'campaign';
   if(c.product_report?.unresolved?.length||c.product_report?.catalogue_filter&&c.product_report.catalogue_filter.source==null)return 'product_report';
   if(c.unresolved_required_fields?.length)return 'scope';
