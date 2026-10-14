@@ -64,6 +64,7 @@ function mentionedMetrics(text){
   for(const {name,alias} of aliases){const re=new RegExp(`\\b${escape(alias)}\\b`,'g');const match=re.exec(rest);if(match){found.push({name,index:match.index});rest=rest.replace(re,value=>' '.repeat(value.length));}}
   return [...new Set(found.sort((a,b)=>a.index-b.index).map(x=>x.name))];
 }
+const requestedProductCategory=text=>text.match(/\b(pendants?|rings?|earrings?|ready[ -]to[ -]ship)\b/i);
 export function isProductReportRequest(text,previous=null){
   text=String(text||'');
   if(previous?.catalogue_choices?.length&&/^(?:(?:use|choose|pick|select)\s+)?(?:(?:option|choice|number)\s+)?#?\d+\s*[.!]?$/i.test(text))return true;
@@ -72,6 +73,8 @@ export function isProductReportRequest(text,previous=null){
   if(!/\b(?:export|download)\b/i.test(text)&&/\b(?:customers?|before|after|next)\b|\b(?:first|second|third|nth)\s+(?:purchase|order)\b/i.test(text))return false;
   if(previous&&!/\b(?:klaviyo|campaigns?|flows?|customers?|conversion|countries|country)\b/i.test(text)&&((mentionedMetrics(text).length&&/\b(?:add|also|calculate|include|sort|rank|only|use|units|sales value)\b/i.test(text))||(/^(?:what about|just|only|for|in|this year|last year|change (?:the )?dates)\b/i.test(text)&&naturalReportPeriod(text,Date.now()))||/^(?:top \d+|all (?:published (?:Shopify )?)?products|only product ids?|online|xlsx|GBP|USD|EUR|JPY)\b/i.test(text)))return true;
   if(!/\b(?:export|download|report)\b/i.test(text)&&/\b(?:countries|country|locations)\b/i.test(text))return false;
+  const category=requestedProductCategory(text);
+  if(category&&/\b(?:show|list|rank)\s+(?:all\s+)?(?:the\s+)?(?:Shopify\s+)?$/i.test(text.slice(0,category.index))&&mentionedMetrics(text).length&&!/\b(?:inventory|stock|conversion|customers?)\b/i.test(text))return true;
   return /\bproducts?\b/i.test(text)&&/\b(?:export|download|show|report|list|ranked|rank|top[ -]selling|top \d+)\b/i.test(text)&&! /\b(?:inventory|stock|collections?)\b/i.test(text)||/\b(?:photography|content)\b/i.test(text)&&/\bpriority list\b/i.test(text);
 }
 export const hasExplicitMetricRanking=text=>/\b(?:sort(?:ed)? by|rank(?:ed)? by|in order of)\b/i.test(text);
@@ -91,7 +94,7 @@ export function resolveProductReportConfig(message,{previous=null,period=null,de
   if(categoryTerms.length>1)config.unsupported_requirements.push('multiple categories: please choose one native classification');
   const selection=text.match(/\b(?:use|only)\s+(collection|product type|tag)\s+["']?(.+?)["']?[.!]?$/i);
   const namedSource=text.match(/\b(?:products?\s+(?:in|from)\s+(?:the\s+)?)?(collection|product type|tag(?:ged)?)\s+["']?(.+?)(?=\s+(?:by|with|this year|last year)\b|["'.!?]|$)/i);
-  const category=text.match(/\b(pendants?|rings?|earrings?|ready[ -]to[ -]ship)\b/i);
+  const category=requestedProductCategory(text);
   // Capture an unrecognized export category too, so it cannot fall through to all products.
   const unknown=text.match(/\b(?:export|download)\s+(?:all\s+)?(?:Shopify\s+)?(.+?)(?:\s+products?\b|\s+by\b|\s+with\b|\s+this year\b|[.!?]|$)/i)?.[1];
   if(selection)config.catalogue_filter={term:selection[2].trim(),source:selection[1].toLowerCase().replace(' ','_')};
@@ -106,9 +109,7 @@ export function resolveProductReportConfig(message,{previous=null,period=null,de
   if(selection&&!chosen&&previous?.catalogue_filter?.collection_id&&normalizeCatalogueFilter(previous.catalogue_filter).term===normalizeCatalogueFilter(config.catalogue_filter).term&&config.catalogue_filter.source===previous.catalogue_filter.source)config.catalogue_filter.collection_id=previous.catalogue_filter.collection_id;
   if(chosen)config.catalogue_filter={term:chosen.value,source:chosen.source,...(chosen.collection_id?{collection_id:chosen.collection_id}:{}),...(previous.catalogue_filter?.ready_to_ship?{ready_to_ship:true}:{})};
   if(chosen||selection||namedSource||!continuation)delete config.catalogue_choices;
-  const rolling=text.match(/\blast\s+(\d{1,4})\s+(?:completed\s+)?days?\b/i);
   period??=naturalReportPeriod(text,now);
-  if(rolling){const end=new Date(`${defaultPeriod.end_date}T00:00:00Z`),start=new Date(+end-(Number(rolling[1])-1)*86400000);period={start_date:start.toISOString().slice(0,10),end_date:defaultPeriod.end_date};}
   if(period)config.period_defaulted=false;
   if(period)config.period={start_date:period.start_date,end_date:period.end_date,timezone:'Europe/London'};
   const requested=mentionedMetrics(text),sortText=text.match(/\b(?:(?:sort(?:ed)?|rank(?:ed)?)\s+(?:products?\s+)?by|in order of)\s+(.+?)(?:[.;]|$)/i)?.[1];

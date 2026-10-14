@@ -20,7 +20,7 @@ test('monthly customer baseline expands all nine months in fresh, conversion, an
 test('metric, grain and GBP default survive date clarification and execute when complete',()=>{
   let result=apply(emptyAnalysisContext(),'monthly refunds');
   assert.deepEqual(result.context.metrics,['refunds']);assert.equal(result.context.grain,'month');assert.deepEqual(result.context.currencies,['GBP']);
-  assert.equal(clarificationFor(result.context),'What date range would you like? I’ll use GBP unless you specify another currency.');
+  assert.equal(clarificationFor(result.context),'What date range would you like? Start and end dates are required to select the sales reporting period. I’ll use GBP unless you specify another currency.');
   result=apply(result.context,'Jan 2023 to Sep 2026');
   assert.deepEqual(result.context.metrics,['refunds']);assert.equal(result.context.grain,'month');assert.deepEqual(result.context.currencies,['GBP']);
   assert.equal(result.context.start_date,'2023-01-01');assert.equal(result.context.end_date,'2026-09-22');assert.equal(result.context.requested_end_period,'2026-09');assert.equal(result.context.partial_period,true);assert.equal(result.transition.ready_to_execute,true);
@@ -72,7 +72,7 @@ test('timeless definition save and stock-policy hypothetical require neither dat
 test('genuinely date-dependent sales analysis still asks for dates and defaults GBP',()=>{
   const result=apply(emptyAnalysisContext(),'How are product sales performing?');
   assert.deepEqual(result.context.metrics,['sales']);assert.deepEqual(result.context.currencies,['GBP']);
-  assert.equal(clarificationFor(result.context),'What date range would you like? I’ll use GBP unless you specify another currency.');
+  assert.equal(clarificationFor(result.context),'What date range would you like? Start and end dates are required to select the sales reporting period. I’ll use GBP unless you specify another currency.');
 });
 
 test('stock-clearance meaning survives alternate evidence wording and a separate follow-up',()=>{

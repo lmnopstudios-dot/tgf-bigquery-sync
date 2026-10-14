@@ -118,7 +118,7 @@ export function campaignContextPatch(base, text, now) {
   // A new analytical subject must bypass pending clarification handling.
   if (
     !fresh &&
-    /\b(?:products?|conversion rates?|mobile|desktop|stock|inventory|flows?|customers?|shipping|sales by country|Black Friday)\b/i.test(
+    /\b(?:sales|orders?|countries|abandoned?[- ]checkouts?|products?|conversion rates?|mobile|desktop|stock|inventory|flows?|customers?|shipping|sales by country|Black Friday)\b/i.test(
       text,
     )
   )

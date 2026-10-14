@@ -761,3 +761,13 @@ test('original single-campaign persisted plans recover without relaxing identity
   assert.doesNotMatch(restored.answer, /What date range/);
   assert.equal(restored.evidence.campaign.entity_id, 'c1');
 });
+
+// Revenue is a campaign measure, not an independent subject-switch signal.
+test('attributed revenue ranking remains a compatible campaign refinement',async()=>{
+  const f=fixture(),initial=await send(f,null);
+  const ranked=await send(f,initial.context,'Which did best by attributed revenue?',{recent:initial});
+  assert.equal(ranked.context.requested_subject,'klaviyo_email');
+  assert.deepEqual(ranked.evidence.campaigns.map(c=>c.entity_id),initial.evidence.campaigns.map(c=>c.entity_id));
+  assert.match(ranked.answer,/credited attributed revenue/);
+  assert.equal(f.calls.length,3);
+});

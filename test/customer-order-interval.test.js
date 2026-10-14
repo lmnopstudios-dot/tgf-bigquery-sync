@@ -40,7 +40,7 @@ test('service is bounded, aggregate-only, and explains edge cases',async()=>{
 
 test('exact two-turn exchange resolves rolling dates once without currency',async t=>{
   const oracle=await conversation();t.after(oracle.close);
-  const first=await oracle.send(QUESTION);assert.equal(first.answer,'What date range would you like?');assert.doesNotMatch(first.answer,/GBP|currency/i);
+  const first=await oracle.send(QUESTION);assert.match(first.answer,/What date range would you like\? Start and end dates are required/);assert.doesNotMatch(first.answer,/GBP|currency/i);
   const second=await oracle.send('last 3 years');assert.doesNotMatch(second.answer,/What date range|GBP|currency/i);assert.match(second.answer,/12 customers and 31 order pairs/);
   assert.deepEqual(oracle.calls.map(x=>x.params),[{start_date:'2023-09-24',end_date:'2026-09-24',matrixify_app_id:'gid://shopify/App/1758145'}]);
 });

@@ -107,7 +107,9 @@
     "schedule:meta": "node meta/cli.js meta_ads --scheduled --execute --max-windows 100",
     "schedule:instagram": "node meta/cli.js instagram --scheduled --execute",
     "probe:tiktok": "node tiktok/cli.js --probe",
-    "preserve:tiktok": "node tiktok/cli.js"
+    "preserve:tiktok": "node tiktok/cli.js",
+    "test:oracle:acceptance": "node diagnostics/oracle-acceptance-gate.js",
+    "test:oracle:browser": "node diagnostics/oracle-acceptance-browser.mjs"
   },
   "engines": {
     "node": ">=20"

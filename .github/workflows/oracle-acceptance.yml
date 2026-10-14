@@ -1,0 +1,28 @@
+name: Oracle acceptance gate
+on:
+  pull_request:
+  push:
+    branches: [main]
+jobs:
+  oracle-acceptance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm install --ignore-scripts --no-package-lock
+      - run: npm run test:oracle:acceptance
+      - run: npm install --prefix "$RUNNER_TEMP/oracle-browser" --no-save --ignore-scripts playwright@1.56.1
+      - run: '"$RUNNER_TEMP/oracle-browser/node_modules/.bin/playwright" install --with-deps chromium'
+      - run: npm run test:oracle:browser
+        env:
+          ORACLE_BROWSER_DRIVER: ${{ runner.temp }}/oracle-browser/node_modules/playwright-core/index.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: oracle-acceptance-evidence
+          path: |
+            /tmp/oracle-acceptance-gate.tap
+            /tmp/oracle-acceptance-browser/
