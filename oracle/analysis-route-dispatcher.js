@@ -1,3 +1,4 @@
+import { resolveAnalysisDecision, reportAnalysisDecision, decisionResult } from './analysis-decision.js';
 import { assertCampaignSetEvidence } from './campaign-set-analysis.js';
 import { messageIntent, nonAnalyticalResult } from './message-intent.js';
 import { assertOrderValueEvidence } from './order-value-analysis.js';
@@ -5,12 +6,11 @@ import { requestedAnalyticalOperations, unsupportedOperationResult } from './req
 import { deliverOracleResult } from './result-delivery.js';
 import { assertWeekdayEvidence } from './weekday-sales.js';
 import { resolveAnalyticalPlan, analyticalPlanKey, assertPlanAgreement } from './analytical-plan.js';
-import { resolveExecutionPlan } from './analytical-capabilities.js';
 import { catalogueFilterKey, scopeMismatch, assertCatalogueSelection } from './product-catalogue-filter.js';
 import { presentAnalyticalAnswer } from './answer-presentation.js';
 import { withOracleCharts } from './evidence-charts.js';
 import { productReportMismatchField, resolveProductReportConfig } from './product-report-config.js';
-import { ANALYSIS_TOOL_ROUTES, validateAnalysisContext, clarificationFor, transitionAnalysisContext } from './analysis-context.js';
+import { ANALYSIS_TOOL_ROUTES, validateAnalysisContext, transitionAnalysisContext } from './analysis-context.js';
 
 const baselineThenAgent = async ({message,baselineOverview,baselineOptions,chat,chatOptions}) =>
   await baselineOverview?.(message,baselineOptions) || await chat(chatOptions?.suppliedMessage||message,chatOptions);
@@ -112,17 +112,15 @@ export async function dispatchAnalysisRequest({message,analysisContext,baselineO
   const context=analysisContext==null?null:validateAnalysisContext(analysisContext);
   const requested=requestedAnalyticalOperations(message);
   if(requested&&context?.tool_route!=='get_order_value_analysis'){baselineOptions?.onProviderStage?.({stage:'capability_selection',status:'unsupported',operation_count:requested.operations.length});return deliverOracleResult(await unsupportedOperationResult(requested,context||transitionAnalysisContext(null,message).context,baselineOptions),context);}
-  const execution=resolveExecutionPlan(context,ANALYSIS_ROUTE_DISPATCHERS);
-  if(execution.limitation){
-    baselineOptions?.onProviderStage?.({stage:'capability_selection',status:'blocked',selected_route:context?.tool_route||'general_agent',provider_calls:0,component_count:execution.components.length});
-    return deliverOracleResult({answer:execution.limitation,analysis_unavailable:true,tools:[],capability_selection:{components:execution.components,retrieval:'not_attempted'}},context);
-  }
-  const clarification=context?clarificationFor(context):null;if(clarification)return {answer:clarification,tools:[]};
+  const decision=resolveAnalysisDecision(context,ANALYSIS_ROUTE_DISPATCHERS),execution=decision.execution;
+  reportAnalysisDecision(decision,baselineOptions?.onProviderStage);
+  if(decision.outcome!=='execution')return deliverOracleResult(decisionResult(decision),context);
   baselineOptions?.onProviderStage?.({stage:'capability_selection',selected_route:context?.tool_route||'general_agent',registered:Boolean(execution.capability),delivery:execution.delivery||'chat',status:'selected'});
   const binding=execution.execute||baselineThenAgent;
   let result=await binding({message,baselineOverview,baselineOptions:{...baselineOptions,analysisContext:analysisContext??context},chat,chatOptions});
   try{assertResolvedAnalysisContext(context,result?.analysis_context);assertEvidenceAgreement(result?.analysis_context||context,result?.evidence);baselineOptions?.onProviderStage?.({stage:'evidence_validation',status:'success'});}catch(error){baselineOptions?.onProviderStage?.({stage:'evidence_validation',status:'failed',code:'EVIDENCE_SCOPE_MISMATCH',scope_field:error.scope_field||'analytical_scope'});throw error;}
   if(result?.evidence&&context?.requested_subject&&!result.evidence.report_config)result={...result,evidence:{...result.evidence,analytical_plan:resolveAnalyticalPlan(result.analysis_context||context)}};
+  if(result&&!context?.product_report)result={...result,analysis_context:result.analysis_context||context};
   await baselineOptions?.onEvidence?.(result);
   try{return deliverOracleResult(presentAnalyticalAnswer(withOracleCharts(disclosePeriod(result,result?.analysis_context||context)),result?.analysis_context||context),result?.analysis_context||context);}catch{return deliverOracleResult({...result,answer:null,presentation:null,partial:true},result?.analysis_context||context);}
 }
@@ -138,13 +136,9 @@ export async function executeGovernedAgentAnalysis({message,analysisContext,base
   baselineOptions.onProviderStage?.({stage:'scope_resolution',resolved_subject:resolved.context.requested_subject,selected_route:resolved.context.tool_route,start_date:resolved.context.start_date,end_date:resolved.context.end_date});
   const requested=requestedAnalyticalOperations(message);
   if(requested&&resolved.context.tool_route!=='get_order_value_analysis')return deliverOracleResult(await unsupportedOperationResult(requested,resolved.context,baselineOptions),resolved.context);
-  const execution=resolveExecutionPlan(resolved.context,ANALYSIS_ROUTE_DISPATCHERS);
-  if(execution.limitation){
-    baselineOptions.onProviderStage?.({stage:'capability_selection',status:'blocked',selected_route:resolved.context.tool_route||'general_agent',provider_calls:0,component_count:execution.components.length});
-    return deliverOracleResult({answer:execution.limitation,analysis_unavailable:true,tools:[],capability_selection:{components:execution.components,retrieval:'not_attempted'}},resolved.context);
-  }
-  const clarification=clarificationFor(resolved.context);
-  if(clarification)return {answer:clarification,tools:[]};
+  const decision=resolveAnalysisDecision(resolved.context,ANALYSIS_ROUTE_DISPATCHERS),execution=decision.execution;
+  reportAnalysisDecision(decision,baselineOptions.onProviderStage);
+  if(decision.outcome!=='execution')return deliverOracleResult(decisionResult(decision),resolved.context);
   baselineOptions.onProviderStage?.({stage:'capability_selection',selected_route:resolved.context.tool_route||'general_agent',registered:Boolean(execution.capability),delivery:execution.delivery||'chat',status:'selected'});
   let result=await baselineOverview(message,{...baselineOptions,analysisContext:resolved.context});
   if(!result){
@@ -154,6 +148,7 @@ export async function executeGovernedAgentAnalysis({message,analysisContext,base
   assertResolvedAnalysisContext(resolved.context,result.analysis_context);
   assertEvidenceAgreement(result.analysis_context||resolved.context,result.evidence);
   if(result.evidence&&!result.evidence.report_config)result={...result,evidence:{...result.evidence,analytical_plan:resolveAnalyticalPlan(result.analysis_context||resolved.context)}};
+  if(!resolved.context.product_report)result={...result,analysis_context:result.analysis_context||resolved.context};
   await baselineOptions.onEvidence?.(result);
   try{return deliverOracleResult(presentAnalyticalAnswer(withOracleCharts(disclosePeriod(result,result.analysis_context||resolved.context)),result.analysis_context||resolved.context),result.analysis_context||resolved.context,{artifactBase:baselineOptions.downloadBase||'/api/oracle/exports'});}catch{return deliverOracleResult({...result,answer:null,presentation:null,partial:true},result.analysis_context||resolved.context,{artifactBase:baselineOptions.downloadBase||'/api/oracle/exports'});}
 }

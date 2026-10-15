@@ -12,9 +12,13 @@ export const ANALYTICAL_CAPABILITIES=Object.freeze({
   export_product_priorities:{preferred_transport:'job',metrics:PRODUCT_REPORT_CAPABILITIES,dimensions:['product'],filters:['catalogue_filter','product_ids','published_online'],grain:'period',comparisons:[],identity:'Shopify root product ID; unique canonical URL for traffic/search',delivery:['table','chart','xlsx'],provenance:'Complete paginated native catalogue before enrichment'},
   get_klaviyo_email_performance:{entity_selection:{type:'campaign',rules:['latest','previous','last_n','named'],ordering:'actual send timestamp',source:'governed entity_metadata',maximum_count:10},metrics:['purchases','revenue','email_attribution','delivered','click_rate','clicks'],dimensions:['campaign','flow','conversion_metric','currency'],filters:['campaign_id','campaign_account','campaign_channel','report_kind'],grain:'calendar_month',comparisons:['calendar_periods','previous_entities'],identity:'governed account/channel/entity',delivery:['table','xlsx'],provenance:'Persisted message reports, entity metadata and window coverage'}
 });
+// Audited absence of a governed reader is a capability boundary, not missing dates.
+export const UNAVAILABLE_ANALYTICAL_CAPABILITIES=Object.freeze({
+  abandoned_checkouts:'Abandoned-checkout performance is unavailable in the current governed bindings. Checkout identities, checkout counts and values, abandonment status, and linked recovery purchases/revenue with definitions and coverage are missing. Abandoned carts and abandoned checkouts are different populations. Completed orders cannot establish either population or recovery rate. No collection or backfill was attempted and no customer details were retrieved.'
+});
 export function resolveExecutionPlan(context,bindings) {
   const plan=resolveAnalyticalPlan(context),capability=ANALYTICAL_CAPABILITIES[context?.tool_route]||null;
-  let limitation=null;
+  let limitation=UNAVAILABLE_ANALYTICAL_CAPABILITIES[context?.requested_subject]||null;
   if(context?.tool_route==='get_order_value_analysis'){
     // Unspecified scope permits the disclosed Shopify online subset. Explicit
     // source/channel constraints still block incompatible population reads.

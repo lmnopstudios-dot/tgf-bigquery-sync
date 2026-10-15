@@ -1,0 +1,374 @@
+{
+  "version": 1,
+  "runtime": "2026-10-14T12:00:00Z",
+  "time_zone": "Europe/London",
+  "conversations": [
+    {
+      "id": "sales-completed",
+      "turns": [
+        {
+          "question": "How were online sales over the last 30 completed days?",
+          "subject": "sales",
+          "dates": [
+            "2026-09-14",
+            "2026-10-13"
+          ],
+          "provider": "sales",
+          "check": "sales"
+        }
+      ]
+    },
+    {
+      "id": "sales-rolling",
+      "turns": [
+        {
+          "question": "Show online sales for the past 30 days.",
+          "subject": "sales",
+          "dates": [
+            "2026-09-15",
+            "2026-10-14"
+          ],
+          "provider": "sales",
+          "check": "sales"
+        }
+      ]
+    },
+    {
+      "id": "pending-dates",
+      "turns": [
+        {
+          "question": "Show online sales.",
+          "subject": "sales",
+          "outcome": "clarification",
+          "fields": [
+            "start_date",
+            "end_date"
+          ]
+        },
+        {
+          "question": "Last month.",
+          "subject": "sales",
+          "dates": [
+            "2026-09-01",
+            "2026-09-30"
+          ],
+          "provider": "sales",
+          "check": "sales"
+        },
+        {
+          "question": "This month instead.",
+          "subject": "sales",
+          "dates": [
+            "2026-10-01",
+            "2026-10-14"
+          ],
+          "provider": "sales",
+          "check": "sales"
+        }
+      ]
+    },
+    {
+      "id": "country-switch",
+      "turns": [
+        {
+          "question": "How were online sales last month?",
+          "subject": "sales",
+          "dates": [
+            "2026-09-01",
+            "2026-09-30"
+          ],
+          "provider": "sales",
+          "check": "sales"
+        },
+        {
+          "question": "Which countries bought the most this year?",
+          "subject": "shipping_countries",
+          "dates": [
+            "2026-01-01",
+            "2026-10-14"
+          ],
+          "provider": "countries",
+          "check": "countries"
+        }
+      ]
+    },
+    {
+      "id": "customers-calendar",
+      "turns": [
+        {
+          "question": "Compare Shopify customers this month with last month.",
+          "subject": "customers",
+          "dates": [
+            "2026-10-01",
+            "2026-10-14"
+          ],
+          "provider": "customers",
+          "check": "customers",
+          "comparison_dates": [
+            "2026-09-01",
+            "2026-09-30"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "campaign-pending-subject-switch",
+      "turns": [
+        {
+          "question": "How did the latest email perform?",
+          "subject": "klaviyo_email",
+          "provider": "campaigns",
+          "check": "campaign-missing"
+        },
+        {
+          "question": "Show online sales last month.",
+          "subject": "sales",
+          "dates": [
+            "2026-09-01",
+            "2026-09-30"
+          ],
+          "provider": "sales",
+          "check": "sales"
+        }
+      ]
+    },
+    {
+      "id": "checkout-boundary",
+      "turns": [
+        {
+          "question": "Show UK online abandoned-checkout performance for the last 30 completed days. First establish whether governed checkout evidence is available. If supported, show checkout counts, abandoned value, recovery rate and recovered revenue, with definitions and coverage. Distinguish abandoned checkouts from abandoned carts; don’t infer abandonment from orders or expose customer details. No collection or backfill.",
+          "subject": "abandoned_checkouts",
+          "dates": [
+            "2026-09-14",
+            "2026-10-13"
+          ],
+          "outcome": "limitation",
+          "check": "checkout"
+        },
+        {
+          "question": "How were online sales last month?",
+          "subject": "sales",
+          "dates": [
+            "2026-09-01",
+            "2026-09-30"
+          ],
+          "provider": "sales",
+          "check": "sales"
+        }
+      ]
+    },
+    {
+      "id": "checkout-without-dates",
+      "turns": [
+        {
+          "question": "Can you report cart abandonment and recovered revenue?",
+          "subject": "abandoned_checkouts",
+          "outcome": "limitation",
+          "check": "checkout"
+        }
+      ]
+    },
+    {
+      "id": "partial-provider",
+      "fail_start": "2026-10-01",
+      "turns": [
+        {
+          "question": "Show online sales for the last 30 completed days.",
+          "subject": "sales",
+          "dates": [
+            "2026-09-14",
+            "2026-10-13"
+          ],
+          "provider": "sales",
+          "check": "partial-sales"
+        }
+      ]
+    }
+  ],
+  "regression_suites": [
+    {
+      "file": "test/oracle-entity-relative-campaigns.test.js",
+      "covers": [
+        "last 3 campaigns",
+        "latest sent",
+        "previous three",
+        "since it was sent",
+        "named campaigns",
+        "account/channel ambiguity",
+        "draft/scheduled/flow exclusion",
+        "partial failure",
+        "production factory arguments",
+        "interactive/durable recovery",
+        "export delivery"
+      ],
+      "representative_conversations": [
+        [
+          "How did the last 3 Klaviyo campaigns go?",
+          "What about the previous three?",
+          "Since it was sent."
+        ]
+      ]
+    },
+    {
+      "file": "test/oracle-relative-date-continuity.test.js",
+      "covers": [
+        "products",
+        "sales",
+        "conversion",
+        "campaigns",
+        "targeted date replies",
+        "unrelated context",
+        "interactive/durable"
+      ]
+    },
+    {
+      "file": "test/oracle-shared-analytical-plan.test.js",
+      "covers": [
+        "native daily provider",
+        "weekday calculations",
+        "promotion exclusions",
+        "product exports",
+        "subject switches",
+        "capability rejection",
+        "HTTP",
+        "durable recovery"
+      ]
+    },
+    {
+      "file": "test/oracle-clarification-consumption.test.js",
+      "covers": [
+        "valid/invalid replies",
+        "promotion endpoint/exclusion",
+        "product selection",
+        "campaign dates",
+        "knowledge boundaries",
+        "provider counts",
+        "charts/XLSX",
+        "HTTP",
+        "durable"
+      ]
+    },
+    {
+      "file": "test/oracle-product-category-export.test.js",
+      "covers": [
+        "filtered export",
+        "category selection",
+        "provider populations",
+        "workbook",
+        "HTTP",
+        "durable recovery"
+      ],
+      "representative_conversations": [
+        [
+          "Can I get an export of all the pendants products from Shopify?",
+          "Units sold.",
+          "Sort by landing sessions instead.",
+          "Include organic clicks too."
+        ],
+        [
+          "Show pendants by units sold over the last 30 completed days.",
+          "Show pendants by units sold for the past 30 days."
+        ]
+      ]
+    },
+    {
+      "file": "test/oracle-multipart-scenarios.test.js",
+      "covers": [
+        "shipping scenarios",
+        "exclusions",
+        "missing evidence",
+        "partial results",
+        "calculations",
+        "durable delivery"
+      ],
+      "representative_conversations": [
+        [
+          "Assess UK online GBP free shipping for September 2026. Compare £250 with £200 and £225, assuming purchasing behaviour stays unchanged. Show recorded shipping charges and the separate hypothetical £8 calculation."
+        ]
+      ]
+    },
+    {
+      "file": "test/oracle-analysis-route-dispatcher.test.js",
+      "covers": [
+        "all registered route bindings",
+        "provider failures",
+        "evidence mismatch"
+      ]
+    },
+    {
+      "file": "test/oracle-conversation-continuity.test.js",
+      "covers": [
+        "failed intervening requests",
+        "subject switches",
+        "event comparisons",
+        "model fallback"
+      ],
+      "representative_conversations": [
+        [
+          "How are mobile and desktop conversion rates this year?",
+          "What changed between August and September?",
+          "how have klaviyo campaigns effected slaes performance this year"
+        ]
+      ]
+    },
+    {
+      "file": "test/historical-event-comparison.test.js",
+      "covers": [
+        "governed Black Friday",
+        "missing event evidence",
+        "event calculations"
+      ],
+      "representative_conversations": [
+        [
+          "Compare the last 3 Black Friday sales"
+        ]
+      ]
+    },
+    {
+      "file": "test/oracle-message-intent.test.js",
+      "covers": [
+        "documents",
+        "editing",
+        "knowledge-save",
+        "context boundary"
+      ]
+    },
+    {
+      "file": "test/oracle-result-delivery.test.js",
+      "covers": [
+        "blank completion",
+        "partial evidence",
+        "owned polling",
+        "recovered jobs",
+        "visible delivery contract"
+      ]
+    },
+    {
+      "file": "test/oracle-baseline-overview.test.js",
+      "covers": [
+        "legacy baseline composition",
+        "Woo-to-focused subject switches",
+        "provider metric semantics",
+        "explicit comparisons"
+      ]
+    },
+    {
+      "file": "test/oracle-product-priority-production.test.js",
+      "covers": [
+        "production export factory",
+        "artifact identity",
+        "idempotent configuration",
+        "provider calls",
+        "interactive/durable recovery"
+      ]
+    },
+    {
+      "file": "test/customer-order-interval.test.js",
+      "covers": [
+        "targeted date clarification",
+        "date reply execution",
+        "provider-specific interval semantics"
+      ]
+    }
+  ]
+}

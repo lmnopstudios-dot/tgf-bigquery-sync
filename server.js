@@ -7920,8 +7920,8 @@ app.post(
           error: 'message is required'
         });
       }
-      const suppliedContext=req.body?.analysis_context;
-      const baselineAnswer=await executeGovernedAgentAnalysis({message,analysisContext:suppliedContext,scopeResolved:req.body?.scope_resolved===true,baselineOverview,baselineOptions:{operationKnowledgeService:knowledgeService,exportOwner:exportOwnerKey('direct-agent',SYNC_SECRET),requestId:id,downloadBase:'/agent/exports',deadlineAt:deadlineAt-12_000,signal:cancellation.signal,onProviderStage:event=>console.info('Oracle direct provider stage:',{request_id:id,deployed_revision:process.env.RENDER_GIT_COMMIT||'unavailable',...event})}});
+      const suppliedContext=req.body?.scope_resolved===true?req.body?.analysis_context:transitionAnalysisContext(req.body?.analysis_context,message).context;
+      const baselineAnswer=await executeGovernedAgentAnalysis({message,analysisContext:suppliedContext,scopeResolved:true,baselineOverview,baselineOptions:{operationKnowledgeService:knowledgeService,exportOwner:exportOwnerKey('direct-agent',SYNC_SECRET),requestId:id,downloadBase:'/agent/exports',deadlineAt:deadlineAt-12_000,signal:cancellation.signal,onProviderStage:event=>console.info('Oracle direct provider stage:',{request_id:id,deployed_revision:process.env.RENDER_GIT_COMMIT||'unavailable',...event})}});
       if(baselineAnswer)return res.json({success:true,...baselineAnswer,answer:baselineAnswer.answer,presentation:baselineAnswer.presentation||null,evidence:baselineAnswer.evidence,tools_used:baselineAnswer.tools,inline_chart:baselineAnswer.inline_chart||null,charts:baselineAnswer.charts||[],artifact:baselineAnswer.artifact||null,request_id:id});
 
       const suppliedIntent=messageIntent(message);
@@ -8105,7 +8105,7 @@ Important rules:
 - Do not fabricate data for a failed tool. If a Shopify tool is throttled, describe that source as temporarily unavailable rather than as missing data.
 
         `,
-        input: req.body?.scope_resolved===true?governedModelInput(message,suppliedContext):message,
+        input: governedModelInput(message,suppliedContext),
         tools
       }, { timeout: Math.max(1, deadlineAt - Date.now() - callBudget.synthesisReserveMs), signal:cancellation.signal });
 
@@ -8154,7 +8154,7 @@ Important rules:
             if (queryCharge > remainingQueryBytes) throw new Error('Oracle request-wide BigQuery budget exceeded');
             remainingQueryBytes -= queryCharge;
             const args = item.name==='analyze_customer_journey'
-              ? applyJourneyAnalysisContext(parsedArgs,req.body?.analysis_context)
+              ? applyJourneyAnalysisContext(parsedArgs,suppliedContext)
               : applyOrderDateScope(message, item.name, parsedArgs);
 
             const orderCall = await executeOrderToolCall(

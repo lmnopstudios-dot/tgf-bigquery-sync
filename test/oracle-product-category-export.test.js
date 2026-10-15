@@ -119,3 +119,18 @@ test('recovery rejects corrupted bytes, wrong workbook population and missing co
   await assert.rejects(assertProductArtifact({...saved,xlsx_base64:buffer.toString('base64'),sha256:createHash('sha256').update(buffer).digest('hex')}),e=>e.scope_field==='artifact.product_ids');
   const rows=saved.envelope.rows.map((p,i)=>i? p:{...p,collections:[]});await assert.rejects(assertProductArtifact({...saved,envelope:{...saved.envelope,rows}}),e=>e.code==='EVIDENCE_SCOPE_MISMATCH');
 });
+
+// The category report uses the shared calendar, not a local rolling-date parser.
+for(const durable of [false,true])test(`shared category completed/rolling dates reach ${durable?'durable':'interactive'} providers and workbook`,async t=>{
+  const f=await fixture(durable);t.after(()=>f.server.close());
+  for(const [question,start,end] of [
+    ['Show pendants by units sold over the last 30 completed days.','2026-09-09','2026-10-08'],
+    ['Show pendants by units sold for the past 30 days.','2026-09-10','2026-10-09']
+  ]){
+    const offset=f.providerCalls.length,r=await send(f,durable,question);
+    assert.doesNotMatch(r.answer,/What date range/);await assertRows(f,r,['1','5']);
+    assert.deepEqual([r.evidence.report_config.period.start_date,r.evidence.report_config.period.end_date],[start,end]);
+    assert.deepEqual([f.providerCalls[offset].dates.start_date,f.providerCalls[offset].dates.end_date],[start,end]);
+    assert.deepEqual(f.providerCalls[offset].args.productIds,['1','5']);
+  }
+});
