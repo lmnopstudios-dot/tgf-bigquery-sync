@@ -124,3 +124,17 @@ test('shared grouping refinements across governed subjects change only grain',()
   }
   const daily=context('Daily UK visitor conversion versus rest of world last month');assert.equal(daily.grain,'day');assert.equal(resolveAnalysisDecision(daily).outcome,'limitation');
 });
+for(const mode of ['direct','interactive','durable'])test(`oversized monthly scope followed by dates only through ${mode}`,async t=>{
+  const f=fixture(),question='Monthly UK visitor conversion versus rest of world for the last 8 years';
+  let first,second;
+  if(mode==='direct'){
+    first=await executeGovernedAgentAnalysis({message:question,baselineOverview:f.baseline,now:NOW});
+    second=await executeGovernedAgentAnalysis({message:'Okay for the last 366 days then.',analysisContext:first.analysis_context,baselineOverview:f.baseline,now:NOW});
+  }else{
+    const h=await acceptanceServer(f,{durable:mode==='durable',now:NOW});t.after(h.close);
+    first=await h.submit(question);assert.equal(f.calls.length,0);
+    second=await h.submit('Okay for the last 366 days then.');
+  }
+  assert.equal(first.analysis_unavailable,true);assert.equal(first.analysis_context.grain,'month');
+  assert.equal(second.analysis_context.grain,'month');assert.deepEqual(second.evidence.population_scope.groups,['country','rest_of_world']);assert.ok(second.evidence.sections.every(s=>s.month));assert.equal(second.evidence.source.coverage.requested_days,366);
+});
