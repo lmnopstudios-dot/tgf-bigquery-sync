@@ -1,0 +1,396 @@
+{
+  "fixture_version": 1,
+  "exposure": "Authored by the implementation agent before edits; not a blind or independently authored holdout. Frozen fixture hash recorded in delivery documentation. Any fixes informed by its execution must be reported.",
+  "implementation_informed_by": [
+    "retention-export",
+    "document",
+    "retention intent without explicit first-purchase wording"
+  ],
+  "live": false,
+  "harness_corrections": [
+    "Country fixture now returns dates from actual provider arguments rather than fixed January dates.",
+    "Editing fallback permits only toolsAllowed:false and no provider calls."
+  ],
+  "initial_run": {
+    "wrong_answer": 3,
+    "execution_failure": 2,
+    "reason": "Country fixture date mismatch and prohibited safe editing stub; see harness corrections."
+  },
+  "counts": {
+    "supported_answer": 9,
+    "supported_partial_answer": 6,
+    "correct_limitation": 9,
+    "necessary_clarification": 9,
+    "unnecessary_clarification": 0,
+    "correct_document_boundary": 3,
+    "wrong_answer": 0,
+    "execution_failure": 0
+  },
+  "clarification_rate": 0.25,
+  "wrong_answer_rate": 0,
+  "unnecessary_clarification_rate": 0,
+  "negative_substitution_rejected": true,
+  "negative_cases_checked": 3,
+  "rows": [
+    {
+      "id": "retention-entry",
+      "mode": "direct",
+      "category": "supported_partial_answer",
+      "operation": "cohort_retention",
+      "provider_calls": [
+        "retention"
+      ],
+      "detail": ""
+    },
+    {
+      "id": "retention-followup",
+      "mode": "direct",
+      "category": "supported_partial_answer",
+      "operation": "cohort_retention",
+      "provider_calls": [
+        "retention",
+        "retention"
+      ],
+      "detail": ""
+    },
+    {
+      "id": "subject-switch",
+      "mode": "direct",
+      "category": "supported_answer",
+      "operation": "sales_totals",
+      "provider_calls": [
+        "retention",
+        "sales"
+      ],
+      "detail": ""
+    },
+    {
+      "id": "population",
+      "mode": "direct",
+      "category": "supported_answer",
+      "operation": "population_comparison",
+      "provider_calls": [
+        "country_conversion",
+        "country_conversion",
+        "country_conversion"
+      ],
+      "detail": ""
+    },
+    {
+      "id": "campaign",
+      "mode": "direct",
+      "category": "supported_answer",
+      "operation": "campaign_performance",
+      "provider_calls": [
+        "campaigns",
+        "campaigns",
+        "campaigns",
+        "campaigns",
+        "campaigns",
+        "campaigns",
+        "campaigns",
+        "campaigns",
+        "campaigns"
+      ],
+      "detail": ""
+    },
+    {
+      "id": "basket",
+      "mode": "direct",
+      "category": "necessary_clarification",
+      "operation": "basket_composition",
+      "provider_calls": [],
+      "detail": "currencies"
+    },
+    {
+      "id": "promotion",
+      "mode": "direct",
+      "category": "correct_limitation",
+      "operation": "grouped_sales",
+      "provider_calls": [],
+      "detail": "Requested combination unavailable; not a completed capability."
+    },
+    {
+      "id": "unsupported-attribution",
+      "mode": "direct",
+      "category": "correct_limitation",
+      "operation": "product_attribution",
+      "provider_calls": [],
+      "detail": ""
+    },
+    {
+      "id": "ambiguous-sales",
+      "mode": "direct",
+      "category": "necessary_clarification",
+      "operation": "sales_totals",
+      "provider_calls": [],
+      "detail": ""
+    },
+    {
+      "id": "document",
+      "mode": "direct",
+      "category": "correct_document_boundary",
+      "operation": null,
+      "provider_calls": [],
+      "detail": ""
+    },
+    {
+      "id": "ranking",
+      "mode": "direct",
+      "category": "necessary_clarification",
+      "operation": "product_breakdown",
+      "provider_calls": [],
+      "detail": "currency"
+    },
+    {
+      "id": "retention-export",
+      "mode": "direct",
+      "category": "correct_limitation",
+      "operation": "cohort_retention",
+      "provider_calls": [
+        "retention"
+      ],
+      "detail": ""
+    },
+    {
+      "id": "retention-entry",
+      "mode": "interactive",
+      "category": "supported_partial_answer",
+      "operation": "cohort_retention",
+      "provider_calls": [
+        "retention"
+      ],
+      "detail": ""
+    },
+    {
+      "id": "retention-followup",
+      "mode": "interactive",
+      "category": "supported_partial_answer",
+      "operation": "cohort_retention",
+      "provider_calls": [
+        "retention",
+        "retention"
+      ],
+      "detail": ""
+    },
+    {
+      "id": "subject-switch",
+      "mode": "interactive",
+      "category": "supported_answer",
+      "operation": "sales_totals",
+      "provider_calls": [
+        "retention",
+        "sales"
+      ],
+      "detail": ""
+    },
+    {
+      "id": "population",
+      "mode": "interactive",
+      "category": "supported_answer",
+      "operation": "population_comparison",
+      "provider_calls": [
+        "country_conversion",
+        "country_conversion",
+        "country_conversion"
+      ],
+      "detail": ""
+    },
+    {
+      "id": "campaign",
+      "mode": "interactive",
+      "category": "supported_answer",
+      "operation": "campaign_performance",
+      "provider_calls": [
+        "campaigns",
+        "campaigns",
+        "campaigns",
+        "campaigns",
+        "campaigns",
+        "campaigns",
+        "campaigns",
+        "campaigns",
+        "campaigns"
+      ],
+      "detail": ""
+    },
+    {
+      "id": "basket",
+      "mode": "interactive",
+      "category": "necessary_clarification",
+      "operation": "basket_composition",
+      "provider_calls": [],
+      "detail": "currencies"
+    },
+    {
+      "id": "promotion",
+      "mode": "interactive",
+      "category": "correct_limitation",
+      "operation": "grouped_sales",
+      "provider_calls": [],
+      "detail": "Requested combination unavailable; not a completed capability."
+    },
+    {
+      "id": "unsupported-attribution",
+      "mode": "interactive",
+      "category": "correct_limitation",
+      "operation": "product_attribution",
+      "provider_calls": [],
+      "detail": ""
+    },
+    {
+      "id": "ambiguous-sales",
+      "mode": "interactive",
+      "category": "necessary_clarification",
+      "operation": "sales_totals",
+      "provider_calls": [],
+      "detail": ""
+    },
+    {
+      "id": "document",
+      "mode": "interactive",
+      "category": "correct_document_boundary",
+      "operation": null,
+      "provider_calls": [],
+      "detail": ""
+    },
+    {
+      "id": "ranking",
+      "mode": "interactive",
+      "category": "necessary_clarification",
+      "operation": "product_breakdown",
+      "provider_calls": [],
+      "detail": "currency"
+    },
+    {
+      "id": "retention-export",
+      "mode": "interactive",
+      "category": "correct_limitation",
+      "operation": "cohort_retention",
+      "provider_calls": [
+        "retention"
+      ],
+      "detail": ""
+    },
+    {
+      "id": "retention-entry",
+      "mode": "durable",
+      "category": "supported_partial_answer",
+      "operation": "cohort_retention",
+      "provider_calls": [
+        "retention"
+      ],
+      "detail": ""
+    },
+    {
+      "id": "retention-followup",
+      "mode": "durable",
+      "category": "supported_partial_answer",
+      "operation": "cohort_retention",
+      "provider_calls": [
+        "retention",
+        "retention"
+      ],
+      "detail": ""
+    },
+    {
+      "id": "subject-switch",
+      "mode": "durable",
+      "category": "supported_answer",
+      "operation": "sales_totals",
+      "provider_calls": [
+        "retention",
+        "sales"
+      ],
+      "detail": ""
+    },
+    {
+      "id": "population",
+      "mode": "durable",
+      "category": "supported_answer",
+      "operation": "population_comparison",
+      "provider_calls": [
+        "country_conversion",
+        "country_conversion",
+        "country_conversion"
+      ],
+      "detail": ""
+    },
+    {
+      "id": "campaign",
+      "mode": "durable",
+      "category": "supported_answer",
+      "operation": "campaign_performance",
+      "provider_calls": [
+        "campaigns",
+        "campaigns",
+        "campaigns",
+        "campaigns",
+        "campaigns",
+        "campaigns",
+        "campaigns",
+        "campaigns",
+        "campaigns"
+      ],
+      "detail": ""
+    },
+    {
+      "id": "basket",
+      "mode": "durable",
+      "category": "necessary_clarification",
+      "operation": "basket_composition",
+      "provider_calls": [],
+      "detail": "currencies"
+    },
+    {
+      "id": "promotion",
+      "mode": "durable",
+      "category": "correct_limitation",
+      "operation": "grouped_sales",
+      "provider_calls": [],
+      "detail": "Requested combination unavailable; not a completed capability."
+    },
+    {
+      "id": "unsupported-attribution",
+      "mode": "durable",
+      "category": "correct_limitation",
+      "operation": "product_attribution",
+      "provider_calls": [],
+      "detail": ""
+    },
+    {
+      "id": "ambiguous-sales",
+      "mode": "durable",
+      "category": "necessary_clarification",
+      "operation": "sales_totals",
+      "provider_calls": [],
+      "detail": ""
+    },
+    {
+      "id": "document",
+      "mode": "durable",
+      "category": "correct_document_boundary",
+      "operation": null,
+      "provider_calls": [],
+      "detail": ""
+    },
+    {
+      "id": "ranking",
+      "mode": "durable",
+      "category": "necessary_clarification",
+      "operation": "product_breakdown",
+      "provider_calls": [],
+      "detail": "currency"
+    },
+    {
+      "id": "retention-export",
+      "mode": "durable",
+      "category": "correct_limitation",
+      "operation": "cohort_retention",
+      "provider_calls": [
+        "retention"
+      ],
+      "detail": ""
+    }
+  ]
+}
