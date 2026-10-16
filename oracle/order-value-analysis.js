@@ -1,3 +1,4 @@
+import { assertBasketEvidence } from './basket-composition.js';
 import { resolveExecutionPlan } from './analytical-capabilities.js';
 import { safeReadFailure, readFailureAction } from './read-failure.js';
 import { boundedEvidenceRead } from './bounded-evidence-read.js';
@@ -70,6 +71,7 @@ function candidatesFor(catalogue,sections,currency){
 }
 function chartDatasets(e){return (e.sections||[]).filter(s=>s.population_status!=='unverified_empty_population').map((s,i)=>({id:`order-bands-${i}`,shape:'ranking',title:`Order-value bands: ${s.label}`,metric:'orders',unit:'count',definition:'Lower inclusive, upper exclusive; all retrieved eligible orders. Unknown values kept separately. Collection completeness unverified.'+(s.observed_merchandise?` Basis: ${e.basis}. ${s.label==='Sale-excluded comparison'?'Excluded calendar days: '+e.promotion.dates.join(', '):'Full period; no sale days excluded.'}`:''),source:'Persisted Shopify order components',population:s.observed_merchandise?`shopify/shopify · ${e.country} · ${e.currency} · candidate online population`:'shopify/shopify',period:`${e.periods[0].start_date} to ${e.periods[0].end_date}`,category_order:s.bands.map(b=>b.upper==null?`${b.lower}+`:`${b.lower}–<${b.upper}`),points:s.bands.map(b=>({label:b.upper==null?`${b.lower}+`:`${b.lower}–<${b.upper}`,value:b.orders}))}));}
 export function assertOrderValueEvidence(context,e) {
+  if(context.requested_operations?.includes('basket_composition'))return assertBasketEvidence(context,e);
   assertPlanAgreement(context,e);
   const newOperations=['merchandise_mean','merchandise_median','basket_gaps','break_even'];
   const legacy=e.sections?.some(s=>!s.observed_merchandise)&&!context.requested_operations?.some(op=>newOperations.includes(op));

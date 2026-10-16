@@ -1,3 +1,5 @@
+import { population } from './basket-fixture.js';
+import { BASKET_LINE_COLUMNS } from '../../oracle/basket-provider.js';
 import assert from 'node:assert/strict';
 import express from 'express';
 import { createBaselineOverviewService } from '../../oracle/baseline-overview.js';
@@ -19,6 +21,13 @@ export function acceptanceFixture({fail_start=null,campaigns=false}={}){
   }});
   const bigquery={dataset:()=>({getMetadata:async()=>[{location:'US'}]}),query:async query=>{
     queries.push(query);assert.match(query.query,/SELECT/);assert.doesNotMatch(query.query,/INSERT|UPDATE|DELETE|MERGE|CREATE/);
+    if(/INFORMATION_SCHEMA|grouped_lines|represented_location_orders|GROUP BY 1,2,3/.test(query.query)){
+      calls.push({provider:'baskets',args:query.params});
+      if(query.query.includes('INFORMATION_SCHEMA'))return [Object.entries(BASKET_LINE_COLUMNS).map(([column_name,data_type])=>({column_name,data_type}))];
+      if(query.query.includes('grouped_lines'))return [population().map(r=>({...r,date:r.date==='2026-10-14'?'2026-10-12':r.date}))];
+      if(query.query.includes('GROUP BY 1,2,3'))return [[{date:'2026-10-12',amount:260,merchandise_amount:260,shipping_charge:8,orders:1}]];
+      return [[{eligible_orders:query.params.start_date==='2026-01-01'?10:1}]];
+    }
     calls.push({provider:'campaigns',args:query.params});
     if(!state.campaigns)return [[]];
     if(query.query.includes('SELECT CAST(MAX'))return [[{reporting_cutoff:'2026-09-30'}]];
@@ -34,7 +43,7 @@ export function acceptanceFixture({fail_start=null,campaigns=false}={}){
   }});
   const klaviyo=(...args)=>(state.campaigns?live.klaviyo:deps.klaviyo)(...args);
   klaviyo.resolveCampaigns=(...args)=>(state.campaigns?live.klaviyo:deps.klaviyo).resolveCampaigns(...args);
-  const baseline=createOracleBaselineDispatcher({ecommerceBaselineOverview:createBaselineOverviewService({shopifySales:native,dailySales:deps.dailySales,klaviyo,now:()=>new Date(NOW),
+  const baseline=createOracleBaselineDispatcher({ecommerceBaselineOverview:createBaselineOverviewService({shopifySales:native,dailySales:deps.dailySales,basketComposition:deps.basketComposition,klaviyo,now:()=>new Date(NOW),
     onlineCountrySales:async args=>{calls.push({provider:'countries',args});return {rows:[{country_code:'GB',currency:'GBP',orders:4,operational_net_sales:200,sources:[{source_platform:'shopify',orders:4,operational_net_sales:200}],eligible_orders:5,unknown_country_orders:1,eligible_sales:240,unknown_country_sales:40}]};},
     customerReport:async args=>{calls.push({provider:'customers',args});return {overall:{customers:10,new_customers:7,returning_customers:4,orders:15},applied_channel_predicate:"sales_channel = 'Online Store'",coverage:{complete:true},source_collected_at:'2026-10-14T11:00:00Z'};}
   })});
@@ -78,6 +87,15 @@ export function assertAcceptanceTurn(turn,result,f,callOffset=0){
   }
   assert.doesNotMatch(result.answer,/What date range/);
   if(turn.provider){assert.ok(calls.some(c=>c.provider===turn.provider));assert.ok(calls.every(c=>c.provider===turn.provider),JSON.stringify(calls));}
+  if(turn.check==='basket'){
+    assert.equal(result.evidence.kind,'governed_basket_composition');
+    assert.deepEqual(c.numeric_operation.thresholds,[200,225,250]);
+    assert.equal(result.evidence.sections[0].comparisons[2].additional_items_required,5);
+    assert.equal(result.evidence.sections[1].comparisons[2].additional_items_required,4);
+    assert.match(result.answer,/Additional items required/);assert.match(result.answer,/Product 1/);
+    assert.match(result.answer,/Show details/);assert.doesNotMatch(result.presentation.summary_markdown,/Losing eligibility|175\.00|Product 1/);
+    assert.ok(calls.every(x=>x.args.country==='GB'&&x.args.currency==='GBP'&&x.args.end_date===turn.dates[1]));
+  }
   if(turn.check==='checkout'){
     assert.equal(result.analysis_unavailable,true);assert.match(result.answer,/Checkout identities/);assert.match(result.answer,/Completed orders cannot/);assert.match(result.answer,/No collection or backfill/);assert.equal(calls.length,0);
   }

@@ -99,6 +99,11 @@ export function assertEvidenceAgreement(contextValue,evidence,requestMessage=nul
   return true;
 }
 
+// Nonempty prose alone cannot complete a declared analytical operation.
+export function assertOperationDelivery(context,result){
+  if(context?.requested_operations?.length&&!result?.evidence&&!result?.analysis_unavailable)throw Object.assign(new Error('Requested operation has no validated evidence or explicit limitation.'),{code:'EVIDENCE_SCOPE_MISMATCH',failed_stage:'evidence_validation'});
+}
+
 function disclosePeriod(result,context){
   if(!result?.answer||!context?.date_cutoff||!context.start_date||context.campaign_request)return result;
   return {...result,answer:`**Resolved dates:** ${context.start_date} to ${context.end_date}${context.comparison_start_date?` versus ${context.comparison_start_date} to ${context.comparison_end_date}`:''}, inclusive (Europe/London). Current day ${context.current_day_included?'included; evidence through the runtime cutoff may be partial':'excluded'}. Runtime cutoff: ${context.date_cutoff}.\n\n${result.answer}`};
@@ -118,7 +123,7 @@ export async function dispatchAnalysisRequest({message,analysisContext,baselineO
   baselineOptions?.onProviderStage?.({stage:'capability_selection',selected_route:context?.tool_route||'general_agent',registered:Boolean(execution.capability),delivery:execution.delivery||'chat',status:'selected'});
   const binding=execution.execute||baselineThenAgent;
   let result=await binding({message,baselineOverview,baselineOptions:{...baselineOptions,analysisContext:analysisContext??context},chat,chatOptions});
-  try{assertResolvedAnalysisContext(context,result?.analysis_context);assertEvidenceAgreement(result?.analysis_context||context,result?.evidence);baselineOptions?.onProviderStage?.({stage:'evidence_validation',status:'success'});}catch(error){baselineOptions?.onProviderStage?.({stage:'evidence_validation',status:'failed',code:'EVIDENCE_SCOPE_MISMATCH',scope_field:error.scope_field||'analytical_scope'});throw error;}
+  try{assertOperationDelivery(context,result);assertResolvedAnalysisContext(context,result?.analysis_context);assertEvidenceAgreement(result?.analysis_context||context,result?.evidence);baselineOptions?.onProviderStage?.({stage:'evidence_validation',status:'success'});}catch(error){baselineOptions?.onProviderStage?.({stage:'evidence_validation',status:'failed',code:'EVIDENCE_SCOPE_MISMATCH',scope_field:error.scope_field||'analytical_scope'});throw error;}
   if(result?.evidence&&context?.requested_subject&&!result.evidence.report_config)result={...result,evidence:{...result.evidence,analytical_plan:resolveAnalyticalPlan(result.analysis_context||context)}};
   if(result&&!context?.product_report)result={...result,analysis_context:result.analysis_context||context};
   await baselineOptions?.onEvidence?.(result);
@@ -145,6 +150,7 @@ export async function executeGovernedAgentAnalysis({message,analysisContext,base
     if(resolved.context.tool_route==='get_order_value_analysis')return {answer:'Order-value aggregate capability is unavailable from the current evidence binding; no individual-order fallback was used.',analysis_unavailable:true,tools:[]};
     return null;
   }
+  assertOperationDelivery(resolved.context,result);
   assertResolvedAnalysisContext(resolved.context,result.analysis_context);
   assertEvidenceAgreement(result.analysis_context||resolved.context,result.evidence);
   if(result.evidence&&!result.evidence.report_config)result={...result,evidence:{...result.evidence,analytical_plan:resolveAnalyticalPlan(result.analysis_context||resolved.context)}};

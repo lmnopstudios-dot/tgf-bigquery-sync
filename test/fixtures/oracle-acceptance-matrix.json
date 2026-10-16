@@ -136,7 +136,7 @@
       "id": "checkout-boundary",
       "turns": [
         {
-          "question": "Show UK online abandoned-checkout performance for the last 30 completed days. First establish whether governed checkout evidence is available. If supported, show checkout counts, abandoned value, recovery rate and recovered revenue, with definitions and coverage. Distinguish abandoned checkouts from abandoned carts; don’t infer abandonment from orders or expose customer details. No collection or backfill.",
+          "question": "Show UK online abandoned-checkout performance for the last 30 completed days. First establish whether governed checkout evidence is available. If supported, show checkout counts, abandoned value, recovery rate and recovered revenue, with definitions and coverage. Distinguish abandoned checkouts from abandoned carts; don\u2019t infer abandonment from orders or expose customer details. No collection or backfill.",
           "subject": "abandoned_checkouts",
           "dates": [
             "2026-09-14",
@@ -207,6 +207,21 @@
           ],
           "provider": "sales",
           "check": "sales"
+        }
+      ]
+    },
+    {
+      "id": "basket-operation",
+      "turns": [
+        {
+          "question": "Do UK online baskets show evidence of customers adding a smaller item to reach our \u00a3250 free-shipping threshold?\n\nUse this year through the latest completed day, GBP orders shipped to the UK, online only. Show the full period and separately exclude 1\u20134 May inclusive.\n\nUse order-line evidence to identify:\n- Orders containing one item versus multiple items.\n- Multi-item orders where the highest-value individual item was below \u00a3250, but the merchandise basket reached \u00a3250.\n- Within those orders, the highest-value item, remaining items, their combined value and how far the basket finished above \u00a3250.\n- Common main-product/add-on combinations, with order counts and actual discounted prices.\n- Smaller items most often present in these qualifying baskets.\n\nSeparate baskets ending at \u00a3250\u2013\u00a3274.99, \u00a3275\u2013\u00a3299.99 and \u00a3300+. Include examples as anonymous product combinations, without customer information.\n\nCompare \u00a3200, \u00a3225 and \u00a3250: how many observed baskets required additional items to reach each threshold, and how many already qualified on their highest-value item alone? Distinguish one expensive item plus cheaper items from multiple units of the same product.\n\nUse consistent discount allocation and disclose VAT treatment, unknown values and coverage. Do not duplicate orders through line-item joins or infer basket composition from aggregate order totals.\n\nImportant: this establishes basket composition, not buying intent. Do not claim the smaller item was added last or bought to unlock free shipping unless compatible cart-event evidence establishes that.\n\nLead with a short finding and compact comparison table. Put supporting combinations and definitions in Show details. No inventory queries, collection, backfill or mutation.",
+          "subject": "order_values",
+          "dates": [
+            "2026-01-01",
+            "2026-10-13"
+          ],
+          "provider": "baskets",
+          "check": "basket"
         }
       ]
     }
@@ -320,7 +335,7 @@
       ],
       "representative_conversations": [
         [
-          "Assess UK online GBP free shipping for September 2026. Compare £250 with £200 and £225, assuming purchasing behaviour stays unchanged. Show recorded shipping charges and the separate hypothetical £8 calculation."
+          "Assess UK online GBP free shipping for September 2026. Compare \u00a3250 with \u00a3200 and \u00a3225, assuming purchasing behaviour stays unchanged. Show recorded shipping charges and the separate hypothetical \u00a38 calculation."
         ]
       ]
     },
@@ -417,6 +432,27 @@
         "draft/scheduled exclusion",
         "multiple message identity",
         "live dependency factory binding"
+      ]
+    },
+    {
+      "file": "test/oracle-basket-composition.test.js",
+      "covers": [
+        "operation replacement",
+        "actual line batch arguments",
+        "discount and basket reconciliation",
+        "unit versus product semantics",
+        "direct interactive durable",
+        "xlsx and refresh recovery",
+        "partial failures"
+      ],
+      "representative_conversations": [
+        [
+          "Do UK online baskets show evidence of customers adding a smaller item to reach our \u00a3250 free-shipping threshold?\n\nUse this year through the latest completed day, GBP orders shipped to the UK, online only. Show the full period and separately exclude 1\u20134 May inclusive.\n\nUse order-line evidence to identify:\n- Orders containing one item versus multiple items.\n- Multi-item orders where the highest-value individual item was below \u00a3250, but the merchandise basket reached \u00a3250.\n- Within those orders, the highest-value item, remaining items, their combined value and how far the basket finished above \u00a3250.\n- Common main-product/add-on combinations, with order counts and actual discounted prices.\n- Smaller items most often present in these qualifying baskets.\n\nSeparate baskets ending at \u00a3250\u2013\u00a3274.99, \u00a3275\u2013\u00a3299.99 and \u00a3300+. Include examples as anonymous product combinations, without customer information.\n\nCompare \u00a3200, \u00a3225 and \u00a3250: how many observed baskets required additional items to reach each threshold, and how many already qualified on their highest-value item alone? Distinguish one expensive item plus cheaper items from multiple units of the same product.\n\nUse consistent discount allocation and disclose VAT treatment, unknown values and coverage. Do not duplicate orders through line-item joins or infer basket composition from aggregate order totals.\n\nImportant: this establishes basket composition, not buying intent. Do not claim the smaller item was added last or bought to unlock free shipping unless compatible cart-event evidence establishes that.\n\nLead with a short finding and compact comparison table. Put supporting combinations and definitions in Show details. No inventory queries, collection, backfill or mutation."
+        ],
+        [
+          "Compare UK online GBP free shipping \u00a3250, \u00a3175 and \u00a3300 this year.",
+          "Show basket composition and highest-value unit."
+        ]
       ]
     }
   ]

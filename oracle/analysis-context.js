@@ -1,3 +1,4 @@
+import { requestedAttributionOperation } from './requested-operations.js';
 import { messageIntent } from './message-intent.js';
 import { isHistoricalEventComparison } from './historical-event-comparison.js';
 import { OPERATION_REQUIREMENTS, requestedAnalyticalOperations, individualOrderQuestion, metricOperations, mergeRequestedOperations } from './requested-operations.js';
@@ -59,7 +60,7 @@ export function validateAnalysisContext(value={}){
   out.native_metrics=Array.isArray(value.native_metrics)?[...new Set(value.native_metrics)].slice(0,8):[];
   if(out.native_metrics.some(m=>!['net_sales','orders','gross_sales','total_sales','refunds','discounts','profit'].includes(m)))throw contextValidationError('native_metrics','supported_metric');
   out.dimensions=Array.isArray(value.dimensions)?[...new Set(value.dimensions)].slice(0,4):[];
-  if(out.dimensions.some(d=>!['numeric_band','weekday','day','month','source','channel','product'].includes(d)))throw contextValidationError('dimensions','supported_dimension');
+  if(out.dimensions.some(d=>!['basket_composition','numeric_band','weekday','day','month','source','channel','product'].includes(d)))throw contextValidationError('dimensions','supported_dimension');
   if(value.time_zone!=null){try{new Intl.DateTimeFormat('en',{timeZone:value.time_zone});}catch{throw contextValidationError('time_zone','iana_timezone');}}
   out.time_zone=value.time_zone??null;
   out.source_store=typeof value.source_store==='string'?value.source_store.slice(0,160):null;
@@ -119,6 +120,11 @@ function transitionContext(existing, message, {now=Date.now(),reportContext=null
   if(/^(?:new (?:question|analysis)|forget that|start over)\b/i.test(text))return transitionAnalysisContext(emptyAnalysisContext(),text.replace(/^(?:new (?:question|analysis)|forget that|start over)\s*[:,.]?\s*/i,''),{now});
   if(individualOrderQuestion(text)){const context=emptyAnalysisContext();return {context,transition:{continuation:false,set:[],clear:ANALYSIS_CONTEXT_FIELDS,retain:[],missing_required_fields:[],ready_to_execute:false,applies_to_message:true}};}
   if(reportContext) base=initializeFromReportContext(base,reportContext);
+  const attribution=requestedAttributionOperation(text,base);
+  if(attribution){
+    const context=validateAnalysisContext({...emptyAnalysisContext(),...base,...(period(text,now)||{}),requested_subject:base.requested_subject||'klaviyo_email',requested_operations:[attribution],numeric_operation:null,dimensions:['product'],output_preference:null,unresolved_required_fields:[]});
+    return {context,transition:{continuation:Boolean(base.requested_subject),set:['requested_operations','dimensions'],clear:['numeric_operation','output_preference'],retain:[],missing_required_fields:[],ready_to_execute:true,applies_to_message:true}};
+  }
   const additions=metricOperations(text);
   if(base.tool_route&&base.tool_route!=='get_order_value_analysis'&&additions.length&&/\b(?:add|also|now|calculate|compute|include|give|show|instead|only)\b/i.test(text)&&!/\b(?:shipping|basket gaps?|order-value bands?|new analysis)\b/i.test(text)){
     const context=validateAnalysisContext({...base,requested_operations:mergeRequestedOperations(base.requested_operations,additions,text)});
