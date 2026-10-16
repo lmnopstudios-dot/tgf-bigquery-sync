@@ -1,6 +1,6 @@
 import { orderValueTraceSql, assessOrderValueTrace } from '../oracle/order-value-trace.js';
 import { orderValueSourceBindings } from '../oracle/order-value-bindings.js';
-import { inspectOrderValueSchema } from '../oracle/order-value-schema.js';
+import { inspectOrderValueSchema, ORDER_VALUE_SCHEMA } from '../oracle/order-value-schema.js';
 import { boundedEvidenceRead } from '../oracle/bounded-evidence-read.js';
 /** Aggregate-only read diagnostic. Imports no collector, server or inventory API. */
 import { pathToFileURL } from 'node:url';
@@ -25,8 +25,13 @@ export async function diagnoseOrderValues(input,{bigquery,project,env=process.en
   report.location=location;
   report.datasets=[{project,dataset:'shopify_data',actual_location:location}];
   const schemas=await check('schema_inspection',async()=>{const [rows]=await bigquery.query({query:`SELECT table_name,column_name,data_type,is_nullable FROM \`${project}.shopify_data.INFORMATION_SCHEMA.COLUMNS\` WHERE table_name IN ('order_locations','order_financials','order_customers','order_shipping_geography') ORDER BY table_name,ordinal_position LIMIT 200`,location,maximumBytesBilled:'104857600',jobTimeoutMs:30000,useLegacySql:false});return rows;});
-  report.schemas=schemas;
+  const types=new Set(['STRING','INT64','NUMERIC','FLOAT64','BIGNUMERIC','BOOL','TIMESTAMP','DATE','DATETIME','TIME','JSON','BYTES','GEOGRAPHY']);
+  report.schemas=schemas?.filter(r=>Object.hasOwn(ORDER_VALUE_SCHEMA,r.table_name)&&Object.hasOwn(ORDER_VALUE_SCHEMA[r.table_name],r.column_name)).map(r=>({table_name:r.table_name,column_name:r.column_name,data_type:types.has(r.data_type)?r.data_type:'unsupported',is_nullable:['YES','NO'].includes(r.is_nullable)?r.is_nullable:null}))??null;
   report.schema_contract=schemas?inspectOrderValueSchema(schemas):null;
+  if(!report.schema_contract?.valid){
+    for(const stage of ['population_dry_run','coverage_dry_run','population_trace_dry_run','population_trace','join_uniqueness','population_query','coverage_query'])report.checks.push({stage,status:'blocked',blocked_by:'schema_inspection'});
+    return {...report,population_status:'query_failure'};
+  }
   const args={start_date:input.start,end_date:input.end,platform:'shopify',source_store:null,channel:'online',time_zone:'Europe/London',country:'GB',currency:'GBP',basis:'observed_subtotal',assumed_charge:8};
   const options={...orderValueQueryOptions(args,location),jobTimeoutMs:30000};
   report.parameter_contract=options.types;

@@ -1,0 +1,167 @@
+[
+  {
+    "table_name": "order_line_items",
+    "column_name": "order_id",
+    "data_type": "STRING"
+  },
+  {
+    "table_name": "order_line_items",
+    "column_name": "order_name",
+    "data_type": "STRING"
+  },
+  {
+    "table_name": "order_line_items",
+    "column_name": "order_created_at",
+    "data_type": "TIMESTAMP"
+  },
+  {
+    "table_name": "order_line_items",
+    "column_name": "line_item_id",
+    "data_type": "STRING"
+  },
+  {
+    "table_name": "order_line_items",
+    "column_name": "product_id",
+    "data_type": "STRING"
+  },
+  {
+    "table_name": "order_line_items",
+    "column_name": "variant_id",
+    "data_type": "STRING"
+  },
+  {
+    "table_name": "order_line_items",
+    "column_name": "name",
+    "data_type": "STRING"
+  },
+  {
+    "table_name": "order_line_items",
+    "column_name": "title",
+    "data_type": "STRING"
+  },
+  {
+    "table_name": "order_line_items",
+    "column_name": "variant_title",
+    "data_type": "STRING"
+  },
+  {
+    "table_name": "order_line_items",
+    "column_name": "sku",
+    "data_type": "STRING"
+  },
+  {
+    "table_name": "order_line_items",
+    "column_name": "quantity",
+    "data_type": "INT64"
+  },
+  {
+    "table_name": "order_line_items",
+    "column_name": "current_quantity",
+    "data_type": "INT64"
+  },
+  {
+    "table_name": "order_line_items",
+    "column_name": "is_gift_card",
+    "data_type": "BOOL"
+  },
+  {
+    "table_name": "order_line_items",
+    "column_name": "taxable",
+    "data_type": "BOOL"
+  },
+  {
+    "table_name": "order_line_items",
+    "column_name": "requires_shipping",
+    "data_type": "BOOL"
+  },
+  {
+    "table_name": "order_line_items",
+    "column_name": "vendor",
+    "data_type": "STRING"
+  },
+  {
+    "table_name": "order_line_items",
+    "column_name": "product_type",
+    "data_type": "STRING"
+  },
+  {
+    "table_name": "order_line_items",
+    "column_name": "shop_currency",
+    "data_type": "STRING"
+  },
+  {
+    "table_name": "order_line_items",
+    "column_name": "presentment_currency",
+    "data_type": "STRING"
+  },
+  {
+    "table_name": "order_line_items",
+    "column_name": "original_unit_price_shop",
+    "data_type": "NUMERIC"
+  },
+  {
+    "table_name": "order_line_items",
+    "column_name": "original_unit_price_presentment",
+    "data_type": "NUMERIC"
+  },
+  {
+    "table_name": "order_line_items",
+    "column_name": "original_total_shop",
+    "data_type": "NUMERIC"
+  },
+  {
+    "table_name": "order_line_items",
+    "column_name": "original_total_presentment",
+    "data_type": "NUMERIC"
+  },
+  {
+    "table_name": "order_line_items",
+    "column_name": "discounted_total_shop",
+    "data_type": "NUMERIC"
+  },
+  {
+    "table_name": "order_line_items",
+    "column_name": "discounted_total_presentment",
+    "data_type": "NUMERIC"
+  },
+  {
+    "table_name": "order_line_items",
+    "column_name": "total_discount_shop",
+    "data_type": "NUMERIC"
+  },
+  {
+    "table_name": "order_line_items",
+    "column_name": "total_discount_presentment",
+    "data_type": "NUMERIC"
+  },
+  {
+    "table_name": "order_line_items",
+    "column_name": "tax_shop",
+    "data_type": "NUMERIC"
+  },
+  {
+    "table_name": "order_line_items",
+    "column_name": "tax_presentment",
+    "data_type": "NUMERIC"
+  },
+  {
+    "table_name": "order_line_items",
+    "column_name": "custom_attributes_json",
+    "data_type": "STRING"
+  },
+  {
+    "table_name": "order_line_items",
+    "column_name": "tax_lines_json",
+    "data_type": "STRING"
+  },
+  {
+    "table_name": "order_line_items",
+    "column_name": "discount_allocations_json",
+    "data_type": "STRING"
+  },
+  {
+    "table_name": "order_line_items",
+    "column_name": "synced_at",
+    "data_type": "TIMESTAMP"
+  }
+]

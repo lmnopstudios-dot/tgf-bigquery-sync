@@ -454,6 +454,20 @@
           "Show basket composition and highest-value unit."
         ]
       ]
+    },
+    {
+      "file": "test/oracle-basket-sql.test.js",
+      "covers": [
+        "BigQuery STRUCT aliases and SDK parameter contract",
+        "truthful stages and sanitized errors",
+        "standalone dry-run prerequisites",
+        "shared failure presentation"
+      ],
+      "representative_conversations": [
+        [
+          "Show UK online GBP basket composition for 2026-01-01 to 2026-10-15."
+        ]
+      ]
     }
   ]
 }

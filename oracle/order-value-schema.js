@@ -5,12 +5,13 @@ export const ORDER_VALUE_SCHEMA=Object.freeze({
   order_customers:{order_id:'STRING',order_created_at:'TIMESTAMP',synced_at:'TIMESTAMP',cancelled_at:'TIMESTAMP',display_financial_status:'STRING'},
   order_shipping_geography:{order_id:'STRING',order_created_at:'TIMESTAMP',synced_at:'TIMESTAMP',geography_status:'STRING',shipping_country_code:'STRING'}
 });
+const SCALAR_TYPES=new Set(['STRING','INT64','NUMERIC','FLOAT64','BIGNUMERIC','BOOL','TIMESTAMP','DATE','DATETIME','TIME','JSON','BYTES','GEOGRAPHY']);
 export function inspectOrderValueSchema(rows){
   const missing=[],incompatible=[];
   for(const [table,columns] of Object.entries(ORDER_VALUE_SCHEMA))for(const [column,type] of Object.entries(columns)){
     const found=rows.find(r=>r.table_name===table&&r.column_name===column);
     if(!found)missing.push({table,column,required_type:type});
-    else if(found.data_type!==type)incompatible.push({table,column,required_type:type,actual_type:found.data_type});
+    else if(found.data_type!==type)incompatible.push({table,column,required_type:type,actual_type:SCALAR_TYPES.has(found.data_type)?found.data_type:'unsupported'});
   }
   return {valid:!missing.length&&!incompatible.length,missing,incompatible};
 }

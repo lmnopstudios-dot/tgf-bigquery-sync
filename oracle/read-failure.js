@@ -1,7 +1,18 @@
 /** Only allowlisted machine fields leave the retrieval boundary. Never retain messages. */
 const codes=new Set(['BASKET_SCHEMA_UNAVAILABLE','BASKET_READ_BOUND','BASKET_PROVIDER_UNAVAILABLE','ORACLE_AGENT_DEADLINE','REQUEST_CANCELLED','ORDER_VALUE_READ_BOUND','EVIDENCE_SCOPE_MISMATCH','CATALOGUE_READ_BOUND','CATALOGUE_PAGE_INVALID','CATALOGUE_CLASSIFICATION_UNAVAILABLE','DESTINATION_PRICES_INCOMPLETE','CATALOGUE_TIMEOUT','CATALOGUE_CANCELLED','SHOPIFY_BINDING_INVALID','SHOPIFY_AUTH_HTTP_FAILED','SHOPIFY_AUTH_RESPONSE_INVALID','SHOPIFY_AUTH_NETWORK_FAILED','SHOPIFY_GRAPHQL_HTTP_FAILED','SHOPIFY_GRAPHQL_FAILED','SHOPIFY_GRAPHQL_RESPONSE_INVALID','SHOPIFY_GRAPHQL_NETWORK_FAILED']);
 const reasons=new Set(['invalidQuery','invalid','notFound','accessDenied','billingNotEnabled','billingTierLimitExceeded','jobBillingTierLimitExceeded','resourcesExceeded','quotaExceeded','rateLimitExceeded','backendError','internalError','jobTimeout','stopped']);
-const stages=new Set(['dataset_location','population_query','coverage_query','schema_inspection','population_dry_run','coverage_dry_run','join_uniqueness','population_trace_dry_run','population_trace','promotion','published_prices','basket_population']);
+const stages=new Set(['diagnostic','dataset_location','population_query','coverage_query','schema_inspection','population_dry_run','coverage_dry_run','join_uniqueness','population_trace_dry_run','population_trace','promotion','published_prices','basket_population']);
+// Recognize provider message shapes, retaining only fixed categories.
+// Messages, unexpected tokens and field/value text never cross this boundary.
+export function bigQueryErrorCategory(message) {
+  const text=String(message||'');
+  if(/Syntax error:/i.test(text))return 'sql_syntax';
+  if(/Unrecognized name:|Name .* not found inside|Column .* not found/i.test(text))return 'schema_field_missing';
+  if(/Query parameter .* not found|No value found for parameter/i.test(text))return 'parameter_missing';
+  if(/No matching signature|Cannot coerce|Invalid cast|Cannot cast/i.test(text))return 'type_mismatch';
+  if(/was not found in location/i.test(text))return 'dataset_location_mismatch';
+  return null;
+}
 export function safeReadFailure(error,stage) {
   if(error?.safe_failure)return safeReadFailure(error.safe_failure,stage);
   const nested=error?.response?.data?.error;
@@ -11,7 +22,8 @@ export function safeReadFailure(error,stage) {
   const stored=error?.statement_location;
   const location=position?{line:Number(position[1]),column:Number(position[2])}:stored&&Number.isInteger(stored.line)&&Number.isInteger(stored.column)&&stored.line>0&&stored.line<=999999&&stored.column>0&&stored.column<=999999?{line:stored.line,column:stored.column}:null;
   const providerReasons=new Set(['ACCESS_DENIED','THROTTLED','INTERNAL_SERVER_ERROR','GRAPHQL_REJECTED','undefinedField','argumentNotAccepted','variableRequiresValidType','missingRequiredArguments','ENOTFOUND','ECONNREFUSED','ETIMEDOUT','UND_ERR_CONNECT_TIMEOUT','EAI_AGAIN','UND_ERR_ABORTED']);
-  return {provider_reason:providerReasons.has(error?.provider_reason||error?.reason)?error.provider_reason||error.reason:null,...(Array.isArray(error?.graphql_locations)?{graphql_locations:error.graphql_locations.slice(0,3).filter(x=>Number.isInteger(x.line)&&Number.isInteger(x.column)&&x.line>0&&x.line<100000&&x.column>0&&x.column<100000).map(x=>({line:x.line,column:x.column}))}:{}),stage:stages.has(error?.stage)?error.stage:stages.has(stage)?stage:'population_query',code:codes.has(error?.code)?error.code:'ORDER_VALUE_RETRIEVAL_FAILED',http_status:status>=(stage==='published_prices'||error?.stage==='published_prices'?200:400)&&status<=599&&Number.isInteger(status)?status:null,bigquery_reason:reasons.has(source?.reason||error?.bigquery_reason)?source?.reason||error.bigquery_reason:null,statement_location:location};
+  const category=bigQueryErrorCategory(source?.message)||(['sql_syntax','schema_field_missing','parameter_missing','type_mismatch','dataset_location_mismatch'].includes(error?.error_category)?error.error_category:null);
+  return {...(category?{error_category:category}:{}),provider_reason:providerReasons.has(error?.provider_reason||error?.reason)?error.provider_reason||error.reason:null,...(Array.isArray(error?.graphql_locations)?{graphql_locations:error.graphql_locations.slice(0,3).filter(x=>Number.isInteger(x.line)&&Number.isInteger(x.column)&&x.line>0&&x.line<100000&&x.column>0&&x.column<100000).map(x=>({line:x.line,column:x.column}))}:{}),stage:stages.has(error?.stage)?error.stage:stages.has(stage)?stage:'population_query',code:codes.has(error?.code)?error.code:'ORDER_VALUE_RETRIEVAL_FAILED',http_status:status>=(stage==='published_prices'||error?.stage==='published_prices'?200:400)&&status<=599&&Number.isInteger(status)?status:null,bigquery_reason:reasons.has(source?.reason||error?.bigquery_reason)?source?.reason||error.bigquery_reason:null,statement_location:location};
 }
 export function readFailureError(error,stage) {
   const safe_failure=safeReadFailure(error,stage);
