@@ -1,3 +1,4 @@
+import { assertPopulationConversionEvidence } from './population-conversion.js';
 import { resolveAnalysisDecision, reportAnalysisDecision, decisionResult } from './analysis-decision.js';
 import { assertCampaignSetEvidence } from './campaign-set-analysis.js';
 import { messageIntent, nonAnalyticalResult } from './message-intent.js';
@@ -27,7 +28,7 @@ const governedBaseline = async ({message,baselineOverview,baselineOptions}) => {
 // route names, so a deterministic transition cannot silently become orphaned.
 export const ANALYSIS_ROUTE_DISPATCHERS = Object.freeze(Object.fromEntries(ANALYSIS_TOOL_ROUTES.map(route=>[
   route,
-  ['get_order_value_analysis','get_shopify_inventory_by_location','get_meta_performance','get_instagram_performance','get_woocommerce_device_conversion','get_governed_device_conversion','get_general_sales_analysis','get_daily_sales_analysis','export_product_priorities','get_klaviyo_email_performance','get_klaviyo_click_purchase_opportunities','compare_klaviyo_email_with_shopify_referrer'].includes(route)
+  ['get_population_conversion','get_order_value_analysis','get_shopify_inventory_by_location','get_meta_performance','get_instagram_performance','get_woocommerce_device_conversion','get_governed_device_conversion','get_general_sales_analysis','get_daily_sales_analysis','export_product_priorities','get_klaviyo_email_performance','get_klaviyo_click_purchase_opportunities','compare_klaviyo_email_with_shopify_referrer'].includes(route)
     ? governedBaseline
     : baselineThenAgent
 ])));
@@ -59,6 +60,7 @@ export function assertResolvedAnalysisContext(submittedValue,resolvedValue){
 export function assertEvidenceAgreement(contextValue,evidence,requestMessage=null){
   const context=contextValue==null?null:validateAnalysisContext(contextValue);
   assertPlanAgreement(context,evidence);
+  if(context?.population_scope&&evidence)assertPopulationConversionEvidence(context,evidence);
   if(context?.tool_route==='get_order_value_analysis'&&evidence)assertOrderValueEvidence(context,evidence);
   if(context?.tool_route==='get_daily_sales_analysis'&&evidence&&!evidence.analytical_plan)throw Object.assign(new Error('Recovered daily evidence has no validated plan'),{code:'EVIDENCE_SCOPE_MISMATCH'});
   if(context?.tool_route==='get_daily_sales_analysis'&&evidence)assertWeekdayEvidence(context,evidence);
@@ -101,6 +103,7 @@ export function assertEvidenceAgreement(contextValue,evidence,requestMessage=nul
 
 // Nonempty prose alone cannot complete a declared analytical operation.
 export function assertOperationDelivery(context,result){
+  if(context?.population_scope&&!result?.evidence&&!result?.analysis_unavailable&&!result?.clarification?.fields?.length)throw Object.assign(new Error('Requested population has no validated evidence or explicit limitation.'),{code:'EVIDENCE_SCOPE_MISMATCH',failed_stage:'evidence_validation'});
   if(context?.requested_operations?.length&&!result?.evidence&&!result?.analysis_unavailable)throw Object.assign(new Error('Requested operation has no validated evidence or explicit limitation.'),{code:'EVIDENCE_SCOPE_MISMATCH',failed_stage:'evidence_validation'});
 }
 
