@@ -6,6 +6,7 @@ import { resolveAnalyticalPlan } from './analytical-plan.js';
 // Contracts audited from the governed implementations, not inferred from names.
 // Unlisted bindings remain reachable through the existing governed dispatcher.
 export const ANALYTICAL_CAPABILITIES=Object.freeze({
+  get_population_conversion:{metrics:['conversion'],dimensions:[],filters:['visitor_country','human_sessions'],grain:'day',comparisons:['country_global_inclusive','country_rest_of_world_exclusive'],delivery:['table'],identity:'one authoritative Shopify shop; visitor-session geography',provenance:'Read-only ShopifyQL FROM sessions; same-row completed-checkout sessions and sessions',availability:'conditional_on_verified_source_reports',bounds:{days:366,graphql_calls:5,deadline_ms:60000}},
   get_order_value_analysis:{metrics:['orders'],dimensions:['numeric_band','basket_composition'],filters:['shipping_country','currency','channel'],operations:['basket_composition','numeric_bands','threshold_scenarios','merchandise_mean','merchandise_median','basket_gaps','break_even','optional_product_enrichment'],grain:'order',comparisons:['promotion_exclusion'],delivery:['table','chart','xlsx'],preferred_transport:'job',identity:'source-qualified unique Shopify orders',definitions:ORDER_VALUE_DEFINITIONS,provenance:'Persisted order components; shipping eligibility and population completeness unverified'},
   get_shopify_operational_sales_baseline:{metrics:['orders','gross_sales','discounts','returns','net_sales','total_sales','average_order_value','net_items_sold'],dimensions:['calendar_month','channel'],filters:['channel'],grain:'period',comparisons:['explicit_periods'],identity:'one Shopify shop; Online Store and POS predicates remain separate',delivery:['table','chart'],provenance:'ShopifyQL FROM sales; authoritative shop currency; collection coverage unverified'},
   get_daily_sales_analysis:{...DAILY_SALES_CONTRACT,dimensions:['weekday'],comparisons:['promotion_exclusion'],delivery:['table','chart','xlsx'],identity:'one authoritative Shopify shop',provenance:'ShopifyQL sales + shop metadata'},
@@ -19,6 +20,12 @@ export const UNAVAILABLE_ANALYTICAL_CAPABILITIES=Object.freeze({
 export function resolveExecutionPlan(context,bindings) {
   const plan=resolveAnalyticalPlan(context),capability=ANALYTICAL_CAPABILITIES[context?.tool_route]||null;
   let limitation=UNAVAILABLE_ANALYTICAL_CAPABILITIES[context?.requested_subject]||null;
+  if(context?.tool_route==='get_population_conversion'){
+    if(context.population_scope?.geography_role!=='visitor_country')limitation='Conversion requires visitor/session geography. Shipping destination, billing country, currency and storefront market do not establish that population.';
+    else if(context.population_scope?.groups.includes('other_country'))limitation='The requested visitor-country pair has no governed comparison binding. This reader supports a selected visitor country versus global (including it) or rest of world (excluding it); no provider call was made.';
+    else if(plan.dimensions.length||plan.population.filters.length||plan.exclusions.length||plan.scope.currencies.length||plan.scope.channel!=='online'||plan.scope.channel_breakdown||plan.scope.platform&&!['shopify','all'].includes(plan.scope.platform)||plan.comparison.start_date)limitation='The country-conversion reader supports one Shopify online visitor-country population compared with global or rest of world, without additional breakdowns, currency filters or period comparisons. The requested scope has no compatible binding; no provider call was made.';
+    else if(plan.dates.start_date&&plan.dates.end_date&&(Date.parse(plan.dates.end_date)-Date.parse(plan.dates.start_date))/86400000>=366)limitation='Country conversion supports a bounded read of at most 366 days. Narrow the reporting period; no provider call was made.';
+  }
   if(context?.tool_route==='get_order_value_analysis'){
     // Unspecified scope permits the disclosed Shopify online subset. Explicit
     // source/channel constraints still block incompatible population reads.

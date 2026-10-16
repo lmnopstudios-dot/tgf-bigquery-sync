@@ -224,6 +224,107 @@
           "check": "basket"
         }
       ]
+    },
+    {
+      "id": "visitor-conversion-unavailable",
+      "turns": [
+        {
+          "question": "What is the conversion rate this year for online UK visitors only compared to global?",
+          "subject": "population_conversion",
+          "dates": [
+            "2026-01-01",
+            "2026-10-14"
+          ],
+          "check": "visitor-conversion-unavailable"
+        },
+        {
+          "question": "UK only",
+          "subject": "population_conversion",
+          "dates": [
+            "2026-01-01",
+            "2026-10-14"
+          ],
+          "check": "visitor-conversion-unavailable"
+        },
+        {
+          "question": "Worldwide instead",
+          "subject": "population_conversion",
+          "dates": [
+            "2026-01-01",
+            "2026-10-14"
+          ],
+          "check": "visitor-conversion-unavailable"
+        },
+        {
+          "question": "Compare with the rest of the world",
+          "subject": "population_conversion",
+          "dates": [
+            "2026-01-01",
+            "2026-10-14"
+          ],
+          "check": "visitor-conversion-unavailable"
+        }
+      ]
+    },
+    {
+      "id": "native-visitor-country-comparison",
+      "country_conversion": true,
+      "turns": [
+        {
+          "question": "What is the conversion rate this year for online UK visitors only compared to global?",
+          "subject": "population_conversion",
+          "dates": [
+            "2026-01-01",
+            "2026-10-14"
+          ],
+          "check": "visitor-conversion-supported",
+          "provider": "country_conversion",
+          "groups": [
+            "country",
+            "global"
+          ]
+        },
+        {
+          "question": "UK only",
+          "subject": "population_conversion",
+          "dates": [
+            "2026-01-01",
+            "2026-10-14"
+          ],
+          "check": "visitor-conversion-supported",
+          "provider": "country_conversion",
+          "groups": [
+            "country"
+          ]
+        },
+        {
+          "question": "Worldwide instead",
+          "subject": "population_conversion",
+          "dates": [
+            "2026-01-01",
+            "2026-10-14"
+          ],
+          "check": "visitor-conversion-supported",
+          "provider": "country_conversion",
+          "groups": [
+            "global"
+          ]
+        },
+        {
+          "question": "Compare with the rest of the world",
+          "subject": "population_conversion",
+          "dates": [
+            "2026-01-01",
+            "2026-10-14"
+          ],
+          "check": "visitor-conversion-supported",
+          "provider": "country_conversion",
+          "groups": [
+            "country",
+            "rest_of_world"
+          ]
+        }
+      ]
     }
   ],
   "regression_suites": [
@@ -467,6 +568,49 @@
         [
           "Show UK online GBP basket composition for 2026-01-01 to 2026-10-15."
         ]
+      ]
+    },
+    {
+      "file": "test/oracle-population-conversion.test.js",
+      "covers": [
+        "fresh and retained device context",
+        "UK visitor geography distinct from shipping/billing/currency/market",
+        "UK only and worldwide replacement",
+        "global including UK versus rest-of-world excluding UK",
+        "ratio of summed compatible native numerators and sessions",
+        "two decimal percentages and percentage-point difference",
+        "cutoff and partial coverage disclosure",
+        "provider population arguments",
+        "explicit unsupported stored geographic evidence",
+        "direct interactive durable and recovery scope validation",
+        "device table rejection and device switch filter clearing"
+      ],
+      "representative_conversations": [
+        [
+          "What is the conversion rate this year for online UK visitors only compared to global?",
+          "UK only",
+          "Worldwide instead",
+          "Compare with the rest of the world",
+          "Switch back to device breakdown"
+        ],
+        [
+          "Monthly mobile and desktop conversion rates this year.",
+          "What is the conversion rate this year for online UK visitors only compared to global?"
+        ]
+      ]
+    },
+    {
+      "file": "test/oracle-shopify-country-conversion.test.js",
+      "covers": [
+        "production factory and existing credential transport",
+        "read_reports metadata gate",
+        "bounded native Shopify country and unfiltered global counts",
+        "rest-of-world derived from compatible global minus country",
+        "missing days unknown and explicit zeros",
+        "measurement partitions and current-day exclusion",
+        "native proof and recovery tampering",
+        "safe network access parse and permission limitations",
+        "direct interactive durable polling and Render probe"
       ]
     }
   ]

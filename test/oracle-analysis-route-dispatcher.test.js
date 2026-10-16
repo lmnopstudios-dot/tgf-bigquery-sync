@@ -26,6 +26,7 @@ test('focused Woo transition validates from fresh and retained broad contexts',(
 
 test('every deterministic transition route is registered with an executable dispatcher',()=>{
   const prompts=[
+    'What is the conversion rate this year for online UK visitors only compared to global?',
     'Show UK online GBP order-value bands this year.',
     'What is the current stock levels for eye rings?',
     'Show online sales by weekday this year.',

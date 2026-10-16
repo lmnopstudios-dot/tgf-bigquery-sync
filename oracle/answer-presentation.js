@@ -1,3 +1,4 @@
+import { populationConversionMarkdown } from './population-conversion.js';
 import { basketBusinessView } from './basket-composition.js';
 import { campaignSetBusinessView } from './campaign-set-analysis.js';
 import { safeReadFailure, readFailureAction } from './read-failure.js';
@@ -201,6 +202,7 @@ function supportingMetadata(e, supporting='') {
 /** Unknown contracts retain their original answer. Never hide an unknown limitation. */
 export function presentAnalyticalAnswer(result, context={}) {
   if(!result?.evidence) return result;
+  if(result.evidence.kind==='governed_population_conversion')return {...result,answer:populationConversionMarkdown(result.evidence)};
   if(result.evidence.subject==='current_stock')return result;
   context=context||{};
   const e=result.evidence, view=e.ambiguous ? [`Several products match **${text(e.entity_query)}**. Choose one to view its sales.`, ...(e.candidates || []).map((c,i)=>`${i+1}. **${text(c.catalogue_titles?.[0] || 'Unnamed product')}** — ${text(c.sources?.map(s=>[s.source_platform,s.source_store].filter(Boolean).join(' / ')).join('; ') || 'Source unavailable')}`)] : businessView(e);
