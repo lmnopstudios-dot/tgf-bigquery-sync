@@ -123,6 +123,14 @@ function transitionContext(existing, message, {now=Date.now(),reportContext=null
   if(/^(?:new (?:question|analysis)|forget that|start over)\b/i.test(text))return transitionAnalysisContext(emptyAnalysisContext(),text.replace(/^(?:new (?:question|analysis)|forget that|start over)\s*[:,.]?\s*/i,''),{now});
   if(individualOrderQuestion(text)){const context=emptyAnalysisContext();return {context,transition:{continuation:false,set:[],clear:ANALYSIS_CONTEXT_FIELDS,retain:[],missing_required_fields:[],ready_to_execute:false,applies_to_message:true}};}
   if(reportContext) base=initializeFromReportContext(base,reportContext);
+  // A grouping-only refinement is compatible with the retained analytical scope.
+  // Capability selection still decides whether that producer can execute it.
+  const groupingOnly=text.match(/^(?:(?:show|use|give me)\s+)?(?:(by|per|each)\s+(?:calendar\s+)?(day|week|month|quarter|year)|((?:daily|weekly|monthly|quarterly|yearly))|((?:totals?|overall|whole period)))(?:\s+(?:instead|only|please))?[.!?]*$/i);
+  if(base.tool_route&&groupingOnly){
+    const grain=groupingOnly[4]?null:groupingOnly[2]||({daily:'day',weekly:'week',monthly:'month',quarterly:'quarter',yearly:'year'}[groupingOnly[3].toLowerCase()]);
+    const context=validateAnalysisContext({...base,grain});
+    return {context,transition:{continuation:true,set:['grain'],clear:[],retain:ANALYSIS_CONTEXT_FIELDS.filter(k=>k!=='grain'),missing_required_fields:context.unresolved_required_fields,ready_to_execute:!context.unresolved_required_fields.length,applies_to_message:true}};
+  }
   const attribution=requestedAttributionOperation(text,base);
   if(attribution){
     const context=validateAnalysisContext({...emptyAnalysisContext(),...base,...(period(text,now)||{}),requested_subject:base.requested_subject||'klaviyo_email',requested_operations:[attribution],numeric_operation:null,dimensions:['product'],output_preference:null,unresolved_required_fields:[]});
@@ -255,7 +263,7 @@ function transitionContext(existing, message, {now=Date.now(),reportContext=null
     else if(!namedProduct&&!explicitSubject&&!viewsBeforePurchase&&/\bsales|revenue\b/.test(lower)) set.metrics=['sales'],set.analysis_type='finance';
     else if(!explicitSubject&&!viewsBeforePurchase&&/\bcustomers?\b/.test(lower)) set.metrics=['customers'],set.analysis_type='customers';
     else if(!explicitSubject&&!viewsBeforePurchase&&!productChoiceFollowup&&/\bproducts?\b/.test(lower)) set.metrics=['products'],set.analysis_type='products';
-    for(const [pattern,grain] of [[/\bdaily\b/,'day'],[/\bweekly\b/,'week'],[/\bmonthly\b/,'month'],[/\bquarterly\b/,'quarter'],[/\byearly|annually\b/,'year']]) if(pattern.test(lower)) set.grain=grain;
+    for(const [pattern,grain] of [[/\bdaily\b/,'day'],[/\bweekly\b/,'week'],[/\b(?:monthly|by (?:calendar )?month|month by month)\b/,'month'],[/\bquarterly\b/,'quarter'],[/\byearly|annually\b/,'year']]) if(pattern.test(lower)) set.grain=grain;
     if(/each year separately|by (?:cohort )?year|annual cohorts?/.test(lower))set.grain='year';
     for(const currency of CURRENCIES) if(new RegExp(`\\b${currency}\\b`,'i').test(text)) set.currencies=[currency];
     if(/all currencies/i.test(text)) clear.push('currencies');
@@ -280,19 +288,21 @@ function transitionContext(existing, message, {now=Date.now(),reportContext=null
     }
     if(!base.currencies.length&&!set.currencies&&set.analysis_type==='finance'&&!['get_shopify_online_country_products','get_online_country_sales','get_governed_category_sales','get_shopify_operational_sales_baseline','get_general_sales_analysis','get_product_sales_analysis'].includes(set.tool_route||base.tool_route)&&!advisory) set.currencies=['GBP'];
   }
+  const calendarGrain=[[/\b(?:daily|by day|per day)\b/i,'day'],[/\b(?:weekly|by week|per week)\b/i,'week'],[/\b(?:monthly|by (?:calendar )?month|per month|month by month)\b/i,'month'],[/\b(?:quarterly|by quarter)\b/i,'quarter'],[/\b(?:yearly|annually|by year)\b/i,'year']].find(([pattern])=>pattern.test(text))?.[1];
   const conversionFamily=/\bconv(?:ersion|erison)(?:\s+rates?)?\b/i.test(text)||['device_conversion','population_conversion'].includes(base.requested_subject)&&(!set.requested_subject||['device_conversion','population_conversion'].includes(set.requested_subject));
   const populationIntent=conversionFamily?populationScopeIntent(text,base.population_scope):null;
   const deviceBreakdown=/\b(?:device|mobile|desktop)\b/i.test(text)&&/\b(?:breakdown|by|versus|vs|conversion|rates?)\b/i.test(text);
   if(conversionFamily&&populationIntent){
-    Object.assign(set,{requested_subject:'population_conversion',tool_route:'get_population_conversion',metrics:['conversion'],analysis_type:'ecommerce',channel:set.channel||(/\b(?:in[ -]?store|POS|point of sale)\b/i.test(text)&&!/\b(?:exclude|excluding|without)\s+(?:POS|in[ -]?store)/i.test(text)?'instore':'online'),population_scope:populationIntent,dimensions:deviceBreakdown?['device']:[],grain:null});
+    Object.assign(set,{requested_subject:'population_conversion',tool_route:'get_population_conversion',metrics:['conversion'],analysis_type:'ecommerce',channel:set.channel||(base.requested_subject==='population_conversion'?base.channel:null)||(/\b(?:in[ -]?store|POS|point of sale)\b/i.test(text)&&!/\b(?:exclude|excluding|without)\s+(?:POS|in[ -]?store)/i.test(text)?'instore':'online'),population_scope:populationIntent,dimensions:deviceBreakdown?['device']:base.requested_subject==='population_conversion'?base.dimensions:[],grain:calendarGrain??(base.requested_subject==='population_conversion'?base.grain:null)});
     set.platform=/\bwoo(?:commerce)?\b/i.test(text)?(/\bshopify\b/i.test(text)?'woo+shopify':'woo'):/\bshopify\b/i.test(text)?'shopify':base.requested_subject==='population_conversion'?base.platform:null;
     if(base.requested_subject!=='population_conversion'){if(!/\b(?:GBP|USD|JPY|EUR)\b/i.test(text))set.currencies=[];set.filters=set.filters||[];}
-    clear.push('geography','source_store','comparison_type','comparison_start_date','comparison_end_date','included_periods','exclusions','failed_subject_switch');
+    if(base.requested_subject!=='population_conversion')clear.push('geography','source_store','comparison_type','comparison_start_date','comparison_end_date','included_periods','exclusions','failed_subject_switch');
   }else if(conversionFamily&&deviceBreakdown&&base.population_scope){
     Object.assign(set,{requested_subject:'device_conversion',tool_route:'get_governed_device_conversion',metrics:['conversion'],analysis_type:'ecommerce',channel:'online',population_scope:null,dimensions:[],grain:'month'});
     clear.push('geography','filters','currencies','comparison_type','comparison_start_date','comparison_end_date');
   }
-  const scopeOnly=Boolean(period(text,now)&&/^(?:(?:what about|how about|for|in|during)\s+)?(?:the\s+)?(?:last|this|past|since)\b/i.test(text))||(base.tool_route==='get_product_sales_analysis'&&/\b(?:choice|choose|product identit|stable reference)\b/i.test(text))||/^(?:by month|just online|online only|what about (?:last year|this year|20\d{2})|exclude\b|sort\b|add\b|graph\b|chart\b|why\b|what changed between\b|for\b|in\b|last year\b|this year\b)/i.test(text);
+  if((set.tool_route||base.tool_route)&&/\b(?:export|download|spreadsheet|excel|xlsx)\b/i.test(text))set.output_preference='xlsx';
+  const scopeOnly=Object.hasOwn(set,'grain')||Boolean(period(text,now)&&/^(?:(?:what about|how about|for|in|during)\s+)?(?:the\s+)?(?:last|this|past|since)\b/i.test(text))||(base.tool_route==='get_product_sales_analysis'&&/\b(?:choice|choose|product identit|stable reference)\b/i.test(text))||/^(?:by month|just online|online only|what about (?:last year|this year|20\d{2})|exclude\b|sort\b|add\b|graph\b|chart\b|why\b|what changed between\b|for\b|in\b|last year\b|this year\b)/i.test(text);
   if(base.metrics.length&&/^(?:how|what|which|can you|could you|show me)\b/i.test(text)&&Object.keys(set).every(k=>['metrics','analysis_type','start_date','end_date','requested_end_period','partial_period','grain','date_cutoff','current_day_included'].includes(k))&&!scopeOnly&&!unrelated){
     const context={...emptyAnalysisContext(),unresolved_required_fields:['requested_subject']};
     return {context,transition:{continuation:false,set:[],clear:ANALYSIS_CONTEXT_FIELDS,retain:[],missing_required_fields:['requested_subject'],ready_to_execute:false,applies_to_message:true}};

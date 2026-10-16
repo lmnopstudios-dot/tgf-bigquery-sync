@@ -5,6 +5,7 @@ import { assertCatalogueSelection, scopeMismatch } from './product-catalogue-fil
 // Recovery checks stored bytes, not just a successful persistence marker.
 export async function assertProductArtifact(artifact){
   const e=artifact?.envelope;
+  if(e?.kind==='governed_population_conversion'){const {assertCountryWorkbook}=await import('./country-conversion-export.js');return assertCountryWorkbook(artifact);}
   if(e?.kind==='governed_klaviyo_campaign_set'){
     const {assertCampaignSetEvidence,campaignWorkbookRows}=await import('./campaign-set-analysis.js');
     const {assertPlanAgreement}=await import('./analytical-plan.js');

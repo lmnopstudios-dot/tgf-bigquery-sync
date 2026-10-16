@@ -46,15 +46,15 @@ export function acceptanceFixture({fail_start=null,campaigns=false,country_conve
   const countryDeps=createOracleProviderDependencies({project:'fixture',bigquery,env:{},now:()=>new Date(now),shopifyCountryGraphql:async(query,variables)=>{
     calls.push({provider:'country_conversion',args:{query,variables}});assert.doesNotMatch(query,/mutation/);
     if(query.includes('OracleCountryCapability'))return {shop:{id:'gid://shopify/Shop/42',ianaTimezone:'Europe/London'},currentAppInstallation:{accessScopes:[{handle:'read_reports'}]}};
-    const local=variables.query.includes('session_country_code'),names=['day',...(local?['session_country_code']:[]),'sessions','sessions_that_completed_checkout'];
+    const rest=variables.query.includes("session_country_code != 'GB'"),local=!rest&&variables.query.includes("session_country_code = 'GB'"),names=['day',...(local?['session_country_code']:[]),'sessions','sessions_that_completed_checkout'];
     const start=variables.query.match(/SINCE (\S+) UNTIL/)[1];
     const days=[start,new Date(Date.parse(start+'T12:00:00Z')+86400000).toISOString().slice(0,10)];
-    const rows=days.map((day,i)=>({day,...(local?{session_country_code:'GB'}:{}),sessions:local?[100,900][i]:[200,1800][i],sessions_that_completed_checkout:local?[10,9][i]:[12,36][i]}));
+    const rows=days.map((day,i)=>({day,...(local?{session_country_code:'GB'}:{}),sessions:rest?[100,900][i]:local?[100,900][i]:[200,1800][i],sessions_that_completed_checkout:rest?[2,27][i]:local?[10,9][i]:[12,36][i]}));
     return {shopifyqlQuery:{parseErrors:[],tableData:{columns:names.map(name=>({name})),rows}}};
   }});
   const klaviyo=(...args)=>(state.campaigns?live.klaviyo:deps.klaviyo)(...args);
   klaviyo.resolveCampaigns=(...args)=>(state.campaigns?live.klaviyo:deps.klaviyo).resolveCampaigns(...args);
-  const baseline=createOracleBaselineDispatcher({ecommerceBaselineOverview:createBaselineOverviewService({customerJourney:deps.customerJourney,populationConversion:args=>(state.country_conversion?countryDeps:deps).populationConversion(args),shopifySales:native,dailySales:deps.dailySales,basketComposition:deps.basketComposition,klaviyo,now:()=>new Date(now),
+  const baseline=createOracleBaselineDispatcher({ecommerceBaselineOverview:createBaselineOverviewService({customerJourney:deps.customerJourney,populationConversion:(args,options)=>(state.country_conversion?countryDeps:deps).populationConversion(args,options),shopifySales:native,dailySales:deps.dailySales,basketComposition:deps.basketComposition,klaviyo,now:()=>new Date(now),
     onlineCountrySales:async args=>{calls.push({provider:'countries',args});return {rows:[{country_code:'GB',currency:'GBP',orders:4,operational_net_sales:200,sources:[{source_platform:'shopify',orders:4,operational_net_sales:200}],eligible_orders:5,unknown_country_orders:1,eligible_sales:240,unknown_country_sales:40}]};},
     customerReport:async args=>{calls.push({provider:'customers',args});return {overall:{customers:10,new_customers:7,returning_customers:4,orders:15},applied_channel_predicate:"sales_channel = 'Online Store'",coverage:{complete:true},source_collected_at:'2026-10-14T11:00:00Z'};}
   })});
@@ -70,7 +70,7 @@ export async function acceptanceServer(f,{durable=false,now=NOW}={}){
     res.json({success:true,...r,analysis_context:r?.analysis_context||context});
   }catch(e){next(e);}});
   app.use('/api/oracle',createOracleUiRouter({bigquery:{},project:'fixture',knowledgeService:{},baselineOverview:f.baseline,
-    chat:async(message,options)=>{assert.equal(options?.toolsAllowed,false,'Unexpected analytical model fallback');return {answer:'Edited text: collaboration retention, country conversion and basket composition need attention.',tools:[]};},generateProposals:async()=>[],analysisJobStore:jobs,
+    chat:async(message,options)=>{assert.equal(options?.toolsAllowed,false,'Unexpected analytical model fallback');return {answer:'Edited text: collaboration retention, country conversion and basket composition need attention.',tools:[]};},generateProposals:async()=>[],analysisJobStore:jobs,exportStore:f.exportStore,
     env:{ORACLE_UI_PASSWORD:'fixture',ORACLE_UI_SESSION_SECRET:'fixture-session-secret-with-enough-bytes',ORACLE_UI_ADMIN_NAME:'staff',ORACLE_ANALYSIS_JOBS_ENABLED:String(durable)},now:()=>now}));
   const server=await new Promise((resolve,reject)=>{const s=app.listen(0,'127.0.0.1',()=>resolve(s));s.on('error',reject);});
   const origin=`http://127.0.0.1:${server.address().port}`,base=origin+'/api/oracle';
@@ -98,6 +98,13 @@ export function assertAcceptanceTurn(turn,result,f,callOffset=0){
   }
   assert.doesNotMatch(result.answer,/What date range/);
   if(turn.provider){assert.ok(calls.some(c=>c.provider===turn.provider));assert.ok(calls.every(c=>c.provider===turn.provider),JSON.stringify(calls));}
+  if(turn.check==='visitor-monthly'){
+    assert.equal(c.grain,turn.grain);assert.deepEqual(c.population_scope.groups,turn.groups);assert.equal(result.evidence.kind,'governed_population_conversion');
+    if(turn.grain==='month'){assert.ok(result.evidence.sections.every(s=>s.month));assert.match(result.answer,/Month \|/);assert.match(result.answer,/completed-checkout sessions/);}
+    if(turn.groups.includes('rest_of_world'))assert.ok(calls.some(c=>c.args.variables?.query?.includes("session_country_code != 'GB'")));
+    for(const s of result.evidence.sections)for(const row of s.rows)assert.equal(row.rate,row.sessions?row.numerator/row.sessions:null);
+    const coverage=result.evidence.source.coverage;assert.equal(coverage.categories.length,coverage.requested_days);assert.equal(Object.values(coverage.category_counts).reduce((a,b)=>a+b,0),coverage.requested_days);
+  }
   if(turn.check==='retention'){assert.equal(result.evidence.kind,'governed_cohort_retention');assert.match(result.answer,/75\.00%/);assert.match(result.answer,/50\.00%/);assert.equal(result.partial,true);assert.ok(calls.every(c=>c.provider==='retention'));}
   if(turn.check==='visitor-conversion-supported'){assert.equal(result.evidence.kind,'governed_population_conversion');assert.match(result.answer,/1\.90%|2\.40%/);assert.doesNotMatch(result.answer,/Mobile|Desktop/);assert.deepEqual(result.evidence.population_scope.groups,turn.groups);assert.ok(calls.every(c=>c.provider==='country_conversion'));if(turn.groups.includes('rest_of_world'))assert.match(result.answer,/2\.90%/);if(turn.groups.includes('global')&&turn.groups.includes('country'))assert.match(result.answer,/overlap/);}
   if(turn.check==='visitor-conversion-unavailable'){assert.equal(result.analysis_unavailable,true);assert.match(result.answer,/Visitor-country conversion is unavailable/);assert.match(result.answer,/cutoff: unavailable/);assert.doesNotMatch(result.answer,/\|.*Mobile.*Desktop/);assert.equal(calls.length,0);}

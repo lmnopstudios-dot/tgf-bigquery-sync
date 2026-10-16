@@ -307,6 +307,7 @@
           "check": "visitor-conversion-supported",
           "provider": "country_conversion",
           "groups": [
+            "country",
             "global"
           ]
         },
@@ -339,6 +340,100 @@
           ],
           "provider": "retention",
           "check": "retention"
+        }
+      ]
+    },
+    {
+      "id": "production-monthly-country-conversation",
+      "country_conversion": true,
+      "turns": [
+        {
+          "question": "Compare UK visitor conversion with global visitor conversion for 2026.",
+          "subject": "population_conversion",
+          "check": "visitor-monthly",
+          "provider": "country_conversion",
+          "grain": null,
+          "groups": [
+            "country",
+            "global"
+          ]
+        },
+        {
+          "question": "Can we see a monthly report of UK vs rest of the world conversion rates for the last 3 years?",
+          "subject": "population_conversion",
+          "check": "visitor-monthly",
+          "provider": "country_conversion",
+          "grain": "month",
+          "groups": [
+            "country",
+            "rest_of_world"
+          ]
+        },
+        {
+          "question": "Okay for the last 366 days then.",
+          "subject": "population_conversion",
+          "check": "visitor-monthly",
+          "provider": "country_conversion",
+          "grain": "month",
+          "groups": [
+            "country",
+            "rest_of_world"
+          ]
+        },
+        {
+          "question": "Can I see a monthly breakdown of this?",
+          "subject": "population_conversion",
+          "check": "visitor-monthly",
+          "provider": "country_conversion",
+          "grain": "month",
+          "groups": [
+            "country",
+            "rest_of_world"
+          ]
+        },
+        {
+          "question": "Totals instead",
+          "subject": "population_conversion",
+          "check": "visitor-monthly",
+          "provider": "country_conversion",
+          "grain": null,
+          "groups": [
+            "country",
+            "rest_of_world"
+          ]
+        },
+        {
+          "question": "By month",
+          "subject": "population_conversion",
+          "check": "visitor-monthly",
+          "provider": "country_conversion",
+          "grain": "month",
+          "groups": [
+            "country",
+            "rest_of_world"
+          ]
+        },
+        {
+          "question": "Global instead",
+          "subject": "population_conversion",
+          "check": "visitor-monthly",
+          "provider": "country_conversion",
+          "grain": "month",
+          "groups": [
+            "country",
+            "global"
+          ]
+        },
+        {
+          "question": "Rest of world instead",
+          "subject": "population_conversion",
+          "check": "visitor-monthly",
+          "provider": "country_conversion",
+          "grain": "month",
+          "groups": [
+            "country",
+            "rest_of_world"
+          ]
         }
       ]
     }
@@ -631,6 +726,19 @@
     },
     {
       "file": "test/oracle-cohort-retention.test.js"
+    },
+    {
+      "file": "test/oracle-monthly-country-conversion.test.js",
+      "covers": [
+        "monthly weighted counts",
+        "date-only continuation",
+        "oversized retained scope",
+        "calendar and measurement boundaries",
+        "unknown geography",
+        "failed chunks cancellation lease guards",
+        "coverage reconciliation",
+        "chart and workbook evidence validation"
+      ]
     }
   ]
 }

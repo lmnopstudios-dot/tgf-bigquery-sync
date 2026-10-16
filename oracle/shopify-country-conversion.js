@@ -16,10 +16,10 @@ export function countryRequest(args){
   return {start_date:args.start_date,end_date:args.end_date,population_scope:scope,channel:'online',dimensions:[]};
 }
 export function countryConversionQuery(period,group,country,offset=0){
-  if(!['global','country'].includes(group)||group==='country'&&!/^[A-Z]{2}$/.test(country))invalid();
+  if(!['global','country','rest_of_world'].includes(group)||group!=='global'&&!/^[A-Z]{2}$/.test(country))invalid();
   for(const date of [period.start_date,period.end_date])assertDate(date);
   if(![0,COUNTRY_READER_BOUNDS.page_size].includes(offset))invalid();
-  return `FROM sessions\nSHOW sessions, sessions_that_completed_checkout\nGROUP BY day${group==='country'?', session_country_code':''}\nWHERE human_or_bot_session = 'human'${group==='country'?` AND session_country_code = '${country}'`:''}\nSINCE ${period.start_date} UNTIL ${period.end_date}\nORDER BY day ASC\nLIMIT ${COUNTRY_READER_BOUNDS.page_size}\nOFFSET ${offset}`;
+  return `FROM sessions\nSHOW sessions, sessions_that_completed_checkout\nGROUP BY day${group==='country'?', session_country_code':''}\nWHERE human_or_bot_session = 'human'${group==='country'?` AND session_country_code = '${country}'`:group==='rest_of_world'?` AND session_country_code IS NOT NULL AND session_country_code != '' AND session_country_code != 'ZZ' AND session_country_code != '${country}'`:''}\nSINCE ${period.start_date} UNTIL ${period.end_date}\nORDER BY day ASC\nLIMIT ${COUNTRY_READER_BOUNDS.page_size}\nOFFSET ${offset}`;
 }
 const era=date=>date<'2026-09-21'?'before_documented_September_rollout':date>'2026-09-23'?'after_documented_September_rollout':null;
 const normalizeDate=value=>{const date=typeof value==='string'?value.slice(0,10):null;if(!date||!/^\d{4}-\d{2}-\d{2}$/.test(date)||new Date(date+'T12:00:00Z').toISOString().slice(0,10)!==date)invalid();return date;};
@@ -41,7 +41,7 @@ export function deriveCountryEvidence(source){
   const today=new Intl.DateTimeFormat('en-CA',{timeZone:source.shop.ianaTimezone,year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(source.retrieved_at));
   const expectedPeriod={start_date:request.start_date<'2025-11-20'?'2025-11-20':request.start_date,end_date:request.end_date>=today?previousDate(today):request.end_date};
   if(!same(expectedPeriod,source.effective_period)||expectedPeriod.start_date>expectedPeriod.end_date)invalid();
-  const needsLocal=scope.groups.some(g=>g!=='global'),groups=needsLocal?['global','country']:['global'];
+  const needsLocal=scope.groups.some(g=>g!=='global'),groups=needsLocal?['global','country',...(scope.groups.includes('rest_of_world')?['rest_of_world']:[])]:['global'];
   if(!Array.isArray(source.reports)||source.reports.length!==groups.length)invalid();
   const maps={};
   for(const group of groups){
@@ -59,17 +59,20 @@ export function deriveCountryEvidence(source){
   for(const date of requestedDays){
     if(date<expectedPeriod.start_date||date>expectedPeriod.end_date){excluded.push({date,reason:date<'2025-11-20'?'before_governed_Shopify_launch':'current_or_future_day'});continue;}
     if(!era(date)){excluded.push({date,reason:'documented_measurement_rollout_shop_date_unverified'});continue;}
-    const global=maps.global.get(date),local=maps.country?.get(date);
-    if(!global||needsLocal&&!local){missing.push(date);continue;}
+    const global=maps.global.get(date),local=maps.country?.get(date),rest=maps.rest_of_world?.get(date);
+    if(!global||needsLocal&&!local||scope.groups.includes('rest_of_world')&&!rest){missing.push(date);continue;}
     if(local&&(local.sessions>global.sessions||local.numerator>global.numerator||global.numerator-local.numerator>global.sessions-local.sessions))invalid();
+    if(rest&&(rest.sessions+local.sessions>global.sessions||rest.numerator+local.numerator>global.numerator||global.numerator-local.numerator-rest.numerator>global.sessions-local.sessions-rest.sessions))invalid();
     let part=partitions.at(-1);
     if(!part||part.measurement_era!==era(date)||previousDate(date)!==part.period.end_date){
       part={platform:'shopify',source_store:source.shop.id,time_zone:source.shop.ianaTimezone,measurement_era:era(date),channel:'online',geography_role:'visitor_country',numerator_definition:'completed_checkout_sessions',denominator_definition:'sessions',period:{start_date:date,end_date:date},evidence_cutoff:date,rows:[]};partitions.push(part);
     }
     part.period.end_date=date;part.evidence_cutoff=date;available.push(date);
-    for(const group of scope.groups){const value=group==='country'?local:group==='global'?global:{sessions:global.sessions-local.sessions,numerator:global.numerator-local.numerator};part.rows.push({date,group,country:scope.country,geography_role:'visitor_country',denominator_definition:'sessions',numerator_definition:'completed_checkout_sessions',...value});}
+    for(const group of scope.groups){const value=group==='country'?local:group==='global'?global:rest;part.rows.push({date,group,country:scope.country,geography_role:'visitor_country',denominator_definition:'sessions',numerator_definition:'completed_checkout_sessions',...value});}
   }
-  return {partitions,coverage:{requested_days:requestedDays.length,compatible_report_days:available.length,missing_days:missing,excluded_days:excluded,first_compatible_day:available[0]||null,last_compatible_day:available.at(-1)||null,full_requested_period:available.length===requestedDays.length,upstream_tracking_completeness:'unverified',source_collected_at:null,query_retrieved_at:source.retrieved_at,measurement_rollout_shop_date:'unverified'}};
+  const categories=requestedDays.map(date=>{const exclusion=excluded.find(d=>d.date===date);return {date,category:available.includes(date)?'supported':missing.includes(date)?'missing':exclusion.reason==='before_governed_Shopify_launch'?'pre-source-history':exclusion.reason==='current_or_future_day'?'current/incomplete day':'measurement-transition exclusion',reason:exclusion?.reason||(available.includes(date)?'native_report':'native_row_missing')};});
+  const category_counts=Object.fromEntries([...new Set(categories.map(d=>d.category))].map(category=>[category,categories.filter(d=>d.category===category).length]));
+  return {partitions,coverage:{categories,category_counts,requested_days:requestedDays.length,compatible_report_days:available.length,missing_days:missing,excluded_days:excluded,first_compatible_day:available[0]||null,last_compatible_day:available.at(-1)||null,full_requested_period:available.length===requestedDays.length,upstream_tracking_completeness:'unverified',source_collected_at:null,query_retrieved_at:source.retrieved_at,measurement_rollout_shop_date:'unverified'}};
 }
 export function buildCountryEvidence(fields){const source={kind:COUNTRY_READER_CONTRACT,...fields};const derived=deriveCountryEvidence(source);return {...source,supported:derived.partitions.length>0,...derived};}
 export function assertCountrySource(request,source){
@@ -85,9 +88,9 @@ function failureCode(error){
 }
 export function createShopifyCountryConversionReader({env=process.env,graphql=null,fetchImpl=fetch,now=()=>new Date()}={}){
   // No schema setup, warehouse client, collector, schedule or write dependency.
-  const reader=async args=>{
+  const reader=async (args,{signal:externalSignal,deadlineAt=Infinity}={})=>{
     let calls=0,stage='scope_validation',transport=graphql;
-    const wallStarted=Date.now(),started=new Date(now()),deadline=AbortSignal.timeout(COUNTRY_READER_BOUNDS.total_timeout_ms);
+    const wallStarted=Date.now(),started=new Date(now()),deadline=AbortSignal.any([AbortSignal.timeout(COUNTRY_READER_BOUNDS.total_timeout_ms),...(externalSignal?[externalSignal]:[])]);
     const unavailable=(code,httpStatus)=>({kind:COUNTRY_READER_CONTRACT,supported:false,failure:{code,stage,...(Number.isInteger(httpStatus)?{http_status:httpStatus}:{})},read_only:true,graphql_calls:calls,evidence_cutoff:null});
     try{
       const request=countryRequest(args);
@@ -95,13 +98,15 @@ export function createShopifyCountryConversionReader({env=process.env,graphql=nu
         if(missingShopifyConfig(env).length)return unavailable('CONFIGURATION_UNAVAILABLE');
         const config=loadShopifyConfig(env);
         if(!/^[a-z0-9][a-z0-9-]*$/i.test(config.shop))return unavailable('CONFIGURATION_UNAVAILABLE');
-        stage='authentication';
-        const token=await getShopifyAccessToken(config,fetchImpl,AbortSignal.any([deadline,AbortSignal.timeout(COUNTRY_READER_BOUNDS.operation_timeout_ms)]));
+        stage='authentication';deadline.throwIfAborted();
+        if(deadlineAt<=Date.now())throw Object.assign(Error('Country deadline'),{name:'TimeoutError'});
+        const token=await getShopifyAccessToken(config,fetchImpl,AbortSignal.any([deadline,AbortSignal.timeout(Math.max(1,Math.min(COUNTRY_READER_BOUNDS.operation_timeout_ms,deadlineAt-Date.now())))]));
         transport=createShopifyGraphql({...config,token,fetchImpl,apiVersion:'2026-07'});
       }
       const run=async(query,variables={})=>{
         if(++calls>COUNTRY_READER_BOUNDS.max_graphql_calls)throw Object.assign(Error('Country call bound'),{code:'COUNTRY_PAGE_BOUND'});
-        const remaining=COUNTRY_READER_BOUNDS.total_timeout_ms-(Date.now()-wallStarted);
+        deadline.throwIfAborted();
+        const remaining=Math.min(deadlineAt-Date.now(),COUNTRY_READER_BOUNDS.total_timeout_ms-(Date.now()-wallStarted));
         if(remaining<=0)throw Object.assign(Error('Country deadline'),{name:'TimeoutError'});
         const timeout=Math.min(remaining,COUNTRY_READER_BOUNDS.operation_timeout_ms),signal=AbortSignal.any([deadline,AbortSignal.timeout(timeout)]);
         let timer;try{return await Promise.race([transport(query,variables,signal),new Promise((_,reject)=>{timer=setTimeout(()=>reject(Object.assign(Error('Country timeout'),{name:'TimeoutError'})),timeout);})]);}finally{clearTimeout(timer);}
@@ -114,7 +119,7 @@ export function createShopifyCountryConversionReader({env=process.env,graphql=nu
       const effective={start_date:request.start_date<'2025-11-20'?'2025-11-20':request.start_date,end_date:request.end_date>=today?previousDate(today):request.end_date};
       if(effective.start_date>effective.end_date)return unavailable('NO_COMPLETED_SHOPIFY_DAYS');
       const reports=[];
-      for(const group of request.population_scope.groups.some(g=>g!=='global')?['global','country']:['global']){
+      for(const group of request.population_scope.groups.some(g=>g!=='global')?['global','country',...(request.population_scope.groups.includes('rest_of_world')?['rest_of_world']:[])]:['global']){
         stage=`${group}_report`;const pages=[];
         for(let page=0;page<COUNTRY_READER_BOUNDS.max_pages;page++){
           const query=countryConversionQuery(effective,group,request.population_scope.country,page*COUNTRY_READER_BOUNDS.page_size),result=(await run(REPORT,{query}))?.shopifyqlQuery;

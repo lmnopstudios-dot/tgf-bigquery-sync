@@ -13,7 +13,7 @@ const apply=(c,q)=>transitionAnalysisContext(c,q,{now:NOW}).context;
 // Native-report fixture only; it does not certify this shop's live access/history.
 function supported(args){
   const effective={start_date:args.start_date,end_date:args.end_date==='2026-10-14'?'2026-10-13':args.end_date};
-  const reports=(args.population_scope.groups.some(g=>g!=='global')?['global','country']:['global']).map(group=>({group,period:effective,pages:[{query:countryConversionQuery(effective,group,args.population_scope.country),rows:['2026-01-01','2026-01-02'].map((day,i)=>({day,sessions:group==='country'?[100,900][i]:[200,1800][i],sessions_that_completed_checkout:group==='country'?[10,9][i]:[12,36][i],...(group==='country'?{session_country_code:args.population_scope.country}:{})}))}]}));
+  const reports=(args.population_scope.groups.some(g=>g!=='global')?['global','country',...(args.population_scope.groups.includes('rest_of_world')?['rest_of_world']:[])]:['global']).map(group=>({group,period:effective,pages:[{query:countryConversionQuery(effective,group,args.population_scope.country),rows:['2026-01-01','2026-01-02'].map((day,i)=>({day,sessions:group==='rest_of_world'?[100,900][i]:group==='country'?[100,900][i]:[200,1800][i],sessions_that_completed_checkout:group==='rest_of_world'?[2,27][i]:group==='country'?[10,9][i]:[12,36][i],...(group==='country'?{session_country_code:args.population_scope.country}:{})}))}]}));
   return buildCountryEvidence({request:args,shop:{id:'shop-1',ianaTimezone:'Europe/London'},granted_scopes:['read_reports'],retrieved_at:new Date(NOW).toISOString(),effective_period:effective,reports});
 }
 function fixture({available=true,mutate=null}={}){
@@ -34,8 +34,8 @@ test('fresh and device-retained scopes independently represent metric, geography
 });
 test('population followups distinguish overlapping global and disjoint rest of world; device switch clears filters',async()=>{
   const f=fixture();let r=await send(f,null,Q);const original=resolveAnalyticalPlan(r.analysis_context);
-  for(const [q,groups] of [['UK only',['country']],['Worldwide instead',['global']],['Compare with the rest of the world',['country','rest_of_world']]]){
-    r=await send(f,r.analysis_context,q);assert.deepEqual(r.analysis_context.population_scope.groups,groups);assert.deepEqual(f.calls.at(-1).population_scope.groups,groups);assert.notEqual(analyticalPlanKey(original),analyticalPlanKey(resolveAnalyticalPlan(r.analysis_context)));
+  for(const [q,groups] of [['UK only',['country']],['Worldwide instead',['country','global']],['Compare with the rest of the world',['country','rest_of_world']]]){
+    r=await send(f,r.analysis_context,q);assert.deepEqual(r.analysis_context.population_scope.groups,groups);assert.deepEqual(f.calls.at(-1).population_scope.groups,groups);assert.equal(analyticalPlanKey(original)===analyticalPlanKey(resolveAnalyticalPlan(r.analysis_context)),groups.includes('global'));
     if(groups.includes('rest_of_world')){assert.match(r.answer,/excluding GB/);assert.match(r.answer,/disjoint/);assert.match(r.answer,/2\.90%/);assert.match(r.answer,/-1\.00/);}
     if(groups.length===1)assert.equal(r.evidence.sections[0].rows.length,1);
   }
@@ -68,7 +68,7 @@ for(const durable of [false,true])test(`population comparison, retained device, 
   if(durable){const recovered=await server.get('/jobs/'+r.job_id);assert.deepEqual(recovered.evidence,r.evidence);assert.match(recovered.answer,/overlap/);server.jobs.jobs.get(r.job_id).result_json.evidence.sections[0].rows[0].numerator=22;const invalid=await fetch(server.base+'/jobs/'+r.job_id,{headers:server.headers});assert.equal(invalid.status,409);}
   else{const session=await server.get('/session');assert.match(JSON.stringify(session),/country|visitor|population_conversion/);}
   const local=await server.submit('UK only');assert.deepEqual(local.evidence.population_scope.groups,['country']);
-  const world=await server.submit('Worldwide instead');assert.deepEqual(world.evidence.population_scope.groups,['global']);
+  const world=await server.submit('Worldwide instead');assert.deepEqual(world.evidence.population_scope.groups,['country','global']);
   const rest=await server.submit('Compare with the rest of the world');assert.match(rest.answer,/2\.90%/);assert.match(rest.answer,/disjoint/);
   const device=await server.submit('Switch back to device breakdown');assert.equal(device.analysis_context.population_scope,null);assert.match(device.answer,/Mobile/);
   const absent=fixture({available:false}),other=await acceptanceServer(absent,{durable});t.after(other.close);const limitation=await other.submit(Q);assert.equal(limitation.analysis_unavailable,true);assert.match(limitation.answer,/unavailable/);
