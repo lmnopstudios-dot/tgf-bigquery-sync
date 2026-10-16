@@ -53,7 +53,7 @@ test('bounded diagnostic executes exact queries, reports source-qualified join u
   const f=fixture({rows,coverage}),r=await diagnoseOrderValues({start:'2026-09-01',end:'2026-09-30'},{bigquery:f.bq,project:'fixture'});assert.equal(r.population_status,state);assert.equal(r.bounds.maximum_queries,8);assert.equal(f.calls.length,8);assert.equal(r.schema_contract.valid,true);assert.equal(r.checks.find(c=>c.stage==='join_uniqueness').result[0].excess_join_rows,0);assert.equal(r.parameter_contract.assumed_charge,'NUMERIC');assert.doesNotMatch(JSON.stringify(r),/source_rows|shipping_charge"|params"/);
  }
  const partial=fixture({fail:'coverage_query'}),partialReport=await diagnoseOrderValues({start:'2026-09-01',end:'2026-09-30'},{bigquery:partial.bq,project:'fixture'});assert.equal(partialReport.population_status,'retrieved');assert.equal(partialReport.coverage_status,'query_failure');assert.equal(partialReport.checks.find(c=>c.stage==='coverage_query').status,'rejected');
- const dry=fixture({fail:'dry_run',schemas:schema.filter(r=>r.column_name!=='original_shipping_presentment')}),dryReport=await diagnoseOrderValues({start:'2026-09-01',end:'2026-09-30'},{bigquery:dry.bq,project:'fixture'});assert.equal(dryReport.schema_contract.valid,false);assert.equal(dryReport.checks.find(c=>c.stage==='population_dry_run').failure.bigquery_reason,'invalidQuery');
+ const dry=fixture({fail:'dry_run',schemas:schema.filter(r=>r.column_name!=='original_shipping_presentment')}),dryReport=await diagnoseOrderValues({start:'2026-09-01',end:'2026-09-30'},{bigquery:dry.bq,project:'fixture'});assert.equal(dryReport.schema_contract.valid,false);assert.equal(dryReport.checks.find(c=>c.stage==='population_dry_run').status,'blocked');assert.equal(dry.calls.length,1);
  const f=fixture({fail:'population_query'}),r=await diagnoseOrderValues({start:'2026-09-01',end:'2026-09-30'},{bigquery:f.bq,project:'fixture'});assert.equal(r.population_status,'query_failure');assert.equal(r.population,undefined);assert.doesNotMatch(JSON.stringify(r),/private/);
 });
 
@@ -63,12 +63,12 @@ test('common SQL validation failure blocks all dependent queries',async()=>{
  for(const stage of ['coverage_dry_run','join_uniqueness','population_query','coverage_query'])assert.equal(r.checks.find(c=>c.stage===stage).status,'blocked');
  assert.equal(r.population,undefined);
 });
-test('schema query is independent, bounded and preserves nested sanitized failures',async()=>{
+test('schema query is bounded, preserves nested sanitized failures and blocks dependent reads',async()=>{
  const f=fixture();const query=f.bq.query;
  f.bq.query=async o=>{if(o.query.includes('INFORMATION_SCHEMA')){assert.equal(o.maximumBytesBilled,'104857600');assert.equal(o.location,'EUROPE-WEST2');throw {response:{status:403,data:{error:{errors:[{reason:'accessDenied',message:'private customer'}]}}}};}return query(o);};
  const r=await diagnoseOrderValues({start:'2026-09-01',end:'2026-09-30'},{bigquery:f.bq,project:'fixture'});
  const failure=r.checks.find(c=>c.stage==='schema_inspection').failure;
- assert.equal(failure.http_status,403);assert.equal(failure.bigquery_reason,'accessDenied');assert.equal(r.population_status,'retrieved');assert.equal(r.schemas,null);assert.doesNotMatch(JSON.stringify(r),/private customer/);
+ assert.equal(failure.http_status,403);assert.equal(failure.bigquery_reason,'accessDenied');assert.equal(r.population_status,'query_failure');assert.equal(r.checks.find(c=>c.stage==='population_dry_run').status,'blocked');assert.equal(f.calls.length,0);assert.equal(r.schemas,null);assert.doesNotMatch(JSON.stringify(r),/private customer/);
 });
 
 test('all four snapshot tie-breaks serialize explicit governed fields in every shared query',async()=>{

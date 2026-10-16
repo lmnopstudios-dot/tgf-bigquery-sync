@@ -171,9 +171,11 @@ function businessView(e) {
 
 // Only analytical metadata is rendered. Full provider evidence stays in the response;
 // credentials, query payloads and person-level rows never become a display dump.
-function supportingMetadata(e) {
+function supportingMetadata(e, supporting='') {
   const keys=['definitions','coverage','retrieval','promotion','applied_exclusions','retrieved_daily_rows','time_zone','channel','currencies','resolved_product_ref','selected_candidate','history','placement','classification_boundary','ranking_status','ranking_method','provider_provenance','evidence_availability','comparison_compatible','comparison_period'];
+  if(e.retrieval_failed&&keys.includes('definitions'))keys.splice(keys.indexOf('definitions'),1);
   const metadata=Object.fromEntries(keys.filter(key=>e[key]!=null).map(key=>[key,e[key]]));
+  if(metadata.definitions){metadata.definitions=Object.fromEntries(Object.entries(metadata.definitions).filter(([,value])=>typeof value!=='string'||!supporting.includes(value)));}
   if(e.kind==='governed_order_values'){metadata.operation=e.operation;}
   if(e.kind==='governed_weekday_sales'){metadata.weekday_calculations=e.rows;metadata.eligible_daily_evidence=e.source_rows;}
   if(e.kind==='governed_product_sales') {
@@ -219,7 +221,7 @@ export function presentAnalyticalAnswer(result, context={}) {
   supporting=supporting.replace(/```(?:json)?\s*\n[\s\S]*?```/g,'').replace(/^\s*\{.*\}\s*$/gm,'');
   const primary=new Set(lines.map(line=>line.trim()));
   supporting=supporting.split(/\n\s*\n/).filter(part=>!primary.has(part.trim())&&!/^(?:Dates:|Requested\/applied dates:|\*\*Resolved dates:)/.test(part.trim())&&!(e.retrieval_failed&&/could not be retrieved|Population retrieval unavailable/.test(part))).join('\n\n');
-  const details=[exact,supporting,supportingMetadata(e)].filter(Boolean).join('\n\n');
+  const details=[exact,e.retrieval_failed?'':supporting,supportingMetadata(e,supporting)].filter(Boolean).join('\n\n');
   return {...result,answer:lines.join('\n\n')+`\n\n<details>\n<summary>Show details</summary>\n\n${details}\n\n</details>`,presentation:{version:1,supporting_markdown:original,summary_markdown:lines.join('\n\n')}};
 }
 
