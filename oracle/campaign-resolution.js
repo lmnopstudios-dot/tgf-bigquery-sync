@@ -1,20 +1,24 @@
+import { selectSentEntities } from './entity-relative-scope.js';
+import { campaignDiscoveryLimitation } from '../klaviyo/campaign-discovery.js';
 import { validateAnalysisContext } from './analysis-context.js';
 const esc=value=>String(value||'unavailable').replaceAll('\n',' ').replaceAll('|','\\|');
 const day=(instant,zone)=>new Intl.DateTimeFormat('en-CA',{timeZone:zone,year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(instant));
 export async function resolveCampaignContext(context,provider){
   const request=structuredClone(context.campaign_request);
   const pending=answer=>({answer,tools:[],analysis_context:validateAnalysisContext({...context,campaign_request:request}),clarification:true});
-  const missing=()=>{const asked=request.clarification_attempted;request.clarification_attempted=true;return pending(asked?'The supplied clarification is retained, but governed send metadata still cannot verify the campaign. Campaign attribution is unavailable for now.':'Campaign send metadata is unavailable. Please provide the campaign name or identifier (or a verified send date for the retained campaign). I’ll retain the requested campaign attribution metrics.');};
+  const missing=()=>{const asked=request.clarification_attempted;request.clarification_attempted=true;return pending(asked?'The supplied clarification is retained, but governed send metadata still cannot verify the campaign. Campaign attribution is unavailable for now.':'Campaign send metadata is unavailable. Please provide the campaign name or identifier (dates cannot establish missing actual send metadata). I’ll retain the requested campaign attribution metrics.');};
   if(!request.selected&&!request.metadata_attempted){
     request.metadata_attempted=true;
     let result;
-    try{result=await provider.resolveCampaigns({name:request.selector==='named'?request.name:null,channel:request.channel,cutoff:request.cutoff});}catch{
-      return missing();
+    try{result=await provider.resolveCampaigns({name:request.selector==='named'?request.name:null,channel:request.channel,cutoff:request.cutoff});}catch(error){
+      return pending(campaignDiscoveryLimitation(error));
     }
     let candidates=(result.candidates||[]).filter(c=>c.entity_id&&c.entity_kind!=='flow'&&c.report_kind!=='flow'&&!(c.send_time_semantics==='actual campaign send timestamp'&&Date.parse(c.send_time)>Date.parse(request.cutoff))&&(!request.channel||c.channel===request.channel)&&c.channel!=='flow'&&(!c.status||['sent','sending'].includes(c.status.toLowerCase()))&&c.is_sent!==false);
     candidates=candidates.map(c=>({...c,send_time:c.send_time_semantics==='actual campaign send timestamp'&&!Number.isNaN(Date.parse(c.send_time))&&Date.parse(c.send_time)<=Date.parse(request.cutoff)?c.send_time:null}));
     if(request.selector==='latest'&&candidates.every(c=>c.send_time)){
-      const groups=new Map();for(const c of candidates){const key=`${c.account}/${c.channel}`,previous=groups.get(key)||[];if(!previous.length||Date.parse(c.send_time)>Date.parse(previous[0].send_time))groups.set(key,[c]);else if(Date.parse(c.send_time)===Date.parse(previous[0].send_time))previous.push(c);}candidates=[...groups.values()].flat();
+      const selection=selectSentEntities(candidates,{...request,count:1});
+      if(selection.blocker)return missing();
+      candidates=selection.ambiguous||selection.selected;
     }
     request.candidates=candidates.slice(0,50);
     if(result.complete!==false&&candidates.length===1)request.selected=candidates[0];

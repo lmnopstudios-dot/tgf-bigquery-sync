@@ -6,6 +6,25 @@ function clean(value,limit=1000){if(value===null||value===undefined)return null;
 function relatedIds(item,type){const data=item?.relationships?.[type]?.data;return Array.isArray(data)?data.map(x=>x?.id).filter(Boolean):[];}
 function validateItem(item,kind){if(!item||typeof item!=='object'||Array.isArray(item))throw new Error(`Invalid ${kind} metadata resource`);if(typeof item.id!=='string'||!item.id.trim())throw new Error(`Invalid ${kind} metadata stable ID`);if(item.attributes!==undefined&&(item.attributes===null||typeof item.attributes!=='object'||Array.isArray(item.attributes)))throw new Error(`Invalid ${kind} metadata attributes`);const relationship=kind==='campaign'?'campaign-messages':'flow-actions',data=item.relationships?.[relationship]?.data;if(data!==undefined&&(!Array.isArray(data)||data.some(value=>typeof value?.id!=='string'||!value.id.trim())))throw new Error(`Invalid ${kind} metadata relationship IDs`);}
 
+// Campaign send_time is a source timestamp; strategy datetimes and creation
+// timestamps are never substitutes. Static strategy is normal API metadata,
+// not evidence of recipient-local scheduling. Distributed strategies lack one
+// verified campaign send instant and remain blocked.
+export function campaignSendMetadata(attributes = {}) {
+  const status = String(attributes.status || '').toLowerCase();
+  const strategy = attributes.send_strategy;
+  const staticStrategy = !strategy || strategy.method === 'immediate' ||
+    (strategy.method === 'static' && (strategy.options_static?.is_local == null || strategy.options_static.is_local === false));
+  const verified = ['sent', 'sending'].includes(status) && staticStrategy &&
+    typeof attributes.send_time === 'string' && Number.isFinite(Date.parse(attributes.send_time));
+  return {
+    send_time: clean(attributes.send_time),
+    send_time_semantics: verified ? 'actual campaign send timestamp' :
+      'actual send timestamp unavailable',
+    is_sent: ['sent', 'sending'].includes(status),
+  };
+}
+
 /** Metadata is untrusted factual source data. It is never interpreted as instructions. */
 export async function collectMetadata({client,retrievedAt=new Date().toISOString(),maxPages=8,maxItems=1000,includeContent=false}){
   const rows=[];
@@ -18,7 +37,7 @@ export async function collectMetadata({client,retrievedAt=new Date().toISOString
       validateItem(item,kind);
       const a=item.attributes||{},status=clean(a.status);
       const messageIds=relatedIds(item,kind==='campaign'?'campaign-messages':'flow-actions');
-      rows.push({entity_kind:kind,entity_id:item.id,entity_name:clean(a.name),status,send_time:clean(a.send_time),send_time_semantics:kind==='campaign'&&a.send_time&&!a.send_strategy&&['sent','sending'].includes(String(status).toLowerCase())?'actual campaign send timestamp':a.send_strategy?'recipient-local strategy retained from source':'actual send timestamp unavailable',message_ids:JSON.stringify(messageIds),subject:includeContent?clean(a.subject):null,preview_text:includeContent?clean(a.preview_text):null,destination_links:includeContent?JSON.stringify(a.destination_links||[]):null,source_endpoint:endpoint.split('?')[0],retrieved_at:retrievedAt,is_sent:kind==='campaign'?['sent','sending'].includes(String(status).toLowerCase()):null});
+      rows.push({entity_kind:kind,entity_id:item.id,entity_name:clean(a.name),status,...(kind==='campaign'?campaignSendMetadata(a):{send_time:clean(a.send_time),send_time_semantics:'actual send timestamp unavailable'}),message_ids:JSON.stringify(messageIds),subject:includeContent?clean(a.subject):null,preview_text:includeContent?clean(a.preview_text):null,destination_links:includeContent?JSON.stringify(a.destination_links||[]):null,source_endpoint:endpoint.split('?')[0],retrieved_at:retrievedAt,is_sent:kind==='campaign'?['sent','sending'].includes(String(status).toLowerCase()):null});
       // Included records are deliberately not treated as separate sent entities.
       void included;
     }

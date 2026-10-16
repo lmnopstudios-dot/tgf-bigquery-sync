@@ -200,7 +200,7 @@ export function campaignContextPatch(base, text, now) {
     request.reporting_windows = [];
     request.metadata_attempted = false;
   }
-  if (!fresh && /\bcompare\b/i.test(text) && /\bbefore\b/i.test(text)) {
+  if (!fresh && /\bcompare\b/i.test(text) && /\b(?:before|previous)\b/i.test(text)) {
     request.offset = pending.offset;
     request.selected = pending.selected;
     request.selected_entities = pending.selected_entities;

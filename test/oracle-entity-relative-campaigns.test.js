@@ -46,10 +46,12 @@ function fixture({
   candidates = [6, 3, 1, 4, 2, 5].map((x) => campaign(x)),
   failId = null,
   production = false,
+  live = false,
 } = {}) {
   const calls = [],
     resolverCalls = [],
     queryCalls = [],
+    discoveryCalls = [],
     exports = createMemoryExportStore();
   const row = (id) => ({
     entity_id: id,
@@ -87,8 +89,10 @@ function fixture({
     dataset: () => ({ getMetadata: async () => [{ location: 'US' }] }),
     query: async (a) => {
       queryCalls.push(a);
+      if (a.query.includes('SELECT CAST(MAX')) return [[{reporting_cutoff:'2026-09-30'}]];
       if (a.query.includes('entity_metadata')) return [[...candidates]];
       if (a.query.includes('message_performance')) {
+        if(a.params.campaign_id===failId) throw Error('private provider fixture failure');
         calls.push({
           name: 'get_klaviyo_email_performance',
           args: {
@@ -117,12 +121,20 @@ function fixture({
     ? createOracleProviderDependencies({
         bigquery: bq,
         project: 'fixture',
-        env: {},
+        env: live ? {KLAVIYO_PRIVATE_API_KEY:'fixture-private',KLAVIYO_API_REVISION:'2026-07-15'} : {},
+        klaviyoFetch: async (url, options) => {
+          discoveryCalls.push({url,method:options.method});
+          assert.equal(options.method,'GET');
+          const page=new URL(url).searchParams.has('page[cursor]')?1:0;
+          const groups=[candidates.slice(0,2),candidates.slice(2)];
+          return {ok:true,status:200,json:async()=>({data:groups[page].map(c=>({type:'campaign',id:c.entity_id,attributes:{name:c.entity_name,status:c.status,send_time:c.send_time,send_strategy:{method:'static'}},relationships:{'campaign-messages':{data:[{id:c.entity_id+'-a'},{id:c.entity_id+'-b'}]}}})),included:[],links:{next:page?null:'https://a.klaviyo.com/api/campaigns?page[cursor]=next'}})};
+        },
       }).klaviyo
     : provider;
   return {
     calls,
     resolverCalls,
+    discoveryCalls,
     queryCalls,
     bq,
     exports,
@@ -217,7 +229,7 @@ for (const prior of [
         );
       });
 test('production factories receive actual ordered IDs, account/channel and resolved windows', async () => {
-  const f = fixture({ production: true }),
+  const f = fixture({ production: true, live: true }),
     r = await send(f, null);
   verify(r, f);
   const queries = f.queryCalls.filter((q) =>
@@ -352,7 +364,7 @@ test('just emails disambiguates channels and preserves count', async () => {
   verify(r, f);
   assert.ok(f.calls.every((c) => c.args.campaign_channel === 'email'));
 });
-for (const type of ['missing', 'incomplete', 'conflicting', 'tied'])
+for (const type of ['missing', 'incomplete', 'conflicting'])
   test(`${type} send metadata cannot establish newest sent ordering`, async () => {
     const candidates = [campaign(1), campaign(2), campaign(3)];
     if (type === 'missing')
@@ -506,7 +518,7 @@ for (const durable of [false, true])
     'Show Black Friday sales.',
   ])
     test(`real production factory ${durable ? 'durable' : 'interactive'} last-three delivery after ${seed || 'fresh'}`, async (t) => {
-      const f = fixture({ production: true }),
+      const f = fixture({ production: true, live: true }),
         app = express(),
         jobs = createMemoryAnalysisJobStore();
       const baseline = async (message, options) =>
@@ -770,4 +782,57 @@ test('attributed revenue ranking remains a compatible campaign refinement',async
   assert.deepEqual(ranked.evidence.campaigns.map(c=>c.entity_id),initial.evidence.campaigns.map(c=>c.entity_id));
   assert.match(ranked.answer,/credited attributed revenue/);
   assert.equal(f.calls.length,3);
+});
+
+for (const direct of [true,false]) test(`production API pagination and static strategy resolve latest campaigns via ${direct?'direct':'shared'} delivery`,async()=>{
+  const f=fixture({production:true,live:true});
+  const r=await send(f,null,QUESTION,{direct});
+  verify(r,f);
+  assert.equal(f.discoveryCalls.length,2);
+  assert.ok(f.discoveryCalls[0].url.includes('include=campaign-messages'));
+  assert.ok(f.discoveryCalls[1].url.includes('page[cursor]=next'));
+  assert.ok(f.queryCalls.every(q=>!q.query.includes('entity_metadata')));
+  assert.match(r.presentation.summary_markdown,/30\.00 GBP/);
+  assert.doesNotMatch(r.presentation.summary_markdown,/conversion_metric_id|exact post-send|Reporting cutoff/);
+  const best=await send(f,r.context,'Which performed best?',{recent:r});
+  assert.deepEqual(best.evidence.campaigns,r.evidence.campaigns);
+  assert.equal(f.discoveryCalls.length,2);
+  const exported=await send(f,best.context,'Export that.',{recent:best,id:'live-export'});
+  assert.ok(exported.artifact);
+  await assertProductArtifact(await f.exports.get(exported.artifact.id,'owner'));
+});
+test('send timestamp ties use stable campaign identity, including the selection boundary',async()=>{
+  const candidates=[campaign(4),campaign(2),campaign(3),campaign(1)].map(c=>({...c,send_time:campaign(1).send_time}));
+  const f=fixture({candidates,production:true,live:true});
+  const r=await send(f,null);
+  assert.deepEqual(r.evidence.campaigns.map(c=>c.entity_id),['c1','c2','c3']);
+  const previous=await send(f,r.context,'Compare with the previous three.');
+  assert.deepEqual(previous.evidence.campaigns.map(c=>c.entity_id),['c1','c2','c3','c4']);
+});
+
+test('live discovery preserves supported results through one actual performance provider failure',async()=>{
+  const f=fixture({production:true,live:true,failId:'c2'});
+  const r=await send(f,null);
+  assert.deepEqual(r.evidence.campaigns.map(c=>c.entity_id),['c1','c2','c3']);
+  assert.deepEqual(r.evidence.rows.map(c=>c.entity_id),['c1','c3']);
+  assert.match(r.answer,/30\.00 GBP/);
+  assert.match(r.answer,/unavailable|retrieval failed/i);
+  assert.ok(f.queryCalls.some(q=>q.params?.campaign_id==='c2'));
+});
+test('production discovery missing metadata retains the guard and hides internal codes',async()=>{
+  const f=fixture({production:true,live:true,candidates:[campaign(1),{...campaign(2),send_time:null},campaign(3)]});
+  const r=await send(f,null);
+  assert.equal(f.discoveryCalls.length,2);assert.equal(f.calls.length,0);
+  assert.match(r.answer,/actual send timestamp/);
+  assert.doesNotMatch(r.answer,/missing_send_metadata|What date range/);
+});
+
+test('single latest and ordinary recently-sent paraphrases use shared actual-send selection',async()=>{
+ const f=fixture({production:true,live:true,candidates:[campaign(2),{...campaign(1),send_time:campaign(2).send_time},campaign(3)]});
+ const single=await send(f,null,'How did the latest Klaviyo campaign perform?');
+ assert.equal(single.evidence.campaign.entity_id,'c1');
+ for(const question of ['How did the most recently sent 3 Klaviyo campaigns perform?','How did our three latest Klaviyo campaigns do?']) {
+  const result=await send(f,null,question);
+  assert.deepEqual(result.evidence.campaigns.map(c=>c.entity_id),['c1','c2','c3']);
+ }
 });

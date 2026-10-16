@@ -1,3 +1,4 @@
+import { campaignDiscoveryLimitation } from '../klaviyo/campaign-discovery.js';
 import ExcelJS from 'exceljs';
 import { createHash } from 'node:crypto';
 import { validateAnalysisContext } from './analysis-context.js';
@@ -115,7 +116,7 @@ export function compatibleCampaignEvidence(prior, context) {
 }
 export function campaignSetBusinessView(e) {
   const lines = [
-    `Selected ${e.selected_count} sent campaign(s), ordered by actual send timestamp (newest first), account ${esc(e.campaigns[0]?.account)}, channel ${esc(e.campaigns[0]?.channel)}. Evidence selection cutoff: ${esc(e.selection_cutoff)}.`,
+    `Here is the available performance for the ${e.selected_count} most recently sent campaigns. Recent results may still be provisional.`,
     '| Campaign | Sent | Delivered | Click rate | Attributed purchases/conversions | Attributed revenue |' +
       (e.requested_metrics.includes('clicks') ? ' Unique clicks |' : ''),
     '|---|---|---:|---:|---:|---:|' +
@@ -140,13 +141,13 @@ export function campaignSetBusinessView(e) {
                 : display(Number(r[key]) * 100) + '%';
           if (key === 'attributed_conversion_value')
             value = /^[A-Z]{3}$/.test(r.currency || '')
-              ? `${value} ${esc(r.currency)}`
+              ? `${evidenceNumber(r[key]) == null ? 'Unavailable' : Number(r[key]).toFixed(2)} ${esc(r.currency)}`
               : 'Unavailable (currency not established)';
           return label + value;
         })
         .join('; ');
     lines.push(
-      `| ${esc(s.campaign.entity_name || s.campaign.entity_id)}${s.comparison ? ' (previous group)' : ''} | ${esc(s.campaign.send_time)} | ${values('delivered')} | ${values('unique_click_rate')} | ${values('attributed_conversion_events')} | ${values('attributed_conversion_value')} |${e.requested_metrics.includes('clicks') ? ' ' + values('unique_clicks') + ' |' : ''}`,
+      `| ${esc(s.campaign.entity_name || s.campaign.entity_id)}${s.comparison ? ' (previous group)' : ''}${String(s.campaign.status).toLowerCase() === 'sending' ? ' (sending; provisional)' : ''} | ${esc(s.campaign.send_time)} | ${values('delivered')} | ${values('unique_click_rate')} | ${values('attributed_conversion_events')} | ${values('attributed_conversion_value')} |${e.requested_metrics.includes('clicks') ? ' ' + values('unique_clicks') + ' |' : ''}`,
     );
   }
   // Keep the entire Markdown table contiguous through the shared presenter.
@@ -218,10 +219,12 @@ export function campaignSetBusinessView(e) {
 }
 function campaignSetAnswer(e) {
   return [
-    ...campaignSetBusinessView(e),
+    ...campaignSetBusinessView(e).slice(0, 2),
     '',
     '<details>',
     '<summary>Show details</summary>',
+    `Observation cutoff: ${esc(e.selection_cutoff)}. Campaigns are ordered by actual send timestamp, then campaign ID for ties.`,
+    ...campaignSetBusinessView(e).slice(2),
     'Opens are affected by privacy protections and machine activity, and do not verify readership.',
     ...e.sections.map(
       (s) =>
@@ -266,12 +269,12 @@ export async function answerCampaignSet({
         channel: request.channel,
         cutoff: request.cutoff,
       });
-    } catch {
-      listing = null;
+    } catch (error) {
+      return pending(campaignDiscoveryLimitation(error));
     }
     if (!listing || listing.complete === false)
       return pending(
-        'Campaign send metadata is unavailable or the listing is incomplete. Please provide campaign names or identifiers; latest sent ordering cannot be verified.',
+        campaignDiscoveryLimitation(),
       );
     const selection = selectSentEntities(listing.candidates || [], request);
     onProviderStage?.({
@@ -290,7 +293,7 @@ export async function answerCampaignSet({
     });
     if (selection.blocker)
       return pending(
-        `Campaign selection is blocked (${selection.blocker}). Please provide campaign names or identifiers; actual send ordering cannot be verified.`,
+        'I cannot verify the latest campaigns because some sent campaigns lack a reliable actual send timestamp or have conflicting metadata. Campaign names or identifiers can narrow the request; dates cannot establish send ordering.',
       );
     if (selection.ambiguous) {
       request.candidates = selection.ambiguous;
@@ -309,12 +312,14 @@ export async function answerCampaignSet({
       return pending(
         'No verified sent campaigns are available for this selection. Please provide campaign names or identifiers.',
       );
-    request.selected_entities = selection.selected;
-    request.account = selection.selected[0].account;
-    request.channel = selection.selected[0].channel;
+    // A comparison discovers the previous group without replacing the retained
+    // selected metadata snapshot (including its retrieval/observation context).
+    if (!request.selected_entities.length) request.selected_entities = selection.selected;
+    request.account = request.selected_entities[0].account;
+    request.channel = request.selected_entities[0].channel;
     request.candidates = [];
     request.metadata_attempted = true;
-    request.selection_gap = request.count - selection.selected.length;
+    request.selection_gap = request.count - request.selected_entities.length;
     if (request.compare_previous) {
       const previous = selectSentEntities(listing.candidates || [], {
         ...request,
@@ -322,7 +327,7 @@ export async function answerCampaignSet({
       });
       if (previous.blocker)
         return pending(
-          `Previous campaign selection is blocked (${previous.blocker}); provide campaign identifiers.`,
+          'I cannot verify the previous group because its actual send metadata is missing or inconsistent; campaign identifiers can narrow the request.',
         );
       request.comparison_entities = previous.selected || [];
     }
