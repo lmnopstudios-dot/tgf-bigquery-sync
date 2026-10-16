@@ -18,8 +18,8 @@ function fixture({meta=metadata,parseError=false,malform=null,graphqlError=null,
     if(query.includes('OracleCountryCapability'))return structuredClone(meta);
     if(graphqlError)throw Object.assign(Error('private provider message must not be exposed'),{code:graphqlError,http_status:403});
     if(parseError)return {shopifyqlQuery:{parseErrors:['private query details'],tableData:null}};
-    const local=variables.query.includes('session_country_code'),names=['day',...(local?['session_country_code']:[]),'sessions','sessions_that_completed_checkout'];
-    const rows=rowDays.map((day,i)=>({day,...(local?{session_country_code:'GB'}:{}),sessions:local?[100,900][i%2]:[200,1800][i%2],sessions_that_completed_checkout:local?[10,9][i%2]:[12,36][i%2]}));malform?.(rows,local);
+    const rest=variables.query.includes("session_country_code != 'GB'"),local=!rest&&variables.query.includes("session_country_code = 'GB'"),names=['day',...(local?['session_country_code']:[]),'sessions','sessions_that_completed_checkout'];
+    const rows=rowDays.map((day,i)=>({day,...(local?{session_country_code:'GB'}:{}),sessions:rest?[100,900][i%2]:local?[100,900][i%2]:[200,1800][i%2],sessions_that_completed_checkout:rest?[2,27][i%2]:local?[10,9][i%2]:[12,36][i%2]}));malform?.(rows,local);
     return {shopifyqlQuery:{parseErrors:[],tableData:{columns:names.map(name=>({name})),rows:rows.map(row=>names.map(n=>row[n]))}}};
   };
   const fetchImpl=async(url,options)=>{
@@ -61,7 +61,7 @@ test('scope, auth, SQL and network failures remain explicit safe limitations; no
   }
 });
 test('requested bounds, dates, timezone and platform are validated before a rate can be delivered',async()=>{
-  for(const changes of [{start_date:'2024-01-01'},{start_date:'2026-02-30'},{channel:'instore'},{dimensions:['device']},{population_scope:{geography_role:'shipping_country',country:'GB',groups:['country','global']}}]){const f=fixture(),r=await f.reader({...args(),...changes});assert.equal(r.supported,false);assert.equal(f.fetches.length,0);}
+  for(const changes of [{start_date:'2020-01-01'},{start_date:'2026-02-30'},{channel:'instore'},{dimensions:['device']},{population_scope:{geography_role:'shipping_country',country:'GB',groups:['country','global']}}]){const f=fixture(),r=await f.reader({...args(),...changes});assert.equal(r.supported,false);assert.equal(f.fetches.length,0);}
   const f=fixture({meta:{...metadata,shop:{...metadata.shop,ianaTimezone:'UTC'}}});await assert.rejects(executeGovernedAgentAnalysis({message:Q,baselineOverview:f.baseline,now:NOW}),{code:'EVIDENCE_SCOPE_MISMATCH'});
   const source=await fixture({rowDays:['2025-11-20']}).reader({...args(),start_date:'2025-11-19',end_date:'2025-11-20'});assert.equal(source.effective_period.start_date,'2025-11-20');assert.equal(source.coverage.compatible_report_days,1);assert.equal(source.coverage.excluded_days[0].reason,'before_governed_Shopify_launch');
 });
@@ -81,7 +81,7 @@ for(const durable of [false,true])test(`production country reader through direct
   const direct=await fetch(h.origin+'/agent',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({message:Q})});assert.equal(direct.status,200);const payload=await direct.json();assert.match(payload.answer,/1\.90%/);
   const r=await h.submit(Q);assert.match(r.answer,/2\.40%/);const before=f.fetches.length;
   if(durable){const recovered=await h.get('/jobs/'+r.job_id);assert.deepEqual(recovered.evidence,r.evidence);assert.equal(f.fetches.length,before);h.jobs.jobs.get(r.job_id).result_json.evidence.source.reports[0].pages[0].query+=' country';assert.equal((await fetch(h.base+'/jobs/'+r.job_id,{headers:h.headers})).status,409);}
-  const world=await h.submit('Worldwide instead');assert.deepEqual(world.evidence.population_scope.groups,['global']);const rest=await h.submit('Compare with the rest of the world');assert.match(rest.answer,/2\.90%/);assert.match(rest.answer,/excluding GB/);
+  const world=await h.submit('Worldwide instead');assert.deepEqual(world.evidence.population_scope.groups,['country','global']);const rest=await h.submit('Compare with the rest of the world');assert.match(rest.answer,/2\.90%/);assert.match(rest.answer,/excluding GB/);
 });
 
 test('configured country reader asks a targeted date question without making unscoped API calls',async()=>{

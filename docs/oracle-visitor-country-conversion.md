@@ -1,5 +1,7 @@
 # Visitor-country conversion: shared scope and read-only Shopify capability
 
+For current monthly reporting, direct non-UK/unknown-geography semantics, report-level chunking and Render checks, see [monthly country conversion](oracle-monthly-country-conversion.md). The implementation history below describes #328.
+
 ## Change and preserved base
 
 Fresh country-conversion questions had no independent population model. Retained

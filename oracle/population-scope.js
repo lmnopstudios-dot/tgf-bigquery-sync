@@ -14,7 +14,7 @@ export function populationScopeIntent(text, previous) {
   const role=/\bshipping|destination\b/i.test(text)?'shipping_country':/\bbilling\b/i.test(text)?'billing_country':/\bmarket|storefront|currency\b/i.test(text)?'storefront_market':/\b(?:visitors?|sessions?)\b/i.test(text)?'visitor_country':previous?.geography_role||'visitor_country';
   const compare=/\bcompar(?:e|ed|ing|ison)|\bversus\b|\bvs\b/i.test(text);
   const excludesLocal=local&&/\b(?:excluding|exclude|except|without)\b/i.test(text);
-  const groups=global&&excludesLocal?(compare?['country','rest_of_world']:['rest_of_world']):rest?['country','rest_of_world']:global?(local||compare&&country?['country','global']:['global']):['country'];
+  const groups=global&&excludesLocal?(compare?['country','rest_of_world']:['rest_of_world']):rest?['country','rest_of_world']:global?(local||compare&&country||/\binstead\b/i.test(text)&&previous?.groups.includes('country')?['country','global']:['global']):['country'];
   return validatePopulationScope({geography_role:role,country,groups:matched.length>1&&compare&&!global&&!rest?['country','other_country']:groups,...(matched.length>1&&compare&&!global&&!rest?{comparison_country:matched[1]}:{})});
 }
 export const groupLabel=(scope,group)=>group==='global'?'Global (all available visitor countries'+(scope.country?', including '+(scope.country==='GB'?'UK':scope.country):'')+')':group==='other_country'?'Visitors: '+scope.comparison_country:group==='rest_of_world'?'Rest of world (excluding '+scope.country+')':scope.country==='GB'?'UK visitors':'Visitors: '+scope.country;
