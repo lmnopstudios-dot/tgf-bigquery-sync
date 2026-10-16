@@ -436,6 +436,91 @@
           ]
         }
       ]
+    },
+    {
+      "id": "production-collaboration-pieces",
+      "retention": true,
+      "turns": [
+        {
+          "question": "Can I have a breakdown of what collaboration pieces that are the first purchase a customer has ever made lead to the most return customers. Use both online and instore sales from the last 3 years.",
+          "subject": "customer_journey",
+          "dates": [
+            "2023-10-14",
+            "2026-10-14"
+          ],
+          "provider": "retention",
+          "check": "retention",
+          "pieces": true,
+          "provider_count": 2
+        },
+        {
+          "question": "Last 3 years.",
+          "subject": "customer_journey",
+          "dates": [
+            "2023-10-14",
+            "2026-10-14"
+          ],
+          "provider": "retention",
+          "check": "retention",
+          "pieces": true,
+          "provider_count": 2
+        }
+      ]
+    },
+    {
+      "id": "production-pieces-after-unrelated",
+      "retention": true,
+      "turns": [
+        {
+          "question": "Show online sales last month.",
+          "subject": "sales",
+          "dates": [
+            "2026-09-01",
+            "2026-09-30"
+          ],
+          "provider": "sales",
+          "check": "sales"
+        },
+        {
+          "question": "Can I have a breakdown of what collaboration pieces that are the first purchase a customer has ever made lead to the most return customers. Use both online and instore sales from the last 3 years.",
+          "subject": "customer_journey",
+          "dates": [
+            "2023-10-14",
+            "2026-10-14"
+          ],
+          "provider": "retention",
+          "check": "retention",
+          "pieces": true,
+          "provider_count": 2
+        }
+      ]
+    },
+    {
+      "id": "pending-collaboration-pieces",
+      "retention": true,
+      "turns": [
+        {
+          "question": "Can I have a breakdown of what collaboration pieces that are the first purchase a customer has ever made lead to the most return customers. Use both online and instore sales.",
+          "subject": "customer_journey",
+          "outcome": "clarification",
+          "fields": [
+            "start_date",
+            "end_date"
+          ]
+        },
+        {
+          "question": "Last 3 years.",
+          "subject": "customer_journey",
+          "dates": [
+            "2023-10-14",
+            "2026-10-14"
+          ],
+          "provider": "retention",
+          "check": "retention",
+          "pieces": true,
+          "provider_count": 2
+        }
+      ]
     }
   ],
   "regression_suites": [

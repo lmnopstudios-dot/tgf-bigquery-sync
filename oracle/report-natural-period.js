@@ -46,8 +46,14 @@ function parseReportPeriod(text, now){
   }
   if(/\bthis month\b/.test(lower))return{start_date:monthStart(today.getUTCFullYear(),today.getUTCMonth()),end_date:todayIso,requested_end_period:todayIso.slice(0,7),partial_period:true};
   if(/\blast month\b/.test(lower)){const d=new Date(Date.UTC(today.getUTCFullYear(),today.getUTCMonth()-1,1));return{start_date:monthStart(d.getUTCFullYear(),d.getUTCMonth()),end_date:monthEnd(d.getUTCFullYear(),d.getUTCMonth()),requested_end_period:monthStart(d.getUTCFullYear(),d.getUTCMonth()).slice(0,7),partial_period:false};}
-  const rollingYears=lower.match(/\b(?:last|past)\s+(\d{1,2})\s+years?\b/);
-  if(rollingYears){const start=new Date(Date.UTC(today.getUTCFullYear()-Number(rollingYears[1]),today.getUTCMonth(),today.getUTCDate()));return {start_date:start.toISOString().slice(0,10),end_date:todayIso,requested_end_period:'now',partial_period:true}}
+  const rollingYears=lower.match(/\b(?:last|past)\s+(\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+(completed\s+)?years?\b/);
+  if(rollingYears){
+    const count=counts[rollingYears[1]]||Number(rollingYears[1]);if(!Number.isInteger(count)||count<1||count>10)return {invalid:true};
+    const y=today.getUTCFullYear()-count,completed=Boolean(rollingYears[2]);
+    const day=Math.min(today.getUTCDate(),new Date(Date.UTC(y,today.getUTCMonth()+1,0)).getUTCDate());
+    const start=completed?`${y}-01-01`:new Date(Date.UTC(y,today.getUTCMonth(),day)).toISOString().slice(0,10);
+    return {start_date:start,end_date:completed?`${today.getUTCFullYear()-1}-12-31`:todayIso,requested_end_period:completed?String(today.getUTCFullYear()-1):'now',partial_period:!completed};
+  }
   return null;
 }
 

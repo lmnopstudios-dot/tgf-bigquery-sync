@@ -4,7 +4,7 @@ import { PRODUCT_REPORT_CAPABILITIES } from './product-report-config.js';
 import { createHash } from 'node:crypto';
 
 export function planOperation(c) {
-  if(c?.analysis_type==='customer_journey')return c.journey_group_by==='collaboration_name'?'cohort_retention':'customer_journey';
+  if(c?.analysis_type==='customer_journey')return (c.journey_intent==='retention'||c.journey_group_by==='collaboration_name')?'cohort_retention':'customer_journey';
   if(c?.tool_route==='get_population_conversion')return 'population_comparison';
   if(c?.requested_operations?.includes('product_attribution'))return 'product_attribution';
   if(c?.requested_operations?.includes('basket_composition'))return 'basket_composition';
@@ -26,7 +26,7 @@ export function resolveAnalyticalPlan(c) {
     scope:{...(c?.tool_route==='get_order_value_analysis'?{shipping_destination:c?.geography||null}:{}),platform:c?.platform||null,source_store:c?.source_store||null,channel:c?.channel||null,channel_breakdown:Boolean(c?.channel_breakdown),currencies:c?.currencies||[],currency:report?.currency||null},
     metrics:report?.metrics||campaign?.requested_metrics||(c?.native_metrics?.length?c.native_metrics:c?.metrics)||[],
     metric_definitions:report?Object.fromEntries(report.metrics.map(m=>[m,PRODUCT_REPORT_CAPABILITIES[m]?.definition||'Unavailable'])):c?.tool_route==='get_daily_sales_analysis'?DAILY_SALES_CONTRACT.definitions:null,
-    ...(c?.analysis_type==='customer_journey'?{cohort:{entry_start:c.cohort_entry_start,entry_end:c.cohort_entry_end,observation_end:c.observation_end,first_order_semantic:c.first_order_semantic,entry_classification:c.entry_product_classification,group_by:c.journey_group_by,within_days:c.within_days}}:{}),
+    ...(c?.analysis_type==='customer_journey'?{cohort:{entry_start:c.cohort_entry_start,entry_end:c.cohort_entry_end,observation_end:c.observation_end,first_order_semantic:c.first_order_semantic,entry_classification:c.entry_product_classification,group_by:c.journey_group_by,within_days:c.within_days,sort:c.sort||null}}:{}),
     numeric_operation:c?.numeric_operation||null,requested_operations:c?.requested_operations||[],
     dimensions:c?.dimensions||[],grain:c?.grain||null,
     dates:{start_date:c?.start_date||null,end_date:c?.end_date||null,timezone:c?.time_zone||campaign?.selected?.reporting_timezone||report?.period?.timezone||'Europe/London',cutoff:c?.date_cutoff||null,partial_period:Boolean(c?.partial_period),current_day_included:Boolean(c?.current_day_included),basis:campaign?.date_mode||null},
