@@ -15,7 +15,7 @@ export function messageIntent(message) {
   const editing=/\b(?:edit|rewrite|proofread|summari[sz]e|improve|draft|translate)\b/i.test(actionText);
   const editingOnly=editing&&/^(?:please\s+)?(?:edit|rewrite|proofread|summari[sz]e|improve|draft|translate)\b/i.test(instruction)&&! /\band (?:compare|analyse|analyze|calculate|evaluate|assess)\b/i.test(actionText);
   const analyticalAction=analytical&&!editingOnly;
-  const document=structuredDocument||actionText!==instruction&&!analyticalAction&&!knowledge&&!editing;
+  const document=editingOnly||structuredDocument||actionText!==instruction&&!analyticalAction&&!knowledge&&!editing;
   const contextOnly=/^(?:for (?:your )?context|context only|use (?:this|it) as context|fyi)\b/i.test(actionText);
   const contextualMention=!document&&!analyticalAction&&!knowledge&&/^(?:for (?:your )?context|context only|fyi|during\b)|\b(?:context only|as context)\b|\b(?:may|might|will|changes?|happens?|needs?|implemented|added)\b[\s\S]*\bduring\b/i.test(actionText);
   return {document,instruction,actionText,content:structuredDocument?text.slice(offset):document?text:null,analytical:analyticalAction,knowledge,editing,contextOnly,blocked:document&&!analyticalAction||knowledge&&!analyticalAction||contextualMention,clarification:document&&!analyticalAction&&!knowledge&&!editing&&!contextOnly?DOCUMENT_CLARIFICATION:null};

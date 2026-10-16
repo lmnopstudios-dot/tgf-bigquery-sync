@@ -13,7 +13,7 @@ try{
     const page=await browser.newPage({viewport:{width,height}}),errors=[];page.on('pageerror',e=>errors.push(e.message));
     await page.goto(h.origin+'/oracle/');await page.locator('#password').fill('fixture');await page.locator('#login-form button').click();await page.locator('#app').waitFor({state:'visible'});
     for(const conversation of matrix.conversations){
-      f.state.fail_start=conversation.fail_start||null;f.state.campaigns=Boolean(conversation.campaigns);f.state.country_conversion=Boolean(conversation.country_conversion);
+      f.state.retention=Boolean(conversation.retention);f.state.fail_start=conversation.fail_start||null;f.state.campaigns=Boolean(conversation.campaigns);f.state.country_conversion=Boolean(conversation.country_conversion);
       await page.locator('#new-question').click();
       for(const turn of conversation.turns){
         const count=await page.locator('.analytical-answer').count(),offset=f.calls.length;
@@ -23,6 +23,7 @@ try{
         const answer=await page.locator('.analytical-answer').last().innerText();assert.ok(answer.trim());
         if(turn.outcome==='clarification')assert.match(answer,/start and end dates/i);
         else assert.doesNotMatch(answer,/What date range/);
+        if(turn.check==='retention'){assert.match(answer,/75\.00%/);assert.match(answer,/50\.00%/);assert.match(answer,/mature customers/);assert.equal(f.calls.length,offset+1);}
         if(turn.check==='campaigns-available'){
           assert.match(answer,/Campaign 1/);assert.match(answer,/Campaign 2/);assert.match(answer,/Campaign 3/);assert.match(answer,/30\.00 GBP/);
           assert.equal(f.calls.filter(c=>c.discovery).length,2*(name==='desktop'?1:2));

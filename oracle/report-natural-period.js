@@ -46,7 +46,7 @@ function parseReportPeriod(text, now){
   }
   if(/\bthis month\b/.test(lower))return{start_date:monthStart(today.getUTCFullYear(),today.getUTCMonth()),end_date:todayIso,requested_end_period:todayIso.slice(0,7),partial_period:true};
   if(/\blast month\b/.test(lower)){const d=new Date(Date.UTC(today.getUTCFullYear(),today.getUTCMonth()-1,1));return{start_date:monthStart(d.getUTCFullYear(),d.getUTCMonth()),end_date:monthEnd(d.getUTCFullYear(),d.getUTCMonth()),requested_end_period:monthStart(d.getUTCFullYear(),d.getUTCMonth()).slice(0,7),partial_period:false};}
-  const rollingYears=lower.match(/\blast\s+(\d{1,2})\s+years?\b/);
+  const rollingYears=lower.match(/\b(?:last|past)\s+(\d{1,2})\s+years?\b/);
   if(rollingYears){const start=new Date(Date.UTC(today.getUTCFullYear()-Number(rollingYears[1]),today.getUTCMonth(),today.getUTCDate()));return {start_date:start.toISOString().slice(0,10),end_date:todayIso,requested_end_period:'now',partial_period:true}}
   return null;
 }

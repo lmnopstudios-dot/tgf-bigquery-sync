@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "frozen_before_implementation": true,
+  "runtime": "2026-10-16T12:00:00Z",
+  "cases": [
+    {"id":"retention-entry", "turns":["Rank collaborations by repeat purchase rate after a first order, online over the past 3 years."], "operation":"cohort_retention"},
+    {"id":"retention-followup", "turns":["Which collaboration brings return customers after their first purchase in 2025?", "Online only, within 180 days."], "operation":"cohort_retention"},
+    {"id":"subject-switch", "turns":["Which collaboration has the best repeat purchase rate in 2025?", "New question: show online sales last month."], "operation":"sales_totals"},
+    {"id":"population", "turns":["Compare UK visitor conversion against the rest of the world last month."], "operation":"population_comparison"},
+    {"id":"campaign", "turns":["How did the latest three campaigns perform?"], "operation":"campaign_performance"},
+    {"id":"basket", "turns":["Show product combinations in UK online baskets during September 2026."], "operation":"basket_composition"},
+    {"id":"promotion", "turns":["Compare weekday net sales excluding confirmed promotions for Shopify online last month."], "operation":"grouped_sales"},
+    {"id":"unsupported-attribution", "turns":["Which products were purchased from the latest email campaign?"], "outcome":"limitation"},
+    {"id":"ambiguous-sales", "turns":["Show online sales."], "outcome":"clarification"},
+    {"id":"document", "turns":["Proofread this text: collaboration retention, country conversion and basket composition need attention."], "outcome":"document"},
+    {"id":"ranking", "turns":["Rank products by net sales last month and export to Excel."], "operation":"product_breakdown"},
+    {"id":"retention-export", "turns":["Which collaboration has the best repeat purchase rate in 2025?", "Export that to Excel."], "operation":"cohort_retention", "export":"limitation"}
+  ],
+  "negative_evidence": ["monthly sales cannot satisfy retention", "device conversion cannot satisfy visitor-country comparison", "order bands cannot satisfy basket composition"],
+  "exposure": "Authored by the implementation agent before edits; not a blind or independently authored holdout. Frozen fixture hash recorded in delivery documentation. Any fixes informed by its execution must be reported."
+}

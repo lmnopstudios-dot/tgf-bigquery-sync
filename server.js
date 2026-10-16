@@ -180,7 +180,7 @@ const customerOrderIntervalService = createCustomerOrderIntervalService({ bigque
 const onlineCountrySalesService = createOnlineCountrySalesService({ bigquery, project: GOOGLE_PROJECT_ID });
 const platformSalesService = createPlatformSalesService({ bigquery, project: GOOGLE_PROJECT_ID });
 // Bind the live server through the same adapter factory used by the parity CLI.
-const {populationConversion:populationConversionService,deviceConversion:deviceSourceConversionService,klaviyo:klaviyoEmailService,social:metaInstagramService,dailySales:dailySalesService,orderValues:orderValueService,basketComposition:basketCompositionService,productPrices:productPriceService}=createOracleProviderDependencies({env:process.env,bigquery,project:GOOGLE_PROJECT_ID,shopifySales:args=>getShopifySalesKpis(args)});
+const {customerJourney:governedCustomerJourneyService,populationConversion:populationConversionService,deviceConversion:deviceSourceConversionService,klaviyo:klaviyoEmailService,social:metaInstagramService,dailySales:dailySalesService,orderValues:orderValueService,basketComposition:basketCompositionService,productPrices:productPriceService}=createOracleProviderDependencies({env:process.env,bigquery,project:GOOGLE_PROJECT_ID,shopifySales:args=>getShopifySalesKpis(args)});
 const categorySalesService = createCategorySalesService({ bigquery, project: GOOGLE_PROJECT_ID });
 const productViewPurchaseService = createProductViewPurchaseService({bigquery});
 const pageviewsPerSessionService=createPageviewsPerSessionService({bigquery,project:GOOGLE_PROJECT_ID,runShopifyql:async(query,reportName)=>runShopifyqlReport(await getShopifyAccessToken(),query,reportName),getShopTimezone:async()=>{const data=await shopifyGraphQL(await getShopifyAccessToken(),'{ shop { ianaTimezone } }');if(!data?.shop?.ianaTimezone)throw new Error('Shopify reporting timezone unavailable');return data.shop.ianaTimezone;}});
@@ -4170,6 +4170,7 @@ const ecommerceBaselineOverview=createBaselineOverviewService({
   onlineCountrySales:onlineCountrySalesService,
   platformSales:platformSalesService,
   customerReport:getShopifyCustomerKpis,
+  customerJourney:governedCustomerJourneyService,
   populationConversion:populationConversionService,
   shopifyDevice:deviceSourceConversionService,
   wooConversion:deviceSourceConversionService,
@@ -8359,7 +8360,7 @@ Important rules:
         stage='response_generation';
         if(toolAdmissionStopped) {
           console.info('Agent stage outcome:',stageOutcome({id,stage:'tool_admission_stopped',startedAt:requestStarted,outcome:'bounded',extra:{proposed_call_count:callBudget.proposed,dispatched_call_count:callBudget.dispatched}}));
-          if(!res.writableEnded&&!cancellation.signal.aborted) return res.status(206).json({success:true,partial:true,answer:completedEvidence.length?evidenceSummary(completedEvidence,{unavailable:failedTools}):partialAnswer(message,successfulTools,failedTools),tools_used:[...toolsUsed],evidence:{kind:'governed_tool_results',results:completedEvidence,unavailable:failedTools},inline_chart:inlineChart,request_id:id});
+          if(!res.writableEnded&&!cancellation.signal.aborted) return res.status(206).json(deliverOracleResult({success:true,partial:true,answer:completedEvidence.length?evidenceSummary(completedEvidence,{unavailable:failedTools}):partialAnswer(message,successfulTools,failedTools),tools_used:[...toolsUsed],analysis_context:suppliedContext,evidence:{kind:'governed_tool_results',results:completedEvidence,unavailable:failedTools},inline_chart:inlineChart,request_id:id},suppliedContext));
           return;
         }
         const synthesisStarted=Date.now();
@@ -8376,13 +8377,13 @@ Important rules:
         } catch(error) {
           const failure_kind=synthesisFailureKind(error,{deadlineAt,signal:cancellation.signal,outputBytes:synthesisInputBytes});
           console.error('Agent stage outcome:',stageOutcome({id,stage,startedAt:synthesisStarted,outcome:'failed',error,extra:{round:toolRounds,failure_kind,synthesis_input_bytes:synthesisInputBytes,deadline_remaining_ms:Math.max(0,deadlineAt-Date.now())}}));
-          if(successfulTools.length||failedTools.length) return res.status(206).json({success:true,partial:true,answer:evidenceSummary(completedEvidence,{unavailable:failedTools}),tools_used:[...toolsUsed],evidence:{kind:'governed_tool_results',results:completedEvidence,unavailable:failedTools},inline_chart:inlineChart,request_id:id});
+          if(successfulTools.length||failedTools.length) return res.status(206).json(deliverOracleResult({success:true,partial:true,answer:evidenceSummary(completedEvidence,{unavailable:failedTools}),tools_used:[...toolsUsed],analysis_context:suppliedContext,evidence:{kind:'governed_tool_results',results:completedEvidence,unavailable:failedTools},inline_chart:inlineChart,request_id:id},suppliedContext));
           throw error;
         }
       }
 
       console.info('Agent stage outcome:',stageOutcome({id,stage:'agent_response',startedAt:requestStarted,outcome:'success',extra:{proposed_call_count:callBudget.proposed,dispatched_call_count:callBudget.dispatched,tool_rounds:toolRounds}}));
-      const terminalResult={answer:response.output_text,evidence:{kind:'governed_tool_results',results:completedEvidence}};
+      const terminalResult={analysis_context:suppliedContext,answer:response.output_text,evidence:{kind:'governed_tool_results',results:completedEvidence}};
       let delivered;
       try{delivered=deliverOracleResult(withOracleCharts(terminalResult),undefined,{artifactBase:'/agent/exports'});}catch{delivered=deliverOracleResult({...terminalResult,answer:null,partial:true},undefined,{artifactBase:'/agent/exports'});}
       console.info('Oracle presentation readiness:',{request_id:id,stage:'presentation_readiness',status:delivered.delivery.status,schema_version:delivered.delivery.version,answer_present:true,evidence_count:completedEvidence.length});

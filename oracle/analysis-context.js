@@ -1,3 +1,4 @@
+import { retentionIntent } from './cohort-retention.js';
 import { validatePopulationScope, populationScopeIntent } from './population-scope.js';
 import { requestedAttributionOperation } from './requested-operations.js';
 import { messageIntent } from './message-intent.js';
@@ -33,7 +34,7 @@ const FIELDS = new Set([
 const GRAINS = new Set(['day','week','month','quarter','year']);
 const CURRENCIES = new Set(['GBP','USD','JPY','EUR']);
 const METRICS = new Set(['orders','sales','refunds','customers','products','search_console','shipping_countries','ecommerce_performance','customer_journey','customer_order_interval','product_views_before_purchase','conversion','email_attribution','meta_ads','instagram','tiktok']);
-export const ANALYSIS_TOOL_ROUTES = Object.freeze(['get_population_conversion','get_order_value_analysis','get_shopify_inventory_by_location','get_meta_performance','get_instagram_performance','get_tiktok_performance','get_shopify_online_country_products','get_online_country_sales','get_shopify_customer_kpis','get_search_console_evidence','get_average_customer_order_interval','get_governed_category_sales','get_product_views_before_purchase','compare_historical_events','get_shopify_operational_sales_baseline','get_woocommerce_device_conversion','get_governed_device_conversion','get_general_sales_analysis','get_daily_sales_analysis','get_product_sales_analysis','export_product_priorities','get_klaviyo_email_performance','get_klaviyo_click_purchase_opportunities','compare_klaviyo_email_with_shopify_referrer']);
+export const ANALYSIS_TOOL_ROUTES = Object.freeze(['analyze_customer_journey','get_population_conversion','get_order_value_analysis','get_shopify_inventory_by_location','get_meta_performance','get_instagram_performance','get_tiktok_performance','get_shopify_online_country_products','get_online_country_sales','get_shopify_customer_kpis','get_search_console_evidence','get_average_customer_order_interval','get_governed_category_sales','get_product_views_before_purchase','compare_historical_events','get_shopify_operational_sales_baseline','get_woocommerce_device_conversion','get_governed_device_conversion','get_general_sales_analysis','get_daily_sales_analysis','get_product_sales_analysis','export_product_priorities','get_klaviyo_email_performance','get_klaviyo_click_purchase_opportunities','compare_klaviyo_email_with_shopify_referrer']);
 const TOOL_ROUTES = new Set(ANALYSIS_TOOL_ROUTES);
 const MONTHS = {jan:1,january:1,feb:2,february:2,mar:3,march:3,apr:4,april:4,may:5,jun:6,june:6,jul:7,july:7,aug:8,august:8,sep:9,sept:9,september:9,oct:10,october:10,nov:11,november:11,dec:12,december:12};
 
@@ -137,6 +138,20 @@ function transitionContext(existing, message, {now=Date.now(),reportContext=null
   if(/\b(?:abandoned?[- ](?:checkouts?|carts?)|checkout abandonment|cart abandonment)\b/i.test(text)){
     const context=validateAnalysisContext({...emptyAnalysisContext(),...(period(text,now)||{}),requested_subject:'abandoned_checkouts',analysis_type:'ecommerce',channel:/\bonline\b/i.test(text)?'online':null,geography:/\bUK\b/i.test(text)?'GB':null});
     return {context,transition:{continuation:false,set:['requested_subject','start_date','end_date'],clear:ANALYSIS_CONTEXT_FIELDS,retain:[],missing_required_fields:[],ready_to_execute:true,applies_to_message:true}};
+  }
+  const retentionFollowup=base.tool_route==='analyze_customer_journey'&&base.journey_group_by==='collaboration_name'&&(/^(?:online only|just online|within|export|download|chart|graph|last|this|past|for|in|include|exclude)\b/i.test(text))&&!/\b(?:sales|campaign|conversion|basket|products?)\b/i.test(text);
+  if(retentionIntent(text)||retentionFollowup){
+    const continuation=retentionFollowup, dates=period(text,now)||{};
+    const context=validateAnalysisContext({...emptyAnalysisContext(),...(continuation?base:{}),...dates,requested_subject:'customer_journey',analysis_type:'customer_journey',metrics:['customer_journey'],tool_route:'analyze_customer_journey',journey_intent:'retention',journey_group_by:'collaboration_name',entry_product_classification:'collaboration',first_order_semantic:'first_observed_ever'});
+    if(/\bonline\b/i.test(text))context.channel='online';
+    if(/\bin[ -]?store\b/i.test(text))context.channel='instore';
+    if(/\b(?:export|download|excel|xlsx)\b/i.test(text))context.output_preference='xlsx';
+    if(/\b(?:chart|graph)\b/i.test(text))context.output_preference='chart';
+    const days=text.match(/\bwithin (\d+) days?\b/i);if(days)context.within_days=Number(days[1]);
+    context.cohort_entry_start=context.start_date;context.cohort_entry_end=context.end_date;
+    context.observation_end=context.end_date;
+    context.unresolved_required_fields=context.start_date&&context.end_date?[]:['start_date','end_date'];
+    return {context,transition:{continuation,set:ANALYSIS_CONTEXT_FIELDS.filter(k=>JSON.stringify(base[k])!==JSON.stringify(context[k])),clear:[],retain:[],missing_required_fields:context.unresolved_required_fields,ready_to_execute:!context.unresolved_required_fields.length,applies_to_message:true}};
   }
   const daily=orderValueContextPatch(base,text,now)||dailySalesContextPatch(base,text,now);
   if(daily){const context=validateAnalysisContext({...emptyAnalysisContext(),...daily.patch});const changed=ANALYSIS_CONTEXT_FIELDS.filter(k=>JSON.stringify(base[k])!==JSON.stringify(context[k]));return {context,transition:{continuation:daily.continuation,set:changed,clear:changed.filter(k=>context[k]==null),retain:ANALYSIS_CONTEXT_FIELDS.filter(k=>!changed.includes(k)),missing_required_fields:context.unresolved_required_fields,ready_to_execute:!context.unresolved_required_fields.length,applies_to_message:true}};}
@@ -283,6 +298,7 @@ function transitionContext(existing, message, {now=Date.now(),reportContext=null
     return {context,transition:{continuation:false,set:[],clear:ANALYSIS_CONTEXT_FIELDS,retain:[],missing_required_fields:['requested_subject'],ready_to_execute:false,applies_to_message:true}};
   }
   if(set.requested_subject&&set.requested_subject!==base.requested_subject&&!Object.hasOwn(set,'population_scope'))clear.push('population_scope');
+  if(set.requested_subject&&set.requested_subject!==base.requested_subject&&set.analysis_type!=='customer_journey')clear.push('journey_intent','entry_product_classification','subsequent_product_classification','excluded_product_titles','include_unclassified_products','first_order_semantic','cohort_entry_start','cohort_entry_end','observation_end','minimum_order_sequence','maximum_order_sequence','within_days','journey_group_by');
   if(set.requested_subject&&set.requested_subject!==base.requested_subject)clear.push('requested_operations','numeric_operation','native_metrics','dimensions','time_zone','source_store','ranking_metric','ranking_direction','promotion_context','campaign_request','social_scope','entity_query','product_ref','pending_product_candidates','explanation_requested','output_preference','failed_subject_switch','email_report_kind','placement_context');
   if(set.tool_route&&set.tool_route!=='export_product_priorities')clear.push('product_report');
   if(set.tool_route&&set.tool_route!==base.tool_route)clear.push('requested_operations','numeric_operation','native_metrics','dimensions','time_zone','source_store','ranking_metric','ranking_direction','promotion_context');

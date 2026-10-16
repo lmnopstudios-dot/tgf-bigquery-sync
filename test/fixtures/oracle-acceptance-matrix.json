@@ -325,6 +325,22 @@
           ]
         }
       ]
+    },
+    {
+      "id": "collaboration-mature-retention",
+      "retention": true,
+      "turns": [
+        {
+          "question": "Rank collaborations by repeat purchase rate after their first order online in 2025.",
+          "subject": "customer_journey",
+          "dates": [
+            "2025-01-01",
+            "2025-12-31"
+          ],
+          "provider": "retention",
+          "check": "retention"
+        }
+      ]
     }
   ],
   "regression_suites": [
@@ -612,6 +628,9 @@
         "safe network access parse and permission limitations",
         "direct interactive durable polling and Render probe"
       ]
+    },
+    {
+      "file": "test/oracle-cohort-retention.test.js"
     }
   ]
 }
