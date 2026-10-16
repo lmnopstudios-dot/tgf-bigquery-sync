@@ -134,7 +134,7 @@ function businessView(e) {
       'Unresolved shipping destinations are excluded from named-country rankings.'];
   }
   if(e.kind==='shopify_operational_sales_baseline')return ['Available sales figures are shown by channel and period.',table(['Period','Channel','Metric','Value'],(e.metric_rows||[]).filter(r=>['net_sales','orders','net_items_sold','average_order_value'].includes(r.metric)).map(r=>[period(r.period),r.channel,({net_sales:'Net sales',orders:'Orders',net_items_sold:'Units sold',average_order_value:'Average order value'})[r.metric],r.unit==='money'?money(r.value,r.currency):number(r.value)])),...(e.sections?.some(failed)?['Some periods could not be retrieved; their figures are unavailable.']:[]),'Unverified coverage limits completeness. These are operational sales figures.'];
-  if(e.kind==='governed_klaviyo_campaign_set')return campaignSetBusinessView(e);
+  if(e.kind==='governed_klaviyo_campaign_set')return campaignSetBusinessView(e).slice(0,2);
   if(e.kind==='governed_klaviyo_email'&&e.campaign)return [
     `Campaign: ${text(e.campaign.entity_name||e.campaign.entity_id)} (ID ${text(e.campaign.entity_id)}; ${text(e.campaign.account)}; ${text(e.campaign.channel)}).`,
     `Actual send: ${text(e.campaign.send_time||'unavailable; supplied date retained in request')}. Timezone: ${text(e.campaign.reporting_timezone)}. Supported reporting cutoff: ${text(e.campaign.reporting_cutoff)}.`,

@@ -183,6 +183,32 @@
           "check": "partial-sales"
         }
       ]
+    },
+    {
+      "id": "latest-campaign-discovery",
+      "campaigns": true,
+      "turns": [
+        {
+          "question": "How did the last 3 Klaviyo campaigns go?",
+          "subject": "klaviyo_email",
+          "check": "campaigns-available"
+        },
+        {
+          "question": "Which performed best?",
+          "subject": "klaviyo_email",
+          "check": "campaigns-available"
+        },
+        {
+          "question": "Show online sales last month.",
+          "subject": "sales",
+          "dates": [
+            "2026-09-01",
+            "2026-09-30"
+          ],
+          "provider": "sales",
+          "check": "sales"
+        }
+      ]
     }
   ],
   "regression_suites": [
@@ -199,13 +225,24 @@
         "partial failure",
         "production factory arguments",
         "interactive/durable recovery",
-        "export delivery"
+        "export delivery",
+        "live read-only discovery pagination",
+        "static strategy normalization",
+        "deterministic send-time ties",
+        "retained comparison snapshots"
       ],
       "representative_conversations": [
         [
           "How did the last 3 Klaviyo campaigns go?",
           "What about the previous three?",
           "Since it was sent."
+        ],
+        [
+          "How did the last 3 Klaviyo campaigns go?",
+          "Which performed best?",
+          "Since they were sent.",
+          "Compare with the previous three.",
+          "Export that."
         ]
       ]
     },
@@ -368,6 +405,18 @@
         "targeted date clarification",
         "date reply execution",
         "provider-specific interval semantics"
+      ]
+    },
+    {
+      "file": "test/klaviyo-campaign-discovery.test.js",
+      "covers": [
+        "production-shaped API pagination",
+        "static actual send metadata",
+        "recipient-local guards",
+        "bounded failures",
+        "draft/scheduled exclusion",
+        "multiple message identity",
+        "live dependency factory binding"
       ]
     }
   ]

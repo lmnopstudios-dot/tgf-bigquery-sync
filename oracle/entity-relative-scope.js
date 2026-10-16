@@ -18,7 +18,7 @@ export function relativeEntitySelection(
   const countPattern = '(\\d+|' + Object.keys(counts).join('|') + ')';
   const match = text.match(
     new RegExp(
-      '\\b(last|latest|most recent|previous)\\s+(?:' +
+      '\\b(last|latest|most recently sent|most recent|previous)\\s+(?:' +
         countPattern +
         '\\s+)?(?:sent\\s+)?' +
         entityPattern +
@@ -86,7 +86,7 @@ export function selectSentEntities(
     const key = entityIdentity(c),
       prior = dedup.get(key);
     // The source campaign identity collapses message variants and metadata snapshots.
-    if (prior && prior.send_time !== c.send_time)
+    if (prior && Date.parse(prior.send_time) !== Date.parse(c.send_time))
       return { blocker: 'conflicting_send_metadata' };
     if (
       !prior ||
@@ -109,11 +109,5 @@ export function selectSentEntities(
       a.entity_id.localeCompare(b.entity_id),
   );
   const selected = ordered.slice(offset, offset + count);
-  if (
-    selected.length &&
-    ordered[offset + count] &&
-    selected.at(-1).send_time === ordered[offset + count].send_time
-  )
-    return { blocker: 'tied_selection_boundary' };
   return { selected, available: ordered.length };
 }
