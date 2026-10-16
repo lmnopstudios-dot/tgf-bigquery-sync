@@ -18,6 +18,21 @@ export async function assertProductArtifact(artifact){
     for(const [i,row] of rows.entries())for(const [j,key] of keys.entries())if((sheet.getRow(i+2).getCell(j+1).value??null)!==(row[key]??null))throw scopeMismatch('artifact.metrics');
     return true;
   }
+  if(e?.kind==='governed_basket_composition'){
+    const {assertBasketEvidence,basketWorkbookTables}=await import('./basket-composition.js');
+    if(!artifact.analysis_context)throw scopeMismatch('artifact.analysis_context');
+    assertBasketEvidence(artifact.analysis_context,e);
+    const bytes=Buffer.from(artifact.xlsx_base64||'','base64');
+    if(createHash('sha256').update(bytes).digest('hex')!==artifact.sha256)throw scopeMismatch('artifact.sha256');
+    const wb=new ExcelJS.Workbook();try{await wb.xlsx.load(bytes);}catch{throw scopeMismatch('artifact.workbook');}
+    for(const [name,rows] of [['Summary',e.rows],...basketWorkbookTables(e)]){
+      if(!rows.length)continue;
+      const sheet=wb.getWorksheet(name),keys=[...new Set(rows.flatMap(Object.keys))];
+      if(!sheet||sheet.rowCount!==rows.length+1)throw scopeMismatch('artifact.rows');
+      for(const [i,row] of rows.entries())for(const [j,key] of keys.entries())if((sheet.getRow(i+2).getCell(j+1).value??null)!==(row[key]??null))throw scopeMismatch('artifact.metrics');
+    }
+    return true;
+  }
   if(e?.kind==='governed_order_values'){
     const {assertOrderValueEvidence,orderValueGapRows,orderValueWorkbookTables}=await import('./order-value-analysis.js');
     if(!artifact.analysis_context)throw scopeMismatch('artifact.analysis_context');

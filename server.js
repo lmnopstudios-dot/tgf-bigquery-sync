@@ -180,7 +180,7 @@ const customerOrderIntervalService = createCustomerOrderIntervalService({ bigque
 const onlineCountrySalesService = createOnlineCountrySalesService({ bigquery, project: GOOGLE_PROJECT_ID });
 const platformSalesService = createPlatformSalesService({ bigquery, project: GOOGLE_PROJECT_ID });
 // Bind the live server through the same adapter factory used by the parity CLI.
-const {deviceConversion:deviceSourceConversionService,klaviyo:klaviyoEmailService,social:metaInstagramService,dailySales:dailySalesService,orderValues:orderValueService,productPrices:productPriceService}=createOracleProviderDependencies({env:process.env,bigquery,project:GOOGLE_PROJECT_ID,shopifySales:args=>getShopifySalesKpis(args)});
+const {deviceConversion:deviceSourceConversionService,klaviyo:klaviyoEmailService,social:metaInstagramService,dailySales:dailySalesService,orderValues:orderValueService,basketComposition:basketCompositionService,productPrices:productPriceService}=createOracleProviderDependencies({env:process.env,bigquery,project:GOOGLE_PROJECT_ID,shopifySales:args=>getShopifySalesKpis(args)});
 const categorySalesService = createCategorySalesService({ bigquery, project: GOOGLE_PROJECT_ID });
 const productViewPurchaseService = createProductViewPurchaseService({bigquery});
 const pageviewsPerSessionService=createPageviewsPerSessionService({bigquery,project:GOOGLE_PROJECT_ID,runShopifyql:async(query,reportName)=>runShopifyqlReport(await getShopifyAccessToken(),query,reportName),getShopTimezone:async()=>{const data=await shopifyGraphQL(await getShopifyAccessToken(),'{ shop { ianaTimezone } }');if(!data?.shop?.ianaTimezone)throw new Error('Shopify reporting timezone unavailable');return data.shop.ianaTimezone;}});
@@ -4188,7 +4188,7 @@ const ecommerceBaselineOverview=createBaselineOverviewService({
   }),
   shopifySales:getShopifySalesKpis,
   dailySales:dailySalesService,
-  orderValues:orderValueService,productPrices:productPriceService,
+  orderValues:orderValueService,basketComposition:basketCompositionService,productPrices:productPriceService,
   locationFinance:getSalesByLocation
 });
 const historicalEventComparison=createHistoricalEventComparisonService({
@@ -4654,7 +4654,7 @@ app.get(
       service:
         'TGF BigQuery Sync',
       revision: DEPLOYED_GIT_REVISION,
-      oracle_capabilities: {order_values:orderValueRuntimeBinding({orderValues:orderValueService,baselineOverview})}
+      oracle_capabilities: {order_values:orderValueRuntimeBinding({orderValues:orderValueService,basketComposition:basketCompositionService,baselineOverview})}
     });
   }
 );

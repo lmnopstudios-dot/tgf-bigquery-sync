@@ -1,3 +1,4 @@
+import { basketBusinessView } from './basket-composition.js';
 import { orderValueBusinessView } from './order-value-analysis.js';
 const LABELS={
   search_shopify_products:'Current catalogue',
@@ -43,6 +44,7 @@ export function evidenceSummary(entries,{unavailable=[]}={}){
   const sections=[];
   let validatedSectionCount=0;
   for(const entry of entries){
+    if(entry.result?.kind==='governed_basket_composition'){sections.push(basketBusinessView(entry.result).join('\n\n'));validatedSectionCount++;continue;}
     if(entry.result?.kind==='governed_order_values'){sections.push(orderValueBusinessView(entry.result).join('\n\n'));validatedSectionCount++;continue;}
 
     if(entry.result?.success===false){

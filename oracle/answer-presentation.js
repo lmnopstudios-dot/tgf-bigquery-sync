@@ -1,3 +1,4 @@
+import { basketBusinessView } from './basket-composition.js';
 import { campaignSetBusinessView } from './campaign-set-analysis.js';
 import { safeReadFailure, readFailureAction } from './read-failure.js';
 import { orderValueBusinessView } from './order-value-analysis.js';
@@ -101,6 +102,7 @@ function deviceTrend(e) {
   return lines;
 }
 function businessView(e) {
+  if(e.kind==='governed_basket_composition')return basketBusinessView(e);
   if(e.kind==='governed_order_values')return orderValueBusinessView(e);
   if(e.kind==='governed_weekday_sales')return weekdayBusinessView(e);
   if(e.kind==='governed_social')return socialBusinessView(e);

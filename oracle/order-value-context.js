@@ -2,14 +2,14 @@ import { isProductReportRequest } from './product-report-config.js';
 import { requestsInStoreChannel } from './channel-scope.js';
 import { naturalReportPeriod } from './report-natural-period.js';
 import { validateNumericOperation } from './numeric-distribution.js';
-import { requestedAnalyticalOperations, mergeRequestedOperations } from './requested-operations.js';
+import { requestedAnalyticalOperations, mergeRequestedOperations, analyticalOperationFamily } from './requested-operations.js';
 import { dailySalesContextPatch } from './analytical-refinement.js';
 
 export function orderValueContextPatch(base,text,now) {
   const retained=base.tool_route==='get_order_value_analysis',requested=requestedAnalyticalOperations(text,{orderValueFollowup:retained});
   if(retained&&isProductReportRequest(text)&&!requestedAnalyticalOperations(text)&&!/\b(?:price|prices|add[ -]?ons?|basket gaps?)\b/i.test(text))return null;
   const clarificationReply=retained&&base.unresolved_required_fields?.length&&/\b(?:UK|United Kingdom|GB|US|FR|DE|JP|GBP|USD|EUR|JPY)\b/i.test(text);
-  const follow=clarificationReply||retained&&/^(?:try|show|export|download|just|only|exclude|excluding|include|for|in|use|retry|chart|graph|end of|start of|beginning of)\b/i.test(text);
+  const follow=clarificationReply||retained&&/^(?:compare|try|show|export|download|just|only|exclude|excluding|include|for|in|use|retry|chart|graph|end of|start of|beginning of)\b/i.test(text);
   if(!requested&&!follow)return null;
   if(!requested&&/\b(?:campaign|conversion|inventory|stock|customers|product sales)\b/i.test(text))return null;
   // Reuse calendar/promotion refinement and pending clarification semantics.
@@ -22,7 +22,8 @@ export function orderValueContextPatch(base,text,now) {
   if(dates)Object.assign(calendar,dates);
   const today=new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/London',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(now));
   const yesterday=new Date(Date.parse(today+'T00:00:00Z')-86400000).toISOString().slice(0,10);
-  const previous=retained?base.numeric_operation:null;
+  const changed=Boolean(requested?.operations.length&&analyticalOperationFamily(base.requested_operations)!==analyticalOperationFamily(requested.operations));
+  const previous=retained&&!changed?base.numeric_operation:null;
   const operations=mergeRequestedOperations(retained?base.requested_operations:[],requested?.operations,text);
   const trial=text.match(/\btry\s+£?\s*(\d+(?:\.\d+)?)/i);
   // Parse monetary roles separately: band edges must never become thresholds.
@@ -45,8 +46,14 @@ export function orderValueContextPatch(base,text,now) {
   const fee=scenarioInput.match(/\b(?:hypothetical|assumed|assume|assuming|illustrative)[^.;£]{0,40}£\s*(\d+(?:\.\d+)?)/i)||scenarioInput.match(/(?:shipping|delivery)\s*£\s*(\d+(?:\.\d+)?)\s+below/i);
   const scenarioValues=[...new Set([...scenarioText.matchAll(/£\s*(\d+(?:\.\d+)?)/g)].map(m=>Number(m[1])))];
   const baseValue=Number(policy?.[2]||baseline?.[1]||previous?.baseline||scenarioValues[0]||250);
-  const operation=validateNumericOperation({...previous,...(edges?{edges}:{}),...(policy?{assumed_charge:Number(policy[1]),baseline:baseValue}:baseline?{baseline:baseValue}:{}),...(requested?{enrich_products:operations.includes('optional_product_enrichment')}:{}),...(!previous&&!policy&&!baseline&&scenarioValues.length>1?{baseline:baseValue}:{}),...(fee?{assumed_charge:Number(fee[1])}:{}),...(trial?{thresholds:[Number(trial[1])]}:requested&&scenarioValues.length?{thresholds:[...new Set([baseValue,...scenarioValues])]}:{}),...(/\b(?:observed|order) total\b/i.test(text)?{basis:'observed_total'}:/\bsubtotal\b/i.test(text)?{basis:'observed_subtotal'}:{})});
-  const patch={...(retained?base:{}),...calendar,requested_subject:'order_values',metrics:['orders'],native_metrics:[],analysis_type:'finance',tool_route:'get_order_value_analysis',numeric_operation:operation,requested_operations:operations,dimensions:['numeric_band'],grain:'day',platform:retained?base.platform:calendar.platform||'shopify',source_store:retained?base.source_store:null,channel:retained?base.channel:calendar.channel||'online',channel_breakdown:retained?base.channel_breakdown:false,geography:requested?.population.shipping_destination||(retained?base.geography:null)||null,currencies:calendar.currencies?.length?calendar.currencies:requested?.population.currency?[requested.population.currency]:(retained?base.currencies:[])||[],time_zone:'Europe/London',ranking_metric:null,ranking_direction:null,start_date:calendar.start_date||(retained?base.start_date:`${today.slice(0,4)}-01-01`),end_date:calendar.end_date||(retained?base.end_date:yesterday),date_cutoff:today,current_day_included:false,promotion_context:calendar.promotion_context||(retained?base.promotion_context:null)||(requested?.promotion_query?{query:requested.promotion_query,treatment:'compare_excluding'}:null)};
+  let operation=validateNumericOperation({...previous,...(edges?{edges}:{}),...(policy?{assumed_charge:Number(policy[1]),baseline:baseValue}:baseline?{baseline:baseValue}:{}),...(requested?{enrich_products:operations.includes('optional_product_enrichment')}:{}),...(!previous&&!policy&&!baseline&&scenarioValues.length>1?{baseline:baseValue}:{}),...(fee?{assumed_charge:Number(fee[1])}:{}),...(trial?{thresholds:[Number(trial[1])]}:requested&&scenarioValues.length?{thresholds:[...new Set([baseValue,...scenarioValues])]}:{}),...(/\b(?:observed|order) total\b/i.test(text)?{basis:'observed_total'}:/\bsubtotal\b/i.test(text)?{basis:'observed_subtotal'}:{})});
+  if(operations.includes('basket_composition')){
+    // Parse threshold comparison roles independently from display-band edges.
+    const clause=text.match(/\b(?:compare|thresholds?|try)\s+([^.;\n]+)/i)?.[1]||'';
+    const values=[...clause.matchAll(/(?:£\s*|\b)(\d+(?:\.\d+)?)/g)].map(m=>Number(m[1]));
+    operation=validateNumericOperation({basis:'observed_subtotal',thresholds:values.length?values:previous?.thresholds||[200,225,250],baseline:250,edges:[0,250,275,300],enrich_products:false});
+  }
+  const patch={...(retained?base:{}),...calendar,requested_subject:'order_values',metrics:['orders'],native_metrics:[],analysis_type:'finance',tool_route:'get_order_value_analysis',numeric_operation:operation,requested_operations:operations,dimensions:[operations.includes('basket_composition')?'basket_composition':'numeric_band'],grain:'day',platform:retained?base.platform:calendar.platform||'shopify',source_store:retained?base.source_store:null,channel:retained?base.channel:calendar.channel||'online',channel_breakdown:retained?base.channel_breakdown:false,geography:requested?.population.shipping_destination||(retained?base.geography:null)||null,currencies:calendar.currencies?.length?calendar.currencies:requested?.population.currency?[requested.population.currency]:(retained?base.currencies:[])||[],time_zone:'Europe/London',ranking_metric:null,ranking_direction:null,...(changed?{output_preference:null,comparison_start_date:null,comparison_end_date:null,included_periods:[],exclusions:[]}:{}),start_date:calendar.start_date||(retained?base.start_date:`${today.slice(0,4)}-01-01`),end_date:calendar.end_date||(retained?base.end_date:yesterday),date_cutoff:today,current_day_included:false,promotion_context:calendar.promotion_context||(retained&&!changed?base.promotion_context:null)||(requested?.promotion_query?{query:requested.promotion_query,treatment:'compare_excluding'}:null)};
   if(exclusionClause){
     const iso=exclusionClause.match(/(20\d{2}-\d{2}-\d{2})\s+(?:to|through)\s+(20\d{2}-\d{2}-\d{2})/);
     const named=exclusionClause.match(/(\d{1,2})\s*[–—-]\s*(\d{1,2})\s+(January|February|March|April|May|June|July|August|September|October|November|December)(?:\s+(20\d{2}))?/i);

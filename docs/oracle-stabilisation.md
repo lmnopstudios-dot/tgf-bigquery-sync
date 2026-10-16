@@ -192,3 +192,13 @@ above are counted as passes. No live BigQuery/API evidence read, collection,
 backfill, inventory request, source/knowledge mutation, schedule change,
 deployment or merge was performed. CI and deployed acceptance are separate
 from these completed local checks.
+
+## Basket operation follow-up
+
+See [Oracle basket composition](oracle-basket-composition.md) for the demonstrated
+operation-transition defects, bounded reconciled line-evidence contract, unchanged
+production acceptance question, schema/coverage limits and exact Render read-only
+diagnostics. The persistent matrix now executes the basket suite and the browser
+gate checks its summary and expandable combinations. Prior verification figures
+above describe that earlier revision; use the basket PR's recorded final runs for
+this change. No local fixture result verifies deployed schema or collection.

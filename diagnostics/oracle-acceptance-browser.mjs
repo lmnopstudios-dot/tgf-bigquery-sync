@@ -28,6 +28,11 @@ try{
           assert.equal(f.calls.filter(c=>c.discovery).length,2*(name==='desktop'?1:2));
           const details=page.locator('.analytical-answer').last().locator('details').first();await details.locator('summary').click();assert.match(await details.innerText(),/not incremental sales/);
         }
+        if(turn.check==='basket'){
+          assert.match(answer,/Additional items required/);assert.doesNotMatch(answer,/Losing eligibility|Product 1/);
+          const details=page.locator('.analytical-answer').last().locator('details').first();await details.locator('summary').click();
+          assert.match(await details.innerText(),/Product 1/);assert.match(await details.innerText(),/GBP 240\.00/);assert.match(await details.innerText(),/VAT|Tax inclusion/i);
+        }
         if(turn.check==='checkout'){assert.match(answer,/Checkout identities/);assert.match(answer,/Completed orders cannot/);assert.equal(f.calls.length,offset);if(turn.dates)assert.match(answer,new RegExp(turn.dates.join(' to ')));}
         if(turn.check==='sales'||turn.check==='partial-sales'){assert.match(answer,/Online Store/);assert.ok(f.calls.slice(offset).every(c=>c.provider==='sales'));}
         if(turn.check==='countries'){assert.match(answer,/GBP 200/);const details=page.locator('.analytical-answer').last().locator('details').first();await details.locator('summary').click();assert.match(await details.innerText(),/GBP 50/);}

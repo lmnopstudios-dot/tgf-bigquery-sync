@@ -3,6 +3,8 @@ import { retrievePromotionContext, resolvePromotionDates } from './promotion-con
 // Semantic operations may be requested for any monetary distribution. These
 // declarations do not make period totals an order-level evidence capability.
 export const OPERATION_REQUIREMENTS=Object.freeze({
+  product_attribution:['linked_campaign_order_product_identity','compatible_attribution_window'],
+  basket_composition:['complete_unique_orders','reconciled_discounted_lines','unit_allocation','stable_product_identity'],
   merchandise_mean:['unique_order_amounts','valid_value_denominator'],
   merchandise_median:['unique_order_amounts','valid_value_denominator'],
   basket_gaps:['governed_numeric_measure','exact_boundaries'],
@@ -13,6 +15,11 @@ export const OPERATION_REQUIREMENTS=Object.freeze({
   behaviour_forecast:['validated_behaviour_model','compatible_population'],
   optional_product_enrichment:['published_destination_prices','no_inferred_basket_relationships']
 });
+// Grouped attribution needs linked product evidence; campaign totals cannot
+// satisfy it even when the subject, selected campaign and dates stay the same.
+export function requestedAttributionOperation(text,context={}) {
+  return /\bproducts?\b/i.test(text)&&/\b(?:bought|purchased|sold|sales|revenue|attribut\w*)\b/i.test(text)&&(/\b(?:campaigns?|emails?|ads?)\b/i.test(text)||context.campaign_request&&/\b(?:attribut\w*|from it|through it)\b/i.test(text))&&! /\b(?:all product sales|overall product sales)\b/i.test(text)?'product_attribution':null;
+}
 export function individualOrderQuestion(message) {
   return /\border\s+#?(?=[A-Z0-9._/-]*\d)[A-Z0-9][A-Z0-9._/-]*\b/i.test(String(message||''))&&/\b(?:details?|look\s*up|shipping|charges?|status|show|get|find)\b/i.test(String(message||''))&&!/\b(?:orders|population|distribution|bands|compare thresholds)\b/i.test(String(message||''));
 }
@@ -21,12 +28,20 @@ export function metricOperations(message) {
   const sourceNativeMean=/\b(?:shopify[ -]reported|source[ -]native|operational\s+(?:aov|average\s+order\s+value))\b/i.test(text)&&!/\bmerchandise\b/i.test(text);
   return [...(!sourceNativeMean&&/\b(?:aov|(?:average|mean)(?:\s*(?:and|\/)\s*median)?(?:\s+merchandise)?\s+(?:order|basket)\s+value|mean(?:\s+merchandise)?\s+(?:order|basket)\s+value)\b/i.test(text)?['merchandise_mean']:[]),...(/\bmedian\b/i.test(text)?['merchandise_median']:[]),...(/\b(?:basket|spend|threshold)[ -]?gaps?\b|\b(?:within|short by)\s+£/i.test(text)?['basket_gaps']:[]),...(/\bbreak[ -]?even\b/i.test(text)?['break_even']:[])];
 }
+export function analyticalOperationFamily(operations=[]) {
+  return operations.includes('basket_composition')?'basket_composition':operations.length?'order_distribution':null;
+}
 export function mergeRequestedOperations(previous,requested,text) {
+  // An explicit change of operation replaces incompatible settings, independent
+  // of retained geography, currency or dates. Additive metrics remain additive.
+  if(requested?.length&&analyticalOperationFamily(previous)&&analyticalOperationFamily(previous)!==analyticalOperationFamily(requested))return [...new Set(requested)];
   return [...new Set([...(requested?.length&&/\b(?:only|instead(?: of)?|replace)\b/i.test(text)&&(!/\b(?:sort|rank)\b/i.test(text)||/\bonly\b/i.test(text))?[]:previous||[]),...requested||[]])];
 }
 export function requestedAnalyticalOperations(message,{orderValueFollowup=false}={}) {
   const text=String(message||'');
   if(individualOrderQuestion(text))return null;
+  const composition=/\b(?:basket composition|order composition|single[ -](?:item|unit)|multi[ -](?:item|unit)|highest[ -]value (?:individual )?(?:item|unit)|product combinations?|main[ -]product|remaining (?:items|products)|items per order|products? (?:bought|purchased) together)\b/i.test(text);
+  if(composition)return {version:1,charge_domain:false,operations:['basket_composition',...metricOperations(text),...(/\b(?:profit optimization|profit-optimal)\b/i.test(text)?['profit_optimization']:[])],parameters:{},population:{shipping_destination:/\b(?:UK|United Kingdom)\b/i.test(text)?'GB':null,channel:/\bonline\b/i.test(text)?'online':null,currency:text.match(/\b(GBP|USD|EUR|JPY)\b/i)?.[1]?.toUpperCase()||(/£/.test(text)?'GBP':null)},completed_days:/completed day|through yesterday/i.test(text)};
   const bands=/\b(?:order[ -]?value|basket[ -]?(?:value|size)|merchandise (?:amount|value))\b[\s\S]{0,100}\b(?:bands?|distribution|buckets?|ranges?)\b|\b(?:bands?|distribution|buckets?)\b[\s\S]{0,100}\b(?:order|basket|merchandise)[ -]?(?:values?|amounts?|sizes?)\b/i.test(text);
   const moneyCount=[...text.matchAll(/£\s*\d+(?:\.\d+)?/g)].length;
   const shippingComparison=/\b(?:free[ -]?(?:shipping|delivery)|(?:shipping|delivery) (?:threshold|minimum)|(?:order|basket)[ -]?value)\b/i.test(text)&&moneyCount>1&&/\b(?:compare|versus|vs|instead|from|lower|raise|reduce|change|alternatives?|what if)\b/i.test(text);
