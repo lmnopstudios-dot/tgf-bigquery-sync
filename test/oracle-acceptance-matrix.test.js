@@ -44,6 +44,7 @@ test('calendar matrix is shared across subjects and preserves reporting semantic
     ['last week','2026-10-05','2026-10-11',false],['past seven days','2026-10-08','2026-10-14',true],
     ['this month','2026-10-01','2026-10-14',true],['last month','2026-09-01','2026-09-30',false],
     ['last 4 completed months','2026-06-01','2026-09-30',false],['last three completed months','2026-07-01','2026-09-30',false],
+    ['last 3 years','2023-10-14','2026-10-14',true],['past three years','2023-10-14','2026-10-14',true],['last two completed years','2024-01-01','2025-12-31',false],
     ['this year','2026-01-01','2026-10-14',true],['last year','2025-01-01','2025-12-31',false]
   ];
   for(const [phrase,start,end,included] of periods){

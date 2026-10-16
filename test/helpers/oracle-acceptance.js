@@ -22,7 +22,7 @@ export function acceptanceFixture({fail_start=null,campaigns=false,country_conve
   }});
   const bigquery={dataset:()=>({getMetadata:async()=>[{location:'US'}]}),query:async query=>{
     queries.push(query);assert.match(query.query,/SELECT/);assert.doesNotMatch(query.query,/INSERT|UPDATE|DELETE|MERGE|CREATE/);
-    if(query.query.includes('retention_members')){calls.push({provider:'retention',args:query.params});return [state.retention?structuredClone(cohortRows):[]];}
+    if(query.query.includes('retention_members')){calls.push({provider:'retention',args:query.params});if(state.fail_retention_source===query.params.entry_source)throw Object.assign(Error('private upstream failure'),{code:'FIXTURE_READ_FAILED'});return [state.retention?structuredClone(cohortRows).filter(r=>!query.params.entry_source||r.source_platform===query.params.entry_source).map(r=>query.query.includes('source_store,entry_product_ref,window_days')?{...r,entry_product_ref:`${r.source_platform}:${r.source_store}:${r.collaboration_name}`,entry_product_title:r.collaboration_name+' piece'}:r):[]];}
     if(/INFORMATION_SCHEMA|grouped_lines|represented_location_orders|GROUP BY 1,2,3/.test(query.query)){
       calls.push({provider:'baskets',args:query.params});
       if(query.query.includes('INFORMATION_SCHEMA'))return [Object.entries(BASKET_LINE_COLUMNS).map(([column_name,data_type])=>({column_name,data_type}))];
@@ -106,6 +106,13 @@ export function assertAcceptanceTurn(turn,result,f,callOffset=0){
     const coverage=result.evidence.source.coverage;assert.equal(coverage.categories.length,coverage.requested_days);assert.equal(Object.values(coverage.category_counts).reduce((a,b)=>a+b,0),coverage.requested_days);
   }
   if(turn.check==='retention'){assert.equal(result.evidence.kind,'governed_cohort_retention');assert.match(result.answer,/75\.00%/);assert.match(result.answer,/50\.00%/);assert.equal(result.partial,true);assert.ok(calls.every(c=>c.provider==='retention'));}
+  if(turn.pieces){
+    assert.equal(c.journey_group_by,'entry_product');assert.equal(c.channel,null);assert.equal(c.channel_breakdown,true);assert.equal(c.sort,'returning_customers_desc');
+    assert.equal(calls.length,2);assert.deepEqual(calls.map(x=>x.args.entry_source),['woo','shopify']);
+    for(const call of calls){assert.equal(call.args.entry_channel,null);assert.equal(call.args.subsequent_channel,null);assert.equal(call.args.cohort_entry_start,c.start_date);assert.equal(call.args.cohort_entry_end,c.end_date);assert.equal(call.args.first_order_semantic,'first_observed_ever');assert.equal(call.args.entry_classification,'collaboration');assert.equal(call.args.retention_sort,'returning_customers_desc');}
+    assert.ok(result.evidence.rows.every(r=>r.entry_product_ref&&r.entry_product));assert.match(result.answer,/Square/);assert.match(result.answer,/cannot be evaluated are unknown/);assert.match(result.answer,/Left-censoring/);
+  }
+
   if(turn.check==='visitor-conversion-supported'){assert.equal(result.evidence.kind,'governed_population_conversion');assert.match(result.answer,/1\.90%|2\.40%/);assert.doesNotMatch(result.answer,/Mobile|Desktop/);assert.deepEqual(result.evidence.population_scope.groups,turn.groups);assert.ok(calls.every(c=>c.provider==='country_conversion'));if(turn.groups.includes('rest_of_world'))assert.match(result.answer,/2\.90%/);if(turn.groups.includes('global')&&turn.groups.includes('country'))assert.match(result.answer,/overlap/);}
   if(turn.check==='visitor-conversion-unavailable'){assert.equal(result.analysis_unavailable,true);assert.match(result.answer,/Visitor-country conversion is unavailable/);assert.match(result.answer,/cutoff: unavailable/);assert.doesNotMatch(result.answer,/\|.*Mobile.*Desktop/);assert.equal(calls.length,0);}
   if(turn.check==='basket'){

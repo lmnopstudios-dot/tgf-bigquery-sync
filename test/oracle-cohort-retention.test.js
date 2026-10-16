@@ -25,7 +25,7 @@ test('journey SQL retains historical lookback, source identities, approved class
  assert.match(sql,/COALESCE\(l.source_app_id=@matrixify_app_id,FALSE\)/);
  assert.match(sql,/classification_links/);assert.match(sql,/JOIN approved_links/);assert.doesNotMatch(sql,/fuzzy|suggested/);
  assert.match(sql,/UNNEST\(\[90,180\]\)/);assert.match(sql,/COUNTIF\(mature\)/);assert.match(sql,/PERCENTILE_CONT/);
- assert.match(sql,/MIN\(order_timestamp\) order_timestamp FROM downstream_orders/);assert.match(sql,/LIMIT 50/);
+ assert.match(sql,/MIN\(order_timestamp\) order_timestamp FROM downstream_orders/);assert.match(sql,/LIMIT @cohort_limit/);
  let options;const r=await dryRunCohortRetention({project:'fixture',now:NOW,bigquery:{createQueryJob:async value=>{options=value;return [{metadata:{statistics:{totalBytesProcessed:'123'}}}];}}});
  assert.equal(r.verified,true);assert.equal(options.dryRun,true);assert.equal(options.jobTimeoutMs,30000);assert.equal(options.maximumBytesBilled,'20000000000');assert.equal(options.params.entry_channel,'Online');
 });
@@ -53,4 +53,63 @@ for(const mode of ['direct','interactive','durable'])test(`retention uses produc
  const raw=JSON.parse(JSON.stringify(r));assert.equal(deliverOracleResult(raw,r.analysis_context).delivery.status,'partial');
  raw.evidence.rows[0].repeat_rate=.99;assert.throws(()=>assertEvidenceAgreement(r.analysis_context,raw.evidence),e=>e.code==='EVIDENCE_SCOPE_MISMATCH');
  if(mode==='durable'){const count=f.calls.length,recovered=await h.get('/jobs/'+r.job_id);assert.equal(recovered.answer,r.answer);assert.equal(f.calls.length,count);}
+});
+
+const production='Can I have a breakdown of what collaboration pieces that are the first purchase a customer has ever made lead to the most return customers. Use both online and instore sales from the last 3 years.';
+test('piece evidence cannot satisfy collaboration aggregation or lose identity on recovery',async()=>{
+ const f=acceptanceFixture({retention:true});const r=await executeGovernedAgentAnalysis({message:production,baselineOverview:f.baseline,now:NOW});
+ assert.equal(r.evidence.definition.group_by[0],'retention_product_windows');
+ assert.ok(f.queries.every(q=>q.query.includes('source_store,entry_product_ref,window_days')));
+ assert.ok(f.queries.every(q=>q.params.cohort_limit===25));
+ const bad=structuredClone(r);delete bad.evidence.rows[0].entry_product_ref;
+ assert.throws(()=>assertEvidenceAgreement(r.analysis_context,bad.evidence),{code:'EVIDENCE_SCOPE_MISMATCH'});
+ const grouping=structuredClone(r);grouping.evidence.definition.group_by=['retention_windows'];
+ assert.equal(answerCompleteness(r.analysis_context,grouping).status,'incomplete');
+});
+test('combined request retains validated source cohorts on another source failure without exposing exceptions',async()=>{
+ const f=acceptanceFixture({retention:true});f.state.fail_retention_source='shopify';
+ const r=await executeGovernedAgentAnalysis({message:production,baselineOverview:f.baseline,now:NOW});
+ assert.equal(r.partial,true);assert.ok(r.evidence.rows.length);assert.ok(r.evidence.rows.every(r=>r.source_platform==='woo'));
+ assert.deepEqual(r.evidence.coverage.failed_sources,['shopify']);assert.equal(r.evidence.coverage.unevaluable_customers,null);
+ assert.match(r.answer,/Source evidence unavailable: shopify/);assert.doesNotMatch(r.answer,/private upstream/);
+});
+test('year resolution uses runtime London day, clamps leap years and rejects invalid counts across subjects',()=>{
+ for(const subject of ['online sales','Shopify customers','shipping countries','Klaviyo campaigns','collaboration repeat customers']){
+  const c=transitionAnalysisContext(null,`Show ${subject} for the past three years`,{now:Date.parse('2024-02-29T12:00:00Z')}).context;
+  assert.equal(c.start_date,'2021-02-28');assert.equal(c.end_date,'2024-02-29');
+ }
+});
+
+import { readCorrelation, CORRELATION } from '../diagnostics/oracle-correlation-read.js';
+import { reportPeriodResolution } from '../oracle/report-natural-period.js';
+test('correlation lookup is bounded read-only and returns only sanitized diagnostic fields',async()=>{
+ let options;const r=await readCorrelation({project:'fixture',bigquery:{query:async o=>{options=o;return [[{status:'failed',attempts:1,error_code:'PROVIDER_REJECTED',failed_stage:'evidence_read',payload_json:'private',owner_key:'private'}]];}}});
+ assert.equal(options.params.request_id,CORRELATION);assert.equal(options.maximumBytesBilled,'100000000');assert.equal(options.jobTimeoutMs,15000);
+ assert.match(options.query,/LIMIT 5/);assert.doesNotMatch(options.query,/SELECT \*|payload_json|owner_key/);assert.doesNotMatch(JSON.stringify(r),/private/);
+});
+test('relative-year bounds and London midnight are shared by date resolution',()=>{
+ for(const text of ['last 0 years','past 11 years'])assert.equal(reportPeriodResolution(text,NOW).invalid,true);
+ const p=reportPeriodResolution('past three years',Date.parse('2026-10-15T23:30:00Z')).period;
+ assert.equal(p.start_date,'2023-10-16');assert.equal(p.end_date,'2026-10-16');assert.equal(p.current_day_included,true);
+});
+for(const mode of ['direct','interactive','durable'])test(`production pending request and unsupported export preserve the piece population through ${mode}`,async t=>{
+ const f=acceptanceFixture({retention:true}),h=await acceptanceServer(f,{durable:mode==='durable'});t.after(h.close);
+ const c=transitionAnalysisContext(null,production,{now:NOW}).context;
+ const pending={...c,start_date:null,end_date:null,cohort_entry_start:null,cohort_entry_end:null,observation_end:null,unresolved_required_fields:['start_date','end_date']};
+ const send=async(message,prior)=>mode==='direct'?await (await fetch(h.origin+'/agent',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({message,analysis_context:prior})})).json():await h.submit(message);
+ let r;
+ if(mode==='direct')r=await send('Last 3 years.',pending);
+ else{await send(production.replace(' from the last 3 years',''));r=await send('Last 3 years.');}
+ assert.equal(r.analysis_context.journey_group_by,'entry_product');assert.equal(r.analysis_context.channel_breakdown,true);assert.equal(r.analysis_context.sort,'returning_customers_desc');assert.ok(r.evidence.rows.length);
+ const before=f.calls.length,exported=await send('Export that to Excel.',r.analysis_context);
+ assert.equal(exported.analysis_unavailable,true);assert.match(exported.answer,/cohort export or chart is not implemented/);assert.equal(exported.analysis_context.journey_group_by,'entry_product');assert.equal(f.calls.length,before);
+});
+test('piece cohort SQL uses mature fixed windows, distinct entry membership and unconditional later-purchase outcome',()=>{
+ const sql=customerJourneySql('fixture','retention_product_windows');
+ assert.match(sql,/DATE_ADD\(DATE\(em.entry_timestamp\),INTERVAL window_days DAY\)<=@observation_end/);
+ assert.match(sql,/TIMESTAMP_DIFF\(d.order_timestamp,em.entry_timestamp,SECOND\)<=window_days\*86400/);
+ assert.match(sql,/COUNTIF\(mature AND days_to_second IS NOT NULL\)/);
+ assert.match(sql,/MIN\(order_timestamp\) order_timestamp FROM downstream_orders GROUP BY governed_customer_ref/);
+ assert.match(sql,/GROUP BY governed_customer_ref,source_platform,source_store,entry_product_ref,entry_timestamp/);
+ assert.doesNotMatch(sql,/d\.entry_product_ref=em\.entry_product_ref/);
 });

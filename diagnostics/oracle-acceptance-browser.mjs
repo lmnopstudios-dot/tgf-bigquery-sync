@@ -24,7 +24,7 @@ try{
         if(turn.outcome==='clarification')assert.match(answer,/start and end dates/i);
         else assert.doesNotMatch(answer,/What date range/);
         if(turn.check==='visitor-monthly'){if(turn.grain==='month'){assert.match(answer,/Month/);assert.match(answer,/completed-checkout sessions/);}if(turn.groups.includes('rest_of_world'))assert.match(answer,/unknown\/blank\/ZZ/);}
-        if(turn.check==='retention'){assert.match(answer,/75\.00%/);assert.match(answer,/50\.00%/);assert.match(answer,/mature customers/);assert.equal(f.calls.length,offset+1);}
+        if(turn.check==='retention'){assert.match(answer,/75\.00%/);assert.match(answer,/50\.00%/);assert.match(answer,/mature customers/);assert.equal(f.calls.length,offset+(turn.provider_count||1));}
         if(turn.check==='campaigns-available'){
           assert.match(answer,/Campaign 1/);assert.match(answer,/Campaign 2/);assert.match(answer,/Campaign 3/);assert.match(answer,/30\.00 GBP/);
           assert.equal(f.calls.filter(c=>c.discovery).length,2*(name==='desktop'?1:2));
