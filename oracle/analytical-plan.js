@@ -27,7 +27,7 @@ export function resolveAnalyticalPlan(c) {
     metrics:report?.metrics||campaign?.requested_metrics||(c?.native_metrics?.length?c.native_metrics:c?.metrics)||[],
     metric_definitions:report?Object.fromEntries(report.metrics.map(m=>[m,PRODUCT_REPORT_CAPABILITIES[m]?.definition||'Unavailable'])):c?.tool_route==='get_daily_sales_analysis'?DAILY_SALES_CONTRACT.definitions:null,
     ...(c?.analysis_type==='customer_journey'?{cohort:{entry_start:c.cohort_entry_start,entry_end:c.cohort_entry_end,observation_end:c.observation_end,first_order_semantic:c.first_order_semantic,entry_classification:c.entry_product_classification,group_by:c.journey_group_by,within_days:c.within_days,sort:c.sort||null}}:{}),
-    numeric_operation:c?.numeric_operation||null,requested_operations:c?.requested_operations||[],
+    ...(c?.request_detail?{request_detail:c.request_detail}:{}),numeric_operation:c?.numeric_operation||null,requested_operations:c?.requested_operations||[],
     dimensions:c?.dimensions||[],grain:c?.grain||null,
     dates:{start_date:c?.start_date||null,end_date:c?.end_date||null,timezone:c?.time_zone||campaign?.selected?.reporting_timezone||report?.period?.timezone||'Europe/London',cutoff:c?.date_cutoff||null,partial_period:Boolean(c?.partial_period),current_day_included:Boolean(c?.current_day_included),basis:campaign?.date_mode||null},
     comparison:{...(c?.population_scope?{groups:c.population_scope.groups,overlap:c.population_scope.groups.includes('country')&&c.population_scope.groups.includes('global')}:{}),type:c?.comparison_type||null,start_date:c?.comparison_start_date||null,end_date:c?.comparison_end_date||null,included_periods:c?.included_periods||[]},
@@ -46,6 +46,7 @@ export function analyticalPlanKey(plan) {
   const {presentation,pending,...scope}=plan;
   // Older saved plans predate operation declarations; an absent list means none.
   scope.requested_operations=scope.requested_operations||[];
+  if(scope.request_detail){const {formats,...detail}=scope.request_detail;scope.request_detail=detail;}
   if(scope.population)scope.population={...scope.population,catalogue_filter:normalizeCatalogueFilter(scope.population.catalogue_filter)};
   return createHash('sha256').update(stableAnalyticalJSON(scope)).digest('hex');
 }

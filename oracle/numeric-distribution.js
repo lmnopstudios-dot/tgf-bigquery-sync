@@ -13,12 +13,15 @@ export function validateNumericOperation(value={}) {
   const baseline=value.baseline??250,thresholds=value.thresholds||[175,200,225,250,275,300],assumed_charge=value.assumed_charge??8;
   if(minorUnits(baseline)==null||minorUnits(assumed_charge)==null||!Array.isArray(thresholds)||!thresholds.length||thresholds.length>20||thresholds.some(n=>minorUnits(n)==null))throw Error('Invalid threshold parameters');
   if(!['observed_subtotal','observed_total'].includes(value.basis||'observed_subtotal'))throw Error('Invalid observed amount basis');
-  return {edges:[...edges],baseline,thresholds:[...new Set(thresholds)],assumed_charge,basis:value.basis||'observed_subtotal',enrich_products:Boolean(value.enrich_products)};
+  if(value.band_width!=null&&(!(minorUnits(value.band_width)>0)))throw Error('Invalid numeric band width');
+  return {...(value.band_width!=null?{band_width:value.band_width}:{}),edges:[...edges],baseline,thresholds:[...new Set(thresholds)],assumed_charge,basis:value.basis||'observed_subtotal',enrich_products:Boolean(value.enrich_products)};
 }
 /** Weighted, full retrieved population; unknown amounts remain in the denominator.
  * Input weights must come from unique source-qualified orders, never line joins. */
 export function numericDistribution(rows,operation,coverage={}) {
-  const config=validateNumericOperation(operation),edges=config.edges.map(minorUnits),base=minorUnits(config.baseline),fee=minorUnits(config.assumed_charge);
+  const config=validateNumericOperation(operation);
+  const width=config.band_width==null?null:minorUnits(config.band_width),maximum=width?rows.reduce((m,r)=>Math.max(m,minorUnits(r.amount)||0),0):0;
+  const edges=width?Array.from({length:Math.min(100,Math.floor(maximum/width)+2)},(_,i)=>i*width):config.edges.map(minorUnits),base=minorUnits(config.baseline),fee=minorUnits(config.assumed_charge);
   const bands=edges.map((lower,i)=>({lower:majorUnits(lower),upper:majorUnits(edges[i+1]),orders:0}));
   const scenarios=config.thresholds.map(threshold=>({threshold,newly_eligible:0,losing_eligibility:0,affected_orders:0,eligible_orders:0,eligible_known_charge_orders:0,eligible_unknown_charge_orders:0,eligible_charge_minor:0,basket_gaps:[10,25,50].map(upper=>({lower:upper===10?0:upper===25?10:25,upper,orders:0,within_orders:0})),recorded_charge_minor:0,known_charge_orders:0,unknown_charge_orders:0,zero_charge_orders:0,non_standard_charge_orders:0,hypothetical_charge_minor:0}));
   let population=0,unknown_values=0,merchandise_valid_orders=0,merchandise_sum_minor=0;const gaps=new Map(),merchandise=new Map();

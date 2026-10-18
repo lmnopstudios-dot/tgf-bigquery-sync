@@ -21,6 +21,7 @@ export const orderValueGapRows=sections=>sections.some(s=>!s.observed_merchandis
 export function orderValueComponentOutcomes(context,evidence) {
   return resolveExecutionPlan(context).components.map(c=>{
     if(['unsupported','blocked'].includes(c.status))return {...c,status:'unavailable'};
+    if(c.operation==='numeric_bands'&&evidence.operation.band_width&&evidence.sections.some(s=>s.bands.length===100&&s.bands.at(-1).orders>0))return {...c,status:'conditional',detail:'At most 100 requested-width bands are delivered; the final open overflow band contains additional orders. Narrow the amount range or increase the band width for finer detail.'};
     if(c.operation==='break_even')return {...c,status:'conditional',detail:'Formula available; compatible costs, margin and behavioural inputs required.'};
     if(evidence.retrieval_failed&&c.operation!=='optional_product_enrichment')return {...c,status:'failed',detail:'Order population retrieval failed; no new metric calculated.'};
     if(c.operation==='optional_product_enrichment'){
@@ -120,6 +121,7 @@ export async function answerOrderValues({context,provider,productPrices,knowledg
   const attempted=[Boolean(provider),false,false];
   const results=await Promise.allSettled([Promise.resolve().then(()=>{if(!provider)throw Error('Provider unavailable');return retrievePopulation(provider,args,{signal,deadlineAt,onProviderStage});}),boundedEvidenceRead(()=>{if(!context.promotion_context||context.promotion_context.treatment==='include'||!knowledgeService)return null;attempted[1]=true;return retrievePromotionContext(knowledgeService,context.promotion_context,period);},{signal,deadlineAt}),boundedEvidenceRead(()=>{if(!operation.enrich_products||context.geography!=='GB'||!productPrices)return null;attempted[2]=true;return productPrices({signal,deadlineAt,onProviderStage});},{signal,deadlineAt})]);
   const data=results[0].status==='fulfilled'?results[0].value:null,components=resolveExecutionPlan(context).components,limitations=components.filter(c=>c.status==='unsupported').map(c=>c.blocker);
+  if(operation.band_width)limitations.push(`Requested value-band width: ${operation.band_width} ${args.currency}; lower inclusive and upper exclusive. Bands extend through the largest retrieved known amount, with at most 100 bands; the final open band is an explicit overflow bound, not an exact-width interval.`);
   limitations.push('Scope: Shopify-only collected history in the requested window; WooCommerce and other stores are not combined. History before Shopify or missing collection is unverified. To answer for all platforms, specify the additional population and use compatible source-specific evidence.');
   limitations.push(`Illustrative scenario assumption used for this calculation: ${args.currency} ${operation.assumed_charge} below ${args.currency} ${operation.baseline}. This is not a confirmed business policy or a forecast.`);
   if(data){const expected={...args,source_store:'shopify'};if(stableAnalyticalJSON(data.scope)!==stableAnalyticalJSON(expected))mismatch();}

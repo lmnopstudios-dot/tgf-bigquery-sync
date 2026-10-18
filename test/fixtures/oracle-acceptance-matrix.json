@@ -824,6 +824,32 @@
         "coverage reconciliation",
         "chart and workbook evidence validation"
       ]
+    },
+    {
+      "file": "test/oracle-multipart-detail.test.js",
+      "covers": [
+        "exact multipart shipping request fresh and after unrelated conversion",
+        "detail subset and numeric interval membership",
+        "independent order and reconciled denominators",
+        "supporting XLSX and anonymous underlying workbook columns and values",
+        "owner authentication same-ID retry persisted refresh without provider replay",
+        "size/persistence failures retain successful evidence",
+        "changed thresholds exclusions and bands",
+        "explicit export component failures across shared delivery"
+      ],
+      "representative_conversations": [
+        [
+          "Prepare evidence for a team discussion about our \u00a3250 UK free-shipping threshold. Use UK-destination online GBP orders from 1 January 2026 through the latest completed day. Show full-period results and separately exclude 1\u20134 May inclusive. Show basket averages/medians, \u00a325 value bands, single/multi-unit baskets around \u00a3250, qualifying-basket bands, product combinations, \u00a3200/\u00a3225/\u00a3250 threshold comparisons, recorded shipping charges, charts and an XLSX export. Use reconciled order-line evidence. No inventory queries, collection, backfill or mutation.",
+          "Of the 113 sale-excluded baskets that reached \u00a3250 only through multiple items, how many finished at \u00a3250\u2013\u00a3259.99, \u00a3260\u2013\u00a3274.99, \u00a3275\u2013\u00a3299.99 and \u00a3300+? Show the most common highest-value-product plus smaller-product combinations, their discounted prices and order counts. Also identify how many already had a highest-value individual item worth \u00a3200\u2013\u00a3249.99, so would qualify on that item alone at a \u00a3200 threshold. Preserve the same population and exclusions. Export the supporting tables.",
+          "Export the underlying reconciled basket analysis to XLSX. Include anonymous basket reference, sale-exclusion flag, merchandise subtotal, highest-value individual product and its discounted unit price, remaining product names, quantities and combined discounted value. UK online GBP only, same dates. No customer details. If these fields cannot be exported, state which are unavailable rather than repeating the threshold summary."
+        ],
+        [
+          "Show UK online GBP basket composition this year.",
+          "Of baskets that reached \u00a3225 only through multiple items, show \u00a3225\u2013\u00a3239.99, \u00a3240\u2013\u00a3259.99 and \u00a3260+. Highest individual item worth \u00a3175\u2013\u00a3224.99. Exclude 2\u20133 May inclusive.",
+          "Show aggregates only.",
+          "Export supporting tables."
+        ]
+      ]
     }
   ]
 }

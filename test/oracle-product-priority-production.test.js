@@ -47,7 +47,7 @@ async function dispatch(f,id='fixture-request',events=[]){return dispatchAnalysi
 
 test('real production factory + shared dispatch paginates, binds providers, persists and recovers exact XLSX',async()=>{
   const f=production(),events=[],result=await dispatch(f,'factory',events);
-  assert.equal(result.evidence.catalogue.complete,true);assert.equal(result.artifact.row_count,3);
+  assert.equal(result.evidence.catalogue.complete,true);assert.equal(result.artifact.row_count,3);assert.equal(result.component_outcomes.find(c=>c.component==='xlsx').status,'delivered');
   assert.deepEqual(f.http.filter(call=>call.url.endsWith('/graphql.json')).map(call=>JSON.parse(call.options.body).variables),[{cursor:null},{cursor:'second'}]);
   const artifact=await f.artifactStore.get(result.artifact.id,'fixture-owner'),workbook=new ExcelJS.Workbook();await workbook.xlsx.load(Buffer.from(artifact.xlsx_base64,'base64'));
   assert.equal(workbook.worksheets.length,1);assert.deepEqual(workbook.worksheets[0].getRow(1).values.slice(1),['Priority','Product','Product link','Work needed','Status']);assert.equal(workbook.worksheets[0].rowCount,4);

@@ -1,3 +1,4 @@
+import { accountForDelivery } from './component-outcomes.js';
 import { answerCompleteness } from './answer-completeness.js';
 import { normalizeOracleResult, oracleResultContent, RESULT_VERSION } from '../public/oracle/result-contract.js';
 import { presentAnalyticalAnswer } from './answer-presentation.js';
@@ -23,6 +24,8 @@ export function deliverOracleResult(input,context, {present=presentAnalyticalAns
     }
   }
   if(!content.deliverable)code ||= 'EMPTY_TERMINAL_RESULT';
+  result=accountForDelivery({...result,answer:content.answer},context,{artifactBase});
+  content=oracleResultContent(result,{artifactBase});
   const delivered={...result,answer:content.answer,delivery:{version:RESULT_VERSION,status:code||result.analysis_unavailable?'limitation':result.partial?'partial':'ready',code,answer_present:true,evidence_present:Boolean(result.evidence),artifact_present:content.artifactValid}};
   try{JSON.stringify(delivered);return delivered;}catch{
     const safe=value=>{try{return JSON.parse(JSON.stringify(value));}catch{return null;}};

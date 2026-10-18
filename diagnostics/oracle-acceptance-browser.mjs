@@ -4,6 +4,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import { acceptanceFixture, acceptanceServer } from '../test/helpers/oracle-acceptance.js';
 const {chromium}=await import(process.env.ORACLE_BROWSER_DRIVER||'playwright-core');
+const multipart=JSON.parse(readFileSync(new URL('../test/fixtures/oracle-multipart-questions.json',import.meta.url)));
 const matrix=JSON.parse(readFileSync(new URL('../test/fixtures/oracle-acceptance-matrix.json',import.meta.url)));
 const f=acceptanceFixture(),h=await acceptanceServer(f,{durable:true});
 const browser=await chromium.launch({executablePath:process.env.ORACLE_CHROMIUM||(existsSync('/usr/bin/chromium')?'/usr/bin/chromium':chromium.executablePath()),headless:true,args:['--no-sandbox']});
@@ -43,6 +44,19 @@ try{
         if(turn.check==='customers'){assert.match(answer,/Customer figures/);assert.match(answer,/10/);assert.match(answer,/monthly counts cannot be added/);assert.match(answer,/1 September 2026/);}
       }
     }
+    await page.locator('#new-question').click();
+    for(const [kind,question] of Object.entries(multipart)){
+      await page.locator('#message').fill(question);await page.locator('#send').click();
+      await page.waitForFunction(()=>!document.querySelector('#send').disabled);
+      const last=page.locator('.analytical-answer').last(),answer=await last.innerText();
+      if(kind==='INITIAL'){assert.match(answer,/denominators differ/);assert.match(answer,/median/);}
+      if(kind==='DETAIL'){assert.match(answer,/4 reconciled baskets/);assert.match(answer,/259.99|260.00/);assert.match(answer,/Product 4/);assert.doesNotMatch(answer.split('Show details')[0],/Additional items required/);}
+      if(kind==='UNDERLYING')assert.match(answer,/anonymous/i);
+      const download=page.locator('a[href*="/api/oracle/exports/"]').last();await download.waitFor();
+      const response=await page.request.get(new URL(await download.getAttribute('href'),h.origin).href);assert.equal(response.status(),200);assert.ok((await response.body()).length>1000);
+    }
+    const multipartCalls=f.calls.length;await page.reload();await page.waitForFunction(()=>!document.querySelector('#send').disabled&&document.querySelector('.analytical-answer'));
+    assert.match(await page.locator('.analytical-answer').last().innerText(),/anonymous/i);assert.equal(f.calls.length,multipartCalls);
     // Force real durable submission, restore in browser after a refresh, and
     // prove polling/latest recovery doesn't retrieve provider data again.
     f.state.fail_start=null;
