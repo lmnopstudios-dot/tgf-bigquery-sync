@@ -1,5 +1,6 @@
 // Native composer and visible delivery, backed by real Oracle composition.
 import assert from 'node:assert/strict';
+import ExcelJS from 'exceljs';
 import { readFileSync, existsSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import { acceptanceFixture, acceptanceServer } from '../test/helpers/oracle-acceptance.js';
@@ -55,8 +56,22 @@ try{
       const download=page.locator('a[href*="/api/oracle/exports/"]').last();await download.waitFor();
       const response=await page.request.get(new URL(await download.getAttribute('href'),h.origin).href);assert.equal(response.status(),200);assert.ok((await response.body()).length>1000);
     }
+    for(const question of JSON.parse(readFileSync(new URL('../test/fixtures/oracle-basket-incidents.json',import.meta.url)))){
+      await page.locator('#new-question').click();
+      await page.locator('#message').fill(question);await page.locator('#send').click();
+      await page.waitForFunction(()=>!document.querySelector('#send').disabled);
+      const last=page.locator('.analytical-answer').last();
+      assert.match(await last.innerText(),/4 reconciled baskets/);
+      assert.match(await last.innerText(),/Product 4/);
+      const links=last.locator('a[href*="/api/oracle/exports/"]');assert.equal(await links.count(),1);
+      const response=await page.request.get(new URL(await links.first().getAttribute('href'),h.origin).href);
+      assert.equal(response.status(),200);const book=new ExcelJS.Workbook();await book.xlsx.load(await response.body());
+      assert.equal(book.getWorksheet('Basket bands').rowCount,5);
+      const count=f.calls.length;await page.reload();await page.waitForFunction(()=>!document.querySelector('#send').disabled&&document.querySelector('.analytical-answer'));
+      assert.match(await page.locator('.analytical-answer').last().innerText(),/4 reconciled baskets/);assert.equal(f.calls.length,count);
+    }
     const multipartCalls=f.calls.length;await page.reload();await page.waitForFunction(()=>!document.querySelector('#send').disabled&&document.querySelector('.analytical-answer'));
-    assert.match(await page.locator('.analytical-answer').last().innerText(),/anonymous/i);assert.equal(f.calls.length,multipartCalls);
+    assert.match(await page.locator('.analytical-answer').last().innerText(),/4 reconciled baskets/);assert.equal(f.calls.length,multipartCalls);
     // Force real durable submission, restore in browser after a refresh, and
     // prove polling/latest recovery doesn't retrieve provider data again.
     f.state.fail_start=null;
