@@ -26,10 +26,13 @@ export async function assertProductArtifact(artifact){
     const bytes=Buffer.from(artifact.xlsx_base64||'','base64');
     if(createHash('sha256').update(bytes).digest('hex')!==artifact.sha256)throw scopeMismatch('artifact.sha256');
     const wb=new ExcelJS.Workbook();try{await wb.xlsx.load(bytes);}catch{throw scopeMismatch('artifact.workbook');}
-    for(const [name,rows] of [['Summary',e.rows],...basketWorkbookTables(e)]){
+    const expectedTables=[['Summary',e.rows],...basketWorkbookTables(e)];
+    const expectedNames=[...expectedTables.filter(([,rows])=>rows.length).map(([name])=>name),'Definitions'];
+    if(wb.worksheets.length!==expectedNames.length||wb.worksheets.some((sheet,i)=>sheet.name!==expectedNames[i]))throw scopeMismatch('artifact.sheets');
+    for(const [name,rows] of expectedTables){
       if(!rows.length)continue;
       const sheet=wb.getWorksheet(name),keys=[...new Set(rows.flatMap(Object.keys))];
-      if(!sheet||sheet.rowCount!==rows.length+1)throw scopeMismatch('artifact.rows');
+      if(!sheet||sheet.rowCount!==rows.length+1||sheet.columnCount!==keys.length||keys.some((key,i)=>sheet.getRow(1).getCell(i+1).value!==key))throw scopeMismatch('artifact.rows');
       for(const [i,row] of rows.entries())for(const [j,key] of keys.entries())if((sheet.getRow(i+2).getCell(j+1).value??null)!==(row[key]??null))throw scopeMismatch('artifact.metrics');
     }
     return true;

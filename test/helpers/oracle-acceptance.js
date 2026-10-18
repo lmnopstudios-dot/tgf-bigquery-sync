@@ -1,3 +1,4 @@
+import { createMemoryExportStore } from '../../oracle/product-priority-storage.js';
 import { cohortRows } from './cohort-retention-fixture.js';
 import { population } from './basket-fixture.js';
 import { BASKET_LINE_COLUMNS } from '../../oracle/basket-provider.js';
@@ -13,6 +14,7 @@ import { executeGovernedAgentAnalysis } from '../../oracle/analysis-route-dispat
 import { transitionAnalysisContext } from '../../oracle/analysis-context.js';
 export const NOW=Date.parse('2026-10-14T12:00:00Z');
 export function acceptanceFixture({fail_start=null,campaigns=false,country_conversion=false,retention=false,now=NOW}={}){
+  const exportStore=createMemoryExportStore();
   const calls=[],sql=[],queries=[],state={fail_start,campaigns,country_conversion,retention};
   const native=createShopifySalesKpiService({getShop:async()=>({id:'gid://shopify/Shop/fixture',currencyCode:'GBP',ianaTimezone:'Europe/London'}),runReport:async query=>{
     sql.push(query);const [,start_date,end_date]=query.match(/SINCE (\S+) UNTIL (\S+)/);
@@ -27,7 +29,7 @@ export function acceptanceFixture({fail_start=null,campaigns=false,country_conve
       calls.push({provider:'baskets',args:query.params});
       if(query.query.includes('INFORMATION_SCHEMA'))return [Object.entries(BASKET_LINE_COLUMNS).map(([column_name,data_type])=>({column_name,data_type}))];
       if(query.query.includes('grouped_lines'))return [population().map(r=>({...r,date:r.date==='2026-10-14'?'2026-10-12':r.date}))];
-      if(query.query.includes('GROUP BY 1,2,3'))return [[{date:'2026-10-12',amount:260,merchandise_amount:260,shipping_charge:8,orders:1}]];
+      if(query.query.includes('GROUP BY 1,2,3'))return [population().map(r=>({date:r.date==='2026-10-14'?'2026-10-12':r.date,amount:Number(r.merchandise_amount),merchandise_amount:Number(r.merchandise_amount),shipping_charge:null,orders:1}))];
       return [[{eligible_orders:query.params.start_date==='2026-01-01'?10:1}]];
     }
     calls.push({provider:'campaigns',args:query.params});
@@ -54,11 +56,11 @@ export function acceptanceFixture({fail_start=null,campaigns=false,country_conve
   }});
   const klaviyo=(...args)=>(state.campaigns?live.klaviyo:deps.klaviyo)(...args);
   klaviyo.resolveCampaigns=(...args)=>(state.campaigns?live.klaviyo:deps.klaviyo).resolveCampaigns(...args);
-  const baseline=createOracleBaselineDispatcher({ecommerceBaselineOverview:createBaselineOverviewService({customerJourney:deps.customerJourney,populationConversion:(args,options)=>(state.country_conversion?countryDeps:deps).populationConversion(args,options),shopifySales:native,dailySales:deps.dailySales,basketComposition:deps.basketComposition,klaviyo,now:()=>new Date(now),
+  const baseline=createOracleBaselineDispatcher({ecommerceBaselineOverview:createBaselineOverviewService({socialExportStore:exportStore,orderValues:deps.orderValues,customerJourney:deps.customerJourney,populationConversion:(args,options)=>(state.country_conversion?countryDeps:deps).populationConversion(args,options),shopifySales:native,dailySales:deps.dailySales,basketComposition:deps.basketComposition,klaviyo,now:()=>new Date(now),
     onlineCountrySales:async args=>{calls.push({provider:'countries',args});return {rows:[{country_code:'GB',currency:'GBP',orders:4,operational_net_sales:200,sources:[{source_platform:'shopify',orders:4,operational_net_sales:200}],eligible_orders:5,unknown_country_orders:1,eligible_sales:240,unknown_country_sales:40}]};},
     customerReport:async args=>{calls.push({provider:'customers',args});return {overall:{customers:10,new_customers:7,returning_customers:4,orders:15},applied_channel_predicate:"sales_channel = 'Online Store'",coverage:{complete:true},source_collected_at:'2026-10-14T11:00:00Z'};}
   })});
-  return {baseline,calls,sql,queries,state};
+  return {baseline,calls,sql,queries,state,exportStore};
 }
 export async function acceptanceServer(f,{durable=false,now=NOW}={}){
   const app=express(),jobs=createMemoryAnalysisJobStore();
