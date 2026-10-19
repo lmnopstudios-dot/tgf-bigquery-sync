@@ -25,7 +25,7 @@ test('journey SQL retains historical lookback, source identities, approved class
  assert.match(sql,/COALESCE\(l.source_app_id=@matrixify_app_id,FALSE\)/);
  assert.match(sql,/classification_links/);assert.match(sql,/JOIN approved_links/);assert.doesNotMatch(sql,/fuzzy|suggested/);
  assert.match(sql,/UNNEST\(\[90,180\]\)/);assert.match(sql,/COUNTIF\(mature\)/);assert.match(sql,/PERCENTILE_CONT/);
- assert.match(sql,/MIN\(order_timestamp\) order_timestamp FROM downstream_orders/);assert.match(sql,/LIMIT @cohort_limit/);
+ assert.match(sql,/FROM downstream_orders QUALIFY ROW_NUMBER/);assert.match(sql,/cohort_rank<=DIV\(@cohort_limit/);
  let options;const r=await dryRunCohortRetention({project:'fixture',now:NOW,bigquery:{createQueryJob:async value=>{options=value;return [{metadata:{statistics:{totalBytesProcessed:'123'}}}];}}});
  assert.equal(r.verified,true);assert.equal(options.dryRun,true);assert.equal(options.jobTimeoutMs,30000);assert.equal(options.maximumBytesBilled,'20000000000');assert.equal(options.params.entry_channel,'Online');
 });
@@ -42,14 +42,14 @@ test('retention semantics survive dates, channel, export and operation switches 
  assert.equal(resolveAnalysisDecision(c).outcome,'clarification');
  c=transitionAnalysisContext(c,'Last 3 years.',{now:NOW}).context;assert.equal(c.start_date,'2023-10-14');
  c=transitionAnalysisContext(c,'Online only, within 180 days.',{now:NOW}).context;assert.equal(c.channel,'online');assert.equal(c.within_days,180);
- const exportC=transitionAnalysisContext(c,'Export that to Excel.',{now:NOW}).context;assert.equal(resolveAnalysisDecision(exportC).outcome,'limitation');
+ const exportC=transitionAnalysisContext(c,'Export that to Excel.',{now:NOW}).context;assert.equal(resolveAnalysisDecision(exportC).outcome,'execution');
  const switched=transitionAnalysisContext(c,'New question: show online sales last month.',{now:NOW}).context;assert.equal(switched.requested_subject,'sales');assert.equal(switched.entry_product_classification,null);
 });
 for(const mode of ['direct','interactive','durable'])test(`retention uses production factory and ${mode} transport, recovered results require complete evidence`,async t=>{
  const f=acceptanceFixture({retention:true}),h=await acceptanceServer(f,{durable:mode==='durable'});t.after(h.close);
  const r=mode==='direct'?await (await fetch(h.origin+'/agent',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({message:question})})).json():await h.submit(question);
  assert.equal(r.evidence.kind,'governed_cohort_retention');assert.equal(r.partial,true);assert.match(r.answer,/75\.00%/);assert.match(r.answer,/Show details/);assert.match(r.answer,/first-ever purchases are not established/);
- assert.equal(f.calls.length,1);assert.equal(f.calls[0].provider,'retention');assert.equal(f.queries[0].params.first_order_semantic,'first_observed_ever');assert.equal(f.queries[0].params.subsequent_channel,'Online');
+ assert.equal(f.calls.length,2);assert.equal(f.calls[0].provider,'retention');assert.equal(f.queries[0].params.first_order_semantic,'first_observed_ever');assert.equal(f.queries[0].params.subsequent_channel,'Online');
  const raw=JSON.parse(JSON.stringify(r));assert.equal(deliverOracleResult(raw,r.analysis_context).delivery.status,'partial');
  raw.evidence.rows[0].repeat_rate=.99;assert.throws(()=>assertEvidenceAgreement(r.analysis_context,raw.evidence),e=>e.code==='EVIDENCE_SCOPE_MISMATCH');
  if(mode==='durable'){const count=f.calls.length,recovered=await h.get('/jobs/'+r.job_id);assert.equal(recovered.answer,r.answer);assert.equal(f.calls.length,count);}
@@ -59,7 +59,7 @@ const production='Can I have a breakdown of what collaboration pieces that are t
 test('piece evidence cannot satisfy collaboration aggregation or lose identity on recovery',async()=>{
  const f=acceptanceFixture({retention:true});const r=await executeGovernedAgentAnalysis({message:production,baselineOverview:f.baseline,now:NOW});
  assert.equal(r.evidence.definition.group_by[0],'retention_product_windows');
- assert.ok(f.queries.every(q=>q.query.includes('source_store,entry_product_ref,window_days')));
+ assert.ok(f.queries.every(q=>q.query.includes('source_store,collaboration_name,entry_product_ref,window_days')));
  assert.ok(f.queries.every(q=>q.params.cohort_limit===25));
  const bad=structuredClone(r);delete bad.evidence.rows[0].entry_product_ref;
  assert.throws(()=>assertEvidenceAgreement(r.analysis_context,bad.evidence),{code:'EVIDENCE_SCOPE_MISMATCH'});
@@ -102,14 +102,14 @@ for(const mode of ['direct','interactive','durable'])test(`production pending re
  else{await send(production.replace(' from the last 3 years',''));r=await send('Last 3 years.');}
  assert.equal(r.analysis_context.journey_group_by,'entry_product');assert.equal(r.analysis_context.channel_breakdown,true);assert.equal(r.analysis_context.sort,'returning_customers_desc');assert.ok(r.evidence.rows.length);
  const before=f.calls.length,exported=await send('Export that to Excel.',r.analysis_context);
- assert.equal(exported.analysis_unavailable,true);assert.match(exported.answer,/cohort export or chart is not implemented/);assert.equal(exported.analysis_context.journey_group_by,'entry_product');assert.equal(f.calls.length,before);
+ assert.ok(exported.evidence.rows.length);assert.match(exported.answer,/cohort export or chart is not implemented/);assert.equal(exported.analysis_context.journey_group_by,'entry_product');assert.equal(f.calls.length,mode==='direct'?before+2:before);
 });
 test('piece cohort SQL uses mature fixed windows, distinct entry membership and unconditional later-purchase outcome',()=>{
  const sql=customerJourneySql('fixture','retention_product_windows');
- assert.match(sql,/DATE_ADD\(DATE\(em.entry_timestamp\),INTERVAL window_days DAY\)<=@observation_end/);
- assert.match(sql,/TIMESTAMP_DIFF\(d.order_timestamp,em.entry_timestamp,SECOND\)<=window_days\*86400/);
+ assert.match(sql,/DATE_ADD\(DATE\(em.entry_timestamp,@time_zone\),INTERVAL window_days DAY\)<=@observation_end/);
+ assert.match(sql,/DATE_DIFF\(DATE\(d.order_timestamp,@time_zone\),DATE\(em.entry_timestamp,@time_zone\),DAY\)<=window_days/);
  assert.match(sql,/COUNTIF\(mature AND days_to_second IS NOT NULL\)/);
- assert.match(sql,/MIN\(order_timestamp\) order_timestamp FROM downstream_orders GROUP BY governed_customer_ref/);
- assert.match(sql,/GROUP BY governed_customer_ref,source_platform,source_store,entry_product_ref,entry_timestamp/);
+ assert.match(sql,/FROM downstream_orders QUALIFY ROW_NUMBER/);
+ assert.match(sql,/GROUP BY governed_customer_ref,source_platform,source_store,collaboration_name,entry_product_ref,entry_timestamp/);
  assert.doesNotMatch(sql,/d\.entry_product_ref=em\.entry_product_ref/);
 });

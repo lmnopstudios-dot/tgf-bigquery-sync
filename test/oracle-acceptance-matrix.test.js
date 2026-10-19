@@ -9,6 +9,8 @@ import { executeGovernedAgentAnalysis } from '../oracle/analysis-route-dispatche
 const matrix=JSON.parse(readFileSync(new URL('./fixtures/oracle-acceptance-matrix.json',import.meta.url)));
 for(const mode of ['direct','interactive','durable']){
   test(`acceptance matrix: real shared ${mode} execution and delivery`,async t=>{
+    const outcomes={correct:0,partial:0,limitations:0,pending:0,failures:0};
+    t.after(()=>t.diagnostic(JSON.stringify({transport:mode,outcomes})));
     for(const conversation of matrix.conversations){
       await t.test(conversation.id,async t=>{
         const f=acceptanceFixture(conversation),h=await acceptanceServer(f,{durable:mode==='durable'});t.after(h.close);
@@ -22,7 +24,8 @@ for(const mode of ['direct','interactive','durable']){
             assert.equal(response.status,200);result=await response.json();
           }else result=await h.submit(turn.question);
           assert.ok(result.analysis_context,'Resolved context must survive delivery');
-          assertAcceptanceTurn(turn,result,f,offset);
+          try{assertAcceptanceTurn(turn,result,f,offset);}catch(error){outcomes.failures++;throw error;}
+          outcomes[result.clarification?'pending':result.analysis_unavailable?'limitations':result.partial?'partial':'correct']++;
           if(mode==='durable'){
             // Serialized stored result, owned polling, no repeated provider calls.
             const count=f.calls.length,job=h.jobs.jobs.get(result.job_id);

@@ -33,7 +33,7 @@ export function resolveAnalyticalPlan(c) {
     comparison:{...(c?.population_scope?{groups:c.population_scope.groups,overlap:c.population_scope.groups.includes('country')&&c.population_scope.groups.includes('global')}:{}),type:c?.comparison_type||null,start_date:c?.comparison_start_date||null,end_date:c?.comparison_end_date||null,included_periods:c?.included_periods||[]},
     promotion:c?.promotion_context?{query:c.promotion_context.query,treatment:c.promotion_context.treatment,...(c.promotion_context.endpoint_choice?{endpoint_choice:c.promotion_context.endpoint_choice}:{}),...(c.promotion_context.endpoint_zone?{endpoint_zone:c.promotion_context.endpoint_zone}:{}),supplied_periods:c.promotion_context.supplied_periods||[]}:null,exclusions:c?.exclusions||[],
     ranking:report?.sort||{metric:campaign?.ranking_metric||c?.ranking_metric||null,direction:c?.ranking_direction||'desc'},
-    presentation:{format:c?.output_preference||null,columns:report?.metrics||[],limit:c?.limit||null},
+    presentation:{formats:c?.requested_formats||[],format:c?.output_preference||null,columns:report?.metrics||[],limit:c?.limit||null},
     pending:{fields:report?.unresolved||c?.unresolved_required_fields||[],campaign:campaign?.selected||campaign?.selected_entities?.length?null:campaign?.selector||null}
   };
 }

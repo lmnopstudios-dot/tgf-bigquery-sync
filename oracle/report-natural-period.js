@@ -71,6 +71,11 @@ function parseReportPeriod(text, now){
 export function reportPeriodResolution(text, now=Date.now(), {referenceYear=null}={}){
   if(/^(?:(?:just|only|for|in|during|what about|how about)\s+)?(?:january|february|march|april|may|june|july|august|september|october|november|december)[.!]?$/i.test(text.trim()))text=`${text.trim().replace(/[.!]$/,'')} ${referenceYear||new Intl.DateTimeFormat('en',{year:'numeric',timeZone:'Europe/London'}).format(new Date(now))}`;
   const resolved=parseReportPeriod(text,now);
+  if(resolved&&!resolved.invalid&&/\b(?:through|to|until) (?:the )?latest completed day\b/i.test(text)){
+    const today=new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/London',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(now));
+    resolved.end_date=new Date(Date.parse(today+'T00:00:00Z')-86400000).toISOString().slice(0,10);
+    resolved.requested_end_period=resolved.end_date;resolved.partial_period=false;
+  }
   if(!resolved)return {period:null,invalid:false};
   const valid=d=>/^\d{4}-\d{2}-\d{2}$/.test(d||'')&&Number.isFinite(Date.parse(d))&&new Date(d+'T00:00:00Z').toISOString().slice(0,10)===d;
   if(resolved.invalid||!valid(resolved.start_date)||!valid(resolved.end_date)||resolved.start_date>resolved.end_date)return {period:null,invalid:true};

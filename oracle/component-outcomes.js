@@ -1,3 +1,4 @@
+import { ANALYTICAL_CAPABILITIES } from './analytical-capabilities.js';
 import { oracleResultContent } from '../public/oracle/result-contract.js';
 // Shared terminal accounting. Intent metadata never proves delivery. Failures
 // are explicit and retain successful evidence and persisted artifacts.
@@ -15,9 +16,11 @@ export function componentOutcomes(context,result,{artifactBase='/api/oracle/expo
     for(const component of [...(requested.subset?['basket_subset']:[]),...(requested.bands?['basket_total_bands']:[]),...(requested.overlap?['highest_unit_interval']:[]),...(requested.level==='detail'?['product_combinations']:[])])outcomes.push({component,status,detail:status==='delivered'?'Calculated directly from reconciled basket membership.':'Compatible basket evidence or exclusion dates are unavailable.'});
     if(requested.level==='underlying')outcomes.push({component:'anonymous_basket_rows',status:oracleResultContent(result,{artifactBase}).artifactValid&&Array.isArray(e.anonymous_rows)?'delivered':'failed',detail:'Anonymous allowlisted rows require a persisted workbook.'});
   }
-  const formats=new Set([...(context?.request_detail?.formats||[]),...(['xlsx','chart'].includes(context?.output_preference)?[context.output_preference]:[])]);
-  if(formats.has('xlsx'))outcomes.push({component:'xlsx',status:oracleResultContent(result,{artifactBase}).artifactValid?'delivered':result?.export_outcome?.status==='failed'?'failed':result?.analysis_unavailable?'unsupported':'failed',detail:result?.export_outcome?.detail||(!result?.artifact?'No persisted workbook download is available.':'Owner-scoped persisted workbook download.')});
-  if(formats.has('chart'))outcomes.push({component:'chart',status:result?.charts?.length?'delivered':result?.analysis_unavailable?'unsupported':'failed',detail:result?.charts?.length?'Validated evidence chart.':'No compatible chart was delivered.'});
+  const supportedFormats=ANALYTICAL_CAPABILITIES[context?.tool_route]?.delivery;
+  const unsupportedFormat=format=>Array.isArray(supportedFormats)&&!supportedFormats.includes(format);
+  const formats=new Set([...(context?.requested_formats||[]),...(context?.request_detail?.formats||[]),...(['xlsx','chart'].includes(context?.output_preference)?[context.output_preference]:[])]);
+  if(formats.has('xlsx'))outcomes.push({component:'xlsx',status:oracleResultContent(result,{artifactBase}).artifactValid?'delivered':result?.export_outcome?.status==='failed'?'failed':result?.analysis_unavailable||unsupportedFormat('xlsx')?'unsupported':'failed',detail:result?.export_outcome?.detail||(!result?.artifact?'No persisted workbook download is available.':'Owner-scoped persisted workbook download.')});
+  if(formats.has('chart'))outcomes.push({component:'chart',status:result?.charts?.length?'delivered':result?.analysis_unavailable||unsupportedFormat('chart')?'unsupported':'failed',detail:result?.charts?.length?'Validated evidence chart.':'No compatible chart was delivered.'});
   return result?.clarification?.fields?.length?outcomes.map(c=>({...c,status:'blocked_by_clarification',detail:'Execution requires: '+result.clarification.fields.join(', ')})):outcomes;
 }
 export function accountForDelivery(result,context,{artifactBase='/api/oracle/exports'}={}){
