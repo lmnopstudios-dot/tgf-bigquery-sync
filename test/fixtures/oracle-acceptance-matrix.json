@@ -829,6 +829,9 @@
       "file": "test/oracle-multipart-detail.test.js",
       "covers": [
         "exact multipart shipping request fresh and after unrelated conversion",
+        "exposed basket incidents: unchanged natural and structured requests, real production SQL bindings, exact bands and highest-unit overlap",
+        "incident interactive/durable delivery, authenticated XLSX rows and same-ID recovery",
+        "shared named date ranges and London completed-day semantics across subjects",
         "detail subset and numeric interval membership",
         "independent order and reconciled denominators",
         "supporting XLSX and anonymous underlying workbook columns and values",

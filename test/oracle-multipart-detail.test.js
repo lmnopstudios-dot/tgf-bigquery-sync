@@ -1,5 +1,10 @@
+import {requestDetailPatch} from '../oracle/request-detail.js';
+import {naturalReportPeriod} from '../oracle/report-natural-period.js';
+import {createOracleProviderDependencies} from '../oracle/provider-dependencies.js';
+import {BASKET_LINE_COLUMNS,basketPopulationSql} from '../oracle/basket-provider.js';
 import { acceptanceFixture } from './helpers/oracle-acceptance.js';
 import {readFileSync} from 'node:fs';
+const incidents=JSON.parse(readFileSync(new URL('./fixtures/oracle-basket-incidents.json',import.meta.url)));
 const {INITIAL,DETAIL,UNDERLYING}=JSON.parse(readFileSync(new URL('./fixtures/oracle-multipart-questions.json',import.meta.url)));
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -20,9 +25,12 @@ import { createMemoryAnalysisJobStore } from '../oracle/analysis-jobs.js';
 
 
 const NOW=Date.parse('2026-10-18T12:00:00Z'),apply=(c,m)=>transitionAnalysisContext(c,m,{now:NOW}).context;
-function fixture({rows=population(),fail=false,store=createMemoryExportStore()}={}){
- const calls=[];const overview=createBaselineOverviewService({now:()=>new Date(NOW),socialExportStore:store,basketComposition:async(scope)=>{calls.push({kind:'basket',scope});if(fail)throw Error('read failed');return {scope,rows,coverage:{complete:false}};},orderValues:async(scope)=>{calls.push({kind:'orders',scope});return {scope,rows:rows.map(r=>({date:r.date,amount:Number(r.merchandise_amount),merchandise_amount:Number(r.merchandise_amount),shipping_charge:null,orders:1})),coverage:{eligible_orders:rows.length,complete:false}};}});
- return {calls,store,baseline:createOracleBaselineDispatcher({ecommerceBaselineOverview:overview}),run(message,analysisContext=null,requestId='multipart-1'){return executeGovernedAgentAnalysis({message,analysisContext,baselineOverview:this.baseline,now:NOW,baselineOptions:{exportStore:store,exportOwner:'owner',requestId}});}};
+function fixture({production=false,rows=population(),fail=false,store=createMemoryExportStore()}={}){
+ const calls=[];
+ const sqlCalls=[];
+ const productionReader=createOracleProviderDependencies({env:{},project:'fixture',bigquery:{dataset:()=>({getMetadata:async()=>[{location:'EU'}]}),query:async options=>{sqlCalls.push(options);return [options.query.includes('INFORMATION_SCHEMA')?Object.entries(BASKET_LINE_COLUMNS).map(([column_name,data_type])=>({column_name,data_type})):options.query.includes('grouped_lines')?rows:[{eligible_orders:rows.length}]];}}}).basketComposition;
+ const overview=createBaselineOverviewService({now:()=>new Date(NOW),socialExportStore:store,basketComposition:async(scope)=>{calls.push({kind:'basket',scope});if(fail)throw Error('read failed');return production?productionReader(scope):{scope,rows,coverage:{complete:false}};},orderValues:async(scope)=>{calls.push({kind:'orders',scope});return {scope,rows:rows.map(r=>({date:r.date,amount:Number(r.merchandise_amount),merchandise_amount:Number(r.merchandise_amount),shipping_charge:null,orders:1})),coverage:{eligible_orders:rows.length,complete:false}};}});
+ return {calls,sqlCalls,store,baseline:createOracleBaselineDispatcher({ecommerceBaselineOverview:overview}),run(message,analysisContext=null,requestId='multipart-1'){return executeGovernedAgentAnalysis({message,analysisContext,baselineOverview:this.baseline,now:NOW,baselineOptions:{exportStore:store,exportOwner:'owner',requestId}});}};
 }
 async function workbook(f,r){assert.ok(r.artifact, r.answer);const saved=await f.store.get(r.artifact.id,'owner');assert.ok(saved);await assertProductArtifact(saved);const book=new ExcelJS.Workbook();await book.xlsx.load(Buffer.from(saved.xlsx_base64,'base64'));return {saved,book};}
 test('multipart exact request executes both governed populations, mean/median, width, comparisons, charts and persisted XLSX',async()=>{
@@ -42,10 +50,10 @@ test('export failure retains valid evidence; recovery rejects a repeated summary
 test('empty evidence and provider failure do not invent supported nonzero findings or workbook completion',async()=>{
  const empty=fixture({rows:[]}),r=await empty.run(INITIAL);assert.equal(r.evidence.sections[0].reconciled_orders,0);assert.equal(r.analysis_unavailable,true);const failed=fixture({fail:true}),bad=await failed.run(INITIAL);assert.equal(bad.evidence.retrieval_failed,true);assert.equal(bad.artifact,undefined);assert.equal(bad.export_outcome.status,'failed');assert.equal(bad.evidence.order_result.evidence.sections[0].population,10);
 });
-for(const durable of [false,true])test(`exact detail and XLSX authenticate, persist and recover (${durable?'durable':'interactive'})`,async t=>{
+for(const initialQuestion of [INITIAL,...incidents])for(const durable of [false,true])test(`exact detail and XLSX authenticate, persist and recover (${durable?'durable':'interactive'})`,async t=>{
  const f=fixture(),jobs=createMemoryAnalysisJobStore(),app=express();app.use('/api/oracle',createOracleUiRouter({baselineOverview:f.baseline,chat:async()=>assert.fail('model fallback'),knowledgeService:{},exportStore:f.store,analysisJobStore:jobs,generateProposals:async()=>[],env:{ORACLE_UI_PASSWORD:'fixture',ORACLE_UI_SESSION_SECRET:'fixture-secret-long-enough-32-characters',ORACLE_ANALYSIS_JOBS_ENABLED:String(durable)},now:()=>NOW}));const server=await new Promise((resolve,reject)=>{const s=app.listen(0,'127.0.0.1',()=>resolve(s));s.on('error',reject);});t.after(()=>{server.closeAllConnections();server.close();});const base=`http://127.0.0.1:${server.address().port}`,origin=base;const login=await fetch(base+'/api/oracle/auth/login',{method:'POST',headers:{origin,'content-type':'application/json'},body:JSON.stringify({password:'fixture'})}),auth=await login.json(),headers={cookie:login.headers.getSetCookie().map(x=>x.split(';')[0]).join('; '),origin,'content-type':'application/json','x-csrf-token':auth.csrf};let n=0;
  const send=async message=>{const id=`multipart-${durable}-${++n}`;const sendRequest=()=>fetch(base+'/api/oracle/'+(durable?'jobs':'chat'),{method:'POST',headers:{...headers,'x-request-id':id},body:JSON.stringify({message})});const response=await sendRequest();let r=await response.json();if(durable){const job=r.job_id;const retry=await(await sendRequest()).json();assert.equal(retry.job_id,job);for(let i=0;i<300;i++){r=await(await fetch(base+'/api/oracle/jobs/'+job,{headers})).json();if(['completed','failed'].includes(r.status))break;await new Promise(resolve=>setTimeout(resolve,10));}assert.equal(r.status,'completed',JSON.stringify(r));}return r;};
- await send(INITIAL);const detail=await send(DETAIL);assert.equal(detail.evidence.sections[1].subset_orders,4);const r=await send(UNDERLYING);const download=await fetch(base+r.artifact.download_url,{headers});assert.equal(download.status,200);const wb=new ExcelJS.Workbook();await wb.xlsx.load(Buffer.from(await download.arrayBuffer()));assert.equal(wb.getWorksheet('Anonymous baskets').rowCount,8);assert.equal((await fetch(base+r.artifact.download_url)).status,401);const count=f.calls.length;const recovered=await(await fetch(base+r.artifact.download_url+'/manifest',{headers})).json();assert.equal(recovered.evidence.anonymous_rows.length,7);if(durable){const again=await(await fetch(base+'/api/oracle/jobs/'+r.job_id,{headers})).json();assert.deepEqual(again.artifact,r.artifact);}assert.equal(f.calls.length,count);
+ await send(initialQuestion);const detail=await send(DETAIL);assert.equal(detail.evidence.sections[1].subset_orders,4);const r=await send(UNDERLYING);const download=await fetch(base+r.artifact.download_url,{headers});assert.equal(download.status,200);const wb=new ExcelJS.Workbook();await wb.xlsx.load(Buffer.from(await download.arrayBuffer()));assert.equal(wb.getWorksheet('Anonymous baskets').rowCount,8);assert.equal((await fetch(base+r.artifact.download_url)).status,401);const count=f.calls.length;const recovered=await(await fetch(base+r.artifact.download_url+'/manifest',{headers})).json();assert.equal(recovered.evidence.anonymous_rows.length,7);if(durable){const again=await(await fetch(base+'/api/oracle/jobs/'+r.job_id,{headers})).json();assert.deepEqual(again.artifact,r.artifact);}assert.equal(f.calls.length,count);
 });
 
 test('unbound same-population references require dates/exclusions; supported detail does not default to a new population',async()=>{
@@ -88,4 +96,49 @@ test('XLSX validation rejects renamed columns and extra sheets, including with a
 
 test('direct agent exports retain the authenticated download base and delivered outcome',async()=>{
  const f=fixture(),r=await executeGovernedAgentAnalysis({message:INITIAL,baselineOverview:f.baseline,now:NOW,baselineOptions:{exportOwner:'direct-owner',requestId:'direct-basket',downloadBase:'/agent/exports'}});assert.match(r.artifact.download_url,/^\/agent\/exports\/[a-f0-9]{64}$/);assert.equal(r.component_outcomes.find(c=>c.component==='xlsx').status,'delivered');assert.ok(await f.store.get(r.artifact.id,'direct-owner'));assert.equal(await f.store.get(r.artifact.id,'owner'),null);
+});
+
+// Exposed incident regressions, not held-out generalisation evidence.
+for(const [index,question] of incidents.entries())test(`exposed basket incident ${index+1}: exact scope, membership, workbook and recovery`,async()=>{
+ for(const previous of [null,apply(null,'Show mobile and desktop conversion for September 2026.')]){
+  const f=fixture({production:true}),r=await f.run(question,previous,`incident-${index}`),c=r.analysis_context;
+  assert.equal(c.start_date,'2026-01-01');assert.equal(c.end_date,'2026-10-17');
+  assert.deepEqual(c.request_detail.subset,{highest_below:25000,total_at_least:25000,exclude_sale:true});
+  assert.deepEqual(c.request_detail.bands,[{lower:25000,upper:26000},{lower:26000,upper:27500},{lower:27500,upper:30000},{lower:30000,upper:null}]);
+  assert.deepEqual(c.request_detail.overlap,{lower:20000,upper:25000});
+  assert.equal(JSON.stringify(c).includes('Infinity'),false);
+  assert.deepEqual(c.promotion_context.supplied_periods,[{start_date:'2026-05-01',end_date:'2026-05-04'}]);
+  const sql=f.sqlCalls.find(o=>o.query.includes('grouped_lines'));assert.equal(sql.query,basketPopulationSql('fixture'));assert.equal(sql.params.start_date,'2026-01-01');assert.equal(sql.params.end_date,'2026-10-17');assert.equal(sql.types.start_date,'STRING');
+  const selected=r.evidence.sections[1];assert.equal(selected.subset_orders,4);assert.equal(selected.overlap_orders,2);
+  assert.deepEqual(selected.bands.map(b=>b.orders),[1,1,1,1]);
+  assert.equal(selected.bands.reduce((n,b)=>n+b.orders,0),selected.subset_orders);
+  const {book}=await workbook(f,r);assert.equal(book.getWorksheet('Basket bands').rowCount,5);
+  assert.ok(book.getWorksheet('Combinations').rowCount>1);
+  assert.match(r.presentation.summary_markdown,/4 reconciled baskets/);
+  const calls=f.calls.length,recovered=await f.run(question,previous,`incident-${index}`);assert.equal(f.calls.length,calls);assert.equal(recovered.artifact.id,r.artifact.id);
+ }
+});
+
+test('shared calendar preserves date roles across analytical subjects and London completed days',()=>{
+ for(const subject of ['online sales','product sales','campaign performance','conversion','collaboration cohorts']){
+  for(const range of ['1 January–17 October 2026','1 January to 17 October 2026']){
+   const period=naturalReportPeriod(`Show ${subject} from ${range}, excluding 1–4 May.`,NOW);
+   assert.equal(period.start_date,'2026-01-01');assert.equal(period.end_date,'2026-10-17');
+  }
+ }
+ for(const ending of ['yesterday','latest completed day']){
+  const p=naturalReportPeriod(`From 1 January 2026 through ${ending}`,Date.parse('2026-07-01T23:30:00Z'));
+  assert.equal(p.end_date,'2026-07-01');assert.equal(p.current_day_included,false);
+ }
+ assert.equal(naturalReportPeriod('Exclude sale dates: 2026-05-01 through 2026-05-04.',NOW),null);
+});
+
+test('numeric roles preserve a requested basket band even when an item interval has identical edges',()=>{
+ const d=requestDetailPatch(null,'Show basket totals £200–£249.99 and £250+. Highest item priced £200–£249.99.');
+ assert.deepEqual(d.bands,[{lower:20000,upper:25000},{lower:25000,upper:null}]);
+ assert.deepEqual(d.overlap,{lower:20000,upper:25000});
+ const changed=requestDetailPatch(null,'Select merchandise subtotal >= £300 AND highest discounted individual unit price < £225. Group totals [300,325), [325,infinity). Separately count highest unit price >= £175 AND < £225.');
+ assert.deepEqual(changed.subset,{highest_below:22500,total_at_least:30000,exclude_sale:false});
+ assert.deepEqual(changed.overlap,{lower:17500,upper:22500});
+ assert.deepEqual(changed.bands,[{lower:30000,upper:32500},{lower:32500,upper:null}]);
 });

@@ -1,7 +1,7 @@
 const MONTHS = {jan:1,january:1,feb:2,february:2,mar:3,march:3,apr:4,april:4,may:5,jun:6,june:6,jul:7,july:7,aug:8,august:8,sep:9,sept:9,september:9,oct:10,october:10,nov:11,november:11,dec:12,december:12};
 const iso=value=>/^\d{4}-\d{2}-\d{2}$/.test(String(value||''))?value:null;
 function parseReportPeriod(text, now){
-  const lower=text.toLowerCase(),localDay=new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/London',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(now)),today=new Date(`${localDay}T00:00:00Z`),todayIso=localDay;
+  const lower=text.toLowerCase().replace(/\b(?:exclude|excluding|without)\b[^.;\n]*/g,clause=>/20\d{2}-\d{2}-\d{2}\s+(?:to|through)|\d{1,2}\s*[–—-]\s*\d{1,2}\s+[a-z]+/.test(clause)?'':clause),localDay=new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/London',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(now)),today=new Date(`${localDay}T00:00:00Z`),todayIso=localDay;
   const counts={one:1,two:2,three:3,four:4,five:5,six:6,seven:7,eight:8,nine:9,ten:10};
   const relative=lower.match(/\b(?:last|past)\s+(\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+(completed\s+)?(days?|months?)\b/);
   if(relative){
@@ -22,6 +22,16 @@ function parseReportPeriod(text, now){
   if(/\blast week\b/.test(lower)){const mondayOffset=(today.getUTCDay()+6)%7;return window(shift(-mondayOffset-7),shift(-mondayOffset-1));}
   const weekday=lower.match(/\bsince last (monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/);
   if(weekday){const target=['sunday','monday','tuesday','wednesday','thursday','friday','saturday'].indexOf(weekday[1]),distance=(today.getUTCDay()-target+7)%7||7;return window(shift(-distance),todayIso,true);}
+  // Resolve report roles before scanning incidental dates in exclusions.
+  const reportText=lower;
+  const fields=reportText.match(/report start date:\s*(20\d{2}-\d{2}-\d{2})[\s\S]*?report end date:\s*(20\d{2}-\d{2}-\d{2})/);
+  if(fields)return window(fields[1],fields[2]);
+  const monthNames=Object.keys(MONTHS).join('|');
+  const namedRange=reportText.match(new RegExp(`\\b(\\d{1,2})\\s+(${monthNames})(?:\\s+(20\\d{2}))?\\s*(?:–|—|-|to|through)\\s*(\\d{1,2})\\s+(${monthNames})\\s+(20\\d{2})\\b`));
+  const namedDate=(d,m,y)=>`${y}-${String(MONTHS[m]).padStart(2,'0')}-${d.padStart(2,'0')}`;
+  if(namedRange)return window(namedDate(namedRange[1],namedRange[2],namedRange[3]||namedRange[6]),namedDate(namedRange[4],namedRange[5],namedRange[6]));
+  const completed=reportText.match(new RegExp(`\\b(\\d{1,2})\\s+(${monthNames})\\s+(20\\d{2})\\s+(?:to|through)\\s+(?:yesterday|(?:the )?latest completed day)\\b`));
+  if(completed)return window(namedDate(completed[1],completed[2],completed[3]),shift(-1));
   const explicitIso=lower.match(/\b(20\d{2}-\d{2}-\d{2})\s*(?:to|through|–|—)\s*(20\d{2}-\d{2}-\d{2})\b/);if(explicitIso)return{start_date:explicitIso[1],end_date:explicitIso[2],partial_period:false};
   const namedDay=lower.match(/\b(\d{1,2})\s+(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+(20\d{2})\b/);if(namedDay){const d=`${namedDay[3]}-${String(MONTHS[namedDay[2]]).padStart(2,'0')}-${namedDay[1].padStart(2,'0')}`;if(!Number.isNaN(Date.parse(`${d}T00:00:00Z`))&&new Date(`${d}T00:00:00Z`).toISOString().slice(0,10)===d)return window(d,todayIso,true);return {invalid:true};}
   const singleIso=lower.match(/\b(20\d{2}-\d{2}-\d{2})\b/);if(singleIso){if(!Number.isNaN(Date.parse(`${singleIso[1]}T00:00:00Z`))&&new Date(`${singleIso[1]}T00:00:00Z`).toISOString().slice(0,10)===singleIso[1])return window(singleIso[1],todayIso,true);return {invalid:true};}
