@@ -969,6 +969,15 @@
         "authentication stage sanitization",
         "global cancellation and per-source diagnostics"
       ]
+    },
+    {
+      "id": "query-cancellation-and-metadata-evidence",
+      "file": "test/oracle-query-cancellation-evidence.test.js",
+      "covers": [
+        "bounded cancellation acknowledgement versus terminal observation",
+        "late query rows rejected after deadline",
+        "read-only metadata without SQL or customer data"
+      ]
     }
   ]
 }

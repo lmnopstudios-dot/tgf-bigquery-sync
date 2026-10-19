@@ -26,7 +26,7 @@ export async function diagnoseCohortProviders({bigquery,project,now=Date.now(),e
   if(channel==='In-store'&&source==='woo'){sources.push({source_platform:source,source_store,state:'unsupported',reason:'Woo history supports Online only'});continue;}
   let settings,stage='provider_contract',sql_verified=false,query_id=null,submission_attempted=false,auth_verified=false;
   const events=[];
-  const onProviderStage=event=>{if(event.stage==='query_submission')submission_attempted=true;if(event.query_id)query_id=event.query_id;if(events.length<20&&['query_submission','query_response','query_results','query_failed','query_cancel_requested','query_cancel_finished'].includes(event.stage))events.push({stage:event.stage,elapsed_ms:Math.min(60000,Math.round(performance.now()-started)),...(event.cancellation_state?{cancellation_state:event.cancellation_state}:{})});};
+  const onProviderStage=event=>{if(event.stage==='query_submission')submission_attempted=true;if(event.query_id)query_id=event.query_id;if(events.length<20&&['query_submission','query_response','query_results','query_failed','query_cancel_requested','query_cancel_acknowledged','query_cancel_finished'].includes(event.stage))events.push({stage:event.stage,elapsed_ms:Math.min(60000,Math.round(performance.now()-started)),...(event.cancellation_state?{cancellation_state:event.cancellation_state}:{})});};
   const deps=createOracleProviderDependencies({project,bigquery:{query:async value=>{settings=value;return [[]];}}});
   const item={request_id,source_platform:source,source_store,bound:typeof deps.customerJourney?.analyzeCustomerJourney==='function'};
   try{
