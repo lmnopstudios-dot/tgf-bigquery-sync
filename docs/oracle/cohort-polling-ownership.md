@@ -4,7 +4,7 @@ Base: fresh branch from origin/main ab140795 (merged #341). No deployment or mer
 
 ## Established versus unresolved
 
-The original incident remains unverified in production. Request b3899896-fd41-47ae-9f56-ef98f5dee7eb, job b18574c0-16a9-4a9c-b877-c097c9545782 exhausted its 15-second execution stage after the submission response used approximately 10.269 seconds. This does not establish a warehouse processing bottleneck. Operator-supplied metadata later reports a stopped job and slot activity, as detailed below. The missing header prevents hash/location verification and timestamp comparison; the limiting stage, queueing contribution and relation to client expiry remain unknown.
+The original production job has now been verified through operator-supplied metadata, but completed production cohort calculations and resolution remain unverified. Request b3899896-fd41-47ae-9f56-ef98f5dee7eb, job b18574c0-16a9-4a9c-b877-c097c9545782 exhausted its 15-second execution stage after the submission response used approximately 10.269 seconds. This does not establish a warehouse processing bottleneck. Operator-supplied metadata verifies the exact hash in US, 81 ms creation-to-start and 24,156 ms start-to-end before stopping. The warehouse job therefore outlived the 15-second client stage. Initial queueing is small; execution/planning and cancellation latency still need separate attribution.
 
 This environment's bounded dataset-location discovery through the configured client returned HTTP 403 before jobs.get. No job location was guessed. The enforced network policy excludes OAuth/BigQuery destinations. No credential values, customer rows, SQL text or provider exception bodies were printed.
 
@@ -20,7 +20,7 @@ The production factory regenerates the exact incident SQL: SHA-256 40d47aa0971b6
 
 The successful classification population reaches first-observed order selection and classified entry lines. The full query additionally reaches distinct named customer/piece membership, subsequent-order matching, order-level classification sets, 90/180 calendar-day maturity, mature-only analytic median, ranking and coverage. Entry coverage joins lines to entry matches by customer and then aggregates booleans, permitting intermediate fanout. Shared CTE references may expand more than once; unused product aggregates are not proof of executed work. #340 already removed the median self-join. None of these structural observations proves where the production time was spent, so no further SQL rewrite or temporary storage is introduced.
 
-The diagnostic has independent 15-second dry-run/execution stages within a 30-second per-source cap including authentication. Production retention uses the remaining request deadline (default 45 seconds); sources are parallel and requested groups within a source are sequential. Durable worker runtime/lease bounds are separate. No budget is increased or validation removed. Submission is jobs.insert; result polling is jobs.getQueryResults; server creation/start/end evidence is needed to attribute their observed duration.
+The diagnostic has independent 15-second dry-run/execution stages within a 30-second per-source cap including authentication. Production retention uses the remaining request deadline (default 45 seconds); sources are parallel and requested groups within a source are sequential. Durable worker runtime/lease bounds are separate. No budget is increased or validation removed. Submission is jobs.insert; result polling is jobs.getQueryResults; server timestamps establish the longer warehouse lifetime but do not fully attribute observed client duration.
 
 Callers of boundedQuery include journey/cohort, basket and order-value providers and the cohort dry-run diagnostic. Existing ownership, lease fencing, independent outcomes and presentation recovery remain in their owning layers.
 
@@ -99,6 +99,23 @@ The last command requires ORACLE_UI_ORIGIN and ORACLE_INCIDENT_SESSION_COOKIE; i
 - This environment's default Node process-isolation run reported only file-level tests, so assertion counts above use `--test-isolation=none`. A standalone new test run executes 12 assertions/tests, rather than the default runner's single file-level pass.
 - Exact incident SQL hash was reproduced locally. Live BigQuery dry run, execution and production chat acceptance remain blocked/unverified; no production speedup is claimed.
 
-## Operator metadata returned during this task
+## Verified production job metadata
 
-The operator supplied the tail of #341's inspection output. It reports `cancellation: stopped`, with timeline samples at 9,891 ms / 132,539 total slot-ms and 10,891 ms / 193,240 total slot-ms. The latter sample reports 30 pending units, 186 completed units and 30 active units. Supplied output stages (IDs 9–58) remain PENDING with mostly absent metrics. This provides warehouse slot-activity evidence and a stopped-job observation; PENDING output stages alone do not locate the bottleneck. The pasted portion omits location, SQL hash verification, top-level status/error and creation/start/end times. Those fields were requested from the existing output; no duplicate production query was requested. Attribution of planning, queueing, execution and client expiry remains pending those fields.
+The merged inspector returned: location US, DONE/error reason stopped, exact SQL hash match, uncached SELECT. CreationTime 1792435534028, startTime 1792435534109, endTime 1792435558265. Creation-to-start is 81 ms; start-to-end is 24,156 ms. Processed bytes 509,628, billed bytes 73,400,320, total slot-ms 193,240. This identifies the exact job and establishes that warehouse lifetime exceeded the 15-second client execution stage. It does not distinguish client cancellation from server job timeout as the source of stopped, or separate useful execution, planning and stopping latency. Low processed bytes do not prove a planning bottleneck. The first supplied tail omitted stages 0–8; a compact read-only request for non-PENDING stages is pending.
+
+Timeline samples at 9,891 ms / 132,539 slot-ms and 10,891 ms / 193,240 slot-ms show recorded warehouse activity. The latter sample reports 30 pending units, 186 completed units and 30 active units. Supplied output stages 9–58 remain PENDING with mostly absent metrics. PENDING output stages alone do not identify the limiting work.
+
+Broader repository run: `NODE_OPTIONS=--test-isolation=none npm test` finished with 1,470 passed, two failed file loads, three skipped, zero cancellations (1,475 reported tests). The two failures are existing entry-point guards in diagnostics/klaviyo-production.js:81 and diagnostics/oracle-campaign-selection.js:168 calling pathToFileURL(process.argv[1]) with undefined argv[1] in the multi-file runner. Both guards are present unchanged on origin/main. Klaviyo passes all 45 tests when run alone; the campaign suite passes in the 552-test acceptance gate. Three opt-in live BigQuery syntax-validation checks were skipped. The full run is not reported as passing.
+
+Compact follow-up for recorded non-PENDING stages (one five-second jobs.get; US is now verified):
+
+```bash
+timeout 8s node --input-type=module <<'NODE'
+import {createBigQueryClient} from './bigquery/client.js';
+import {inspectBigQueryJob} from './diagnostics/oracle-bigquery-job.js';
+try {
+  const r=await inspectBigQueryJob({...createBigQueryClient(),location:'US',jobId:'b18574c0-16a9-4a9c-b877-c097c9545782',expectedHash:'40d47aa0971b60b774668396a8fd4d0aa27db5404e17dec0a0cb4d353c9c7e91'});
+  console.log(JSON.stringify({hash_matches:r.hash_matches,state:r.state,error_reason:r.error_reason,stage_count:r.query_plan.length,pending_stages:r.query_plan.filter(s=>s.status==='PENDING').length,observed_stages:r.query_plan.filter(s=>s.status!=='PENDING')},null,2));
+} catch(e) {console.log(JSON.stringify({inspection:'unverified',code:e.code||'METADATA_READ_FAILED'}));process.exitCode=1;}
+NODE
+```
