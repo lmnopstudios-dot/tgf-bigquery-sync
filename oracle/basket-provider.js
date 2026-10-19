@@ -1,3 +1,4 @@
+import { boundedQuery } from './bounded-query.js';
 import { orderValuePopulationSql, orderValueCoverageSql, orderValueQueryOptions, validateOrderValueScope } from './order-value-provider.js';
 import { boundedEvidenceRead } from './bounded-evidence-read.js';
 import { datasetLocation } from '../bigquery/dataset-location.js';
@@ -34,7 +35,7 @@ export function createBasketProvider({bigquery,project}){
     try{location=await boundedEvidenceRead(()=>datasetLocation(bigquery,project,'shopify_data'),options);}catch(error){throw readFailureError(error,'dataset_location');}
     const settings=orderValueQueryOptions(args,location);
     let calls=0;
-    const read=query=>{calls++;return boundedEvidenceRead(timeout=>bigquery.query({...settings,query,jobTimeoutMs:Math.min(15000,Math.max(1,Math.floor(timeout)))}),options);};
+    const read=query=>{calls++;return boundedQuery(bigquery,{...settings,query,jobTimeoutMs:15000},options);};
     let schema;
     try{[schema]=await read(basketSchemaSql(project));}catch(error){throw readFailureError(error,'schema_inspection');}
     const issues=basketSchemaIssues(schema);

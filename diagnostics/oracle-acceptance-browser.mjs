@@ -93,6 +93,30 @@ try{
     assert.match(await page.locator('.analytical-answer').last().innerText(),/Online Store/);
     const calls=f.calls.length;await page.reload();await page.locator('.analytical-answer').last().waitFor();await page.waitForFunction(()=>!document.querySelector('#send').disabled);
     assert.match(await page.locator('.analytical-answer').last().innerText(),/Online Store/);assert.equal(f.calls.length,calls);
+    // Exhaust the bounded GET retries, then reconnect to the same completed job.
+    // This is a browser transport failure; no POST or provider replay is allowed.
+    await page.evaluate(job=>{localStorage.setItem('oracle-active-analysis-job',job.job_id);localStorage.setItem('oracle-pending-analysis-request',job.request_id);},job);
+    const beforeReconnect=f.calls.length;
+    const statusPattern='**/api/oracle/jobs/*';
+    await page.route(statusPattern,route=>route.request().method()==='GET'?route.abort('failed'):route.continue());
+    await page.reload();await page.getByRole('button',{name:'Reconnect',exact:true}).waitFor();
+    const disconnected=await page.locator('.message.oracle').last().innerText();
+    assert.match(disconnected,/status could not be checked/);assert.doesNotMatch(disconnected,/Analysis failed/);
+    assert.equal(await page.evaluate(()=>localStorage.getItem('oracle-active-analysis-job')),job.job_id);
+    await page.unroute(statusPattern);await page.getByRole('button',{name:'Reconnect',exact:true}).click();
+    await page.waitForFunction(()=>!document.querySelector('#send').disabled&&document.querySelector('.analytical-answer'));
+    assert.match(await page.locator('.analytical-answer').last().innerText(),/Online Store/);assert.equal(f.calls.length,beforeReconnect);
+    // A terminal failed job remains recoverable after refresh, with a clear
+    // unsupported-replay explanation and no new submission or provider work.
+    const ownedJob=h.jobs.jobs.get(job.job_id);
+    const failed=await h.jobs.create({owner_key:ownedJob.owner_key,request_id:`browser-failed-${name}`,payload_json:ownedJob.payload_json});
+    Object.assign(h.jobs.jobs.get(failed.job_id),{status:'failed',error_code:'WORKER_LEASE_EXPIRED'});
+    await page.evaluate(failed=>{localStorage.setItem('oracle-active-analysis-job',failed.job_id);localStorage.setItem('oracle-pending-analysis-request',failed.request_id);},failed);
+    for(let refresh=0;refresh<2;refresh++){
+      await page.reload();await page.waitForFunction(()=>!document.querySelector('#send').disabled&&document.querySelector('.message.oracle'));
+      const failure=await page.locator('.message.oracle').last().innerText();assert.match(failure,/Analysis failed/);assert.match(failure,/Automatic provider replay is unsupported/);
+      assert.equal(await page.evaluate(()=>localStorage.getItem('oracle-active-analysis-job')),failed.job_id);assert.equal(f.calls.length,beforeReconnect);
+    }
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);
     assert.deepEqual(errors,[]);await page.screenshot({path:`${output}/${name}.png`,fullPage:true});await page.close();
   }

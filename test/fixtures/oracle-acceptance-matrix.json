@@ -910,6 +910,18 @@
         "generic membership, second-order classifications, requested ranking",
         "direct interactive durable recovery and optional-output partial delivery"
       ]
+    },
+    {
+      "file": "test/oracle-durable-lifecycle.test.js",
+      "covers": [
+        "poll disconnect/reconnect and same-submission idempotency",
+        "worker shutdown and hung provider deadlines",
+        "expired lease discovery without unsafe provider replay",
+        "lease-fenced checkpoint, lifecycle and terminal writes",
+        "preserved evidence and artifacts",
+        "original execution versus diagnostic revision",
+        "unchanged production basket and cross-family XLSX"
+      ]
     }
   ]
 }
