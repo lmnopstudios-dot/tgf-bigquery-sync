@@ -1,0 +1,9 @@
+Which named TGF collaborations have the highest repeat-purchase rate among customers whose first purchase included that collaboration?
+
+Use the last three years through yesterday, including online and in-store evidence where supported.
+
+For each collaboration, show first-purchase customer count, mature 90-day and 180-day customer counts, repeat purchasers and repeat-purchase rates. Rank by 90-day repeat rate and flag small samples.
+
+Use named collaborations, not the generic ‘collaborations’ category. Distinguish first-ever from first-observed purchases. If customers cannot be linked across sources/channels, show separate results and explain the limitation.
+
+Return a concise table and short finding. These are associations, not proof the collaboration caused repeat purchases. No charts, exports, collection or mutation.

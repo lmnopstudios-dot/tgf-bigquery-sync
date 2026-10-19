@@ -340,7 +340,7 @@
           ],
           "provider": "retention",
           "check": "retention",
-          "provider_count": 2
+          "provider_count": 3
         }
       ]
     },
@@ -452,7 +452,7 @@
           "provider": "retention",
           "check": "retention",
           "pieces": true,
-          "provider_count": 2
+          "provider_count": 3
         },
         {
           "question": "Last 3 years.",
@@ -464,7 +464,7 @@
           "provider": "retention",
           "check": "retention",
           "pieces": true,
-          "provider_count": 2
+          "provider_count": 3
         }
       ]
     },
@@ -492,7 +492,7 @@
           "provider": "retention",
           "check": "retention",
           "pieces": true,
-          "provider_count": 2
+          "provider_count": 3
         }
       ]
     },
@@ -519,7 +519,7 @@
           "provider": "retention",
           "check": "retention",
           "pieces": true,
-          "provider_count": 2
+          "provider_count": 3
         }
       ]
     },
@@ -537,7 +537,7 @@
           ],
           "provider": "retention",
           "check": "retention-incident",
-          "provider_count": 4
+          "provider_count": 6
         }
       ]
     },
@@ -565,7 +565,7 @@
           ],
           "provider": "retention",
           "check": "retention-incident",
-          "provider_count": 4
+          "provider_count": 6
         }
       ]
     },
@@ -946,6 +946,10 @@
         "direct interactive durable and owned recovery; source failure partial results; explicit optional-format limitations",
         "equivalent named promotions without Black-Friday-only routing"
       ]
+    },
+    {
+      "id": "cohort-provider-outcomes-and-completed-days",
+      "file": "test/oracle-cohort-providers.test.js"
     }
   ]
 }
