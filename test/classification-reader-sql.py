@@ -16,7 +16,8 @@ const deps=createOracleProviderDependencies({project:'fixture',bigquery:{query:a
 const c=transitionAnalysisContext(null,'Rank collaborations by repeat purchase rate online in the last 3 years.',{now}).context;
 const d=retentionDefinition(c);await deps.customerJourney.analyzeCustomerJourney({...d,cohort:{...d.cohort,entry_source:'woo'}},{sourceStore:'ww'});
 const retention=q;await deps.customerJourney.analyzeCustomerJourney({...d,cohort:{...d.cohort,entry_source:'woo'},group_by:['downstream_product'],subsequent:{...d.subsequent,product_classification:'collaboration'}},{sourceStore:'ww'});const downstream=q;await deps.customerJourney.analyzeCustomerJourney({...d,cohort:{...d.cohort,entry_source:'shopify'}},{sourceStore:'shopify'});const shopify=q;
-console.log(JSON.stringify({shopify,downstream,shared:'WITH '+classificationReaderCtes('fixture')+' SELECT * FROM cr_resolved',retention,stages:await classificationDiagnosticOptions({project:'fixture',source:'woo',store:'ww',stage:'stages',now})}));
+const diagnostics={};for(const stage of ['gaps','identity','history','keys'])diagnostics[stage]=await classificationDiagnosticOptions({project:'fixture',source:'woo',store:'ww',stage,now});diagnostics.catalogue=await classificationDiagnosticOptions({project:'fixture',source:'shopify',store:'shopify',stage:'catalogue',now});
+console.log(JSON.stringify({diagnostics,shopify,downstream,shared:'WITH '+classificationReaderCtes('fixture')+' SELECT * FROM cr_resolved',retention,stages:await classificationDiagnosticOptions({project:'fixture',source:'woo',store:'ww',stage:'stages',now})}));
 """
 queries=json.loads(subprocess.check_output(['node','--input-type=module','-e',node],text=True))
 c=duckdb.connect();c.execute("ATTACH ':memory:' AS fixture")
@@ -82,3 +83,13 @@ print('Shopify numeric/GID joins, variant rejection, preserved 2025-11-16 first 
 down=run(queries['downstream'])
 assert len(down)==1 and down[0]['classification_status']=='governed_collaboration' and down[0]['product_returning_customers']==1,down
 print('Shared downstream collaboration-name-only membership: passed')
+
+c.execute("ALTER TABLE fixture.commerce.collection_classifications ADD COLUMN provenance VARCHAR DEFAULT 'human_governed'")
+c.execute('CREATE TABLE fixture.shopify_catalogue.products(product_id VARCHAR)')
+c.execute("INSERT INTO fixture.shopify_catalogue.products VALUES ('100'),('101'),('102')")
+diag={key:run(options) for key,options in queries['diagnostics'].items()}
+assert {r['source_product_ref'] for r in diag['gaps']}=={'woo:ww:0','woo:ww:3','woo:ww:5','woo:ww:6','woo:ww:8','woo:ww:99'},diag['gaps']
+assert diag['identity'][0]['missing_customer_id']==1,diag['identity']
+assert diag['catalogue'][0]['historical_product_lines']==4 and diag['catalogue'][0]['missing_shopify_catalogue_lines']==1,diag['catalogue']
+assert any(r['evidence_table']=='collection_classifications' and r['status']=='revoked' for r in diag['keys']),diag['keys']
+print('All diagnostic SQL stages execute: gap identities, customer coverage, raw classification history and missing catalogue counts passed')

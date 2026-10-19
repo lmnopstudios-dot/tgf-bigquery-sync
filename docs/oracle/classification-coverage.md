@@ -79,7 +79,8 @@ node --test test/classification-reader.test.js test/category-sales.test.js \
 python -m pip install --target /tmp/oracle-sql-tools duckdb==1.5.6 sqlglot==30.23.0
 PYTHONPATH=/tmp/oracle-sql-tools python test/classification-reader-sql.py
 npm run test:oracle:acceptance
-npm run test:oracle:browser
+npm install --prefix /tmp/oracle-browser-tools --no-package-lock --no-save playwright-core@1.64.1
+ORACLE_BROWSER_DRIVER=/tmp/oracle-browser-tools/node_modules/playwright-core/index.mjs npm run test:oracle:browser
 npm test
 ```
 
@@ -88,3 +89,5 @@ In this workspace production authentication returned HTTP 403 from `oauth2.googl
 Acceptance question: **Which named collaborations have the highest mature 90-day repeat-purchase rate, separately for Woo WW, Woo USD and Shopify, and what classification coverage supports each ranking?**
 
 Synthetic relational first-order coverage (nine eligible identified customers): three named product matches, two classification-absent, one generic-only, two conflicting and one unmatched product key. Alpha's 90-day result is 1/1 mature customers (two entries including one immature); beta is 0/1 at 90 days and 1/1 at 180 days. These values are fixture expectations, not production estimates.
+
+Workspace verification on 2026-10-19: repository suite 1563 tests, 1560 passed, zero failed, three opt-in BigQuery syntax checks skipped (annual, generated statements, reconciliation). Persistent acceptance: 526 passed with zero skipped. Browser acceptance: 21 conversations on desktop/mobile with durable refresh passed using Chromium and the temporary Playwright driver above. All synthetic relational SQL checks passed. Deployed BigQuery execution and production ranking remain unverified due to the authentication 403.
