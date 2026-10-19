@@ -959,6 +959,16 @@
         "shared current collection/product decisions and approved family routes",
         "stage coverage and bounded diagnostic factory contracts"
       ]
+    },
+    {
+      "id": "cohort-validation-deadline-isolation",
+      "file": "test/cohort-deadline-isolation.test.js",
+      "covers": [
+        "slow dry run and late allocation cancellation",
+        "independent source budgets and partial success",
+        "authentication stage sanitization",
+        "global cancellation and per-source diagnostics"
+      ]
     }
   ]
 }
