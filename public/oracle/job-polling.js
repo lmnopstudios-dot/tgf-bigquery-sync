@@ -5,7 +5,7 @@ export async function pollOracleJob({get,onProgress=()=>{},isCurrent=()=>true,pa
     if(!isCurrent())return {stale:true};
     let data;
     try{data=await get();failures=0;}catch(error){
-      if(error.status&&error.status<500||++failures>=3)throw error;
+      if(error.status&&error.status<500||++failures>=3)throw Object.assign(error,{jobStatusUnknown:true});
       await pause(1000*failures);continue;
     }
     if(!isCurrent())return {stale:true};

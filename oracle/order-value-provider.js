@@ -1,3 +1,4 @@
+import { boundedQuery } from './bounded-query.js';
 import { ORDER_VALUE_SCHEMA } from './order-value-schema.js';
 import { safeReadFailure, readFailureError } from './read-failure.js';
 import { boundedEvidenceRead } from './bounded-evidence-read.js';
@@ -123,7 +124,7 @@ export function createOrderValueProvider({bigquery,project}) {
     try{location=await boundedEvidenceRead(()=>datasetLocation(bigquery,project,'shopify_data'),options);}catch(error){throw readFailureError(error,'dataset_location');}
     const queryOptions=orderValueQueryOptions(args,location);
     let providerCalls=0;
-    const read=query=>boundedEvidenceRead(timeoutMs=>{providerCalls++;return bigquery.query({...queryOptions,query,jobTimeoutMs:Math.max(1,Math.floor(timeoutMs))});},options);
+    const read=query=>(providerCalls++,boundedQuery(bigquery,{...queryOptions,query},options));
     const results=await Promise.allSettled([read(orderValueHistogramSql(project)),read(orderValueCoverageSql(project))]);
     options.onProviderStage?.({stage:'aggregate_provider',selected_route:'get_order_value_analysis',provider_calls:providerCalls,population_status:results[0].status,coverage_status:results[1].status});
     if(results[0].status==='rejected')throw readFailureError(results[0].reason,'population_query');

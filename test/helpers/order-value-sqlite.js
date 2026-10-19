@@ -51,7 +51,7 @@ export function fixtureBigQuery(components,{failCoverage=false}={}) {
     }
     return sql;
   };
-  return {calls,db,dataset:()=>({getMetadata:async()=>[{location:'US'}]}),createQueryJob:async o=>{calls.push(o);db.prepare(translate(o.query));return [{metadata:{statistics:{totalBytesProcessed:'0'}}}];},query:async o=>{
+  const client={calls,db,dataset:()=>({getMetadata:async()=>[{location:'US'}]}),createQueryJob:async o=>{if(!o.dryRun&&!o.query.includes('INFORMATION_SCHEMA'))db.prepare(translate(o.query));if(!o.dryRun)return [{getQueryResults:()=>client.query(o),cancel:async()=>{}}];calls.push(o);db.prepare(translate(o.query));return [{metadata:{statistics:{totalBytesProcessed:'0'}}}];},query:async o=>{
     calls.push(o);
     if(o.query.includes('INFORMATION_SCHEMA'))return [Object.entries(ORDER_VALUE_SCHEMA).flatMap(([table_name,cols])=>Object.entries(cols).map(([column_name,data_type])=>({table_name,column_name,data_type,is_nullable:'YES'})))];
     if(failCoverage&&o.query.includes('represented_location_orders'))throw {code:403,errors:[{reason:'accessDenied'}]};
@@ -62,4 +62,5 @@ export function fixtureBigQuery(components,{failCoverage=false}={}) {
     }
     return [rows];
   }};
+  return client;
 }

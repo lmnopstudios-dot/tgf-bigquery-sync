@@ -1,3 +1,4 @@
+import { boundedEvidenceRead } from './bounded-evidence-read.js';
 import { normalizeOracleResult } from '../public/oracle/result-contract.js';
 import { deliverOracleResult } from './result-delivery.js';
 import crypto from 'node:crypto';
@@ -9,7 +10,7 @@ export const JOB_SCHEMA = [
   {name:'error_code',type:'STRING'}, {name:'created_at',type:'TIMESTAMP',mode:'REQUIRED'},
   {name:'updated_at',type:'TIMESTAMP',mode:'REQUIRED'}, {name:'lease_until',type:'TIMESTAMP'},
   {name:'attempts',type:'INT64',mode:'REQUIRED'}, {name:'cancel_requested',type:'BOOL',mode:'REQUIRED'},
-  {name:'claim_token',type:'STRING'}, {name:'worker_id',type:'STRING'}
+  {name:'claim_token',type:'STRING'}, {name:'worker_id',type:'STRING'}, {name:'lifecycle_json',type:'JSON'}
 ];
 
 export const ORACLE_JOB_DEFAULTS = Object.freeze({dataset:'commerce',table:'oracle_analysis_jobs_v1',location:'EU'});
@@ -69,7 +70,7 @@ export function inspectJobTableSchema(fields=[],expected=JOB_SCHEMA,limit=SCHEMA
 }
 
 const value = date => date?.value || date || null;
-const normalize = row => row && ({...row,payload_json:typeof row.payload_json==='string'?JSON.parse(row.payload_json):row.payload_json,result_json:row.result_json==null?null:normalizeOracleResult(row.result_json),created_at:value(row.created_at),updated_at:value(row.updated_at),lease_until:value(row.lease_until)});
+const normalize = row => row && ({...row,payload_json:typeof row.payload_json==='string'?JSON.parse(row.payload_json):row.payload_json,lifecycle_json:typeof row.lifecycle_json==='string'?JSON.parse(row.lifecycle_json):row.lifecycle_json,result_json:row.result_json==null?null:normalizeOracleResult(row.result_json),created_at:value(row.created_at),updated_at:value(row.updated_at),lease_until:value(row.lease_until)});
 
 /** Durable BigQuery queue. A lease is acquired atomically; stale running work is
  * failed rather than replayed because model/tool calls are not transactional. */
@@ -77,11 +78,11 @@ export function createBigQueryAnalysisJobStore({bigquery,project,dataset=ORACLE_
   const fq=`\`${project}.${dataset}.${table}\``;
   let datasetLocation;
   const resolveDatasetLocation=async ds=>{if(datasetLocation)return datasetLocation;const [metadata]=await ds.getMetadata();datasetLocation=metadata.location;return datasetLocation;};
-  const query=async(sql,params={})=>(await bigquery.query({query:sql,params,location:await resolveDatasetLocation(bigquery.dataset(dataset))}))[0];
+  const query=async(sql,params={})=>boundedEvidenceRead(async()=> (await bigquery.query({query:sql,params,jobTimeoutMs:15000,location:await resolveDatasetLocation(bigquery.dataset(dataset))}))[0],{maximumMs:20000});
   const contentionDelay=attempt=>sleep(Math.floor((50*2**attempt)*(0.5+Math.random())));
-  const terminalWrite=async(sql,params)=>{for(let attempt=0;attempt<claimRetries;attempt++){try{const [job]=await bigquery.createQueryJob({query:sql,params,location:await resolveDatasetLocation(bigquery.dataset(dataset)),useLegacySql:false});await job.getQueryResults();const [metadata]=await job.getMetadata();return Number(metadata.statistics?.query?.numDmlAffectedRows)===1;}catch(error){if(!isConcurrentUpdateAbort(error)||attempt===claimRetries-1)throw error;const row=normalize((await query(`SELECT status,lease_until,claim_token FROM ${fq} WHERE job_id=@job_id LIMIT 1`,{job_id:params.job_id}))[0]);if(!row||['completed','failed','cancelled'].includes(row.status))return false;if(row.claim_token!==params.claim_token||String(value(row.lease_until))!==params.lease.toISOString())return false;await contentionDelay(attempt);}}};
+  const terminalWrite=async(sql,params)=>{for(let attempt=0;attempt<claimRetries;attempt++){try{return await boundedEvidenceRead(async()=>{const [job]=await bigquery.createQueryJob({query:sql,params,jobTimeoutMs:15000,location:await resolveDatasetLocation(bigquery.dataset(dataset)),useLegacySql:false});await job.getQueryResults();const [metadata]=await job.getMetadata();return Number(metadata.statistics?.query?.numDmlAffectedRows)===1;},{maximumMs:20000});}catch(error){if(!isConcurrentUpdateAbort(error)||attempt===claimRetries-1)throw error;const row=normalize((await query(`SELECT status,lease_until,claim_token FROM ${fq} WHERE job_id=@job_id LIMIT 1`,{job_id:params.job_id}))[0]);if(!row||['completed','failed','cancelled'].includes(row.status))return false;if(row.claim_token!==params.claim_token||String(value(row.lease_until))!==params.lease.toISOString())return false;await contentionDelay(attempt);}}};
   return {
-    async setup(){const ds=bigquery.dataset(dataset);const [exists]=await ds.exists();if(!exists)await ds.create({location});await resolveDatasetLocation(ds);const t=ds.table(table);const [present]=await t.exists();if(!present){await t.create({schema:JOB_SCHEMA});return;}let [metadata]=await t.getMetadata();const fields=metadata.schema?.fields||[],missingLeaseFields=JOB_SCHEMA.filter(field=>['claim_token','worker_id'].includes(field.name)&&!fields.some(existing=>existing.name===field.name));if(missingLeaseFields.length){await t.setMetadata({schema:{fields:[...fields,...missingLeaseFields]}});[metadata]=await t.getMetadata();}const inspection=inspectJobTableSchema(metadata.schema?.fields||[]);if(!inspection.matches)throw Object.assign(new Error(`Oracle job table schema mismatch: ${table}`),{code:'SCHEMA_MISMATCH',schema_diff:inspection});},
+    async setup(){const ds=bigquery.dataset(dataset);const [exists]=await ds.exists();if(!exists)await ds.create({location});await resolveDatasetLocation(ds);const t=ds.table(table);const [present]=await t.exists();if(!present){await t.create({schema:JOB_SCHEMA});return;}let [metadata]=await t.getMetadata();const fields=metadata.schema?.fields||[],missingLeaseFields=JOB_SCHEMA.filter(field=>['claim_token','worker_id','lifecycle_json'].includes(field.name)&&!fields.some(existing=>existing.name===field.name));if(missingLeaseFields.length){await t.setMetadata({schema:{fields:[...fields,...missingLeaseFields]}});[metadata]=await t.getMetadata();}const inspection=inspectJobTableSchema(metadata.schema?.fields||[]);if(!inspection.matches)throw Object.assign(new Error(`Oracle job table schema mismatch: ${table}`),{code:'SCHEMA_MISMATCH',schema_diff:inspection});},
     // Do not use table.insert here. That API uses BigQuery's legacy streaming
     // buffer, whose rows cannot reliably be mutated by the claim UPDATE. A
     // query MERGE is committed before it returns, is immediately eligible for
@@ -95,6 +96,14 @@ export function createBigQueryAnalysisJobStore({bigquery,project,dataset=ORACLE_
     // (The targeted smoke never exercised that SQL branch.) The
     // targeted transaction still makes the queued -> running transition atomic;
     // if another worker wins the race this worker simply receives no row.
+    // Read a single expired candidate, then fence the terminal transition against
+    // its observed token and lease. Never replay non-transactional provider calls.
+    async recoverExpired(){
+      const row=(await query(`SELECT job_id,claim_token,lease_until FROM ${fq} WHERE status='running' AND lease_until<CURRENT_TIMESTAMP() AND NOT STARTS_WITH(request_id,'oracle-smoke-') ORDER BY lease_until LIMIT 1`))[0];
+      if(!row)return false;
+      return terminalWrite(`UPDATE ${fq} SET status=IF(cancel_requested,'cancelled','failed'),error_code='WORKER_LEASE_EXPIRED',updated_at=CURRENT_TIMESTAMP(),lease_until=NULL WHERE job_id=@job_id AND status='running' AND COALESCE(claim_token,'')=@claim_token AND lease_until=@lease AND lease_until<CURRENT_TIMESTAMP()`,{job_id:row.job_id,claim_token:row.claim_token||'',lease:new Date(value(row.lease_until))});
+    },
+    async recordLifecycle(job_id,lifecycle,claim){return terminalWrite(`UPDATE ${fq} SET lifecycle_json=PARSE_JSON(@lifecycle),updated_at=CURRENT_TIMESTAMP() WHERE job_id=@job_id AND status='running' AND claim_token=@claim_token AND lease_until=@lease AND lease_until>=CURRENT_TIMESTAMP()`,{job_id,lifecycle:JSON.stringify(lifecycle),claim_token:claim.claim_token,lease:new Date(value(claim.lease_until))});},
     async peekOrdinary(){return (await query(`SELECT job_id FROM ${fq} AS candidate WHERE candidate.status='queued' AND candidate.cancel_requested=FALSE AND NOT STARTS_WITH(candidate.request_id,'oracle-smoke-') ORDER BY candidate.created_at LIMIT 1`))[0]||null;},
     async claim({worker_id,leaseMs,now=Date.now(),job_id=null}){const candidate=job_id?{job_id}:await this.peekOrdinary();if(!candidate)return null;const lease=new Date(now+leaseMs),targetJobId=candidate.job_id,claim_token=crypto.randomUUID(),params={lease,job_id:targetJobId,claim_token,worker_id:String(worker_id)};for(let attempt=0;attempt<claimRetries;attempt++){try{const rows=await query(`BEGIN TRANSACTION; UPDATE ${fq} AS queued SET status='running',attempts=queued.attempts+1,updated_at=CURRENT_TIMESTAMP(),lease_until=@lease,claim_token=@claim_token,worker_id=@worker_id WHERE queued.job_id=@job_id AND queued.status='queued' AND queued.cancel_requested=FALSE; COMMIT TRANSACTION; SELECT * FROM ${fq} AS claimed WHERE claimed.job_id=@job_id AND claimed.status='running' AND claimed.claim_token=@claim_token AND claimed.lease_until=@lease LIMIT 1;`,params);return normalize(rows[0]);}catch(error){if(!isConcurrentUpdateAbort(error)||attempt===claimRetries-1)throw error;const current=normalize((await query(`SELECT status,lease_until,claim_token FROM ${fq} WHERE job_id=@job_id LIMIT 1`,{job_id:targetJobId}))[0]);if(current?.status!=='queued')return current?.claim_token===claim_token?current:null;await contentionDelay(attempt);}}return null;},
     async checkpoint(job_id,result_json,claim){return terminalWrite(`UPDATE ${fq} SET result_json=PARSE_JSON(@result),updated_at=CURRENT_TIMESTAMP() WHERE job_id=@job_id AND status='running' AND claim_token=@claim_token AND lease_until=@lease AND lease_until>=CURRENT_TIMESTAMP()`,{job_id,result:JSON.stringify(result_json),claim_token:claim.claim_token,lease:new Date(value(claim.lease_until))});},
@@ -105,24 +114,34 @@ export function createBigQueryAnalysisJobStore({bigquery,project,dataset=ORACLE_
   };
 }
 
-export function createAnalysisJobWorker({store,run,pollMs=1000,leaseMs=9*60_000,runtimeMs=8*60_000,maxBackoffMs=60_000,logger=console,workerId=`${process.pid}-${crypto.randomUUID()}`}) {
+export function createAnalysisJobWorker({store,run,pollMs=1000,leaseMs=9*60_000,runtimeMs=8*60_000,maxBackoffMs=60_000,logger=console,revision=process.env.RENDER_GIT_COMMIT,heartbeatMs=15000,workerId=`${process.pid}-${crypto.randomUUID()}`}) {
+  if(runtimeMs>=leaseMs)throw new Error('Worker runtime must be shorter than its lease');
+  let activeTick=null,shuttingDown=false;
   let timer=null,running=false,controller=null,stopped=true,failures=0,stage='claim';
   let context={};
   const diagnostic=(error,failedStage=stage)=>{const bq=bigQueryErrorDiagnostic(error);return {...context,stage:safeStage(error?.failed_stage||error?.stage||failedStage),code:safeToken(error?.code),...(bq.reason!=='unknown'?{bigquery_reason:bq.reason}:{}),...(bq.location?{bigquery_location:bq.location}:{}),...(Number.isInteger(error?.status)?{status:error.status}:{})};};
-  const tick=async()=>{
+  const runTick=async()=>{
     if(running)return;
     running=true;context={worker_id:safeToken(workerId)};
     try{
+      stage='lease_recovery';await store.recoverExpired?.();
       stage='claim';
       const job=await store.claim({worker_id:workerId,leaseMs});if(!job)return;
       context={request_id:safeToken(job.request_id),job_id:safeToken(job.job_id),attempt:Number(job.attempts)||0,worker_id:safeToken(workerId)};
       logger.info?.('Oracle job worker stage:',{...context,stage:'claimed',status:'success'});
-      controller=new AbortController();const activeController=controller;
+      controller=new AbortController();const activeController=controller;if(shuttingDown)activeController.abort(Object.assign(Error('worker stopped'),{code:'WORKER_SHUTDOWN'}));
       const cancelPoll=setInterval(async()=>{try{if(await store.isCancelled(job.job_id))activeController.abort(new Error('cancelled'));}catch(error){logger.error('Oracle job worker stage failed:',diagnostic(error,'cancel_check'));}},Math.min(pollMs,1000));
-      let runtimeTimer,result;
+      let runtimeTimer,result,abortListener,heartbeatBusy=false;
+      const lifecycle={claimed_at:new Date().toISOString(),execution_revision:safeToken(revision,'not_recorded'),attempt:Number(job.attempts)||0,stage:'claimed',heartbeat_at:new Date().toISOString()};
+      const record=async()=>{if(heartbeatBusy||!store.recordLifecycle)return;heartbeatBusy=true;try{lifecycle.heartbeat_at=new Date().toISOString();if(await store.recordLifecycle(job.job_id,{...lifecycle},job)===false)activeController.abort(Object.assign(Error('Lease rejected'),{code:'LEASE_NOT_OWNED'}));}finally{heartbeatBusy=false;}};
+      const onStage=event=>{lifecycle.stage=safeStage(event?.stage,'analysis');if(event?.query_id)lifecycle.query_id=safeToken(event.query_id,'not_recorded');if(event?.cancellation)lifecycle.query_cancellation=safeToken(event.cancellation,'not_recorded');if(event?.query_location)lifecycle.query_location=safeToken(event.query_location,'not_recorded');if(Number.isFinite(event?.query_timeout_ms))lifecycle.query_timeout_ms=event.query_timeout_ms;if(event?.cancellation_state)lifecycle.query_cancellation_state=safeToken(event.cancellation_state,'not_recorded');void record().catch(error=>logger.error('Oracle job worker stage failed:',diagnostic(error,'lifecycle')));};
+      const heartbeat=setInterval(()=>record().catch(error=>logger.error('Oracle job worker stage failed:',diagnostic(error,'heartbeat'))),heartbeatMs);
+
       try{
-        const timeout=new Promise((_,reject)=>{runtimeTimer=setTimeout(()=>{activeController.abort(new Error('runtime'));reject(Object.assign(new Error('runtime'),{code:'JOB_RUNTIME_EXCEEDED'}));},runtimeMs)});
-        stage='analysis';result=await Promise.race([run(job,controller.signal),timeout]);
+        await record();
+        const interrupted=new Promise((_,reject)=>{abortListener=()=>reject(activeController.signal.reason||Object.assign(Error('cancelled'),{code:'REQUEST_CANCELLED'}));activeController.signal.addEventListener('abort',abortListener,{once:true});if(activeController.signal.aborted)abortListener();});
+        const timeout=new Promise((_,reject)=>{runtimeTimer=setTimeout(()=>{activeController.abort(Object.assign(new Error('runtime'),{code:'JOB_RUNTIME_EXCEEDED'}));reject(Object.assign(new Error('runtime'),{code:'JOB_RUNTIME_EXCEEDED'}));},runtimeMs)});
+        stage='analysis';result=await Promise.race([Promise.resolve().then(()=>{activeController.signal.throwIfAborted();return run(job,activeController.signal,onStage);}),timeout,interrupted]);
         stage='presentation_readiness';result=deliverOracleResult(result,job.payload_json?.analysis_context);
         logger.info?.('Oracle job worker stage:',{...context,stage,status:result.delivery.status,schema_version:result.delivery.version,answer_present:true,evidence_present:result.delivery.evidence_present,artifact_present:result.delivery.artifact_present});
         stage='evidence_checkpoint';
@@ -143,17 +162,25 @@ export function createAnalysisJobWorker({store,run,pollMs=1000,leaseMs=9*60_000,
           const written=await store.fail(job.job_id,code,{...result,failed_stage:failedStage,code},job);
           if(written===false)logger.error('Oracle job worker stage failed:',{...context,stage,code:'LEASE_NOT_OWNED'});
         }catch(failError){logger.error('Oracle job worker stage failed:',diagnostic(failError));throw failError;}
-      }finally{clearTimeout(runtimeTimer);clearInterval(cancelPoll);controller=null;}
+      }finally{clearTimeout(runtimeTimer);clearInterval(cancelPoll);clearInterval(heartbeat);activeController.signal.removeEventListener('abort',abortListener);controller=null;}
     }finally{running=false;context={};}
   };
+  const tick=()=>activeTick||(activeTick=runTick().finally(()=>{activeTick=null;}));
   const schedule=delay=>{if(stopped)return;timer=setTimeout(async()=>{try{await tick();failures=0;}catch(error){failures++;logger.error('Oracle job worker failed:',diagnostic(error));}schedule(failures?Math.min(maxBackoffMs,pollMs*2**Math.min(failures,10)):pollMs);},delay);timer.unref?.();};
-  return {start(){if(!stopped)return;stopped=false;schedule(0);},stop(){stopped=true;clearTimeout(timer);timer=null;controller?.abort(new Error('worker stopped'));},tick,get backoffMs(){return failures?Math.min(maxBackoffMs,pollMs*2**Math.min(failures,10)):pollMs;}};
+  return {start(){if(!stopped)return;shuttingDown=false;stopped=false;schedule(0);},stop(){shuttingDown=true;stopped=true;clearTimeout(timer);timer=null;controller?.abort(Object.assign(new Error('worker stopped'),{code:'WORKER_SHUTDOWN'}));return activeTick||Promise.resolve();},tick,get backoffMs(){return failures?Math.min(maxBackoffMs,pollMs*2**Math.min(failures,10)):pollMs;}};
 }
 
 export function createMemoryAnalysisJobStore(seed=[]) {
   const jobs=new Map(seed.map(job=>[job.job_id,{...job}]));
   const owns=(job,claim)=>job?.status==='running'&&job.claim_token===claim?.claim_token&&job.lease_until===claim?.lease_until&&Date.parse(job.lease_until)>=Date.now();
-  return {jobs,async setup(){},async create(input){const existing=[...jobs.values()].find(job=>job.owner_key===input.owner_key&&job.request_id===input.request_id);if(existing)return structuredClone(existing);const now=new Date().toISOString(),job={...input,job_id:crypto.randomUUID(),status:'queued',created_at:now,updated_at:now,attempts:0,cancel_requested:false};jobs.set(job.job_id,job);return structuredClone(job);},async get(id,owner){const job=jobs.get(id);return job?.owner_key===owner?structuredClone(job):null;},async getByRequest(request,owner){const job=[...jobs.values()].find(x=>x.request_id===request&&x.owner_key===owner);return job?structuredClone(job):null;},async claim({leaseMs,job_id=null,worker_id='memory-worker'}){for(const stale of jobs.values())if(stale.status==='running'&&Date.parse(stale.lease_until)<Date.now()){stale.status='failed';stale.error_code='WORKER_RESTARTED';stale.lease_until=null;}const job=[...jobs.values()].find(x=>x.status==='queued'&&!x.cancel_requested&&(!job_id?!String(x.request_id||'').startsWith('oracle-smoke-'):x.job_id===job_id));if(!job)return null;job.status='running';job.attempts++;job.lease_until=new Date(Date.now()+leaseMs).toISOString();job.claim_token=crypto.randomUUID();job.worker_id=String(worker_id);return structuredClone(job);},async checkpoint(id,result,claim){const job=jobs.get(id);if(!owns(job,claim))return false;job.result_json=structuredClone(result);job.updated_at=new Date().toISOString();return true;},async finish(id,result,claim){const job=jobs.get(id);if(!owns(job,claim))return false;job.status=job.cancel_requested?'cancelled':'completed';job.result_json=job.cancel_requested?null:result;job.updated_at=new Date().toISOString();job.lease_until=null;return true;},async fail(id,code,failure=null,claim){const job=jobs.get(id);if(!owns(job,claim))return false;job.status=job.cancel_requested?'cancelled':'failed';job.error_code=job.cancel_requested?null:code;job.result_json=job.cancel_requested?job.result_json:(job.result_json||failure);job.updated_at=new Date().toISOString();job.lease_until=null;return true;},async cancel(id,owner){const job=jobs.get(id);if(job?.owner_key===owner){job.cancel_requested=true;if(['queued','running'].includes(job.status))job.status='cancelled';}},async isCancelled(id){const job=jobs.get(id);return !job||job.cancel_requested||job.status==='cancelled';}};
+  return {jobs,async recoverExpired(){for(const stale of jobs.values())if(stale.status==='running'&&Date.parse(stale.lease_until)<Date.now()&&!String(stale.request_id||'').startsWith('oracle-smoke-')){stale.status=stale.cancel_requested?'cancelled':'failed';stale.error_code='WORKER_LEASE_EXPIRED';stale.updated_at=new Date().toISOString();stale.lease_until=null;}},async recordLifecycle(id,lifecycle,claim){const job=jobs.get(id);if(!owns(job,claim))return false;job.lifecycle_json=structuredClone(lifecycle);job.updated_at=new Date().toISOString();return true;},async setup(){},async create(input){const existing=[...jobs.values()].find(job=>job.owner_key===input.owner_key&&job.request_id===input.request_id);if(existing)return structuredClone(existing);const now=new Date().toISOString(),job={...input,job_id:crypto.randomUUID(),status:'queued',created_at:now,updated_at:now,attempts:0,cancel_requested:false};jobs.set(job.job_id,job);return structuredClone(job);},async get(id,owner){const job=jobs.get(id);return job?.owner_key===owner?structuredClone(job):null;},async getByRequest(request,owner){const job=[...jobs.values()].find(x=>x.request_id===request&&x.owner_key===owner);return job?structuredClone(job):null;},async claim({leaseMs,job_id=null,worker_id='memory-worker'}){await this.recoverExpired();const job=[...jobs.values()].find(x=>x.status==='queued'&&!x.cancel_requested&&(!job_id?!String(x.request_id||'').startsWith('oracle-smoke-'):x.job_id===job_id));if(!job)return null;job.status='running';job.attempts++;job.lease_until=new Date(Date.now()+leaseMs).toISOString();job.claim_token=crypto.randomUUID();job.worker_id=String(worker_id);return structuredClone(job);},async checkpoint(id,result,claim){const job=jobs.get(id);if(!owns(job,claim))return false;job.result_json=structuredClone(result);job.updated_at=new Date().toISOString();return true;},async finish(id,result,claim){const job=jobs.get(id);if(!owns(job,claim))return false;job.status=job.cancel_requested?'cancelled':'completed';job.result_json=job.cancel_requested?null:result;job.updated_at=new Date().toISOString();job.lease_until=null;return true;},async fail(id,code,failure=null,claim){const job=jobs.get(id);if(!owns(job,claim))return false;job.status=job.cancel_requested?'cancelled':'failed';job.error_code=job.cancel_requested?null:code;job.result_json=job.cancel_requested?job.result_json:(job.result_json||failure);job.updated_at=new Date().toISOString();job.lease_until=null;return true;},async cancel(id,owner){const job=jobs.get(id);if(job?.owner_key===owner){job.cancel_requested=true;if(['queued','running'].includes(job.status))job.status='cancelled';}},async isCancelled(id){const job=jobs.get(id);return !job||job.cancel_requested||job.status==='cancelled';}};
+}
+
+export function runningJobProgress(job,now=Date.now()){
+  const expiry=Date.parse(value(job.lease_until));
+  if(!Number.isFinite(expiry))return 'Analysis is marked running; worker activity is unverified. Refresh to check saved status.';
+  if(expiry<now)return 'The previous execution window expired. Waiting for saved-status recovery; automatic provider replay is unsupported.';
+  return 'Analysis is marked running. Checking for saved progress…';
 }
 
 export function ownerKey(sessionCookie,secret){return crypto.createHmac('sha256',secret).update(sessionCookie||'').digest('hex');}

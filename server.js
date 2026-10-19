@@ -1,3 +1,4 @@
+let stopOracleAnalysisWorker=()=>Promise.resolve();
 import { messageIntent } from './oracle/message-intent.js';
 import { orderValueRuntimeBinding } from './oracle/runtime-capability-bindings.js';
 import { createOracleBaselineDispatcher } from './oracle/baseline-dispatcher.js';
@@ -8407,7 +8408,7 @@ Important rules:
 ========================================================= */
 
 if (process.env.ORACLE_UI_PASSWORD || process.env.ORACLE_UI_SESSION_SECRET) {
-  app.use('/api/oracle', createOracleUiRouter({
+  const oracleUiRouter=createOracleUiRouter({
     knowledgeService,
     bigquery,
     project: GOOGLE_PROJECT_ID,
@@ -8450,7 +8451,9 @@ if (process.env.ORACLE_UI_PASSWORD || process.env.ORACLE_UI_SESSION_SECRET) {
       }
       return agentResultForUi(payload);
     }
-  }));
+  });
+  app.use('/api/oracle',oracleUiRouter);
+  stopOracleAnalysisWorker=()=>oracleUiRouter.stopAnalysisWorker?.();
   app.use('/oracle', express.static(new URL('./public/oracle', import.meta.url).pathname, { index: 'index.html' }));
   app.get('/oracle', (_req, res) => res.redirect('/oracle/'));
 }
@@ -8459,7 +8462,7 @@ if (process.env.ORACLE_UI_PASSWORD || process.env.ORACLE_UI_SESSION_SECRET) {
    START SERVER
 ========================================================= */
 
-app.listen(
+const httpServer=app.listen(
   PORT,
   () => {
     console.log(
@@ -8470,3 +8473,9 @@ app.listen(
     );
   }
 );
+
+for(const event of ['SIGTERM','SIGINT'])process.once(event,async()=>{
+  const deadline=setTimeout(()=>process.exit(1),25000);deadline.unref();
+  try{await Promise.all([stopOracleAnalysisWorker(),new Promise(resolve=>httpServer.close(resolve))]);clearTimeout(deadline);process.exit(0);}
+  catch{process.exit(1);}
+});
