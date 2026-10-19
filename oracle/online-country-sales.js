@@ -20,6 +20,14 @@ export function validateOnlineCountrySalesInput(input = {}) {
   return { start_date, end_date, currency: currency?.toUpperCase() || null, platform };
 }
 
+export const ONLINE_COUNTRY_SALES_SEMANTICS=Object.freeze({
+  metric: 'Source-native operational order total less source refund total, after each source\'s established eligible-order status rules.',
+  comparability: 'Woo and Shopify operational totals and refund capture come from different source systems. Combined country totals are directional, not canonical accounting revenue; use source breakdowns when comparing performance.',
+  geography: 'Direct shipping-country evidence only. Unknown country is reported in coverage and excluded from named-country ranking.',
+  currency: 'Ranked independently by source currency; no conversion or cross-currency addition.',
+  deduplication: 'Orders are deduplicated before latest geography is joined; Matrixify Shopify representations are excluded.',
+  eligibility_coverage: 'Shopify financial, location, customer and fully joined populations are returned explicitly. Financial orders without required customer evidence are excluded and reported, never assumed eligible; cancellation and financial status genuinely require the contemporaneous customer row.' });
+
 /**
  * One row is established per source order before the latest direct geography
  * row is joined.  Country totals therefore cannot be multiplied by duplicate
@@ -158,13 +166,7 @@ export function createOnlineCountrySalesService({ bigquery, project }) {
       rows: JSON.parse(JSON.stringify(rows)), source_scope: params.platform?[params.platform]:['woo','shopify'],
       shopify_native_history: { known_start: SHOPIFY_NATIVE_HISTORY_START,
         warning: `Native Shopify history starts ${SHOPIFY_NATIVE_HISTORY_START}; do not describe Shopify as covering the whole requested period.` },
-      semantics: {
-        metric: 'Source-native operational order total less source refund total, after each source\'s established eligible-order status rules.',
-        comparability: 'Woo and Shopify operational totals and refund capture come from different source systems. Combined country totals are directional, not canonical accounting revenue; use source breakdowns when comparing performance.',
-        geography: 'Direct shipping-country evidence only. Unknown country is reported in coverage and excluded from named-country ranking.',
-        currency: 'Ranked independently by source currency; no conversion or cross-currency addition.',
-        deduplication: 'Orders are deduplicated before latest geography is joined; Matrixify Shopify representations are excluded.',
-        eligibility_coverage: 'Shopify financial, location, customer and fully joined populations are returned explicitly. Financial orders without required customer evidence are excluded and reported, never assumed eligible; cancellation and financial status genuinely require the contemporaneous customer row.' },
+      semantics: ONLINE_COUNTRY_SALES_SEMANTICS,
       contract: { read_only: true, aggregate_only: true, pii_free: true, maximum_rows: 100 } };
   };
 }

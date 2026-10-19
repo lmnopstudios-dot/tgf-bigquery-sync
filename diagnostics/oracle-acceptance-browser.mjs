@@ -15,7 +15,7 @@ try{
     const page=await browser.newPage({viewport:{width,height}}),errors=[];page.on('pageerror',e=>errors.push(e.message));
     await page.goto(h.origin+'/oracle/');await page.locator('#password').fill('fixture');await page.locator('#login-form button').click();await page.locator('#app').waitFor({state:'visible'});
     for(const conversation of matrix.conversations){
-      f.state.retention=Boolean(conversation.retention);f.state.retention_events=Boolean(conversation.retention_events);f.state.fail_start=conversation.fail_start||null;f.state.campaigns=Boolean(conversation.campaigns);f.state.country_conversion=Boolean(conversation.country_conversion);
+      f.state.named_events=Boolean(conversation.named_events);f.state.retention=Boolean(conversation.retention);f.state.retention_events=Boolean(conversation.retention_events);f.state.fail_start=conversation.fail_start||null;f.state.campaigns=Boolean(conversation.campaigns);f.state.country_conversion=Boolean(conversation.country_conversion);
       await page.locator('#new-question').click();
       for(const turn of conversation.turns){
         const count=await page.locator('.analytical-answer').count(),offset=f.calls.length;
@@ -25,6 +25,14 @@ try{
         const answer=await page.locator('.analytical-answer').last().innerText();assert.ok(answer.trim());
         if(turn.outcome==='clarification')assert.match(answer,/start and end dates/i);
         else assert.doesNotMatch(answer,/What date range/);
+        if(turn.check==='named-events'){
+          assert.match(answer,/Black Friday/);assert.match(answer,/150/);assert.match(answer,/100/);
+          const last=page.locator('.analytical-answer').last();assert.ok(await last.locator('table').count());
+          assert.equal(await last.locator('details').count(),1);assert.equal(await last.locator('summary').innerText(),'Show details');
+          await last.locator('summary').click();assert.match(await last.innerText(),/VIP|vip_early_access/);assert.match(await last.innerText(),/coverage|completeness/);
+          const count=f.calls.length;await page.reload();await page.waitForFunction(()=>!document.querySelector('#send').disabled&&document.querySelector('.analytical-answer'));
+          assert.match(await page.locator('.analytical-answer').last().innerText(),/150/);assert.equal(f.calls.length,count);
+        }
         if(turn.check==='visitor-monthly'){if(turn.grain==='month'){assert.match(answer,/Month/);assert.match(answer,/completed-checkout sessions/);}if(turn.groups.includes('rest_of_world'))assert.match(answer,/unknown\/blank\/ZZ/);}
         if(turn.check==='retention-incident'){
           assert.match(answer,/Beta has the highest observed repeat purchase rate at 90 days/);assert.match(answer,/Pieces within Alpha/);assert.match(answer,/33.33%/);assert.equal(f.calls.length,offset+4);

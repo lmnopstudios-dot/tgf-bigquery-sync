@@ -20,7 +20,7 @@ export function transportFailure(error,{stage='agent_request'}={}) {
   const code=SAFE_CODE.test(suppliedCode)?suppliedCode:(timeout?'ORACLE_AGENT_DEADLINE':'ORACLE_AGENT_API_REJECTED');
   return {
     failure_stage:SAFE_STAGE.test(stage)?stage:'agent_request',
-    failure_kind:timeout?'timeout_or_abort':suppliedCode==='CATALOGUE_CANCELLED'?'cancelled':suppliedCode.startsWith('CATALOGUE_PAGINATION_')?'pagination_failure':suppliedCode.startsWith('SHOPIFY_')?'http_api_rejection':suppliedCode.startsWith('CATALOGUE_')?'internal_error':status?'http_api_rejection':'transport_failure',
+    failure_kind:suppliedCode==='EVIDENCE_SCOPE_MISMATCH'?'evidence_validation':timeout?'timeout_or_abort':suppliedCode==='CATALOGUE_CANCELLED'?'cancelled':suppliedCode.startsWith('CATALOGUE_PAGINATION_')?'pagination_failure':suppliedCode.startsWith('SHOPIFY_')?'http_api_rejection':suppliedCode.startsWith('CATALOGUE_')?'internal_error':status?'http_api_rejection':'transport_failure',
     status,
     code
   };
@@ -101,4 +101,9 @@ export function cataloguePublicError(code){
  if(String(code).startsWith('SHOPIFY_'))return 'Shopify rejected the catalogue request. No export was created. Please retry explicitly.';
  if(String(code).startsWith('CATALOGUE_'))return 'The catalogue could not be verified. No export was created. Please retry explicitly.';
  return null;
+}
+
+export function evidenceValidationResponse(error,id){
+  if(error?.code!=='EVIDENCE_SCOPE_MISMATCH')return null;
+  return {success:false,code:'EVIDENCE_SCOPE_MISMATCH',error:'The returned evidence did not match the requested analysis scope. No incompatible figures were delivered. Request reference: '+requestId(id),request_id:requestId(id),failed_stage:'evidence_validation',failure_stage:'evidence_validation',failure_kind:'evidence_validation'};
 }
