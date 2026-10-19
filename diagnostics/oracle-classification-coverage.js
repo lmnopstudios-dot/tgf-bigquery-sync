@@ -10,11 +10,18 @@ import {boundedQuery} from '../oracle/bounded-query.js';
 import {safeReadFailure} from '../oracle/read-failure.js';
 
 export async function classificationDiagnosticOptions({project,source,store,now,stage}){
- if(!['resolver','stages','gaps','identity','history','keys','catalogue'].includes(stage))throw Error('Invalid diagnostic stage');
+ if(!['resolver','stages','gaps','identity','history','keys','catalogue','first-orders','subsequent','members','aggregation','full'].includes(stage))throw Error('Invalid diagnostic stage');
  let settings;
  const deps=createOracleProviderDependencies({project,bigquery:{query:async q=>{settings=q;return [[]];}}});
  const context=transitionAnalysisContext(null,QUESTION,{now}).context,definition=retentionDefinition(context);
  await deps.customerJourney.analyzeCustomerJourney({...definition,cohort:{...definition.cohort,entry_source:source}},{sourceStore:store});
+ const probes={
+  'first-orders':'SELECT COUNT(*) orders FROM entry_orders',
+  subsequent:'SELECT COUNT(*) orders FROM downstream_orders',
+  members:'SELECT COUNT(*) members FROM retention_members',
+  aggregation:'SELECT COUNT(*) cohorts FROM retention_totals'
+ };
+ if(stage==='full'||probes[stage])return {...settings,query:stage==='full'?settings.query:settings.query.split('  SELECT r.*,c.coverage FROM')[0]+' '+probes[stage],jobTimeoutMs:15000};
  const sql=settings.query.split(', retention_members AS (')[0];
  const selections={
   stages:`SELECT st.* FROM entry_stage_coverage st ORDER BY collaboration_state LIMIT 20`,

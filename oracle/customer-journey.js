@@ -102,15 +102,15 @@ function retentionWindowResultSql(product=false,nested=false){
     FROM (${members}) em CROSS JOIN UNNEST([90,180]) window_days
     LEFT JOIN (SELECT * FROM downstream_orders QUALIFY ROW_NUMBER() OVER(PARTITION BY governed_customer_ref ORDER BY order_timestamp,order_ref)=1) d ON d.governed_customer_ref=em.governed_customer_ref
     LEFT JOIN order_classification_sets sc ON sc.source_platform=d.source_platform AND sc.source_store=d.source_store AND sc.order_ref=d.order_ref
-  ), retention_medians AS (
-    SELECT DISTINCT ${keys},window_days,PERCENTILE_CONT(IF(mature,days_to_second,NULL),0.5) OVER(PARTITION BY ${keys},window_days) median_days_to_second FROM retention_members
+  ), retention_with_medians AS (
+    SELECT *,PERCENTILE_CONT(IF(mature,days_to_second,NULL),0.5) OVER(PARTITION BY ${keys},window_days) median_days_to_second FROM retention_members
   ), retention_totals AS (SELECT ${keys},window_days,COUNT(*) cohort_customers,COUNTIF(mature) mature_customers,
     COUNTIF(mature AND days_to_second IS NOT NULL) repeat_customers,ANY_VALUE(median_days_to_second) median_days_to_second${product?',MIN(entry_product_title) entry_product_title':''},
     COUNTIF(mature AND days_to_second IS NOT NULL AND second_purchase_classification='same_collaboration') same_collaboration,
     COUNTIF(mature AND days_to_second IS NOT NULL AND second_purchase_classification='different_collaboration') different_collaboration,
     COUNTIF(mature AND days_to_second IS NOT NULL AND second_purchase_classification='core_range') core_range,
     COUNTIF(mature AND days_to_second IS NOT NULL AND second_purchase_classification='unknown') unknown
-    FROM retention_members JOIN retention_medians USING(${keys},window_days) GROUP BY ${keys},window_days
+    FROM retention_with_medians GROUP BY ${keys},window_days
   ), retention_scored AS (SELECT *,MAX(IF(window_days=@ranking_window,repeat_customers,NULL)) OVER(PARTITION BY ${keys}) rank_customers,MAX(IF(window_days=@ranking_window,SAFE_DIVIDE(repeat_customers,mature_customers),NULL)) OVER(PARTITION BY ${keys}) rank_rate FROM retention_totals), retention_ranked AS (SELECT *,DENSE_RANK() OVER(PARTITION BY source_platform,source_store ORDER BY
       IF(@retention_sort='returning_customers_desc',rank_customers,NULL) DESC,
       rank_rate DESC,${keys}${nested?'':''}) cohort_rank,COUNT(*) OVER(PARTITION BY source_platform,source_store)>2*DIV(@cohort_limit,IF(@entry_source='woo',2,1)) truncated FROM retention_scored)

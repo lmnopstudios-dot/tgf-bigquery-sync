@@ -16,7 +16,7 @@ const deps=createOracleProviderDependencies({project:'fixture',bigquery:{query:a
 const c=transitionAnalysisContext(null,'Rank collaborations by repeat purchase rate online in the last 3 years.',{now}).context;
 const d=retentionDefinition(c);await deps.customerJourney.analyzeCustomerJourney({...d,cohort:{...d.cohort,entry_source:'woo'}},{sourceStore:'ww'});
 const retention=q;await deps.customerJourney.analyzeCustomerJourney({...d,cohort:{...d.cohort,entry_source:'woo'},group_by:['downstream_product'],subsequent:{...d.subsequent,product_classification:'collaboration'}},{sourceStore:'ww'});const downstream=q;await deps.customerJourney.analyzeCustomerJourney({...d,cohort:{...d.cohort,entry_source:'shopify'}},{sourceStore:'shopify'});const shopify=q;
-const diagnostics={};for(const stage of ['gaps','identity','history','keys'])diagnostics[stage]=await classificationDiagnosticOptions({project:'fixture',source:'woo',store:'ww',stage,now});diagnostics.catalogue=await classificationDiagnosticOptions({project:'fixture',source:'shopify',store:'shopify',stage:'catalogue',now});
+const diagnostics={};for(const stage of ['gaps','identity','history','keys','first-orders','subsequent','members','aggregation','full'])diagnostics[stage]=await classificationDiagnosticOptions({project:'fixture',source:'woo',store:'ww',stage,now});diagnostics.catalogue=await classificationDiagnosticOptions({project:'fixture',source:'shopify',store:'shopify',stage:'catalogue',now});
 console.log(JSON.stringify({diagnostics,shopify,downstream,shared:'WITH '+classificationReaderCtes('fixture')+' SELECT * FROM cr_resolved',retention,stages:await classificationDiagnosticOptions({project:'fixture',source:'woo',store:'ww',stage:'stages',now})}));
 """
 queries=json.loads(subprocess.check_output(['node','--input-type=module','-e',node],text=True))
@@ -61,6 +61,13 @@ def run(options):
  return records(c.execute(sql,params))
 stages=run(queries['stages']);counts={r['collaboration_state']:int(r['product_lines']) for r in stages}
 assert counts=={'named':3,'classification_absent':2,'generic_only':1,'conflicting':2,'product_identity_unmatched':1},counts
+def assert_previous_equivalent(options):
+ previous=dict(options)
+ previous['query']=options['query'].replace('retention_with_medians AS (\n    SELECT *,PERCENTILE_CONT', 'retention_medians AS (\n    SELECT DISTINCT source_platform,source_store,collaboration_name,window_days,PERCENTILE_CONT').replace('FROM retention_with_medians GROUP BY', 'FROM retention_members JOIN retention_medians USING(source_platform,source_store,collaboration_name,window_days) GROUP BY')
+ assert previous['query'] != options['query']
+ assert run(previous)==run(options), 'Previous and improved relational results differ'
+
+assert_previous_equivalent(queries['retention'])
 rows=run(queries['retention'])
 a=next(r for r in rows if r['collaboration_name']=='alpha' and r['window_days']==90)
 b=next(r for r in rows if r['collaboration_name']=='beta' and r['window_days']==180)
@@ -75,6 +82,7 @@ c.execute('CREATE TABLE fixture.shopify_data.order_financials(order_id VARCHAR,p
 c.execute('CREATE TABLE fixture.shopify_data.order_line_items(order_id VARCHAR,product_id VARCHAR,title VARCHAR,name VARCHAR,quantity INT,discounted_total_presentment DOUBLE,presentment_currency VARCHAR)')
 for order,customer,when,product,app in [('s1','gid://shopify/Customer/1','2025-11-16','gid://shopify/Product/100',None),('s2','gid://shopify/Customer/1','2025-12-16','101',None),('s3','gid://shopify/Customer/2','2025-11-16','102',None),('s4','gid://shopify/Customer/3','2025-11-16','gid://shopify/ProductVariant/100',None),('s5','gid://shopify/Customer/4','2025-11-16','100','gid://shopify/App/1758145')]:
  c.execute('INSERT INTO fixture.shopify_data.order_locations VALUES (?,NULL,?,?)',[order,when,app]);c.execute("INSERT INTO fixture.shopify_data.order_customers VALUES (?,?,'paid',NULL,FALSE)",[order,customer]);c.execute("INSERT INTO fixture.shopify_data.order_financials VALUES (?,'GBP',100,0)",[order]);c.execute("INSERT INTO fixture.shopify_data.order_line_items VALUES (?,?,'Synthetic option',NULL,1,100,'GBP')",[order,product])
+assert_previous_equivalent(queries['shopify'])
 shop=run(queries['shopify'])
 a=next(r for r in shop if r['collaboration_name']=='alpha' and r['window_days']==90)
 assert (a['cohort_customers'],a['mature_customers'],a['repeat_customers'],a['different_collaboration'])==(1,1,1,1),a
@@ -90,6 +98,11 @@ c.execute("INSERT INTO fixture.shopify_catalogue.products VALUES ('100'),('101')
 diag={key:run(options) for key,options in queries['diagnostics'].items()}
 assert {r['source_product_ref'] for r in diag['gaps']}=={'woo:ww:0','woo:ww:3','woo:ww:5','woo:ww:6','woo:ww:8','woo:ww:99'},diag['gaps']
 assert diag['identity'][0]['missing_customer_id']==1,diag['identity']
+assert diag['first-orders'][0]['orders']==9
+assert diag['subsequent'][0]['orders']==2
+assert diag['members'][0]['members']==6
+assert diag['aggregation'][0]['cohorts']==4
+assert diag['full']==rows
 assert diag['catalogue'][0]['historical_product_lines']==4 and diag['catalogue'][0]['missing_shopify_catalogue_lines']==1,diag['catalogue']
 assert any(r['evidence_table']=='collection_classifications' and r['status']=='revoked' for r in diag['keys']),diag['keys']
 print('All diagnostic SQL stages execute: gap identities, customer coverage, raw classification history and missing catalogue counts passed')
