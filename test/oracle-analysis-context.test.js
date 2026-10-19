@@ -142,7 +142,7 @@ test('safe transition diagnostics contain field names, not filter values or mess
 test('Black Friday intent survives a year-count follow-up and incompatible subjects clear it',()=>{
   let result=apply(null,'Can you please give me an overview of the last 3 Black Friday sales? I would like to compare sales, conversion rates and products.');
   assert.equal(result.context.tool_route,'compare_historical_events');assert.equal(result.context.event_name,'Black Friday');assert.equal(result.context.event_count,3);assert.equal(clarificationFor(result.context),null);assert.equal(result.transition.ready_to_execute,true);
-  result=apply(result.context,'The last 3 years.');assert.equal(result.context.tool_route,'compare_historical_events');assert.equal(result.context.event_count,3);assert.deepEqual(result.context.currencies,['GBP']);
+  result=apply(result.context,'The last 3 years.');assert.equal(result.context.tool_route,'compare_historical_events');assert.equal(result.context.event_count,3);assert.deepEqual(result.context.currencies,[]);
   for(const prompt of ['Show customers instead','What about shipping countries?','Compare Search Console instead']){const changed=apply(result.context,prompt);assert.equal(changed.context.event_name,null);assert.equal(changed.context.event_count,null);assert.notEqual(changed.context.tool_route,'compare_historical_events');}
 });
 

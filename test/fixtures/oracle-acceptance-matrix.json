@@ -568,6 +568,18 @@
           "provider_count": 4
         }
       ]
+    },
+    {
+      "id": "black-friday-production-scope",
+      "named_events": true,
+      "turns": [
+        {
+          "question": "Can you compare teh sales of the last 3 black friday sale periods",
+          "subject": "sales",
+          "route": "compare_historical_events",
+          "check": "named-events"
+        }
+      ]
     }
   ],
   "regression_suites": [
@@ -921,6 +933,18 @@
         "preserved evidence and artifacts",
         "original execution versus diagnostic revision",
         "unchanged production basket and cross-family XLSX"
+      ]
+    },
+    {
+      "id": "named-event-production-scope",
+      "file": "test/oracle-named-event-scope.test.js",
+      "covers": [
+        "unchanged typo-containing production question through real production campaign factory",
+        "disjoint completed periods and nested phases, source-qualified provider arguments and denominators",
+        "future ongoing cancelled and missing campaigns",
+        "strict invalid population period currency source and recovery plan rejection",
+        "direct interactive durable and owned recovery; source failure partial results; explicit optional-format limitations",
+        "equivalent named promotions without Black-Friday-only routing"
       ]
     }
   ]

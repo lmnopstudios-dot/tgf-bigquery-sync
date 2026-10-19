@@ -40,7 +40,7 @@ import { createProposalGenerator } from './oracle/proposals.js';
 import { createProductMappingService, governedDecisionCtes, productFamilyCtes } from './oracle/product-mapping.js';
 import { createCollectionClassificationService } from './oracle/collection-classification.js';
 import { redactError } from './oracle/ui-security.js';
-import { affinityJustified, partialAnswer, requestId, stageOutcome, terminalMessage } from './oracle/request-observability.js';
+import { evidenceValidationResponse, affinityJustified, partialAnswer, requestId, stageOutcome, terminalMessage } from './oracle/request-observability.js';
 import { RequestToolBudget, boundedToolFailure, toolCallSignature } from './oracle/request-tool-budget.js';
 import { evidenceSummary, synthesisFailureKind } from './oracle/evidence-summary.js';
 import {
@@ -70,7 +70,7 @@ import {createGoogleAdsService,executeGoogleAdsToolCall} from './oracle/google-a
 import {createBaselineOverviewService} from './oracle/baseline-overview.js';
 import {createGeneralAnalyticsService} from './oracle/general-analytics.js';
 import {createProductEvidenceReportService} from './oracle/product-report.js';
-import {createHistoricalEventComparisonService} from './oracle/historical-event-comparison.js';
+import {createHistoricalEventDependencies} from './oracle/historical-event-provider.js';
 import {createOracleProviderDependencies} from './oracle/provider-dependencies.js';
 
 const app = express();
@@ -4194,16 +4194,7 @@ const ecommerceBaselineOverview=createBaselineOverviewService({
   orderValues:orderValueService,basketComposition:basketCompositionService,productPrices:productPriceService,
   locationFinance:getSalesByLocation
 });
-const historicalEventComparison=createHistoricalEventComparisonService({
-  knowledgeService,
-  collectEvent:async event=>{
-    const [online_sales,management]=await Promise.all([
-      onlineCountrySalesService({start_date:event.start_date,end_date:event.end_date,currency:null,platform:null}),
-      getEcommerceManagementReport({start_date:event.start_date,end_date:event.end_date})
-    ]);
-    return{online_sales,conversion:management.conversion};
-  }
-});
+const {historicalEventComparison}=createHistoricalEventDependencies({bigquery,project:GOOGLE_PROJECT_ID,knowledgeService});
 const productEvidenceReport=createProductEvidenceReportService({
   getProductPerformance:getShopifyProductPerformance,
   getShopCurrency:async()=>{
@@ -8392,6 +8383,8 @@ Important rules:
     } catch (error) {
       console.error('Agent stage outcome:',stageOutcome({id,stage,startedAt:requestStarted,outcome:'failed',error}));
 
+      const validationFailure=evidenceValidationResponse(error,id);
+      if(validationFailure)return res.status(422).json(validationFailure);
       res.status(500).json({
         success: false,
         code:'ORACLE_AGENT_TERMINAL_FAILURE',

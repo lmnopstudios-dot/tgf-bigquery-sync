@@ -3,7 +3,7 @@ import { retentionIntent } from './cohort-retention.js';
 import { validatePopulationScope, populationScopeIntent } from './population-scope.js';
 import { requestedAttributionOperation } from './requested-operations.js';
 import { messageIntent } from './message-intent.js';
-import { isHistoricalEventComparison } from './historical-event-comparison.js';
+import { isHistoricalEventComparison, historicalEventRequest } from './historical-event-comparison.js';
 import { OPERATION_REQUIREMENTS, requestedAnalyticalOperations, individualOrderQuestion, metricOperations, mergeRequestedOperations } from './requested-operations.js';
 import { orderValueContextPatch } from './order-value-context.js';
 import { validateNumericOperation } from './numeric-distribution.js';
@@ -254,7 +254,7 @@ function transitionContext(existing, message, {now=Date.now(),reportContext=null
     const explicitPlatformComparison=/\b(?:shopify|native shopify)\b[\s\S]*\b(?:woocommerce|woo)\b|\b(?:woocommerce|woo)\b[\s\S]*\bshopify\b/i.test(text)&&/\b(?:compare|comparison|versus|vs\.?|with)\b/i.test(text)&&/\b(?:sales|revenue|orders?)\b/i.test(text);
     if(explicitPlatformComparison){for(const key of ['tool_route','geography','customer_segment','product_ref','report_section','included_periods'])clear.push(key);set.requested_subject='platform_sales';set.analysis_type='finance';set.metrics=['sales','refunds'];set.platform='shopify+woo';set.channel='online';set.channel_breakdown=false;set.comparison_type='explicit_platform_periods';set.filters=['exclude_pos','exclude_matrixify'];}
     const historicalEvent=!excludedBlackFriday&&!set.included_periods&&isHistoricalEventComparison(text);
-    if(historicalEvent){const count=lower.match(/\blast\s+(\d{1,2})\s+(?:black\s+friday\s+)?(?:sales?|years?)\b/);set.event_name='Black Friday';set.event_count=Math.max(1,Math.min(Number(count?.[1]||3),5));set.tool_route='compare_historical_events';set.metrics=['sales','refunds','customers','products','ecommerce_performance'];set.analysis_type='ecommerce';set.channel='online';clear.push('start_date','end_date','requested_end_period','comparison_start_date','comparison_end_date');}
+    if(historicalEvent){const request=historicalEventRequest(text);set.event_name=request.name;set.event_count=request.count;set.requested_subject='sales';set.tool_route='compare_historical_events';set.metrics=['sales'];set.analysis_type='ecommerce';set.channel='online';set.channel_breakdown=false;for(const key of ['start_date','end_date','requested_end_period','comparison_start_date','comparison_end_date','comparison_type','grain','platform','source_store','currencies','geography','entity_query','product_ref','product_report','filters','included_periods','exclusions','requested_operations','numeric_operation','population_scope','campaign_request','native_metrics','dimensions','promotion_context','date_cutoff','partial_period','current_day_included'])clear.push(key);}
     else if(base.tool_route==='compare_historical_events'&&/\blast\s+(\d{1,2})\s+years?\b/i.test(text)){set.event_count=Math.max(1,Math.min(Number(text.match(/\blast\s+(\d{1,2})\s+years?\b/i)[1]),5));}
     const advisory=isStockClearanceAdvisory(text,base);
     if(advisory){set.request_kind='advisory';set.advisory_topic='stock_clearance';}
@@ -323,7 +323,20 @@ function transitionContext(existing, message, {now=Date.now(),reportContext=null
   if(set.tool_route&&set.tool_route!=='export_product_priorities')clear.push('product_report');
   if(set.tool_route&&set.tool_route!==base.tool_route)clear.push('request_detail','requested_operations','numeric_operation','native_metrics','dimensions','time_zone','source_store','ranking_metric','ranking_direction','promotion_context');
   const effectiveClear=clear.filter(key=>!Object.hasOwn(set,key));const next={...base,...set};if(next.analysis_type==='customer_journey'){next.first_order_semantic=next.first_order_semantic||'first_observed_ever';if(next.start_date){next.cohort_entry_start=next.start_date;next.cohort_entry_end=next.end_date;next.observation_end=next.end_date;}}for(const key of effectiveClear) next[key]=emptyAnalysisContext()[key];
-  const promotion=promotionIntent(text);
+  if(next.tool_route==='compare_historical_events'){
+    // Named periods own their population; general product/month and promotion-exclusion
+    // recognizers must not contaminate a fresh named-event request.
+    if(historicalEventRequest(text)){
+      const fresh=emptyAnalysisContext();
+      for(const field of ['start_date','end_date','requested_end_period','grain','comparison_type','comparison_start_date','comparison_end_date','included_periods','exclusions','entity_query','product_ref','product_report','promotion_context','numeric_operation','requested_operations','population_scope','campaign_request','native_metrics','dimensions','source_store','time_zone','filters','geography','platform','currencies','date_cutoff','partial_period','current_day_included','period_issue','location','customer_segment','pending_product_candidates','social_scope','email_report_kind','failed_subject_switch'])next[field]=fresh[field];
+      next.channel=/\b(?:in[ -]?store|POS|all channels)\b/i.test(text)&&!/\b(?:exclude|excluding|without)\s+(?:POS|in[ -]?store)/i.test(text)?'instore':'online';next.channel_breakdown=false;
+      // Explicit unsupported filters remain visible for capability checking.
+      if(/\b(?:shopify|woo(?:commerce)?)\b/i.test(text))next.platform=/\bshopify\b/i.test(text)?'shopify':'woo';
+      if(/\b(?:UK|US|USA|Japan|Japanese|British|American|shipping|destination|returning customers?|new customers?|rings?|pendants?)\b/i.test(text))next.filters=['unsupported_event_population'];
+      next.currencies=[...CURRENCIES].filter(c=>new RegExp(`\\b${c}\\b`,'i').test(text));
+    }
+  }
+  const promotion=next.tool_route==='compare_historical_events'?null:promotionIntent(text);
   if(promotion&&['sales','channel_sales','product_sales'].includes(next.requested_subject))next.promotion_context={query:promotion,treatment:'compare_excluding'};
   if(requestedDimensions(text))next.dimensions=requestedDimensions(text);
   const missing=[];if(next.population_scope&&!next.population_scope.country&&next.population_scope.groups.some(g=>g!=='global'))missing.push('population_scope');if(next.metrics.length&&(!next.start_date||!next.end_date)&&next.tool_route!=='compare_historical_events'&&!['advisory','knowledge_save','policy_definition'].includes(next.request_kind)) {if(!next.start_date)missing.push('start_date');if(!next.end_date)missing.push('end_date');}
