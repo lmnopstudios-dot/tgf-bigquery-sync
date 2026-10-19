@@ -49,7 +49,7 @@ for(const mode of ['direct','interactive','durable'])test(`retention uses produc
  const f=acceptanceFixture({retention:true}),h=await acceptanceServer(f,{durable:mode==='durable'});t.after(h.close);
  const r=mode==='direct'?await (await fetch(h.origin+'/agent',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({message:question})})).json():await h.submit(question);
  assert.equal(r.evidence.kind,'governed_cohort_retention');assert.equal(r.partial,true);assert.match(r.answer,/75\.00%/);assert.match(r.answer,/Show details/);assert.match(r.answer,/first-ever purchases are not established/);
- assert.equal(f.calls.length,2);assert.equal(f.calls[0].provider,'retention');assert.equal(f.queries[0].params.first_order_semantic,'first_observed_ever');assert.equal(f.queries[0].params.subsequent_channel,'Online');
+ assert.equal(f.calls.length,3);assert.equal(f.calls[0].provider,'retention');assert.equal(f.queries[0].params.first_order_semantic,'first_observed_ever');assert.equal(f.queries[0].params.subsequent_channel,'Online');
  const raw=JSON.parse(JSON.stringify(r));assert.equal(deliverOracleResult(raw,r.analysis_context).delivery.status,'partial');
  raw.evidence.rows[0].repeat_rate=.99;assert.throws(()=>assertEvidenceAgreement(r.analysis_context,raw.evidence),e=>e.code==='EVIDENCE_SCOPE_MISMATCH');
  if(mode==='durable'){const count=f.calls.length,recovered=await h.get('/jobs/'+r.job_id);assert.equal(recovered.answer,r.answer);assert.equal(f.calls.length,count);}
@@ -102,7 +102,7 @@ for(const mode of ['direct','interactive','durable'])test(`production pending re
  else{await send(production.replace(' from the last 3 years',''));r=await send('Last 3 years.');}
  assert.equal(r.analysis_context.journey_group_by,'entry_product');assert.equal(r.analysis_context.channel_breakdown,true);assert.equal(r.analysis_context.sort,'returning_customers_desc');assert.ok(r.evidence.rows.length);
  const before=f.calls.length,exported=await send('Export that to Excel.',r.analysis_context);
- assert.ok(exported.evidence.rows.length);assert.match(exported.answer,/cohort export or chart is not implemented/);assert.equal(exported.analysis_context.journey_group_by,'entry_product');assert.equal(f.calls.length,mode==='direct'?before+2:before);
+ assert.ok(exported.evidence.rows.length);assert.match(exported.answer,/cohort export or chart is not implemented/);assert.equal(exported.analysis_context.journey_group_by,'entry_product');assert.equal(f.calls.length,mode==='direct'?before+3:before);
 });
 test('piece cohort SQL uses mature fixed windows, distinct entry membership and unconditional later-purchase outcome',()=>{
  const sql=customerJourneySql('fixture','retention_product_windows');

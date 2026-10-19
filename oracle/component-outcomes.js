@@ -9,6 +9,7 @@ export function componentOutcomes(context,result,{artifactBase='/api/oracle/expo
     const executed=e?.components?.find(c=>c.operation===operation);
     return {component:operation,status:executed?({supported:'delivered',conditional:'partially_delivered',unavailable:'unsupported',blocked:'unsupported'}[executed.status]||executed.status):result?.analysis_unavailable?'unsupported':'failed',detail:executed?.detail||executed?.blocker||'No compatible executed component was recorded.'};
   });
+  if(e?.kind==='governed_cohort_retention')for(const item of e.source_outcomes||[])outcomes.push({component:`cohort_${item.source_store}_${item.group}`,status:item.state==='fulfilled'?'delivered':item.state==='not_attempted'?'not_attempted':'failed',detail:item.status,request_id:e.request_id});
   const requested=context?.request_detail;
   if(requested&&e?.kind==='governed_basket_composition'){
     const sections=requested.subset?.exclude_sale?e.sections.filter(s=>s.label==='Exclusion comparison'):e.sections;

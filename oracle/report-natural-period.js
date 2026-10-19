@@ -3,17 +3,6 @@ const iso=value=>/^\d{4}-\d{2}-\d{2}$/.test(String(value||''))?value:null;
 function parseReportPeriod(text, now){
   const lower=text.toLowerCase().replace(/\b(?:exclude|excluding|without)\b[^.;\n]*/g,clause=>/20\d{2}-\d{2}-\d{2}\s+(?:to|through)|\d{1,2}\s*[–—-]\s*\d{1,2}\s+[a-z]+/.test(clause)?'':clause),localDay=new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/London',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(now)),today=new Date(`${localDay}T00:00:00Z`),todayIso=localDay;
   const counts={one:1,two:2,three:3,four:4,five:5,six:6,seven:7,eight:8,nine:9,ten:10};
-  const relative=lower.match(/\b(?:last|past)\s+(\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+(completed\s+)?(days?|months?)\b/);
-  if(relative){
-    const count=counts[relative[1]]||Number(relative[1]),completed=Boolean(relative[2]);
-    if(!Number.isInteger(count)||count<1||count>(relative[3].startsWith('day')?3660:36))return {invalid:true};
-    if(relative[3].startsWith('day')){
-      const end=new Date(+today-(completed?86400000:0)),start=new Date(+end-(count-1)*86400000);
-      return {start_date:start.toISOString().slice(0,10),end_date:end.toISOString().slice(0,10),requested_end_period:end.toISOString().slice(0,10),partial_period:!completed};
-    }
-    const start=new Date(Date.UTC(today.getUTCFullYear(),today.getUTCMonth()-count+(completed?0:1),1)),end=completed?new Date(Date.UTC(today.getUTCFullYear(),today.getUTCMonth(),0)):today;
-    return {start_date:start.toISOString().slice(0,10),end_date:end.toISOString().slice(0,10),requested_end_period:completed?end.toISOString().slice(0,7):'now',partial_period:!completed};
-  }
   // Rolling windows include the runtime London day, matching governed
   // month-to-date cutoffs. Calendar weeks are completed Monday–Sunday.
   const shift=days=>new Date(+today+days*86400000).toISOString().slice(0,10);
@@ -33,6 +22,17 @@ function parseReportPeriod(text, now){
   const completed=reportText.match(new RegExp(`\\b(\\d{1,2})\\s+(${monthNames})\\s+(20\\d{2})\\s+(?:to|through)\\s+(?:yesterday|(?:the )?latest completed day)\\b`));
   if(completed)return window(namedDate(completed[1],completed[2],completed[3]),shift(-1));
   const explicitIso=lower.match(/\b(20\d{2}-\d{2}-\d{2})\s*(?:to|through|–|—)\s*(20\d{2}-\d{2}-\d{2})\b/);if(explicitIso)return{start_date:explicitIso[1],end_date:explicitIso[2],partial_period:false};
+  const relative=lower.match(/\b(?:last|past)\s+(\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+(completed\s+)?(days?|months?)\b/);
+  if(relative){
+    const count=counts[relative[1]]||Number(relative[1]),completed=Boolean(relative[2])||relative[3].startsWith('day')&&/\b(?:through|to|until)\s+(?:yesterday|(?:the )?latest completed day)\b/.test(lower);
+    if(!Number.isInteger(count)||count<1||count>(relative[3].startsWith('day')?3660:36))return {invalid:true};
+    if(relative[3].startsWith('day')){
+      const end=new Date(+today-(completed?86400000:0)),start=new Date(+end-(count-1)*86400000);
+      return {start_date:start.toISOString().slice(0,10),end_date:end.toISOString().slice(0,10),requested_end_period:end.toISOString().slice(0,10),partial_period:!completed};
+    }
+    const start=new Date(Date.UTC(today.getUTCFullYear(),today.getUTCMonth()-count+(completed?0:1),1)),end=completed?new Date(Date.UTC(today.getUTCFullYear(),today.getUTCMonth(),0)):today;
+    return {start_date:start.toISOString().slice(0,10),end_date:end.toISOString().slice(0,10),requested_end_period:completed?end.toISOString().slice(0,7):'now',partial_period:!completed};
+  }
   const namedDay=lower.match(/\b(\d{1,2})\s+(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+(20\d{2})\b/);if(namedDay){const d=`${namedDay[3]}-${String(MONTHS[namedDay[2]]).padStart(2,'0')}-${namedDay[1].padStart(2,'0')}`;if(!Number.isNaN(Date.parse(`${d}T00:00:00Z`))&&new Date(`${d}T00:00:00Z`).toISOString().slice(0,10)===d)return window(d,todayIso,true);return {invalid:true};}
   const singleIso=lower.match(/\b(20\d{2}-\d{2}-\d{2})\b/);if(singleIso){if(!Number.isNaN(Date.parse(`${singleIso[1]}T00:00:00Z`))&&new Date(`${singleIso[1]}T00:00:00Z`).toISOString().slice(0,10)===singleIso[1])return window(singleIso[1],todayIso,true);return {invalid:true};}
   if(/\bthis year(?:'s)?\b/.test(lower)&&/\blast year(?:'s)?\b/.test(lower)){const y=today.getUTCFullYear(),priorEnd=new Date(Date.UTC(y-1,today.getUTCMonth(),today.getUTCDate())).toISOString().slice(0,10);return{start_date:`${y}-01-01`,end_date:todayIso,requested_end_period:String(y),partial_period:true,comparison_type:'matching_elapsed_year_on_year',comparison_start_date:`${y-1}-01-01`,comparison_end_date:priorEnd};}
@@ -70,8 +70,16 @@ function parseReportPeriod(text, now){
 
 export function reportPeriodResolution(text, now=Date.now(), {referenceYear=null}={}){
   if(/^(?:(?:just|only|for|in|during|what about|how about)\s+)?(?:january|february|march|april|may|june|july|august|september|october|november|december)[.!]?$/i.test(text.trim()))text=`${text.trim().replace(/[.!]$/,'')} ${referenceYear||new Intl.DateTimeFormat('en',{year:'numeric',timeZone:'Europe/London'}).format(new Date(now))}`;
-  const resolved=parseReportPeriod(text,now);
-  if(resolved&&!resolved.invalid&&/\b(?:through|to|until) (?:the )?latest completed day\b/i.test(text)){
+  const cutoffMatch=text.match(/\b(?:through|to|until)\s+(20\d{2}-\d{2}-\d{2})\b/i),relativeWindow=/\b(?:last|past)\s+(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+(?:days?|months?|years?)\b/i.test(text);
+  let resolved;
+  if(cutoffMatch&&relativeWindow&&!/20\d{2}-\d{2}-\d{2}\s*(?:to|through|–|—)\s*20\d{2}-\d{2}-\d{2}/.test(text)){
+    const end=cutoffMatch[1],anchor=Date.parse(end+'T12:00:00Z')+(/\byears?\b/i.test(text)?86400000:0);
+    if(!Number.isFinite(anchor))return {period:null,invalid:true};
+    resolved=parseReportPeriod(text.replace(cutoffMatch[0],''),anchor);
+    if(resolved){resolved.end_date=end;resolved.requested_end_period=end;resolved.partial_period=false;}
+  }else resolved=parseReportPeriod(text,now);
+  const explicitEnd=Boolean(cutoffMatch)||/\b20\d{2}-\d{2}-\d{2}\s*(?:to|through|–|—)\s*20\d{2}-\d{2}-\d{2}\b|report end date:|\b\d{1,2}\s+[a-z]+\s+20\d{2}\s*(?:to|through|–|—)\s*\d{1,2}\s+[a-z]+\s+20\d{2}\b/i.test(text);
+  if(resolved&&!resolved.invalid&&!explicitEnd&&/\b(?:through|to|until)\s+(?:yesterday|(?:the )?latest completed day)\b/i.test(text)){
     const today=new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/London',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(now));
     resolved.end_date=new Date(Date.parse(today+'T00:00:00Z')-86400000).toISOString().slice(0,10);
     resolved.requested_end_period=resolved.end_date;resolved.partial_period=false;

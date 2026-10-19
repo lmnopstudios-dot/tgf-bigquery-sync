@@ -35,7 +35,7 @@ try{
         }
         if(turn.check==='visitor-monthly'){if(turn.grain==='month'){assert.match(answer,/Month/);assert.match(answer,/completed-checkout sessions/);}if(turn.groups.includes('rest_of_world'))assert.match(answer,/unknown\/blank\/ZZ/);}
         if(turn.check==='retention-incident'){
-          assert.match(answer,/Beta has the highest observed repeat purchase rate at 90 days/);assert.match(answer,/Pieces within Alpha/);assert.match(answer,/33.33%/);assert.equal(f.calls.length,offset+4);
+          assert.match(answer,/Beta has the highest observed repeat purchase rate at 90 days/);assert.match(answer,/Pieces within Alpha/);assert.match(answer,/33.33%/);assert.equal(f.calls.length,offset+6);
           const last=page.locator('.analytical-answer').last();assert.equal(await last.locator('details').count(),1);assert.equal(await last.locator('summary').innerText(),'Show details');
           assert.doesNotMatch(answer,/<details>|<summary>|woo:ww:|UTC order dates/);
           await last.locator('summary').click();assert.match(await last.innerText(),/8 eligible identified first-observed/);assert.match(await last.innerText(),/1 generic-only/);
@@ -62,6 +62,20 @@ try{
         if(turn.check==='customers'){assert.match(answer,/Customer figures/);assert.match(answer,/10/);assert.match(answer,/monthly counts cannot be added/);assert.match(answer,/1 September 2026/);}
       }
     }
+    // The unchanged provider incident must survive visible durable delivery and refresh.
+    f.state.retention_events=true;f.state.retention=true;
+    await page.locator('#new-question').click();
+    const incidentQuestion=readFileSync(new URL('../test/fixtures/oracle-cohort-provider-question.txt',import.meta.url),'utf8').trim(),incidentOffset=f.calls.length;
+    await page.locator('#message').fill(incidentQuestion);await page.locator('#send').click();
+    await page.waitForFunction(()=>!document.querySelector('#send').disabled);
+    const incidentAnswer=page.locator('.analytical-answer').last();
+    assert.match(await incidentAnswer.innerText(),/Beta has the highest observed repeat purchase rate at 90/);
+    assert.match(await incidentAnswer.innerText(),/33.33%/);assert.match(await incidentAnswer.innerText(),/Small/);
+    assert.equal(await incidentAnswer.locator('details').count(),1);assert.equal(f.calls.length,incidentOffset+3);
+    assert.ok(f.calls.slice(incidentOffset).every(c=>c.args.observation_end==='2026-10-13'&&c.args.entry_channel===null));
+    const incidentCount=f.calls.length;await page.reload();await page.waitForFunction(()=>!document.querySelector('#send').disabled&&document.querySelector('.analytical-answer'));
+    assert.match(await page.locator('.analytical-answer').last().innerText(),/33.33%/);assert.equal(f.calls.length,incidentCount);
+    f.state.retention_events=false;
     await page.locator('#new-question').click();
     for(const [kind,question] of Object.entries(multipart)){
       await page.locator('#message').fill(question);await page.locator('#send').click();

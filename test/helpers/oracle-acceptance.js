@@ -17,7 +17,7 @@ import { transitionAnalysisContext } from '../../oracle/analysis-context.js';
 export const NOW=Date.parse('2026-10-14T12:00:00Z');
 export function acceptanceFixture({fail_start=null,campaigns=false,country_conversion=false,retention=false,retention_events=false,named_events=false,now=NOW}={}){
   const exportStore=createMemoryExportStore();
-  const calls=[],sql=[],queries=[],state={fail_start,campaigns,country_conversion,retention,retention_events,named_events};
+  const calls=[],sql=[],queries=[],wireQueries=[],state={fail_start,campaigns,country_conversion,retention,retention_events,named_events};
   const native=createShopifySalesKpiService({getShop:async()=>({id:'gid://shopify/Shop/fixture',currencyCode:'GBP',ianaTimezone:'Europe/London'}),runReport:async query=>{
     sql.push(query);const [,start_date,end_date]=query.match(/SINCE (\S+) UNTIL (\S+)/);
     calls.push({provider:'sales',args:{start_date,end_date,sales_channel:query.includes("'Online Store'")?'Online Store':'Point of Sale'}});
@@ -25,6 +25,8 @@ export function acceptanceFixture({fail_start=null,campaigns=false,country_conve
     return [{orders:4,gross_sales:250,discounts:20,returns:30,net_sales:200,total_sales:210,average_order_value:47,net_items_sold:10}];
   }});
   const bigquery={dataset:()=>({getMetadata:async()=>[{location:'US'}]}),query:async query=>{
+    wireQueries.push(query);
+    if(query.query.includes('retention_members'))query={...query,params:Object.fromEntries(Object.entries(query.params||{}).map(([k,v])=>[k,v?.constructor?.name==='BigQueryDate'?v.value:v]))};
     queries.push(query);
     if(query.query.includes('WITH woo_geography')){
       calls.push({provider:'events',args:query.params});
@@ -33,7 +35,7 @@ export function acceptanceFixture({fail_start=null,campaigns=false,country_conve
       return [[row,{...row,country_code:'US'}]];
     }
     assert.match(query.query,/SELECT/);assert.doesNotMatch(query.query,/INSERT|UPDATE|DELETE|MERGE|CREATE/);
-    if(query.query.includes('retention_members')){calls.push({provider:'retention',args:query.params});if(state.fail_retention_source===query.params.entry_source)throw Object.assign(Error('private upstream failure'),{code:'FIXTURE_READ_FAILED'});if(state.retention_events)return [fixtureRetention(state.retention_events===true?retentionEvents:state.retention_events,query.params,{pieces:query.query.includes('entry_product_title FROM entry_matches')})];return [state.retention?structuredClone(cohortRows).filter(r=>!query.params.entry_source||r.source_platform===query.params.entry_source).map(r=>query.query.includes('entry_product_title FROM entry_matches')?{...r,entry_product_ref:`${r.source_platform}:${r.source_store}:${r.collaboration_name}`,entry_product_title:r.collaboration_name+' piece'}:r):[]];}
+    if(query.query.includes('retention_members')){const store=query.query.includes('metorik_uk.orders')?'ww':query.query.includes('metorik_us.orders')?'usd':'shopify';calls.push({provider:'retention',args:query.params});if(state.fail_retention_source===query.params.entry_source||state.fail_retention_stores?.includes(store))throw Object.assign(Error('private upstream failure'),{code:'FIXTURE_READ_FAILED'});if(state.retention_events)return [fixtureRetention((state.retention_events===true?retentionEvents:state.retention_events).filter(e=>e.source_store===store),query.params,{pieces:query.query.includes('entry_product_title FROM entry_matches')})];return [state.retention?structuredClone(cohortRows).filter(r=>(!query.params.entry_source||r.source_platform===query.params.entry_source)&&r.source_store===store).map(r=>query.query.includes('entry_product_title FROM entry_matches')?{...r,entry_product_ref:`${r.source_platform}:${r.source_store}:${r.collaboration_name}`,entry_product_title:r.collaboration_name+' piece'}:r):[]];}
     if(/INFORMATION_SCHEMA|grouped_lines|represented_location_orders|GROUP BY 1,2,3/.test(query.query)){
       calls.push({provider:'baskets',args:query.params});
       if(query.query.includes('INFORMATION_SCHEMA'))return [Object.entries(BASKET_LINE_COLUMNS).map(([column_name,data_type])=>({column_name,data_type}))];
@@ -75,7 +77,7 @@ export function acceptanceFixture({fail_start=null,campaigns=false,country_conve
     onlineCountrySales:async args=>{calls.push({provider:'countries',args});return {rows:[{country_code:'GB',currency:'GBP',orders:4,operational_net_sales:200,sources:[{source_platform:'shopify',orders:4,operational_net_sales:200}],eligible_orders:5,unknown_country_orders:1,eligible_sales:240,unknown_country_sales:40}]};},
     customerReport:async args=>{calls.push({provider:'customers',args});return {overall:{customers:10,new_customers:7,returning_customers:4,orders:15},applied_channel_predicate:"sales_channel = 'Online Store'",coverage:{complete:true},source_collected_at:'2026-10-14T11:00:00Z'};}
   })});
-  return {baseline,calls,sql,queries,state,exportStore};
+  return {baseline,calls,sql,queries,wireQueries,state,exportStore};
 }
 export async function acceptanceServer(f,{durable=false,now=NOW}={}){
   const app=express(),jobs=createMemoryAnalysisJobStore();
@@ -130,17 +132,17 @@ export function assertAcceptanceTurn(turn,result,f,callOffset=0){
     const coverage=result.evidence.source.coverage;assert.equal(coverage.categories.length,coverage.requested_days);assert.equal(Object.values(coverage.category_counts).reduce((a,b)=>a+b,0),coverage.requested_days);
   }
   if(turn.check==='retention-incident'){
-    assert.equal(c.journey_group_by,'collaboration_piece');assert.equal(c.time_zone,'Europe/London');assert.equal(c.current_day_included,false);assert.equal(calls.length,4);
+    assert.equal(c.journey_group_by,'collaboration_piece');assert.equal(c.time_zone,'Europe/London');assert.equal(c.current_day_included,false);assert.equal(calls.length,6);
     assert.equal(result.evidence.ranking_window,90);assert.match(result.answer,/Beta\*\* has the highest observed repeat purchase rate at 90/);assert.match(result.answer,/Pieces within Alpha/);
     const alpha=result.evidence.rows.find(r=>r.source_platform==='woo'&&r.collaboration_name==='alpha'&&!r.entry_product_ref&&r.window_days===90);
     assert.deepEqual([alpha.cohort_customers,alpha.mature_customers,alpha.repeat_customers],[4,3,1]);assert.equal(alpha.repeat_rate,1/3);
-    assert.deepEqual(calls.map(c=>c.args.entry_source),['woo','woo','shopify','shopify']);assert.ok(calls.every(c=>c.args.time_zone==='Europe/London'&&c.args.observation_end===turn.dates[1]&&c.args.ranking_window===90));
+    assert.deepEqual(calls.map(c=>c.args.entry_source),['woo','woo','woo','woo','shopify','shopify']);assert.ok(calls.every(c=>c.args.time_zone==='Europe/London'&&c.args.observation_end===turn.dates[1]&&c.args.ranking_window===90));
     const coverage=result.evidence.coverage.classification.find(c=>c.source_platform==='woo');assert.deepEqual([coverage.eligible_first_customers,coverage.named_customers,coverage.generic_only_customers,coverage.unknown_customers],[8,5,1,2]);
   }
   if(turn.check==='retention'){assert.equal(result.evidence.kind,'governed_cohort_retention');assert.match(result.answer,/75\.00%/);assert.match(result.answer,/50\.00%/);assert.equal(result.partial,true);assert.ok(calls.every(c=>c.provider==='retention'));}
   if(turn.pieces){
     assert.equal(c.journey_group_by,'entry_product');assert.equal(c.channel,null);assert.equal(c.channel_breakdown,true);assert.equal(c.sort,'returning_customers_desc');
-    assert.equal(calls.length,2);assert.deepEqual(calls.map(x=>x.args.entry_source),['woo','shopify']);
+    assert.equal(calls.length,3);assert.deepEqual(calls.map(x=>x.args.entry_source),['woo','woo','shopify']);
     for(const call of calls){assert.equal(call.args.entry_channel,null);assert.equal(call.args.subsequent_channel,null);assert.equal(call.args.cohort_entry_start,c.start_date);assert.equal(call.args.cohort_entry_end,c.end_date);assert.equal(call.args.first_order_semantic,'first_observed_ever');assert.equal(call.args.entry_classification,'collaboration');assert.equal(call.args.retention_sort,'returning_customers_desc');}
     assert.ok(result.evidence.rows.every(r=>r.entry_product_ref&&r.entry_product));assert.match(result.answer,/Square/);assert.match(result.answer,/cannot be evaluated are unknown/);assert.match(result.answer,/Left-censoring/);
   }

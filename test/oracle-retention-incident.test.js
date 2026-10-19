@@ -13,8 +13,8 @@ function verify(r,f){
  assert.equal(r.evidence.kind,'governed_cohort_retention');assert.equal(r.analysis_context.journey_group_by,'collaboration_piece');
  assert.deepEqual([r.analysis_context.start_date,r.analysis_context.end_date],['2023-10-19','2026-10-18']);
  assert.equal(r.analysis_context.current_day_included,false);assert.equal(r.evidence.definition.time_zone,'Europe/London');
- assert.equal(r.evidence.ranking_window,90);assert.equal(f.calls.length,4);
- assert.deepEqual(f.calls.map(c=>c.args.entry_source),['woo','woo','shopify','shopify']);
+ assert.equal(r.evidence.ranking_window,90);assert.equal(f.calls.length,6);
+ assert.deepEqual(f.calls.map(c=>c.args.entry_source),['woo','woo','woo','woo','shopify','shopify']);
  for(const q of f.queries){assert.equal(q.params.time_zone,'Europe/London');assert.equal(q.params.ranking_window,90);assert.equal(q.params.observation_end,'2026-10-18');assert.equal(q.params.first_order_semantic,'first_observed_ever');assert.equal(q.params.entry_channel,null);assert.equal(q.params.subsequent_channel,null);assert.equal(q.maximumBytesBilled,'20000000000');assert.doesNotMatch(q.query,q.params.entry_source==='woo'?/shopify_data\./:/metorik_uk\.|metorik_us\./);}
  const row=(name,window,piece)=>r.evidence.rows.find(x=>x.source_platform==='woo'&&x.collaboration_name===name&&x.window_days===window&&(piece?x.entry_product_ref?.endsWith(':'+piece):!x.entry_product_ref));
  assert.deepEqual([row('alpha',90).cohort_customers,row('alpha',90).mature_customers,row('alpha',90).repeat_customers],[4,3,1]);
@@ -58,8 +58,8 @@ test('scope proof rejects generic competitors, wrong window/timezone, invalid se
 });
 test('partial platform/group failure retains independently supported calculations',async()=>{
  const c=context(),definition=retentionDefinition(c),calls=[];
- const provider={analyzeCustomerJourney:async input=>{calls.push(input);if(input.cohort.entry_source==='woo'&&input.group_by[0]==='retention_piece_windows')throw Error('private error');const results=fixtureRetention(retentionEvents,{...input,entry_source:input.cohort.entry_source},{pieces:input.group_by[0]!=='retention_windows'});return {results,classification_coverage:results[0]?.coverage};}};
- const r=await answerCohortRetention({context:c,provider});assert.ok(r.evidence.rows.length);assert.equal(calls.length,4);assert.deepEqual(r.evidence.coverage.failed_sources,['woo/retention_piece_windows']);assert.match(r.answer,/Source evidence unavailable/);assert.doesNotMatch(r.answer,/private error/);
+ const provider={analyzeCustomerJourney:async (input,{sourceStore})=>{calls.push(input);if(input.cohort.entry_source==='woo'&&input.group_by[0]==='retention_piece_windows')throw Error('private error');const results=fixtureRetention(retentionEvents.filter(e=>e.source_store===sourceStore),{...input,entry_source:input.cohort.entry_source},{pieces:input.group_by[0]!=='retention_windows'});return {results,classification_coverage:results[0]?.coverage};}};
+ const r=await answerCohortRetention({context:c,provider});assert.ok(r.evidence.rows.length);assert.equal(calls.length,6);assert.deepEqual(r.evidence.coverage.failed_sources,['woo/retention_piece_windows']);assert.match(r.answer,/Source evidence unavailable/);assert.doesNotMatch(r.answer,/private error/);
  assert.equal(definition.observation_end,'2026-10-18');
 });
 test('calendar maturity, London cutoff, first-observed prior history, and unknown versus core are explicit',()=>{
@@ -81,7 +81,7 @@ test('requested ranking window survives secondary measures and presentation-only
 });
 test('coverage-only provider results survive empty named populations and invalid coverage never certifies a source',async()=>{
  const c=context(),coverage={source_platform:'woo',source_store:'ww',eligible_first_customers:2,named_customers:0,generic_only_customers:1,unknown_customers:1,identified_orders:2,anonymous_orders:0,migrated_orders:0,excluded_orders:0,history_start:'2024-01-01',history_end:'2025-01-01'};
- const provider={analyzeCustomerJourney:async d=>({results:[],classification_coverage:d.cohort.entry_source==='woo'?[coverage]:[]})};
+ const provider={analyzeCustomerJourney:async (d,{sourceStore})=>({results:[],classification_coverage:sourceStore==='ww'?[coverage]:[]})};
  const r=await answerCohortRetention({context:c,provider});assert.equal(r.analysis_unavailable,true);assert.equal(r.evidence.coverage.classification[0].generic_only_customers,1);assert.match(r.answer,/does not establish zero customers/);
  const f=acceptanceFixture({retention:true,now});f.state.retention_events=true;const supported=await executeGovernedAgentAnalysis({message:RETENTION_REQUEST,baselineOverview:f.baseline,now});
  supported.evidence.coverage.classification[0].named_customers=999;assert.throws(()=>assertEvidenceAgreement(supported.analysis_context,supported.evidence),{code:'EVIDENCE_SCOPE_MISMATCH'});
