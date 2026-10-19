@@ -15,9 +15,9 @@ const now=Date.parse('2026-10-19T12:00:00Z');let q;
 const deps=createOracleProviderDependencies({project:'fixture',bigquery:{query:async x=>{q=x;return [[]];}}});
 const c=transitionAnalysisContext(null,'Rank collaborations by repeat purchase rate online in the last 3 years.',{now}).context;
 const d=retentionDefinition(c);await deps.customerJourney.analyzeCustomerJourney({...d,cohort:{...d.cohort,entry_source:'woo'}},{sourceStore:'ww'});
-const retention=q;await deps.customerJourney.analyzeCustomerJourney({...d,cohort:{...d.cohort,entry_source:'woo'},group_by:['downstream_product'],subsequent:{...d.subsequent,product_classification:'collaboration'}},{sourceStore:'ww'});const downstream=q;await deps.customerJourney.analyzeCustomerJourney({...d,cohort:{...d.cohort,entry_source:'shopify'}},{sourceStore:'shopify'});const shopify=q;
+const retention=q;await deps.customerJourney.analyzeCustomerJourney({...d,cohort:{...d.cohort,entry_source:'woo'},group_by:['retention_piece_windows']},{sourceStore:'ww'});const pieces=q;await deps.customerJourney.analyzeCustomerJourney({...d,cohort:{...d.cohort,entry_source:'woo'},group_by:['downstream_product'],subsequent:{...d.subsequent,product_classification:'collaboration'}},{sourceStore:'ww'});const downstream=q;await deps.customerJourney.analyzeCustomerJourney({...d,cohort:{...d.cohort,entry_source:'shopify'}},{sourceStore:'shopify'});const shopify=q;
 const diagnostics={};for(const stage of ['gaps','identity','history','keys','first-orders','subsequent','members','aggregation','full'])diagnostics[stage]=await classificationDiagnosticOptions({project:'fixture',source:'woo',store:'ww',stage,now});diagnostics.catalogue=await classificationDiagnosticOptions({project:'fixture',source:'shopify',store:'shopify',stage:'catalogue',now});
-console.log(JSON.stringify({diagnostics,shopify,downstream,shared:'WITH '+classificationReaderCtes('fixture')+' SELECT * FROM cr_resolved',retention,stages:await classificationDiagnosticOptions({project:'fixture',source:'woo',store:'ww',stage:'stages',now})}));
+console.log(JSON.stringify({diagnostics,pieces,shopify,downstream,shared:'WITH '+classificationReaderCtes('fixture')+' SELECT * FROM cr_resolved',retention,stages:await classificationDiagnosticOptions({project:'fixture',source:'woo',store:'ww',stage:'stages',now})}));
 """
 queries=json.loads(subprocess.check_output(['node','--input-type=module','-e',node],text=True))
 c=duckdb.connect();c.execute("ATTACH ':memory:' AS fixture")
@@ -63,11 +63,13 @@ stages=run(queries['stages']);counts={r['collaboration_state']:int(r['product_li
 assert counts=={'named':3,'classification_absent':2,'generic_only':1,'conflicting':2,'product_identity_unmatched':1},counts
 def assert_previous_equivalent(options):
  previous=dict(options)
- previous['query']=options['query'].replace('retention_with_medians AS (\n    SELECT *,PERCENTILE_CONT', 'retention_medians AS (\n    SELECT DISTINCT source_platform,source_store,collaboration_name,window_days,PERCENTILE_CONT').replace('FROM retention_with_medians GROUP BY', 'FROM retention_members JOIN retention_medians USING(source_platform,source_store,collaboration_name,window_days) GROUP BY')
+ keys='source_platform,source_store,collaboration_name'+(',entry_product_ref' if 'MIN(entry_product_title) entry_product_title' in options['query'] else '')
+ previous['query']=options['query'].replace('retention_with_medians AS (\n    SELECT *,PERCENTILE_CONT', 'retention_medians AS (\n    SELECT DISTINCT '+keys+',window_days,PERCENTILE_CONT').replace('FROM retention_with_medians GROUP BY', 'FROM retention_members JOIN retention_medians USING('+keys+',window_days) GROUP BY')
  assert previous['query'] != options['query']
  assert run(previous)==run(options), 'Previous and improved relational results differ'
 
 assert_previous_equivalent(queries['retention'])
+assert_previous_equivalent(queries['pieces'])
 rows=run(queries['retention'])
 a=next(r for r in rows if r['collaboration_name']=='alpha' and r['window_days']==90)
 b=next(r for r in rows if r['collaboration_name']=='beta' and r['window_days']==180)
