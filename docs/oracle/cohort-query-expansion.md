@@ -47,3 +47,5 @@ Compare successful stage counts and final cohort rows with the prior revision at
 BigQuery attempt: dry-run submission rejected HTTP 403 after 109 ms, no successful SQL validation and no actual execution. This is an access failure, not a query runtime or production improvement measurement.
 
 Synthetic relational validation executes the generated SQL after BigQuery-to-DuckDB translation. It compares complete old/new Woo and Shopify result rows and independently asserts known mature denominators, repeats and classifications: alpha 90 days 1/1 mature (two entries including an immature entry); beta 90 days 0/1 and 180 days 1/1. It also executes every new probe. These are fixtures, not production counts or timings. BigQuery validation remains pending the bounded Render checks.
+
+Local gates: acceptance 535/535 passed; browser acceptance passed all 21 conversations on desktop/mobile with durable refresh. The relational comparison also covers piece cohort grouping. Initial sandbox runs could not bind localhost; the gates passed with network permission for their local test servers.
