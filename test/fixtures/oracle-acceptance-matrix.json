@@ -339,7 +339,8 @@
             "2025-12-31"
           ],
           "provider": "retention",
-          "check": "retention"
+          "check": "retention",
+          "provider_count": 2
         }
       ]
     },
@@ -519,6 +520,52 @@
           "check": "retention",
           "pieces": true,
           "provider_count": 2
+        }
+      ]
+    },
+    {
+      "id": "retention-end-to-end-fresh",
+      "retention": true,
+      "retention_events": true,
+      "turns": [
+        {
+          "question": "Which TGF collaborations bring customers back after their first purchase?\nAnalyse customers whose first-ever purchase was during the last three years through the latest completed day, including online and in-store purchases where governed evidence supports them.\nGroup by collaboration first, then show the strongest individual pieces within each collaboration.\nShow first-purchase customer counts, mature 90-day and 180-day denominators, repeat customers and rates, median days to second purchase, and whether the second purchase was the same collaboration, another collaboration or the core range.\nRank primarily by 90-day repeat-purchase rate. Disclose small samples, history and customer-linkage limitations. Preserve supported results if charts or exports are unavailable.",
+          "subject": "customer_journey",
+          "dates": [
+            "2023-10-14",
+            "2026-10-13"
+          ],
+          "provider": "retention",
+          "check": "retention-incident",
+          "provider_count": 4
+        }
+      ]
+    },
+    {
+      "id": "retention-end-to-end-after-sales",
+      "retention": true,
+      "retention_events": true,
+      "turns": [
+        {
+          "question": "Show online sales last month.",
+          "subject": "sales",
+          "dates": [
+            "2026-09-01",
+            "2026-09-30"
+          ],
+          "provider": "sales",
+          "check": "sales"
+        },
+        {
+          "question": "Which TGF collaborations bring customers back after their first purchase?\nAnalyse customers whose first-ever purchase was during the last three years through the latest completed day, including online and in-store purchases where governed evidence supports them.\nGroup by collaboration first, then show the strongest individual pieces within each collaboration.\nShow first-purchase customer counts, mature 90-day and 180-day denominators, repeat customers and rates, median days to second purchase, and whether the second purchase was the same collaboration, another collaboration or the core range.\nRank primarily by 90-day repeat-purchase rate. Disclose small samples, history and customer-linkage limitations. Preserve supported results if charts or exports are unavailable.",
+          "subject": "customer_journey",
+          "dates": [
+            "2023-10-14",
+            "2026-10-13"
+          ],
+          "provider": "retention",
+          "check": "retention-incident",
+          "provider_count": 4
         }
       ]
     }
@@ -852,6 +899,16 @@
           "Show aggregates only.",
           "Export supporting tables."
         ]
+      ]
+    },
+    {
+      "id": "retention-incident-calculations-and-delivery",
+      "file": "test/oracle-retention-incident.test.js",
+      "covers": [
+        "unchanged request fresh and after unrelated context",
+        "actual event membership and mature denominators",
+        "generic membership, second-order classifications, requested ranking",
+        "direct interactive durable recovery and optional-output partial delivery"
       ]
     }
   ]

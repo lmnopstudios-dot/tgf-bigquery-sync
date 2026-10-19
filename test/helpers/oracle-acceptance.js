@@ -1,3 +1,4 @@
+import { fixtureRetention,retentionEvents } from './retention-events.js';
 import { createMemoryExportStore } from '../../oracle/product-priority-storage.js';
 import { cohortRows } from './cohort-retention-fixture.js';
 import { population } from './basket-fixture.js';
@@ -13,9 +14,9 @@ import { createMemoryAnalysisJobStore } from '../../oracle/analysis-jobs.js';
 import { executeGovernedAgentAnalysis } from '../../oracle/analysis-route-dispatcher.js';
 import { transitionAnalysisContext } from '../../oracle/analysis-context.js';
 export const NOW=Date.parse('2026-10-14T12:00:00Z');
-export function acceptanceFixture({fail_start=null,campaigns=false,country_conversion=false,retention=false,now=NOW}={}){
+export function acceptanceFixture({fail_start=null,campaigns=false,country_conversion=false,retention=false,retention_events=false,now=NOW}={}){
   const exportStore=createMemoryExportStore();
-  const calls=[],sql=[],queries=[],state={fail_start,campaigns,country_conversion,retention};
+  const calls=[],sql=[],queries=[],state={fail_start,campaigns,country_conversion,retention,retention_events};
   const native=createShopifySalesKpiService({getShop:async()=>({id:'gid://shopify/Shop/fixture',currencyCode:'GBP',ianaTimezone:'Europe/London'}),runReport:async query=>{
     sql.push(query);const [,start_date,end_date]=query.match(/SINCE (\S+) UNTIL (\S+)/);
     calls.push({provider:'sales',args:{start_date,end_date,sales_channel:query.includes("'Online Store'")?'Online Store':'Point of Sale'}});
@@ -24,7 +25,7 @@ export function acceptanceFixture({fail_start=null,campaigns=false,country_conve
   }});
   const bigquery={dataset:()=>({getMetadata:async()=>[{location:'US'}]}),query:async query=>{
     queries.push(query);assert.match(query.query,/SELECT/);assert.doesNotMatch(query.query,/INSERT|UPDATE|DELETE|MERGE|CREATE/);
-    if(query.query.includes('retention_members')){calls.push({provider:'retention',args:query.params});if(state.fail_retention_source===query.params.entry_source)throw Object.assign(Error('private upstream failure'),{code:'FIXTURE_READ_FAILED'});return [state.retention?structuredClone(cohortRows).filter(r=>!query.params.entry_source||r.source_platform===query.params.entry_source).map(r=>query.query.includes('source_store,entry_product_ref,window_days')?{...r,entry_product_ref:`${r.source_platform}:${r.source_store}:${r.collaboration_name}`,entry_product_title:r.collaboration_name+' piece'}:r):[]];}
+    if(query.query.includes('retention_members')){calls.push({provider:'retention',args:query.params});if(state.fail_retention_source===query.params.entry_source)throw Object.assign(Error('private upstream failure'),{code:'FIXTURE_READ_FAILED'});if(state.retention_events)return [fixtureRetention(state.retention_events===true?retentionEvents:state.retention_events,query.params,{pieces:query.query.includes('entry_product_title FROM entry_matches')})];return [state.retention?structuredClone(cohortRows).filter(r=>!query.params.entry_source||r.source_platform===query.params.entry_source).map(r=>query.query.includes('entry_product_title FROM entry_matches')?{...r,entry_product_ref:`${r.source_platform}:${r.source_store}:${r.collaboration_name}`,entry_product_title:r.collaboration_name+' piece'}:r):[]];}
     if(/INFORMATION_SCHEMA|grouped_lines|represented_location_orders|GROUP BY 1,2,3/.test(query.query)){
       calls.push({provider:'baskets',args:query.params});
       if(query.query.includes('INFORMATION_SCHEMA'))return [Object.entries(BASKET_LINE_COLUMNS).map(([column_name,data_type])=>({column_name,data_type}))];
@@ -106,6 +107,14 @@ export function assertAcceptanceTurn(turn,result,f,callOffset=0){
     if(turn.groups.includes('rest_of_world'))assert.ok(calls.some(c=>c.args.variables?.query?.includes("session_country_code != 'GB'")));
     for(const s of result.evidence.sections)for(const row of s.rows)assert.equal(row.rate,row.sessions?row.numerator/row.sessions:null);
     const coverage=result.evidence.source.coverage;assert.equal(coverage.categories.length,coverage.requested_days);assert.equal(Object.values(coverage.category_counts).reduce((a,b)=>a+b,0),coverage.requested_days);
+  }
+  if(turn.check==='retention-incident'){
+    assert.equal(c.journey_group_by,'collaboration_piece');assert.equal(c.time_zone,'Europe/London');assert.equal(c.current_day_included,false);assert.equal(calls.length,4);
+    assert.equal(result.evidence.ranking_window,90);assert.match(result.answer,/Beta\*\* has the highest observed repeat purchase rate at 90/);assert.match(result.answer,/Pieces within Alpha/);
+    const alpha=result.evidence.rows.find(r=>r.source_platform==='woo'&&r.collaboration_name==='alpha'&&!r.entry_product_ref&&r.window_days===90);
+    assert.deepEqual([alpha.cohort_customers,alpha.mature_customers,alpha.repeat_customers],[4,3,1]);assert.equal(alpha.repeat_rate,1/3);
+    assert.deepEqual(calls.map(c=>c.args.entry_source),['woo','woo','shopify','shopify']);assert.ok(calls.every(c=>c.args.time_zone==='Europe/London'&&c.args.observation_end===turn.dates[1]&&c.args.ranking_window===90));
+    const coverage=result.evidence.coverage.classification.find(c=>c.source_platform==='woo');assert.deepEqual([coverage.eligible_first_customers,coverage.named_customers,coverage.generic_only_customers,coverage.unknown_customers],[8,5,1,2]);
   }
   if(turn.check==='retention'){assert.equal(result.evidence.kind,'governed_cohort_retention');assert.match(result.answer,/75\.00%/);assert.match(result.answer,/50\.00%/);assert.equal(result.partial,true);assert.ok(calls.every(c=>c.provider==='retention'));}
   if(turn.pieces){
