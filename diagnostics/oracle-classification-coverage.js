@@ -4,13 +4,13 @@ import {createBigQueryClient} from '../bigquery/client.js';
 import {createOracleProviderDependencies} from '../oracle/provider-dependencies.js';
 import {transitionAnalysisContext} from '../oracle/analysis-context.js';
 import {retentionDefinition} from '../oracle/cohort-retention.js';
+import {classificationReaderCtes} from '../oracle/classification-reader.js';
 import {QUESTION} from './oracle-cohort-providers.js';
-import {boundedEvidenceRead} from '../oracle/bounded-evidence-read.js';
 import {boundedQuery} from '../oracle/bounded-query.js';
 import {safeReadFailure} from '../oracle/read-failure.js';
 
 export async function classificationDiagnosticOptions({project,source,store,now,stage}){
- if(!['stages','gaps','identity','history','keys','catalogue'].includes(stage))throw Error('Invalid diagnostic stage');
+ if(!['resolver','stages','gaps','identity','history','keys','catalogue'].includes(stage))throw Error('Invalid diagnostic stage');
  let settings;
  const deps=createOracleProviderDependencies({project,bigquery:{query:async q=>{settings=q;return [[]];}}});
  const context=transitionAnalysisContext(null,QUESTION,{now}).context,definition=retentionDefinition(context);
@@ -24,18 +24,18 @@ export async function classificationDiagnosticOptions({project,source,store,now,
   catalogue:`SELECT l.source_platform,l.source_store,COUNT(*) historical_product_lines,COUNTIF(p.product_id IS NOT NULL) surviving_shopify_catalogue_lines,COUNTIF(p.product_id IS NULL) missing_shopify_catalogue_lines,COUNTIF(EXISTS(SELECT 1 FROM cr_routes r WHERE r.source_ref=l.source_product_ref)) approved_route_lines FROM source_lines l JOIN qualifying_orders o USING(source_platform,source_store,order_ref) LEFT JOIN \`${project}.shopify_catalogue.products\` p ON l.source_product_ref=CONCAT('shopify:shopify:',CAST(p.product_id AS STRING)) WHERE l.source_platform='shopify' GROUP BY 1,2 LIMIT 3`,
   keys:`SELECT 'product_classifications' evidence_table,CONCAT(SPLIT(subject_ref,':')[SAFE_OFFSET(0)],':',SPLIT(subject_ref,':')[SAFE_OFFSET(1)]) source_namespace,classification_type,classification_value,provenance,status,COUNT(*) evidence_rows,COUNT(DISTINCT subject_ref) products FROM \`${project}.commerce.product_classifications\` GROUP BY ALL UNION ALL SELECT 'collection_classifications','shopify:shopify',classification_type,classification_value,provenance,status,COUNT(*),COUNT(DISTINCT collection_id) FROM \`${project}.commerce.collection_classifications\` WHERE platform='shopify' GROUP BY ALL ORDER BY products DESC,classification_type,classification_value LIMIT 100`
  };
- return {...settings,query:sql+'\n'+selections[stage],jobTimeoutMs:15000,maximumBytesBilled:'20000000000',labels:{component:'classification_coverage',operation:stage}};
+ return {...settings,query:stage==='resolver'?`WITH ${classificationReaderCtes(project)} SELECT mapping_type,classification_type,COUNT(*) evidence_rows,COUNT(DISTINCT subject_ref) products FROM cr_resolved GROUP BY 1,2 LIMIT 100`:sql+'\n'+selections[stage],jobTimeoutMs:15000,maximumBytesBilled:'20000000000',labels:{component:'classification_coverage',operation:stage}};
 }
 export async function diagnoseClassificationCoverage({bigquery,project,now=Date.now(),source='woo',store='ww',stage='stages',execute=false}){
  if(!((source==='woo'&&['ww','usd'].includes(store))||(source==='shopify'&&store==='shopify')))throw Error('Invalid source/store');
  const options=await classificationDiagnosticOptions({project,source,store,now,stage});
- let sqlVerified=false;
+ let sqlVerified=false;const timings=[];const started=performance.now();const onProviderStage=e=>{if(timings.length<12&&['query_submission','query_response','query_results','query_failed'].includes(e.stage))timings.push({stage:e.stage,elapsed_ms:Math.min(60000,Math.max(0,Math.round(performance.now()-started))),dry_run:!sqlVerified});};
  try{
-  const [job]=await boundedEvidenceRead(()=>bigquery.createQueryJob({...options,dryRun:true}),{maximumMs:15000});
+  const [job]=await boundedQuery(bigquery,{...options,dryRun:true},{maximumMs:15000,onProviderStage});
   sqlVerified=true;
-  const rows=execute?(await boundedQuery(bigquery,options,{maximumMs:15000}))[0]:null;
-  return {read_only:true,source,store,stage,state:'fulfilled',sql_verified:true,executed:execute,bytes:job.metadata?.statistics?.totalBytesProcessed??null,rows,truncated:rows?.length===(stage==='gaps'||stage==='keys'?100:stage==='history'?200:20),identity_contract:'Source-qualified persisted customer IDs only. Null/zero does not prove a real-world anonymous customer; no guest substitution or cross-source linkage.',classification_contract:'Current governed view; not certified purchase-time classification. Valid historical product keys do not certify a surviving catalogue record.'};
- }catch(error){return {read_only:true,source,store,diagnostic_stage:stage,state:'rejected',sql_verified:sqlVerified,executed:false,...safeReadFailure(error,sqlVerified?'population_query':'population_dry_run'),code:'CLASSIFICATION_RETRIEVAL_FAILED'}}
+  const rows=execute?(await boundedQuery(bigquery,options,{maximumMs:15000,onProviderStage}))[0]:null;
+  return {read_only:true,timings,source,store,stage,state:'fulfilled',sql_verified:true,executed:execute,bytes:job.metadata?.statistics?.totalBytesProcessed??null,rows,truncated:rows?.length===(stage==='gaps'||stage==='keys'||stage==='resolver'?100:stage==='history'?200:20),identity_contract:'Source-qualified persisted customer IDs only. Null/zero does not prove a real-world anonymous customer; no guest substitution or cross-source linkage.',classification_contract:'Current governed view; not certified purchase-time classification. Valid historical product keys do not certify a surviving catalogue record.'};
+ }catch(error){return {read_only:true,timings,source,store,diagnostic_stage:stage,state:'rejected',sql_verified:sqlVerified,executed:false,...safeReadFailure(error,sqlVerified?'population_query':'population_dry_run'),code:'CLASSIFICATION_RETRIEVAL_FAILED'}}
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){
  const arg=(key,fallback)=>process.argv.find(x=>x.startsWith(`--${key}=`))?.split('=').slice(1).join('=')||fallback;

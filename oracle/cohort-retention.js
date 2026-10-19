@@ -100,13 +100,16 @@ export async function answerCohortRetention({context,provider,...options}){
   const failed_sources=[],results=[],classification=[],source_outcomes=[];let truncated=false;
   const readOptions={...options,deadlineAt:options.deadlineAt??Date.now()+45000};
   const groups=context.journey_group_by==='collaboration_piece'?['retention_windows','retention_piece_windows']:definition.group_by;
-  // Independent platform reads retain a supported population on another failure.
-  for(const [source,source_store] of [['woo','ww'],['woo','usd'],['shopify','shopify']])for(const group of groups){
-    let stage='provider_contract',query_id=null;
+  // Start independent sources together under the unchanged request deadline.
+  // A slow source must not consume another source's opportunity to submit.
+  const parts=await Promise.all([['woo','ww'],['woo','usd'],['shopify','shopify']].map(async ([source,source_store])=>{
+   const failed_sources=[],results=[],classification=[],source_outcomes=[];let truncated=false;
+   for(const group of groups){
+    let stage='provider_contract',query_id=null;const timings=[];
     const outcome={request_id,source_platform:source,source_store,group,attempted:true};
     if(readOptions.deadlineAt<=Date.now()){source_outcomes.push({...outcome,attempted:false,state:'not_attempted',status:'not_attempted',stage:'request_deadline'});if(!failed_sources.includes(source))failed_sources.push(source);continue;}
     try{
-      const part=await boundedEvidenceRead(timeoutMs=>provider.analyzeCustomerJourney({...definition,group_by:[group],cohort:{...definition.cohort,entry_source:source}},{...readOptions,timeoutMs,sourceStore:source_store,onProviderStage:event=>{stage=event.stage==='query_start'?'population_query':stage;if(event.query_id)query_id=event.query_id;options.onProviderStage?.(event);}}),readOptions);
+      const part=await boundedEvidenceRead(timeoutMs=>provider.analyzeCustomerJourney({...definition,group_by:[group],cohort:{...definition.cohort,entry_source:source}},{...readOptions,timeoutMs,sourceStore:source_store,onProviderStage:event=>{stage=event.stage==='query_start'?'population_query':stage;if(timings.length<12&&['query_start','query_submission','query_response','query_results','query_failed'].includes(event.stage)&&Number.isFinite(event.elapsed_ms))timings.push({stage:event.stage,elapsed_ms:Math.min(3600000,Math.max(0,Math.round(event.elapsed_ms)))});if(event.query_id)query_id=event.query_id;options.onProviderStage?.(event);}}),readOptions);
       stage='evidence_validation';
       if(!part||!Array.isArray(part.results))throw new Error('Invalid retention evidence');
       const validated=retentionRows(part.results||[]);
@@ -115,13 +118,16 @@ export async function answerCohortRetention({context,provider,...options}){
       if((part.results||[]).length>definition.limit)throw new Error('Retention provider row bound exceeded');
       const coverage=retentionCoverage(part.classification_coverage||[]);
       if(coverage.some(c=>c.source_platform!==source||c.source_store!==source_store))throw new Error('Retention coverage source mismatch');
-      source_outcomes.push({...outcome,state:'fulfilled',status:validated.length?'classified_cohorts':coverage.some(c=>c.eligible_first_customers>0)?'unclassified_population':'successful_empty',stage:'complete',query_id});
+      source_outcomes.push({...outcome,state:'fulfilled',status:validated.length?'classified_cohorts':coverage.some(c=>c.eligible_first_customers>0)?'unclassified_population':'successful_empty',stage:'complete',query_id,timings});
       results.push(...validated);if(group===groups[0])classification.push(...coverage);
       truncated ||= Boolean(part.truncated)||(part.results||[]).length===definition.limit;
     }catch(error){if(error.code==='LEASE_NOT_OWNED'||error.code==='REQUEST_CANCELLED'||options.signal?.aborted)throw error;const failure=safeReadFailure(error,stage);
-      source_outcomes.push({...outcome,state:'rejected',status:stage==='evidence_validation'?'evidence_rejected':failure.code==='COHORT_ARGUMENT_REJECTED'?'arguments_rejected':'retrieval_failed',...failure,stage,code:stage==='evidence_validation'?'EVIDENCE_SCOPE_MISMATCH':failure.code==='ORDER_VALUE_RETRIEVAL_FAILED'?'COHORT_RETRIEVAL_FAILED':failure.code,timeout_category:error.code==='ORACLE_AGENT_DEADLINE'?'request_deadline':failure.bigquery_reason==='jobTimeout'?'warehouse_timeout':['ETIMEDOUT','UND_ERR_CONNECT_TIMEOUT'].includes(failure.provider_reason)?'transport_timeout':null,query_id});
+      source_outcomes.push({...outcome,state:'rejected',status:stage==='evidence_validation'?'evidence_rejected':failure.code==='COHORT_ARGUMENT_REJECTED'?'arguments_rejected':'retrieval_failed',...failure,stage,code:stage==='evidence_validation'?'EVIDENCE_SCOPE_MISMATCH':failure.code==='ORDER_VALUE_RETRIEVAL_FAILED'?'COHORT_RETRIEVAL_FAILED':failure.code,timeout_category:error.code==='ORACLE_AGENT_DEADLINE'?'request_deadline':failure.bigquery_reason==='jobTimeout'?'warehouse_timeout':['ETIMEDOUT','UND_ERR_CONNECT_TIMEOUT'].includes(failure.provider_reason)?'transport_timeout':null,query_id,timings});
       const failed=groups.length>1?source+'/'+group:source;if(!failed_sources.includes(failed))failed_sources.push(failed);}
   }
+   return {failed_sources,results,classification,source_outcomes,truncated};
+  }));
+  for(const part of parts){for(const failed of part.failed_sources)if(!failed_sources.includes(failed))failed_sources.push(failed);results.push(...part.results);classification.push(...part.classification);source_outcomes.push(...part.source_outcomes);truncated ||= part.truncated;}
   const result={definition,results};
   const rows=retentionRows(result.results||[],definition.sort,definition.ranking_window).filter(row=>!context.within_days||row.window_days===context.within_days);
   const evidence={request_id,source_outcomes,ranking_window:context.ranking_metric==='repeat_rate_180'?180:context.within_days||90,component_limitations:context.output_preference?[rows.length?'The supported table is retained. A governed cohort export or chart is not implemented.':'No cohort table is available. A governed cohort export or chart is not implemented.']:[],kind:'governed_cohort_retention',subject:'customer_journey',operation:'cohort_retention',periods:[{start_date:context.start_date,end_date:context.end_date}],observation_end:definition.observation_end,definition:result.definition,rows,truncated,coverage:{classification,source_status:[['woo','ww'],['woo','usd'],['shopify','shopify']].map(([source_platform,source_store])=>({source_platform,source_store,status:classification.some(c=>c.source_platform===source_platform&&c.source_store===source_store)?'observed_endpoints_only':source_outcomes.some(s=>s.source_store===source_store&&s.state==='rejected')?'unavailable':'coverage_not_returned'})),failed_sources,unevaluable_customers:null,unevaluable_share:null,complete:false,identity:'source_qualified_only',prior_history:'unverified'}};

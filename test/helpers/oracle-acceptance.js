@@ -136,7 +136,7 @@ export function assertAcceptanceTurn(turn,result,f,callOffset=0){
     assert.equal(result.evidence.ranking_window,90);assert.match(result.answer,/Beta\*\* has the highest observed repeat purchase rate at 90/);assert.match(result.answer,/Pieces within Alpha/);
     const alpha=result.evidence.rows.find(r=>r.source_platform==='woo'&&r.collaboration_name==='alpha'&&!r.entry_product_ref&&r.window_days===90);
     assert.deepEqual([alpha.cohort_customers,alpha.mature_customers,alpha.repeat_customers],[4,3,1]);assert.equal(alpha.repeat_rate,1/3);
-    assert.deepEqual(calls.map(c=>c.args.entry_source),['woo','woo','woo','woo','shopify','shopify']);assert.ok(calls.every(c=>c.args.time_zone==='Europe/London'&&c.args.observation_end===turn.dates[1]&&c.args.ranking_window===90));
+    assert.deepEqual(calls.map(c=>c.args.entry_source).sort(),['shopify','shopify','woo','woo','woo','woo']);assert.ok(calls.every(c=>c.args.time_zone==='Europe/London'&&c.args.observation_end===turn.dates[1]&&c.args.ranking_window===90));
     const coverage=result.evidence.coverage.classification.find(c=>c.source_platform==='woo');assert.deepEqual([coverage.eligible_first_customers,coverage.named_customers,coverage.generic_only_customers,coverage.unknown_customers],[8,5,1,2]);
   }
   if(turn.check==='retention'){assert.equal(result.evidence.kind,'governed_cohort_retention');assert.match(result.answer,/75\.00%/);assert.match(result.answer,/50\.00%/);assert.equal(result.partial,true);assert.ok(calls.every(c=>c.provider==='retention'));}
