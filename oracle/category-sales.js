@@ -1,3 +1,4 @@
+import {classificationReaderCtes} from './classification-reader.js';
 import { governedDecisionCtes, PRODUCT_FAMILY_TABLE } from './product-mapping.js';
 
 export const CATEGORY_SALES_MAX_BYTES = 20_000_000_000;
@@ -19,17 +20,8 @@ export function validateCategorySalesInput(input={}) {
  */
 export function categorySalesSql(project) {
   const jewellery=JEWELLERY_CATEGORIES.map(x=>`'${x}'`).join(',');
-  return `WITH ${governedDecisionCtes(project,'identity')},
-  family_history AS (SELECT *,COALESCE(decision_id,event_id) resolved_decision_id FROM \`${project}.commerce.${PRODUCT_FAMILY_TABLE}\`),
-  family_superseded AS (SELECT supersedes_decision_id decision_id FROM family_history WHERE supersedes_decision_id IS NOT NULL),
-  family_current AS (SELECT h.*,ROW_NUMBER() OVER(PARTITION BY membership_id ORDER BY reviewed_at DESC,resolved_decision_id DESC) decision_rank FROM family_history h LEFT JOIN family_superseded s ON s.decision_id=h.resolved_decision_id WHERE s.decision_id IS NULL),
-  family_active AS (SELECT source_ref,shopify_parent_ref FROM family_current WHERE decision_rank=1 AND status='active'),
-  identity_routes AS (SELECT left_ref source_ref,right_ref classification_ref FROM identity_active UNION ALL SELECT right_ref,left_ref FROM identity_active),
-  routes AS (SELECT source_ref,classification_ref,'approved_identity' mapping_type FROM identity_routes UNION ALL SELECT source_ref,shopify_parent_ref,'approved_reporting_family' FROM family_active),
-  active_classifications AS (SELECT subject_ref,classification_type,classification_value,provenance FROM \`${project}.commerce.product_classifications\` WHERE status='active'),
-  source_classifications AS (
-    SELECT subject_ref source_ref,classification_type,classification_value,provenance,'direct' mapping_type FROM active_classifications
-    UNION ALL SELECT r.source_ref,c.classification_type,c.classification_value,c.provenance,r.mapping_type FROM routes r JOIN active_classifications c ON c.subject_ref=r.classification_ref
+  return `WITH ${classificationReaderCtes(project)},
+  source_classifications AS (SELECT subject_ref source_ref,classification_type,classification_value,provenance,mapping_type FROM cr_resolved
   ), governed_evidence AS (
     SELECT source_ref,classification_type,classification_value,provenance,mapping_type
     FROM source_classifications
@@ -52,7 +44,7 @@ export function categorySalesSql(project) {
   shopify_financials AS (SELECT * FROM \`${project}.shopify_data.order_financials\` QUALIFY ROW_NUMBER() OVER(PARTITION BY order_id ORDER BY original_total_presentment DESC,total_refunded_presentment DESC)=1),
   shopify_orders AS (SELECT l.order_id,DATE(l.created_at) order_date,IF(l.retail_location_id IS NULL,'Online','POS') sales_channel,LOWER(c.display_financial_status) status,c.cancelled_at,l.source_app_id,f.original_total_presentment order_total,COALESCE(f.total_refunded_presentment,0) refunds
     FROM shopify_locations l JOIN shopify_customers c USING(order_id) JOIN shopify_financials f USING(order_id)),
-  shopify_lines AS (SELECT 'shopify' source_platform,'shopify' source_store,o.sales_channel,CAST(li.order_id AS STRING) order_ref,REGEXP_EXTRACT(CAST(li.product_id AS STRING),r'([^/]+)$') source_product_id,li.quantity units,li.discounted_total_presentment sales,UPPER(li.presentment_currency) currency,'major_unit' monetary_unit,o.order_date,o.status,o.cancelled_at,o.source_app_id,o.order_total,o.refunds
+  shopify_lines AS (SELECT 'shopify' source_platform,'shopify' source_store,o.sales_channel,CAST(li.order_id AS STRING) order_ref,REGEXP_EXTRACT(CAST(li.product_id AS STRING),r'^(?:gid://shopify/Product/)?([0-9]+)$') source_product_id,li.quantity units,li.discounted_total_presentment sales,UPPER(li.presentment_currency) currency,'major_unit' monetary_unit,o.order_date,o.status,o.cancelled_at,o.source_app_id,o.order_total,o.refunds
     FROM \`${project}.shopify_data.order_line_items\` li JOIN shopify_orders o ON CAST(o.order_id AS STRING)=CAST(li.order_id AS STRING)),
   square_returns AS (SELECT containing_order_id order_ref,source_line_item_uid line_item_uid,SUM(COALESCE(total_return_amount,0)) returned_amount FROM \`${project}.square_data.retail_returns\` GROUP BY 1,2),
   eligible_lines AS (

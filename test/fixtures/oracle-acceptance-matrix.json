@@ -950,6 +950,15 @@
     {
       "id": "cohort-provider-outcomes-and-completed-days",
       "file": "test/oracle-cohort-providers.test.js"
+    },
+    {
+      "id": "shared-classification-current-evidence",
+      "file": "test/classification-reader.test.js",
+      "covers": [
+        "source namespace and parent versus variant identity",
+        "shared current collection/product decisions and approved family routes",
+        "stage coverage and bounded diagnostic factory contracts"
+      ]
     }
   ]
 }

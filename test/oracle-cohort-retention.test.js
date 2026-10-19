@@ -23,7 +23,7 @@ test('journey SQL retains historical lookback, source identities, approved class
  const sql=customerJourneySql('fixture','retention_windows');
  assert.match(sql,/ranked_orders AS[\s\S]*entry_orders AS/);assert.match(sql,/source_platform,'\|',source_store/);
  assert.match(sql,/COALESCE\(l.source_app_id=@matrixify_app_id,FALSE\)/);
- assert.match(sql,/classification_links/);assert.match(sql,/JOIN approved_links/);assert.doesNotMatch(sql,/fuzzy|suggested/);
+ assert.match(sql,/classification_links/);assert.match(sql,/JOIN cr_direct/);assert.doesNotMatch(sql,/fuzzy|suggested/);
  assert.match(sql,/UNNEST\(\[90,180\]\)/);assert.match(sql,/COUNTIF\(mature\)/);assert.match(sql,/PERCENTILE_CONT/);
  assert.match(sql,/FROM downstream_orders QUALIFY ROW_NUMBER/);assert.match(sql,/cohort_rank<=DIV\(@cohort_limit/);
  let options;const r=await dryRunCohortRetention({project:'fixture',now:NOW,bigquery:{createQueryJob:async value=>{options=value;return [{metadata:{statistics:{totalBytesProcessed:'123'}}}];}}});
