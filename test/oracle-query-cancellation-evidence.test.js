@@ -16,8 +16,8 @@ test('acknowledgement alone is not terminal completion',async()=>{
 });
 test('metadata inspection is a single read and excludes SQL, rows and error messages',async()=>{
  let calls=0;
- const result=await inspectBigQueryJob({bigquery:{job:(id,opts)=>{assert.equal(id,'j');assert.equal(opts.location,'EU');return {getMetadata:async()=>{calls++;return [{configuration:{query:{query:'SELECT 1'}},status:{state:'DONE',errors:[{reason:'stopped',message:'sensitive'}]},statistics:{creationTime:'100',startTime:'110',endTime:'150',query:{cacheHit:false,totalSlotMs:'25',queryPlan:[{id:'0',recordsRead:'8',steps:['sensitive']} ]}}}];}};}},jobId:'j',location:'EU'});
- assert.equal(calls,1);assert.equal(result.creation_to_start_ms,10);assert.equal(result.start_to_end_ms,40);assert.equal(result.cacheHit,false);assert.equal(result.query_plan[0].recordsRead,'8');assert.doesNotMatch(JSON.stringify(result),/sensitive|SELECT/);
+ const result=await inspectBigQueryJob({bigquery:{job:(id,opts)=>{assert.equal(id,'j');assert.equal(opts.location,'EU');return {getMetadata:async()=>{calls++;return [{configuration:{query:{query:'SELECT 1'}},status:{state:'DONE',errors:[{reason:'stopped',message:'sensitive'}]},statistics:{totalBytesProcessed:'88',creationTime:'100',startTime:'110',endTime:'150',query:{cacheHit:false,totalSlotMs:'25',queryPlan:[{id:'0',recordsRead:'8',steps:['sensitive']} ]}}}];}};}},jobId:'j',location:'EU'});
+ assert.equal(calls,1);assert.equal(result.creation_to_start_ms,10);assert.equal(result.start_to_end_ms,40);assert.equal(result.cacheHit,false);assert.equal(result.totalBytesProcessed,'88');assert.equal(result.query_plan[0].recordsRead,'8');assert.doesNotMatch(JSON.stringify(result),/sensitive|SELECT/);
 });
 test('hung cancellation is bounded and explicitly unverified',async()=>{
  const events=[];const start=performance.now();
