@@ -1,3 +1,4 @@
+import {classificationReaderCtes} from './classification-reader.js';
 import {createInventoryReadBudget,inventoryDiagnostic} from '../shopify/inventory-budget.js';
 import {createBatchedInventoryByLocation,inventoryLocationSelector,inventoryLocationSelectorForRequest} from '../shopify/inventory-by-location.js';
 
@@ -46,11 +47,9 @@ export function createStockGroupLookup({bigquery,project}) {
   return async(entity,{signal}={})=>{
     if(signal?.aborted)throw Object.assign(new Error('Cancelled'),{code:'REQUEST_CANCELLED'});
     const group=entity.toLowerCase().replace(/[^a-z0-9]+/g,'_').replace(/^_|_$/g,'');
-    const [rows]=await bigquery.query({query:`SELECT DISTINCT subject_ref,classification_value FROM \`${project}.commerce.product_classifications\`
+    const [rows]=await bigquery.query({query:`WITH ${classificationReaderCtes(project)} SELECT DISTINCT subject_ref,classification_value FROM cr_resolved
       WHERE classification_type='product_group' AND classification_value IN UNNEST(@groups)
-      AND status='active' AND subject_grain='source_product' AND STARTS_WITH(subject_ref,'shopify:shopify:')
-      AND (effective_from IS NULL OR effective_from<=CURRENT_DATE('Europe/London'))
-      AND (effective_to IS NULL OR effective_to>=CURRENT_DATE('Europe/London')) LIMIT 26`,params:{groups:[group,group.replace(/s$/,'')]},useLegacySql:false,maximumBytesBilled:'100000000',jobTimeoutMs:'5000',labels:{component:'oracle_current_stock',operation:'group_resolution'}});
+      AND STARTS_WITH(subject_ref,'shopify:shopify:') LIMIT 26`,params:{groups:[group,group.replace(/s$/,'')]},useLegacySql:false,maximumBytesBilled:'100000000',jobTimeoutMs:'5000',labels:{component:'oracle_current_stock',operation:'group_resolution'}});
     return rows;
   };
 }

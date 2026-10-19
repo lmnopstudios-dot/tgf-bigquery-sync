@@ -22,7 +22,7 @@ test('SQL uses only governed direct/approved mapping evidence and returns partia
   const sql=categorySalesSql('p');
   assert.match(sql,/product_type' AND classification_value='sunglasses'/);
   assert.match(sql,/product_category' AND classification_value IN \('ring','pendant','necklace','bracelet','chain','earrings'\)/);
-  assert.match(sql,/approved_reporting_family/);assert.match(sql,/identity_active/);assert.match(sql,/status='active'/);
+  assert.match(sql,/approved_reporting_family/);assert.match(sql,/cr_map_active/);assert.match(sql,/status='active'/);
   assert.match(sql,/WHEN COALESCE\(c\.governed_classifications,0\)=0 THEN 'unclassified'/);
   assert.match(sql,/source_platform,source_store,currency,monetary_unit/);assert.match(sql,/sales_share/);
   assert.match(sql,/directly_classified_lines/);assert.match(sql,/identity_mapped_lines/);assert.match(sql,/reporting_family_mapped_lines/);assert.match(sql,/unclassified_sales_share/);
