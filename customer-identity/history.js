@@ -17,7 +17,7 @@ const stamp=value=>{if(!value)return null;const text=String(value);const d=new D
 const id=value=>value==null||String(value)==='0'||String(value)===''?null:String(value);
 const profile=(source,cid)=>cid?`${source==='shopify'?'shopify':'woo'}:${source}:${cid}`:null;
 export function observations({source,record,provider,orderId=null,profileKey=null,recordId,now=new Date().toISOString(),failure=null}){
-  const observed=stamp(record?.updatedAt||record?.date_modified_gmt||record?.updated_at||record?.order_updated_at);
+  const observed=stamp(record?.updatedAt||record?.date_modified_gmt||record?.updated_at||record?.order_updated_at||record?.date_modified);
   const native=id(record?.customer_id),metorik=id(record?.metorik_customer_id||record?.customer?.metorik_customer_id);
   const values=failure?[{field:'availability',value:null,state:failure}]:emailFields(record);
   return values.map(f=>{
@@ -78,7 +78,7 @@ export async function nativeHistoryClient(source,env,signal,budget){
 export function correspondence(order,roster){
   const oid=String(order?.order_id??order?.id??'');
   if(oid!==roster.order_id)return false;
-  const date=stamp(order?.order_created_at||order?.created_at||order?.date_created_gmt||order?.createdAt);
+  const date=stamp(order?.order_created_at||order?.created_at||order?.date_created_gmt||order?.createdAt||order?.date_created);
   const expected=stamp(roster.created_at?.value||roster.created_at);
   return !!date&&!!expected&&date===expected&&(!roster.currency||String(order.currency).toUpperCase()===roster.currency.toUpperCase());
 }

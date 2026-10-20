@@ -116,6 +116,7 @@ test('evidence IDs are idempotent; placeholder/null and changed usable revisions
   const sql=batchMergeSql('fixture','identity',{email_observations:'stage'});
   assert.doesNotMatch(sql,/THEN UPDATE SET.*email=/);assert.match(sql,/BEGIN TRANSACTION/);assert.match(sql,/history_progress/);
   assert.ok(correspondence({id:1,date_created_gmt:'2024-01-01T00:00:00',currency:'GBP'},{order_id:'1',created_at:'2024-01-01T00:00:00Z',currency:'GBP'}));
+  assert.ok(correspondence({order_id:1,date_created:'2024-01-01T00:00:00',currency:'GBP'},{order_id:'1',created_at:'2024-01-01T00:00:00Z',currency:'GBP'}));
   assert.equal(correspondence({id:2},{order_id:'1'}),false);
 });
 test('collector resumes a committed Shopify batch, preserves explicit null customers, and never logs records',async()=>{
