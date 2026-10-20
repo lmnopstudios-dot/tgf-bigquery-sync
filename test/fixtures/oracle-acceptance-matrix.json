@@ -1032,6 +1032,15 @@
         "source-qualified history contract through direct interactive durable follow-ups and recovery",
         "Matrixify copies excluded and unknown bridge counts never zero"
       ]
+    },
+    {
+      "id": "customer-email-linked-history",
+      "file": "test/customer-email-history.test.js",
+      "covers": [
+        "conservative normalization and global ambiguity exclusion",
+        "bounded aggregate audit with partial source failure",
+        "shared original history sequencing and linked baseline SQL"
+      ]
     }
   ]
 }

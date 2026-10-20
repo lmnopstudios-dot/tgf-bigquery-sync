@@ -1,3 +1,10 @@
+> For the current email investigation, use [Exact-email customer history audit](customer-email-history.md).
+> It inspects retained raw Woo order billing email as well as customer/order fields;
+> an old migration manifest is not a prerequisite. Exact-email analytical linkage
+> is authorized subject to explicit ambiguity rules and remains distinct from
+> certified migration completeness or verified human identity. The reference audit
+> below describes the earlier order-reference investigation.
+
 # Woo to Shopify migration history investigation
 
 ## Demonstrated repository findings
