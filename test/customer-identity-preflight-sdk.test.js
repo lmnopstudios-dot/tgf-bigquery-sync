@@ -84,7 +84,7 @@ test('execute generated selection and relationship SQL against populated tables 
   // SQLite executes the generated predicates, DISTINCT, ordering, grouping and
   // joins. Adapt only the STRING cast and BigQuery COUNTIF/STARTS_WITH functions.
   const script=`import json,sqlite3,sys
-queries=json.load(sys.stdin)
+queries=json.loads(sys.argv[1])
 db=sqlite3.connect(':memory:')
 db.create_function('STARTS_WITH',2,lambda v,p: int(v.startswith(p)) if v is not None else None)
 class CountIf:
@@ -104,7 +104,7 @@ for q in queries:
  rows=db.execute(q['query'].replace(' AS STRING',' AS TEXT'),params).fetchall()
  results.append(rows)
 print(json.dumps(results))`;
-  const run=spawnSync('python3',['-c',script],{input:JSON.stringify(statements),encoding:'utf8',timeout:10000});
+  const run=spawnSync('python3',['-c',script,JSON.stringify(statements)],{stdio:['ignore','pipe','pipe'],encoding:'utf8',timeout:10000});
   assert.equal(run.status,0,run.error?.message||run.stderr);
   const rows=JSON.parse(run.stdout);
   assert.deepEqual(rows.map((r,i)=>statements[i].query.includes('WITH parent')?r[0][0]:r.length),[0,2,0,2,0,2,0,2]);
@@ -190,3 +190,4 @@ test('production factory resolves explicit, credential and default project consi
     assert.equal(job.jobReference.projectId,expected);assert.ok(job.configuration.query.query.includes(`\`${expected}.metorik_uk.orders\``));
   }
 });
+

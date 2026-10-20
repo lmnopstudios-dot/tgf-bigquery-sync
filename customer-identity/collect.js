@@ -94,6 +94,19 @@ export async function retrieve({source, ids, graphql, woo, now = new Date().toIS
   }
   return rows;
 }
+export function evidenceMergeSql(project,dataset,stage) {
+  // Preserve usable Woo evidence only when the API has no value. A changed
+  // customer identity must never inherit the previous customer's address.
+  const keep=(level)=>`S.source IN ('ww','usd') AND S.${level}_email IS NULL AND T.${level}_email_normalized IS NOT NULL${level==='customer'?' AND S.customer_id IS NOT DISTINCT FROM T.customer_id':''}`;
+  const chosen=(level,suffix='')=>`IF(${keep(level)},T.${level}_email${suffix},S.${level}_email${suffix})`;
+  const a=chosen('order','_normalized'),b=chosen('customer','_normalized');
+  const state=`CASE WHEN ${a} IS NOT NULL AND ${b} IS NOT NULL AND ${a}!=${b} THEN 'conflict' WHEN S.email_state='placeholder' THEN 'placeholder' WHEN ${a} IS NOT NULL OR ${b} IS NOT NULL THEN 'candidate' ELSE S.email_state END`;
+  const assignments=SCHEMA.filter(f=>!['source','order_id'].includes(f.name)).map(f=>{
+    const match=/^(order|customer)_email(_normalized)?$/.exec(f.name);
+    return `${f.name}=${match?chosen(match[1],match[2]||''):f.name==='email_state'?state:`S.${f.name}`}`;
+  });
+  return `MERGE ${fq(project,dataset,'order_identity')} T USING ${fq(project,dataset,stage)} S ON T.source=S.source AND T.order_id=S.order_id WHEN MATCHED AND S.retrieved_at>=T.retrieved_at THEN UPDATE SET ${assignments.join(',')} WHEN NOT MATCHED THEN INSERT ROW`;
+}
 export async function store({bigquery, project, dataset, rows}) {
   if (!rows.length) return;
   const ds = bigquery.dataset(dataset), table = ds.table('order_identity');
@@ -107,7 +120,7 @@ export async function store({bigquery, project, dataset, rows}) {
     const file = join(dir,'rows.ndjson');
     await writeFile(file,rows.map(row => JSON.stringify(row)).join('\n'),{mode:0o600});
     await ds.table(stage).load(file,{schema:{fields:SCHEMA}, sourceFormat:'NEWLINE_DELIMITED_JSON', writeDisposition:'WRITE_TRUNCATE'});
-    await bigquery.query({query:`MERGE ${fq(project,dataset,'order_identity')} T USING ${fq(project,dataset,stage)} S ON T.source=S.source AND T.order_id=S.order_id WHEN MATCHED AND S.retrieved_at>=T.retrieved_at THEN UPDATE SET ${SCHEMA.filter(f=>!['source','order_id'].includes(f.name)).map(f=>`${f.name}=S.${f.name}`).join(',')} WHEN NOT MATCHED THEN INSERT ROW`, maximumBytesBilled:SCOPE.mergeBytes, jobTimeoutMs:20000});
+    await bigquery.query({query:evidenceMergeSql(project,dataset,stage), maximumBytesBilled:SCOPE.mergeBytes, jobTimeoutMs:20000});
   } finally {
     await ds.table(stage).delete({ignoreNotFound:true}).catch(()=>{});
     await rm(dir,{recursive:true,force:true});
