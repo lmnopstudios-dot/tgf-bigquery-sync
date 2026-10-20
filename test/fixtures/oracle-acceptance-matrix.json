@@ -1062,6 +1062,15 @@
         "unverified maturity preserved with active analytical identity snapshots",
         "source-local fallback when snapshot unavailable"
       ]
+    },
+    {
+      "id": "customer-history-v2",
+      "file": "test/customer-history-v2.test.js",
+      "covers": [
+        "executed additive evidence SQL including guests, shared/conflicting addresses and unavailable coverage",
+        "executed Oracle order mapping, original Woo deduplication, imported-copy exclusion and cross-migration sequence/entry calculations",
+        "idempotent evidence and resumable collection without customer values in logs"
+      ]
     }
   ]
 }

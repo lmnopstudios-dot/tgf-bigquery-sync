@@ -160,7 +160,8 @@ try{
       assert.match(await page.locator('.analytical-answer').last().innerText(),/coverage is unverified/);assert.equal(uncertainFixture.calls.length,count);await page.close();
     }
   }finally{uncertainServer.close();}
-  const activatedFixture=acceptanceFixture({retention_events:true,observationCertificates:[],identityEnv:{ORACLE_CUSTOMER_IDENTITY_MODE:'email_candidate_v1',ORACLE_CUSTOMER_IDENTITY_DATASET:'customer_identity',ORACLE_CUSTOMER_IDENTITY_SNAPSHOT:'email-20261020-v1'}});
+  for(const identityMode of ['email_candidate_v1','email_candidate_v2']){
+  const activatedFixture=acceptanceFixture({retention_events:true,observationCertificates:[],identityEnv:{ORACLE_CUSTOMER_IDENTITY_MODE:identityMode,ORACLE_CUSTOMER_IDENTITY_DATASET:'customer_identity',ORACLE_CUSTOMER_IDENTITY_SNAPSHOT:'email-20261020-v1'}});
   const activatedServer=await acceptanceServer(activatedFixture,{durable:true});
   try{
     for(const width of [1280,390]){
@@ -171,11 +172,13 @@ try{
       const answer=await page.locator('.analytical-answer').last().innerText();
       assert.match(answer,/email candidate snapshot/i);assert.match(answer,/coverage is unverified/);
       assert.doesNotMatch(answer,/customer linkage has not been verified/);
+      if(identityMode==='email_candidate_v2'){assert.match(answer,/email-linked records/);assert.match(answer,/3 matched, 2 unmatched, 1 ambiguous, 2 unavailable/);}
       const reads=activatedFixture.wireQueries.length;
       await page.reload();await page.waitForFunction(()=>!document.querySelector('#send').disabled&&document.querySelector('.analytical-answer'));
       assert.match(await page.locator('.analytical-answer').last().innerText(),/email candidate snapshot/i);
       assert.equal(activatedFixture.wireQueries.length,reads);await page.close();
     }
   }finally{activatedServer.close();}
+  }
   console.log(JSON.stringify({status:'passed',conversations:matrix.conversations.length,viewports:['desktop','mobile'],durable_refresh:true,activated_identity_refresh:true,output}));
 }finally{await browser.close();h.close();}
