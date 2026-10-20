@@ -5,9 +5,9 @@ import {loadBigQueryConfig,createBigQueryClient} from '../bigquery/client.js';
 import {options} from './collect.js';
 import {preflight,provision,setup,enrich,verify,publish,selectedIds,verifyLinkage,activationCheck} from './operations.js';
 
-export async function main(argv=process.argv.slice(2),env=process.env) {
+export async function main(argv=process.argv.slice(2),env=process.env,{BigQueryClass,client}={}) {
   const [command,...raw] = argv;
-  if (!['plan','preflight','provision','setup','enrich','verify','verify-linkage','activation-check','publish'].includes(command)) throw Error('Select plan/preflight/setup/enrich/verify/publish');
+  if (!['plan','preflight','source-check','provision','setup','enrich','verify','verify-linkage','activation-check','publish'].includes(command)) throw Error('Select plan/preflight/setup/enrich/verify/publish');
   const snapshotArg = raw.find(a=>a.startsWith('--snapshot='));
   const snapshot = snapshotArg?.slice('--snapshot='.length);
   if (snapshotArg && !['publish','activation-check'].includes(command)) throw Error('Snapshot only valid for publication');
@@ -19,11 +19,11 @@ export async function main(argv=process.argv.slice(2),env=process.env) {
   }
   const o=options(args), writes=['provision','setup','enrich','publish'].includes(command);
   if (writes!==o.apply) throw Error('Writes require --apply; read-only operations reject it');
-  const {bigquery,project}=createBigQueryClient(env);
+  const {bigquery,project}=createBigQueryClient(env,BigQueryClass);
   if(command==='plan')return {read_only:true,source:o.source,selected_orders:(await selectedIds(bigquery,project,o)).length,scope:{start:o.start,end:o.end}};
-  if(command==='preflight'){
-    const result=await preflight({bigquery,project,o,env});
-    if(!result.destination?.ready||result.source_access!=='sampled'||!result.location_matches)process.exitCode=2;
+  if(command==='preflight'||command==='source-check'){
+    const result=await preflight({bigquery,project,o,env,sourceOnly:command==='source-check',...(client?{client}:{})});
+    if(result.source_access!=='sampled'||result.stages.source_metadata.state!=='succeeded'||result.stages.relationship.state==='failed'||command==='preflight'&&(!result.destination?.ready||!result.location_matches))process.exitCode=2;
     return result;
   }
   if(command==='provision')return provision({bigquery,project,dataset:o.dataset,principal:loadBigQueryConfig(env).credentials?.client_email});

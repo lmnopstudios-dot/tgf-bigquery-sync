@@ -1,9 +1,11 @@
 import {randomUUID} from 'node:crypto';
+import {BigQuery} from '@google-cloud/bigquery';
 import {SOURCES,SCOPE,SCHEMA,fq,selectionSql,retrieve,store} from './collect.js';
 import {mappingSql} from './linkage.js';
 import {sourceClient,requestBudget} from './runtime.js';
 import {safeReadFailure} from '../oracle/read-failure.js';
 import {boundedQuery} from '../oracle/bounded-query.js';
+import {boundedEvidenceRead} from '../oracle/bounded-evidence-read.js';
 
 const canonicalType=value=>({INT64:'INTEGER',BOOL:'BOOLEAN',FLOAT64:'FLOAT',STRUCT:'RECORD'}[value]||value);
 export const TABLES = {
@@ -12,14 +14,25 @@ export const TABLES = {
   identity_links:[['snapshot_id','STRING'],['source_store','STRING'],['source_customer_id','STRING'],['canonical_customer_ref','STRING']].map(([name,type])=>({name,type})),
   identity_snapshots:[['snapshot_id','STRING'],['state','STRING'],['start_date','DATE'],['end_date','DATE'],['mapping_count','INT64'],['created_at','TIMESTAMP']].map(([name,type])=>({name,type})),
 };
-export const read = (bigquery,query,params={},types={},maximumMs=20000) => boundedQuery(bigquery,{query,params,types,maximumBytesBilled:SCOPE.bytes,jobTimeoutMs:maximumMs},{maximumMs});
+// The SDK reads .value for explicitly typed DATE parameters. Plain strings
+// silently serialize without a value (SQL NULL), even with types supplied.
+export const typedParams = (params,types) => Object.fromEntries(Object.entries(params).map(([key,value])=>
+  [key,types[key]==='DATE' && typeof value==='string' ? BigQuery.date(value) : value]));
+export const read = async (bigquery,query,params={},types={},maximumMs=20000) => {
+  const result=await boundedQuery(bigquery,{query,params:typedParams(params,types),types,maximumBytesBilled:SCOPE.bytes,jobTimeoutMs:maximumMs},{maximumMs});
+  if(!Array.isArray(result?.[0]) || typeof bigquery.createQueryJob==='function' && result[2]?.jobComplete!==true)throw Object.assign(Error('Invalid warehouse result envelope'),{code:'INVALID_QUERY_RESULT'});
+  const total=result[2]?.totalRows;
+  if(total!=null && (!/^\d+$/.test(String(total)) || BigInt(total)!==BigInt(result[0].length)))throw Object.assign(Error('Incomplete warehouse results'),{code:'INVALID_QUERY_RESULT'});
+  return result;
+};
 export async function selectedIds(bigquery,project,o) {
   const [rows] = await read(bigquery,selectionSql(project,o),{start:o.start,end:o.end},{start:'DATE',end:'DATE'});
   if (rows.length > o.maxOrders) throw Error('Selection exceeds cap; narrow window or increase within proposed bound');
+  if(rows.some(row=>typeof row?.order_id!=='string'||!row.order_id)||new Set(rows.map(row=>row.order_id)).size!==rows.length)throw Object.assign(Error('Invalid selection rows'),{code:'INVALID_SELECTION_RESULT'});
   return rows.map(row=>row.order_id);
 }
 export async function destinationReadiness(bigquery,project,dataset) {
-  const ds = bigquery.dataset(dataset), [exists] = await ds.exists();
+  const ds = bigquery.dataset(dataset,{projectId:project}), [exists] = await ds.exists();
   if (!exists) return {exists:false,ready:false,setup_required:true};
   const [metadata] = await ds.getMetadata();
   const publicAccess = (metadata.access || []).some(entry=>['allUsers','allAuthenticatedUsers','projectReaders','projectWriters'].includes(entry.specialGroup));
@@ -70,34 +83,77 @@ export async function setup({bigquery,project,dataset}) {
   }
   return {schema_ready:true,tables:Object.keys(TABLES)};
 }
-export async function preflight({bigquery,project,o,env=process.env,client=sourceClient}) {
-  const result={read_only:true,source:o.source,scope:{start:o.start,end:o.end}};
-  try {result.destination=await destinationReadiness(bigquery,project,o.dataset);}
-  catch(error) {result.destination={ready:false,state:'unavailable',failure:safeReadFailure(error,'diagnostic')};}
+export async function preflight({bigquery,project,o,env=process.env,client=sourceClient,sourceOnly=false}) {
+  const source=SOURCES[o.source];
+  const result={read_only:true,source:o.source,scope:{start:o.start,end:o.end,max_orders:o.maxOrders},
+    bindings:{project,source_table:fq(project,source.dataset,source.table),date_field:source.date,
+      date_type:null,source_location:null,destination_dataset:`${project}.${o.dataset}`,selection_sql:selectionSql(project,o),
+      ...(o.source==='shopify'?{relationship_parent_table:fq(project,source.dataset,'order_locations'),relationship_date_field:'created_at',relationship_date_type:null,relationship_sql:relationshipSql(project,o)}:{}),
+      date_parameters:{start:{type:'DATE',value:o.start},end:{type:'DATE',value:o.end}}},
+    stages:{source_metadata:{state:'attempted'},warehouse_selection:{state:'skipped'},
+      relationship:{state:'skipped',reason:o.source==='shopify'?'selection_pending':'not_shopify'},
+      source_email:{state:'skipped',reason:'selection_pending'},destination:{state:'skipped',reason:sourceOnly?'source_only':'pending'}},
+    selected_orders:null,sample_orders:null,email_query_succeeded:false,source_access:'unverified'};
+  const stages=result.stages;
+  try {
+    const ds=bigquery.dataset(source.dataset,{projectId:project});
+    const [[meta],[table],parent]=await boundedEvidenceRead(()=>Promise.all([ds.getMetadata(),ds.table(source.table).getMetadata(),
+      ...(o.source==='shopify'?[ds.table('order_locations').getMetadata()]:[])]),{maximumMs:10000});
+    result.bindings.source_location=meta.location||null;
+    result.bindings.date_type=table.schema?.fields?.find(f=>f.name===source.date)?.type||null;
+    if(!['DATE','DATETIME','TIMESTAMP'].includes(result.bindings.date_type))throw Object.assign(Error('Source date type unavailable or unsupported'),{code:'INVALID_SOURCE_SCHEMA'});
+    if(parent){
+      result.bindings.relationship_date_type=parent[0].schema?.fields?.find(f=>f.name==='created_at')?.type||null;
+      if(!['DATE','DATETIME','TIMESTAMP'].includes(result.bindings.relationship_date_type))throw Object.assign(Error('Relationship date type unavailable or unsupported'),{code:'INVALID_SOURCE_SCHEMA'});
+    }
+    stages.source_metadata={state:'succeeded'};
+  } catch(error) {stages.source_metadata={state:'failed',failure:safeReadFailure(error,'diagnostic')};}
+  if(!sourceOnly){
+    stages.destination={state:'attempted'};
+    try {result.destination=await boundedEvidenceRead(()=>destinationReadiness(bigquery,project,o.dataset),{maximumMs:10000});stages.destination={state:'succeeded'};}
+    catch(error) {result.destination={ready:false,state:'unavailable',failure:safeReadFailure(error,'diagnostic')};stages.destination={state:'failed',failure:result.destination.failure};}
+  }
   let ids;
-  try {ids=await selectedIds(bigquery,project,o);result.selected_orders=ids.length;}
-  catch(error) {return {...result,source_access:'unverified',failure_stage:'warehouse_selection',failure:safeReadFailure(error,'diagnostic')};}
+  stages.warehouse_selection={state:'attempted'};
+  try {ids=await selectedIds(bigquery,project,o);result.selected_orders=ids.length;stages.warehouse_selection={state:'succeeded'};}
+  catch(error) {
+    stages.warehouse_selection={state:'failed',failure:safeReadFailure(error,'diagnostic')};
+    stages.source_email={state:'skipped',reason:'selection_failed'};
+    if(o.source==='shopify')stages.relationship={state:'skipped',reason:'selection_failed'};
+    return {...result,source_access:'unverified',failure_stage:'warehouse_selection',failure:stages.warehouse_selection.failure};
+  }
   if(o.source==='shopify'){
-    try {const [rows]=await read(bigquery,relationshipSql(project,o),{start:o.start,end:o.end},{start:'DATE',end:'DATE'});result.order_customer_relationship=rows[0];}
-    catch(error){result.order_customer_relationship={state:'unavailable',failure:safeReadFailure(error,'diagnostic')};}
+    stages.relationship={state:'attempted'};
+    try {
+      const [rows]=await read(bigquery,relationshipSql(project,o),{start:o.start,end:o.end},{start:'DATE',end:'DATE'});
+      const fields=['parent_orders','missing_relationship_rows','duplicate_relationship_orders','invalid_customer_ids'];
+      if(rows.length!==1||fields.some(k=>rows[0]?.[k]==null||!Number.isSafeInteger(Number(rows[0][k]))||Number(rows[0][k])<0))throw Object.assign(Error('Invalid relationship result'),{code:'INVALID_QUERY_RESULT'});
+      result.order_customer_relationship=Object.fromEntries(fields.map(k=>[k,Number(rows[0][k])]));
+      stages.relationship={state:'succeeded'};
+    } catch(error){result.order_customer_relationship={state:'unavailable',failure:safeReadFailure(error,'diagnostic')};stages.relationship={state:'failed',failure:result.order_customer_relationship.failure};}
   }
   const sample=ids.slice(0,3);
-  try {
-    const transport=sample.length ? await client(o.source,env,AbortSignal.timeout(90000),requestBudget(o.source,true)) : {};
-    let scopes=null;
-    if(transport.graphql){
-      const data=await transport.graphql('{currentAppInstallation{accessScopes{handle}}}',{});
-      const handles=new Set(data?.currentAppInstallation?.accessScopes?.map(s=>s.handle)||[]);
-      scopes={read_orders:handles.has('read_orders'),read_all_orders:handles.has('read_all_orders'),read_customers:handles.has('read_customers')};
-    }
-    const rows=await retrieve({source:o.source,ids:sample,...transport});
-    Object.assign(result,{sample_orders:rows.length,email_query_succeeded:rows.length>0,
-      usable_order_emails:rows.filter(r=>r.order_email_normalized).length,
-      usable_customer_emails:rows.filter(r=>r.customer_email_normalized).length,
-      source_access:rows.length?'sampled':'unverified_empty_selection',scopes});
-  } catch(error) {Object.assign(result,{source_access:'unavailable',failure_stage:'source_email',failure:safeReadFailure(error,'diagnostic')});}
-  try {const [meta]=await bigquery.dataset(SOURCES[o.source].dataset).getMetadata();result.location_matches=result.destination.location===meta.location;}
-  catch {result.location_matches=null;}
+  if(!sample.length){
+    stages.source_email={state:'skipped',reason:'empty_selection'};
+    result.source_access='unverified_empty_selection';
+  } else {
+    stages.source_email={state:'attempted'};
+    try {
+      const transport=await client(o.source,env,AbortSignal.timeout(90000),requestBudget(o.source,true));
+      let scopes=null;
+      if(transport.graphql){
+        const data=await transport.graphql('{currentAppInstallation{accessScopes{handle}}}',{});
+        const handles=new Set(data?.currentAppInstallation?.accessScopes?.map(s=>s.handle)||[]);
+        scopes={read_orders:handles.has('read_orders'),read_all_orders:handles.has('read_all_orders'),read_customers:handles.has('read_customers')};
+      }
+      const rows=await retrieve({source:o.source,ids:sample,...transport});
+      Object.assign(result,{sample_orders:rows.length,email_query_succeeded:true,
+        usable_order_emails:rows.filter(r=>r.order_email_normalized).length,
+        usable_customer_emails:rows.filter(r=>r.customer_email_normalized).length,source_access:'sampled',scopes});
+      stages.source_email={state:'succeeded'};
+    } catch(error) {Object.assign(result,{source_access:'unavailable',failure_stage:'source_email',failure:safeReadFailure(error,'diagnostic')});stages.source_email={state:'failed',failure:result.failure};}
+  }
+  result.location_matches=result.destination?.location&&result.bindings.source_location ? result.destination.location===result.bindings.source_location : null;
   return {...result,limitation:'Null-only responses do not establish usable email coverage; sampled access does not certify all historical orders.'};
 }
 
@@ -109,7 +165,7 @@ export async function enrich({bigquery,project,o,env=process.env,client=sourceCl
     if(!rows[0]||['missing_relationship_rows','duplicate_relationship_orders','invalid_customer_ids'].some(k=>Number(rows[0][k])!==0))throw Error('Repair Shopify order to customer relationships before enrichment');
   }
   const ids = await selectedIds(bigquery,project,o), runId = randomUUID();
-  await bigquery.query({query:`INSERT INTO ${fq(project,o.dataset,'enrichment_runs')} VALUES(@id,@source,@start,@end,@requested,0,'running',CURRENT_TIMESTAMP())`,params:{id:runId,source:o.source,start:o.start,end:o.end,requested:ids.length},types:{start:'DATE',end:'DATE'},maximumBytesBilled:SCOPE.mergeBytes,jobTimeoutMs:20000});
+  await bigquery.query({query:`INSERT INTO ${fq(project,o.dataset,'enrichment_runs')} VALUES(@id,@source,@start,@end,@requested,0,'running',CURRENT_TIMESTAMP())`,params:{id:runId,source:o.source,start:BigQuery.date(o.start),end:BigQuery.date(o.end),requested:ids.length},types:{start:'DATE',end:'DATE'},maximumBytesBilled:SCOPE.mergeBytes,jobTimeoutMs:20000});
   let returned = 0;
   const deadline = Date.now()+SCOPE.maxMs;
   const budget=requestBudget(o.source);
@@ -172,7 +228,7 @@ export async function publish({bigquery,project,dataset,snapshot}) {
     INSERT INTO ${fq(project,dataset,'identity_snapshots')}
       SELECT @snapshot,'ready',@start,@end,COUNT(*),CURRENT_TIMESTAMP() FROM ${fq(project,dataset,'identity_links')} WHERE snapshot_id=@snapshot;
     COMMIT TRANSACTION;`;
-  await bigquery.query({query,params:{snapshot,start:SCOPE.start,end:SCOPE.end},types:{start:'DATE',end:'DATE'},maximumBytesBilled:SCOPE.mergeBytes,jobTimeoutMs:20000});
+  await bigquery.query({query,params:{snapshot,start:BigQuery.date(SCOPE.start),end:BigQuery.date(SCOPE.end)},types:{start:'DATE',end:'DATE'},maximumBytesBilled:SCOPE.mergeBytes,jobTimeoutMs:20000});
   return {published:true,snapshot,mode:'email_candidate_v1'};
 }
 

@@ -88,7 +88,7 @@ customer values are never printed. Do not commit data exports or shell traces.
 
 | Operation | Limits |
 |---|---|
-| Preflight | One selection query, plus one relationship query for Shopify; 1 GB/query and 20 s/query; metadata/IAM reads for four destination tables; 3 sample orders, at most 8 upstream HTTP requests, 16 MiB total decoded API JSON and 2 MiB/response; source phase 90 s; shell bound 125 s |
+| Preflight | One selection query, plus one relationship query for Shopify; 1 GB/query and 20 s/query; metadata/IAM reads for four destination tables; 3 sample orders, at most 8 upstream HTTP requests, 16 MiB total decoded API JSON and 2 MiB/response; source phase 90 s; metadata waiting at most 10 s/stage; use 160 s shell bound |
 | Historical selection | 60,000 distinct orders/source plus one overflow sentinel; overflow fails before source calls or data writes; one read at 1 GB/20 s |
 | Historical source retrieval | 100 orders/batch, at most 600 batches/source, 90 s/batch and four-hour run deadline; Shopify GraphQL batches of 50, at most 1,200 node calls plus 600 token requests; Woo at most 120,000 order/customer requests/source; customer fetches cached per batch |
 | API bytes | 2 MiB/response; 256 MiB decoded JSON/source across the entire run, including token responses; at most 768 MiB for all three runs. Woo requests `_fields` to minimize returned fields. No automatic retries or hidden pagination |
@@ -155,6 +155,83 @@ linkage. Classification, provenance, first-ever and company-wide certification
 safeguards remain. Saved reports retain their original snapshot/evidence and are
 not retroactively relinked during polling or presentation recovery.
 
+## Shared preflight selection investigation (2026-10-20)
+
+**Demonstrated cause.** The deployed identity helper passed ISO strings with
+`types: {start:'DATE', end:'DATE'}`. BigQuery SDK v8 reads `.value` for explicit
+DATE types: a plain string serializes as `parameterValue: {}` instead of the
+date. The missing value represents SQL NULL; `DATE(order_created_at) BETWEEN
+NULL AND NULL` selects nothing. Shopify's parent relationship query used the
+same bindings and therefore also returned zero aggregates. No query exception
+was necessary. The helper now supplies `BigQuery.date(...)`; the identity run
+marker and publication transaction use the same SDK DATE contract. This changes
+parameter encoding, not the inclusive window, source tables, identity exclusions,
+reporting semantics, publication guards or activation controls.
+
+The production factory resolves `GOOGLE_PROJECT_ID`, then the configured service
+account's `project_id`, then `gf-full-data`. Tests cover all three paths, actual
+SDK job project IDs, fully qualified SQL, parsed CLI dates/caps, SDK serialization,
+paginated result decoding, and the same populated REST fixtures before/after the
+fix. A SQL-backed regression also executes the generated selection and Shopify
+relationship predicates/joins against populated SQLite fixtures with the actual
+serialized SDK bounds (adapting the STRING cast and BigQuery functions).
+With broken parameters the fixtures return zero selection and Shopify
+parent counts; corrected parameters return two selected orders and email samples
+for each source. These are offline reproductions, not production row counts.
+The original preflight already continued source selection after a missing
+destination; a missing dataset did not suppress the source query. The original
+empty branch skipped the source client but reported `sample_orders=0`; it now
+reports skipped sampling with a null sample count. Submission, retrieval,
+decoding, deadline and source API failures remain failures, never successful
+zero-order selections. A genuinely empty successful selection has count zero,
+but still cannot establish source email access.
+
+**Safe diagnostics.** Results expose resolved project/table, generated selection
+SQL, date field/type from table metadata, source region, inclusive DATE bounds
+and cap. Shopify also exposes the relationship SQL and parent date binding/type.
+Each stage records `succeeded`, `failed`, or `skipped` (with a reason); `attempted`
+is the in-flight state. Failed selection/sample counts are null. Provider errors
+use the existing safe failure classifier. There are no order IDs, customer IDs,
+emails, credential values or raw provider responses in output. Metadata checks
+have a 10 s waiting bound; each warehouse query remains bounded at 20 s/1 GB.
+The source sample remains at most three orders, eight API requests, 90 s,
+16 MiB total JSON and 2 MiB per response. The outer shell bounds SDK cleanup or
+late metadata requests too.
+
+**One read-only Render command.** Run this after the fix is present in the Render
+checkout, using its existing protected credentials. It runs all three sources,
+retains failure exit status, and performs no destination inspection, provisioning,
+load, enrichment, publication or activation. A missing destination cannot affect
+this check. No automatic retries are added.
+
+```sh
+GOOGLE_PROJECT_ID=gf-full-data timeout --signal=TERM --kill-after=3s 490s bash -c '
+  status=0
+  for identity_source in ww usd shopify; do
+    timeout --signal=TERM --kill-after=3s 160s node customer-identity/cli.js source-check --source="$identity_source" --start=2022-09-24 --end=2026-10-19 --max-orders=60000 || status=2
+  done
+  exit "$status"
+'
+```
+
+Require `stages.warehouse_selection.state=succeeded` and review the actual
+`selected_orders`; require `stages.source_email.state=succeeded` and
+`source_access=sampled` to establish sample access. Review the usable-email
+counts separately: successful null-only responses establish access, not usable
+linkage coverage. Shopify relationship read failures and missing/unsupported
+date metadata also make the command exit 2. This command deliberately does not
+certify destination readiness or authorize any later write.
+
+**Live verification, separate from reproduction.** Running the bounded command
+from this managed workspace returned HTTP 403 for source metadata and selection
+for WW, USD and Shopify. Every result reported `selected_orders=null`,
+`sample_orders=null`, `source_access=unverified`, email sampling skipped because
+selection failed, and destination skipped because this was a source-only check.
+Actual production date types, selected counts and source email sampling therefore
+remain unverified. The supplied Render zero-count outputs do not include their
+actual argv or serialized requests; the new resolved bindings make a Render
+rerun reviewable. No Render execution or production writes were performed here.
+
 ## Exact commands: reads first
 
 Run from the deployed checkout using its existing protected credentials. No
@@ -164,7 +241,7 @@ selects the existing project; it does not replace the configured authentication.
 ```sh
 export GOOGLE_PROJECT_ID=gf-full-data
 for identity_source in ww usd shopify; do
-  timeout --signal=TERM --kill-after=3s 125s node customer-identity/cli.js preflight --source="$identity_source" --dataset=customer_identity --start=2022-09-24 --end=2026-10-19 --max-orders=60000
+  timeout --signal=TERM --kill-after=3s 160s node customer-identity/cli.js preflight --source="$identity_source" --dataset=customer_identity --start=2022-09-24 --end=2026-10-19 --max-orders=60000
 done
 ```
 
@@ -174,7 +251,7 @@ destination setup required, or region mismatch. Three email samples may be null
 or unusable; those counts are shown without the values. Do not equate successful
 null responses with sufficient linkage coverage. Review all three results.
 
-Actual attempts in this workspace: all three source warehouse selections and destination
+Earlier activation-package attempts in this workspace: all three source warehouse selections and destination
 metadata returned **HTTP 403**, with no provider reason. The source email sample
 could not be reached and exact counts remain unknown. This is not evidence of
 missing upstream email. Runtime secret bindings report ready, which does not
