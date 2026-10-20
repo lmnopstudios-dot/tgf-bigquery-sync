@@ -112,7 +112,8 @@
     "test:oracle:browser": "node diagnostics/oracle-acceptance-browser.mjs",
     "test:oracle:independent": "node diagnostics/oracle-independent-evaluation.js",
     "diagnose:oracle-cohort-retention": "node diagnostics/oracle-cohort-retention-read.js",
-    "diagnose:customer-migration-history": "node diagnostics/customer-migration-history.js"
+    "diagnose:customer-migration-history": "node diagnostics/customer-migration-history.js",
+    "diagnose:customer-email-history": "node diagnostics/customer-email-history.js"
   },
   "engines": {
     "node": ">=20"

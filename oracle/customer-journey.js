@@ -102,7 +102,7 @@ function retentionWindowResultSql(product=false,nested=false){
     WHERE r.order_sequence>=@minimum_sequence AND (@maximum_sequence IS NULL OR r.order_sequence<=@maximum_sequence)
       AND r.order_timestamp>e.order_timestamp AND (@within_days IS NULL OR TIMESTAMP_DIFF(r.order_timestamp,e.order_timestamp,DAY)<=@within_days)
       AND (@subsequent_source IS NULL OR r.source_platform=@subsequent_source) AND (@subsequent_channel IS NULL OR r.channel=@subsequent_channel)
-    QUALIFY ROW_NUMBER() OVER(PARTITION BY governed_customer_ref ORDER BY r.order_timestamp,r.order_ref)=1
+    QUALIFY ROW_NUMBER() OVER(PARTITION BY governed_customer_ref ORDER BY r.order_timestamp,r.source_platform,r.source_store,r.order_ref)=1
   ), retention_members AS (
     SELECT em.*,window_days,COALESCE(DATE(em.entry_timestamp,@time_zone)>=@coverage_start AND DATE_ADD(DATE(em.entry_timestamp,@time_zone),INTERVAL window_days DAY)<=LEAST(@observation_end,@coverage_end),FALSE) mature,
       IF(DATE_DIFF(DATE(d.order_timestamp,@time_zone),DATE(em.entry_timestamp,@time_zone),DAY)<=window_days,TIMESTAMP_DIFF(d.order_timestamp,em.entry_timestamp,SECOND)/86400.0,NULL) days_to_second,
