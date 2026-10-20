@@ -30,7 +30,8 @@ as provider evidence. Roster collection makes zero Shopify/Metorik/Woo requests.
   client wait/cancellation. `jobTimeoutMs` alone is not a client deadline.
   A baseline probe and regression simulate a lost MERGE response: the old
   `finally` deleted its one input table (the fixed path deletes zero), although the transaction outcome could be unknown. The fix owns
-  query/load deadlines, cancels allocated and late-allocated jobs, and keeps
+  query/load deadlines and metadata polling, cancels allocated and late-allocated
+  jobs, suppresses late load responses without starting another poll, and keeps
   failed/uncertain stages under their original one-hour TTL. Successful stages
   are cleaned up as before. Temporary local files remain mode 0600 and are removed.
 * The roster performed one source query, table creation, file upload/load,
@@ -179,7 +180,7 @@ The GitHub connection independently confirmed the same commit. No successful liv
 WW completion, quota diagnosis, Render log inspection or lease-recovery diagnosis
 is claimed. Production verification remains the bounded runtime commands above.
 
-Validation: 98 history/identity and shared query ownership/cancellation tests pass.
+Validation: 100 history/identity and shared query ownership/cancellation tests pass.
 The sandbox's Node synchronous input pipe does not signal EOF to Python, so the
 existing Python SQL fixtures were run using an external temporary preload that
 passes the identical input bytes through a private regular-file descriptor.

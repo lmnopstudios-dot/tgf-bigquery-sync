@@ -79,6 +79,7 @@ export async function historyQuery(bigquery,settings,{stage,maximumMs=20000,sign
 /** Own load-job waiting and cancellation, including allocation after timeout. */
 export async function loadHistoryStage(table,file,settings,{maximumMs=20000}={}) {
   let job,ended=false,cancellation,cancellation_state;
+  const started=performance.now(),expired=()=>ended||performance.now()-started>=maximumMs;
   const submittedId=`history_load_${randomUUID().replaceAll('-','')}`;
   const cancel=()=>{
     if(!job||cancellation)return cancellation;
@@ -91,8 +92,20 @@ export async function loadHistoryStage(table,file,settings,{maximumMs=20000}={})
       // Table.createLoadJob accepts configuration.load fields, not the
       // top-level jobTimeoutMs accepted by createQueryJob. Own its client wait.
       [job]=await table.createLoadJob(file,{...settings,jobId:submittedId});
-      if(ended){await cancel();throw Object.assign(Error('Load ownership ended'),{code:'ORACLE_AGENT_DEADLINE'});}
-      await job.promise();
+      if(expired()){await cancel();throw Object.assign(Error('Load ownership ended'),{code:'ORACLE_AGENT_DEADLINE'});}
+      // Job.promise() owns an SDK polling loop that can continue after a raced
+      // deadline. Own each metadata poll instead, including in-flight responses.
+      while(!expired()){
+        const [metadata]=await job.getMetadata({maxRetries:0});
+        if(expired())throw Object.assign(Error('Load ownership ended'),{code:'ORACLE_AGENT_DEADLINE'});
+        if(metadata.status?.state==='DONE'){
+          if(metadata.status.errorResult)throw Object.assign(Error('Warehouse load failed'),{
+            errors:[metadata.status.errorResult,...(metadata.status.errors||[])]});
+          return;
+        }
+        await new Promise(resolve=>setTimeout(resolve,Math.min(1000,Math.max(1,maximumMs-(performance.now()-started)))));
+      }
+      throw Object.assign(Error('Load ownership ended'),{code:'ORACLE_AGENT_DEADLINE'});
     },{maximumMs});}
     catch(error){ended=true;await cancel();error.history_diagnostic={job_id:jobId(job?.id)||submittedId,cancellation_state};throw error;}
     finally{ended=true;}

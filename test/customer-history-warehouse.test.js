@@ -62,7 +62,7 @@ test('checkpoint conflicts stop without retry, exposing fixed classification onl
 
 test('lost staged MERGE response preserves its inputs and never reports a confirmed commit',async()=>{
   const deleted=[];let loads=0;
-  const ds={createTable:async()=>{},table:name=>({createLoadJob:async()=>{loads++;return [{id:'load-job',promise:async()=>[]}];},delete:async()=>deleted.push(name)})};
+  const ds={createTable:async()=>{},table:name=>({createLoadJob:async()=>{loads++;return [{id:'load-job',getMetadata:async()=>[{status:{state:'DONE'}}]}];},delete:async()=>deleted.push(name)})};
   await assert.rejects(commitBatch({...staged,bigquery:{dataset:()=>ds,query:async()=>{throw Object.assign(Error('private provider body'),{code:'ECONNRESET'});}}}),e=>{
     const safe=historyFailure(e);assert.equal(safe.stage,'batch_commit');assert.equal(safe.provider_reason,'ECONNRESET');assert.equal(safe.commit_outcome,'unknown');assert.doesNotMatch(JSON.stringify(safe),/private provider/);return true;
   });assert.equal(loads,1);assert.deepEqual(deleted,[]);
@@ -87,7 +87,7 @@ test('load timeout owns cancellation, including a job allocated after the deadli
   for(const late of [false,true]){
     let allocate,cancelled=0,polls=0;
     const allocation=new Promise(r=>allocate=r);
-    const job={id:'load-job',promise:()=>{polls++;return pending();},cancel:async()=>{cancelled++;}};
+    const job={id:'load-job',getMetadata:()=>{polls++;return pending();},cancel:async()=>{cancelled++;}};
     await assert.rejects(loadHistoryStage({createLoadJob:()=>late?allocation:Promise.resolve([job])},'fixture.ndjson',{}, {maximumMs:5}),e=>{assert.equal(historyFailure(e).stage,'stage_load');return true;});
     if(late){allocate([job]);await tick();}
     assert.equal(cancelled,1);assert.equal(polls,late?0:1);
@@ -139,7 +139,7 @@ test('real SDK load boundary receives valid load configuration and retains its g
     table.createWriteStream_=metadata=>{
       seen=metadata;
       const stream=new PassThrough();stream.resume();
-      stream.on('finish',()=>stream.emit('job',{id:metadata.jobId,promise:async()=>[]}));
+      stream.on('finish',()=>stream.emit('job',{id:metadata.jobId,getMetadata:async()=>[{status:{state:'DONE'}}]}));
       return stream;
     };
     await loadHistoryStage(table,file,{sourceFormat:'NEWLINE_DELIMITED_JSON',writeDisposition:'WRITE_TRUNCATE'},{maximumMs:1000});
@@ -171,4 +171,19 @@ test('provider bodies mentioning identity or bounds cannot change the failure ca
   }
   assert.equal(historyFailure(Error('Native order correspondence failed')).failure_category,'source_contract');
   assert.equal(historyFailure(Error('Invalid collection bounds')).failure_category,'bound');
+});
+
+test('late load metadata cannot start another poll or report success after ownership ends',async()=>{
+  let respond,polls=0,cancelled=0;
+  const job={id:'load-job',getMetadata:()=>{polls++;return new Promise(r=>respond=r);},cancel:async()=>{cancelled++;}};
+  await assert.rejects(loadHistoryStage({createLoadJob:async()=>[job]},'fixture.ndjson',{}, {maximumMs:5}),{code:'ORACLE_AGENT_DEADLINE'});
+  respond([{status:{state:'RUNNING'}}]);await tick();
+  assert.equal(polls,1);assert.equal(cancelled,1);
+});
+
+test('terminal load errors expose their allowlisted reason without row/provider text',async()=>{
+  const job={id:'load-job',getMetadata:async()=>[{status:{state:'DONE',errorResult:{reason:'invalid',message:'No matching signature for private@customer.test'},errors:[{reason:'invalid',message:'raw private row'}]}}],cancel:async()=>{}};
+  await assert.rejects(loadHistoryStage({createLoadJob:async()=>[job]},'fixture.ndjson',{}),error=>{
+    const safe=historyFailure(error);assert.equal(safe.stage,'stage_load');assert.equal(safe.bigquery_reason,'invalid');assert.equal(safe.error_category,'type_mismatch');assert.doesNotMatch(JSON.stringify(safe),/private@|raw private/);return true;
+  });
 });

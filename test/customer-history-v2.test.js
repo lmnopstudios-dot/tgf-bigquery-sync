@@ -144,7 +144,7 @@ test('collector resumes a committed Shopify batch, preserves explicit null custo
 
 test('atomic staging deduplicates retries and never advances a checkpoint on failed load',async()=>{
   const stages=[],loaded=[],queries=[],deleted=[];let fail=false;
-  const ds={createTable:async name=>{stages.push(name);},table:name=>({createLoadJob:async file=>{loaded.push((await readFile(file,'utf8')).split('\n').map(JSON.parse));if(fail)throw Error('load unavailable');return [{promise:async()=>[]}];},delete:async()=>deleted.push(name)})};
+  const ds={createTable:async name=>{stages.push(name);},table:name=>({createLoadJob:async file=>{loaded.push((await readFile(file,'utf8')).split('\n').map(JSON.parse));if(fail)throw Error('load unavailable');return [{getMetadata:async()=>[{status:{state:'DONE'}}]}];},delete:async()=>deleted.push(name)})};
   const bq={dataset:()=>ds,query:async q=>{queries.push(q);return [[]];}};
   const e=makeObs('ww','1','kept@real.org');const args={bigquery:bq,project:'fixture',dataset:'identity',jobKey:'job',source:'ww',adapter:'native',revision:'v2',cursor:'1',expectedCursor:'',complete:true,evidence:[...e,...e]};
   await commitBatch(args);assert.equal(loaded[0].length,e.length);assert.equal(queries.length,1);assert.match(queries[0].query,/Concurrent progress changed/);assert.equal(deleted.length,1);
