@@ -15,6 +15,11 @@ are identity evidence only and stay excluded from purchases; genuine later
 Shopify purchases count. Remapping precedes first-observed cohort assignment,
 sequencing, first-to-second timing, repeat metrics and product/journey analysis.
 
+For the blocked WW roster at revision `history-20261020-v2`, use the
+[WW recovery procedure](ww-roster-import-recovery.md), which preserves the
+reported checkpoints and supplies a WW-only bounded resume. Do not rerun the
+completed sources from the initial provisioning sequence below.
+
 ## Source contracts and selection
 
 * Roster: original `metorik_uk.orders`, `metorik_us.orders`, and Shopify
@@ -95,12 +100,15 @@ Each invocation: ten-minute deadline, default five batches (explicit 1–1200),
 256 MiB decoded upstream JSON, 2 MiB/response, no automatic API retries.
 Native calls: at most 120,000; other adapters: 2,400 requests/invocation.
 Metorik: at most 1,200 pages/resource/revision (60,000 records), failure on overflow.
-Roster and retained batches: 100 rows; native/Shopify: 50 orders. Retained duplicate
+Roster bounds remain 100 rows per requested batch, but all requested roster
+rows now commit in one warehouse-side transaction without file loads. Retained
+batches: 100 rows; native/Shopify: 50 orders. Retained duplicate
 order groups are never split at a cursor boundary; an oversized group stops.
 Retained payloads over 2 MiB stop. Each warehouse read/write statement retains
 1 GB billed-byte and 20 s job bounds; these are per-statement ceilings, not an
 entire-run cost estimate. Each evidence stage has a one-hour expiry, private 0600
-temporary NDJSON and finally cleanup. Original runtime deadlines, classification,
+temporary NDJSON and local-file cleanup. Successful stages are deleted; failed
+or uncertain stages retain their existing expiry to avoid racing active jobs. Original runtime deadlines, classification,
 query cancellation/ownership and source-local fallback safeguards remain.
 
 CLI output is compact aggregate JSON: source/adapter, completion state, batch and

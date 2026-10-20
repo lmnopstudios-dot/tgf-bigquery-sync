@@ -11,6 +11,7 @@ import {sourceClient,boundedFetch} from './runtime.js';
 import {emailFields} from './historical-evidence.js';
 import {emailState} from './email.js';
 import {HISTORY_TABLES,HISTORY_SCOPE,historyRosterSql,historyCoverageSql,historyLinkCtes} from './history-sql.js';
+import {historyFailure,historyStage,historyQuery,loadHistoryStage} from './history-warehouse.js';
 
 const hash=value=>createHash('sha256').update(value).digest('hex');
 const stamp=value=>{if(!value)return null;const text=String(value);const d=new Date(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?$/.test(text)?text+'Z':text);return Number.isNaN(d.valueOf())?null:d.toISOString();};
@@ -40,30 +41,61 @@ export async function setupHistory({bigquery,project,dataset}){
   }
   return {status:'ready',tables:Object.keys(HISTORY_TABLES).length};
 }
-export function batchMergeSql(project,dataset,stages,jobKey,cursor,complete){
+export function batchMergeSql(project,dataset,stages,{temporary=false,cursorSql='@cursor',completeSql='@complete'}={}){
   const statements=[];
   for(const [name,stage] of Object.entries(stages)){
     const keys=name==='history_orders'?['source','order_id']:['evidence_id'];
-    statements.push(`MERGE ${fq(project,dataset,name)} T USING ${fq(project,dataset,stage)} S ON ${keys.map(k=>`T.${k}=S.${k}`).join(' AND ')} ${name==='history_orders'?`WHEN MATCHED THEN UPDATE SET ${HISTORY_TABLES[name].filter(f=>!keys.includes(f.name)).map(f=>`${f.name}=${['financial_status','cancelled'].includes(f.name)?`COALESCE(S.${f.name},T.${f.name})`:`COALESCE(T.${f.name},S.${f.name})`}`).join(',')}`:''} WHEN NOT MATCHED THEN INSERT ROW;`);
+    statements.push(`MERGE ${fq(project,dataset,name)} T USING ${temporary?stage:fq(project,dataset,stage)} S ON ${keys.map(k=>`T.${k}=S.${k}`).join(' AND ')} ${name==='history_orders'?`WHEN MATCHED THEN UPDATE SET ${HISTORY_TABLES[name].filter(f=>!keys.includes(f.name)).map(f=>`${f.name}=${['financial_status','cancelled'].includes(f.name)?`COALESCE(S.${f.name},T.${f.name})`:`COALESCE(T.${f.name},S.${f.name})`}`).join(',')}`:''} WHEN NOT MATCHED THEN INSERT ROW;`);
   }
   return `BEGIN TRANSACTION; ASSERT COALESCE((SELECT cursor FROM ${fq(project,dataset,'history_progress')} WHERE job_key=@job),'')=@expected_cursor AS 'Concurrent progress changed'; ${statements.join('\n')}
-    MERGE ${fq(project,dataset,'history_progress')} T USING (SELECT @job job_key,@source source,@adapter adapter,@revision revision,@cursor cursor,@complete complete,CURRENT_TIMESTAMP() updated_at) S ON T.job_key=S.job_key
+    MERGE ${fq(project,dataset,'history_progress')} T USING (SELECT @job job_key,@source source,@adapter adapter,@revision revision,${cursorSql} cursor,${completeSql} complete,CURRENT_TIMESTAMP() updated_at) S ON T.job_key=S.job_key
     WHEN MATCHED THEN UPDATE SET cursor=S.cursor,complete=S.complete,updated_at=S.updated_at WHEN NOT MATCHED THEN INSERT ROW; COMMIT TRANSACTION;`;
+}
+export function bulkRosterSql(project,dataset,source){
+  return `DECLARE next_cursor STRING; DECLARE is_complete BOOL;
+    CREATE TEMP TABLE history_roster_selected AS SELECT * FROM (${historyRosterSql(project,source)}) LIMIT 60001;
+    ASSERT (SELECT COUNT(*) FROM history_roster_selected) BETWEEN 1 AND 60000 AS 'Roster bound/empty selection';
+    ASSERT NOT EXISTS(SELECT 1 FROM history_roster_selected WHERE source!=@source OR order_id IS NULL OR order_id='' OR created_at IS NULL) AS 'History roster validation';
+    ASSERT NOT EXISTS(SELECT 1 FROM history_roster_selected GROUP BY source,order_id HAVING COUNT(*)>1) AS 'History roster validation';
+    CREATE TEMP TABLE history_roster_batch AS SELECT * FROM history_roster_selected WHERE order_id>@expected_cursor ORDER BY order_id LIMIT @row_limit;
+    SET next_cursor=COALESCE((SELECT MAX(order_id) FROM history_roster_batch),@expected_cursor);
+    SET is_complete=NOT EXISTS(SELECT 1 FROM history_roster_selected WHERE order_id>next_cursor);
+    ${batchMergeSql(project,dataset,{history_orders:'history_roster_batch'},{temporary:true,cursorSql:'next_cursor',completeSql:'is_complete'})}
+    SELECT (SELECT COUNT(*) FROM history_roster_batch) records,is_complete complete;`;
+}
+
+export async function collectRoster({bigquery,project,o,jobKey,revision,batches,cursor,run}){
+  const validateRows=rows=>{
+    const summary=rows[0],records=Number(summary?.records);
+    if(rows.length!==1||summary?.records==null||!Number.isSafeInteger(records)||records<0||records>Math.min(60000,batches*100)||typeof summary.complete!=='boolean')
+      throw Object.assign(Error('Invalid roster summary'),{code:'INVALID_QUERY_RESULT'});
+  };
+  const [rows]=await historyQuery(bigquery,{query:bulkRosterSql(project,o.dataset,o.source),
+    params:{job:jobKey,source:o.source,adapter:'roster',revision,expected_cursor:cursor,row_limit:Math.min(60000,batches*100),start:o.start,end:o.end},
+    types:{start:'DATE',end:'DATE'},maximumBytesBilled:SCOPE.bytes,jobTimeoutMs:20000},{stage:'roster_bulk',write:true,validateRows});
+  const summary=rows[0],records=Number(summary?.records);
+  run.committed_batches=1;run.committed_records=records;
+  return {source:o.source,adapter:'roster',status:summary.complete?'complete':'resumable',batches:Math.ceil(records/100),records,warehouse_commits:1,requests:0,bytes:0};
 }
 export async function commitBatch({bigquery,project,dataset,jobKey,source,adapter,revision,cursor,expectedCursor='',complete,orders=[],evidence=[]}){
   if(orders.length>100||evidence.length>3000)throw Error('Batch row cap exceeded');
   orders=[...new Map(orders.map(r=>[r.source+'|'+r.order_id,{...r,created_at:stamp(r.created_at?.value||r.created_at)}])).values()];
   evidence=[...new Map(evidence.map(r=>[r.evidence_id,r])).values()];
-  const ds=bigquery.dataset(dataset),dir=await mkdtemp(join(tmpdir(),'history-evidence-')),stages={};
+  const ds=bigquery.dataset(dataset),dir=await mkdtemp(join(tmpdir(),'history-evidence-')),stages={};let committed=false;
   try{
     for(const [name,rows] of [['history_orders',orders],['email_observations',evidence]])if(rows.length){
       const stage=`_history_${randomUUID().replaceAll('-','')}`,table=ds.table(stage);stages[name]=stage;
-      await ds.createTable(stage,{schema:{fields:HISTORY_TABLES[name]},expirationTime:Date.now()+3600000});
-      const file=join(dir,name+'.ndjson');await writeFile(file,rows.map(r=>JSON.stringify(r)).join('\n'),{mode:0o600});
-      await table.load(file,{schema:{fields:HISTORY_TABLES[name]},sourceFormat:'NEWLINE_DELIMITED_JSON',writeDisposition:'WRITE_TRUNCATE'});
+      await historyStage('stage_create',()=>ds.createTable(stage,{schema:{fields:HISTORY_TABLES[name]},expirationTime:Date.now()+3600000}));
+      const file=join(dir,name+'.ndjson');await historyStage('stage_file',()=>writeFile(file,rows.map(r=>JSON.stringify(r)).join('\n'),{mode:0o600}));
+      await loadHistoryStage(table,file,{schema:{fields:HISTORY_TABLES[name]},sourceFormat:'NEWLINE_DELIMITED_JSON',writeDisposition:'WRITE_TRUNCATE'});
     }
-    await bigquery.query({query:batchMergeSql(project,dataset,stages),params:{job:jobKey,source,adapter,revision,cursor,expected_cursor:expectedCursor,complete},maximumBytesBilled:SCOPE.bytes,jobTimeoutMs:20000});
-  }finally{for(const stage of Object.values(stages))await ds.table(stage).delete({ignoreNotFound:true}).catch(()=>{});await rm(dir,{recursive:true,force:true});}
+    await historyQuery(bigquery,{query:batchMergeSql(project,dataset,stages),params:{job:jobKey,source,adapter,revision,cursor,expected_cursor:expectedCursor,complete},maximumBytesBilled:SCOPE.bytes,jobTimeoutMs:20000},{stage:'batch_commit',write:true});committed=true;
+  }finally{
+    // Failed/uncertain jobs may still reference stages. Retain them under the
+    // original one-hour TTL; never race a late transaction by deleting its input.
+    if(committed)for(const stage of Object.values(stages))await ds.table(stage).delete({ignoreNotFound:true}).catch(()=>{});
+    await rm(dir,{recursive:true,force:true});
+  }
 }
 export async function nativeHistoryClient(source,env,signal,budget){
   const prefix=`WOO_${source==='ww'?'UK':'US'}`,base=env[prefix+'_URL'],key=env[prefix+'_CONSUMER_KEY'],secret=env[prefix+'_CONSUMER_SECRET'];
@@ -82,19 +114,22 @@ export function correspondence(order,roster){
   const expected=stamp(roster.created_at?.value||roster.created_at);
   return !!date&&!!expected&&date===expected&&(!roster.currency||String(order.currency).toUpperCase()===roster.currency.toUpperCase());
 }
-export async function collectHistory({bigquery,project,o,adapter,batches=5,revision='history-20261020-v2',evidenceTable=null,env=process.env,commit=commitBatch,client=sourceClient,nativeClient=nativeHistoryClient,fetchImpl=fetch}){
+export async function collectHistory(args){
+  const start=performance.now(),run={committed_batches:0,committed_records:0};
+  try{return await collectHistoryRun({...args,run});}
+  catch(error){error.history_context={operation:'collect',...run,elapsed_ms:Math.round(performance.now()-start)};throw error;}
+}
+async function collectHistoryRun({bigquery,project,o,adapter,batches=5,run,revision='history-20261020-v2',evidenceTable=null,env=process.env,commit=commitBatch,client=sourceClient,nativeClient=nativeHistoryClient,fetchImpl=fetch}){
   if(!['roster','retained','native','metorik_orders','metorik_customers','shopify','migration'].includes(adapter)||!Number.isInteger(batches)||batches<1||batches>1200)throw Error('Invalid collection bounds');
   if((adapter==='shopify')!==(o.source==='shopify')&&adapter!=='roster'&&adapter!=='retained'&&adapter!=='migration')throw Error('Adapter/source mismatch');
   if(['retained','migration'].includes(adapter)&&!/^\w+\.\w+$/.test(evidenceTable||''))throw Error('Explicit existing evidence table required');
   if(!/^[A-Za-z0-9_-]{1,100}$/.test(revision))throw Error('Invalid revision');
   const jobKey=hash(JSON.stringify([o.source,adapter,o.start,o.end,evidenceTable,revision]));
-  const [progress]=await read(bigquery,`SELECT cursor,complete FROM ${fq(project,o.dataset,'history_progress')} WHERE job_key=@job LIMIT 2`,{job:jobKey});
-  if(progress.length>1)throw Error('Duplicate progress');
+  const warehouseRead=(query,params={},types={})=>historyQuery(bigquery,{query,params,types,maximumBytesBilled:SCOPE.bytes,jobTimeoutMs:20000},{stage:'batch_read'});
+  const [progress]=await historyQuery(bigquery,{query:`SELECT cursor,complete FROM ${fq(project,o.dataset,'history_progress')} WHERE job_key=@job LIMIT 2`,params:{job:jobKey},maximumBytesBilled:SCOPE.bytes,jobTimeoutMs:20000},{stage:'progress_read'});
+  if(progress.length>1)throw Object.assign(Error('Duplicate progress'),{history_diagnostic:{stage:'progress_read'}});
   if(progress[0]?.complete)return {source:o.source,adapter,status:'complete',batches:0,records:0};
-  if(adapter==='roster'){
-    const [counts]=await read(bigquery,`WITH selected AS (${historyRosterSql(project,o.source)}) SELECT COUNT(*) orders FROM selected`,{start:o.start,end:o.end},{start:'DATE',end:'DATE'});
-    if(!counts[0]||Number(counts[0].orders)>60000||Number(counts[0].orders)<1)throw Error('Roster bound/empty selection');
-  }
+  if(adapter==='roster')return collectRoster({bigquery,project,o,jobKey,revision,batches,cursor:progress[0]?.cursor||'',run});
   let cursor=progress[0]?.cursor||'',records=0,processed=0,complete=false;
   const deadline=Date.now()+600000,budget={requests:0,bytes:0,maxRequests:adapter==='native'?120000:2400,maxBytes:268435456};
   const signal=AbortSignal.timeout(600000);let transport;
@@ -103,11 +138,8 @@ export async function collectHistory({bigquery,project,o,adapter,batches=5,revis
   const fetchPage=boundedFetch(budget,fetchImpl);
   for(;processed<batches&&!complete;processed++){
     if(Date.now()>=deadline)break;
-    let orders=[],evidence=[],next=cursor;
-    if(adapter==='roster'){
-      const [rows]=await read(bigquery,`WITH selected AS (${historyRosterSql(project,o.source)}) SELECT * FROM selected WHERE order_id>@cursor ORDER BY order_id LIMIT 101`,{start:o.start,end:o.end,cursor},{start:'DATE',end:'DATE'});
-      orders=rows.slice(0,100);complete=rows.length<=100;next=orders.at(-1)?.order_id||cursor;
-    }else if(adapter.startsWith('metorik_')){
+    let orders=[],evidence=[],next=cursor,pendingRecords=0;
+    if(adapter.startsWith('metorik_')){
       const page=Number(cursor||0)+1;if(page>1200)throw Error('Metorik historical cap exceeded');
       const resource=adapter==='metorik_orders'?'orders':'customers',key=env[`METORIK_${o.source==='ww'?'UK':'US'}_API_KEY`];if(!key)throw Error('Missing Metorik configuration');
       const url=new URL(`https://app.metorik.com/api/v1/store/${resource}`);url.searchParams.set('per_page','50');url.searchParams.set('page',String(page));
@@ -119,16 +151,16 @@ export async function collectHistory({bigquery,project,o,adapter,batches=5,revis
           evidence.push(...observations({source:o.source,record:r,provider:adapter,recordId:mid,profileKey:`metorik:${o.source}:${mid}`}));}
       }else{
         const ids=rows.map(r=>String(r.order_id??r.id));if(new Set(ids).size!==ids.length||ids.some(x=>!/^\d+$/.test(x)))throw Error('Invalid Metorik order identities');
-        const [roster]=await read(bigquery,`SELECT * FROM ${fq(project,o.dataset,'history_orders')} WHERE source=@source AND order_id IN UNNEST(@ids)`,{source:o.source,ids},{ids:['STRING']});
+        const [roster]=await warehouseRead(`SELECT * FROM ${fq(project,o.dataset,'history_orders')} WHERE source=@source AND order_id IN UNNEST(@ids)`,{source:o.source,ids},{ids:['STRING']});
         for(const r of rows){const oid=String(r.order_id??r.id),original=roster.find(x=>x.order_id===oid);if(!original)continue;
           if(!correspondence(r,original))throw Error('Metorik order correspondence failed');
           const mid=id(r.metorik_customer_id||r.customer?.metorik_customer_id),native=id(r.customer_id);
           const pk=native&&native===original.customer_id?profile(o.source,native):mid?`metorik:${o.source}:${mid}`:null;
           evidence.push(...observations({source:o.source,record:r,provider:adapter,recordId:oid,orderId:oid,profileKey:pk}));}
       }
-      complete=!p.has_more_pages;next=String(page);records+=rows.length;
+      complete=!p.has_more_pages;next=String(page);pendingRecords=rows.length;
     }else if(['native','shopify'].includes(adapter)){
-      const [selected]=await read(bigquery,`SELECT * FROM ${fq(project,o.dataset,'history_orders')} WHERE source=@source AND order_id>@cursor ORDER BY order_id LIMIT 51`,{source:o.source,cursor});
+      const [selected]=await warehouseRead(`SELECT * FROM ${fq(project,o.dataset,'history_orders')} WHERE source=@source AND order_id>@cursor ORDER BY order_id LIMIT 51`,{source:o.source,cursor});
       const batch=selected.slice(0,50);complete=selected.length<=50;next=batch.at(-1)?.order_id||cursor;
       if(adapter==='shopify'&&batch.length){
         const data=await transport.graphql('query HistoryOrders($ids:[ID!]!){nodes(ids:$ids){... on Order{id email createdAt updatedAt displayFinancialStatus cancelledAt customer{id email}}}}',{ids:batch.map(r=>r.order_id)});
@@ -151,12 +183,12 @@ export async function collectHistory({bigquery,project,o,adapter,batches=5,revis
       const [d,t]=evidenceTable.split('.');
       const oid=adapter==='migration'?"JSON_VALUE(TO_JSON_STRING(t),'$.source_order_id')":"COALESCE(JSON_VALUE(TO_JSON_STRING(t),'$.order_id'),JSON_VALUE(TO_JSON_STRING(t),'$.id'))";
       // Existing migration exports must explicitly carry original store/order IDs.
-      const [rows]=await read(bigquery,`WITH retained AS (SELECT ${oid} order_id,TO_JSON_STRING(t) payload FROM ${fq(project,d,t)} t WHERE ${oid}>@cursor ${adapter==='migration'?"AND JSON_VALUE(TO_JSON_STRING(t),'$.source_store')=@source":''}) SELECT order_id,IF(BYTE_LENGTH(payload)<=2097152,payload,NULL) payload FROM retained ORDER BY order_id,payload LIMIT 101`,{cursor,...(adapter==='migration'?{source:o.source}:{})});
+      const [rows]=await warehouseRead(`WITH retained AS (SELECT ${oid} order_id,TO_JSON_STRING(t) payload FROM ${fq(project,d,t)} t WHERE ${oid}>@cursor ${adapter==='migration'?"AND JSON_VALUE(TO_JSON_STRING(t),'$.source_store')=@source":''}) SELECT order_id,IF(BYTE_LENGTH(payload)<=2097152,payload,NULL) payload FROM retained ORDER BY order_id,payload LIMIT 101`,{cursor,...(adapter==='migration'?{source:o.source}:{})});
       // Never split duplicate order groups across a cursor boundary.
       let batch=rows.length>100?rows.filter(r=>r.order_id!==rows.at(-1).order_id):rows;
       if(rows.length>100&&!batch.length)throw Error('Retained duplicate group exceeds bound');
       const ids=[...new Set(batch.map(r=>r.order_id))];
-      const [roster]=ids.length?await read(bigquery,`SELECT * FROM ${fq(project,o.dataset,'history_orders')} WHERE source=@source AND order_id IN UNNEST(@ids)`,{source:o.source,ids},{ids:['STRING']}):[[]];
+      const [roster]=ids.length?await warehouseRead(`SELECT * FROM ${fq(project,o.dataset,'history_orders')} WHERE source=@source AND order_id IN UNNEST(@ids)`,{source:o.source,ids},{ids:['STRING']}):[[]];
       for(const row of batch){if(typeof row.payload!=='string')throw Error('Retained payload bound');budget.bytes+=Buffer.byteLength(row.payload);if(Buffer.byteLength(row.payload)>2097152||budget.bytes>budget.maxBytes)throw Error('Retained payload bound');const original=roster.find(r=>r.order_id===row.order_id);if(!original)continue;
         const parsed=JSON.parse(row.payload),raw=parsed.raw_json?typeof parsed.raw_json==='string'?JSON.parse(parsed.raw_json):parsed.raw_json:null;
         const corresponding=adapter==='migration'?{id:parsed.source_order_id,date_created_gmt:parsed.source_order_created_at,currency:parsed.currency}:raw||parsed;
@@ -165,8 +197,8 @@ export async function collectHistory({bigquery,project,o,adapter,batches=5,revis
       }
       next=batch.at(-1)?.order_id||cursor;complete=rows.length<=100;
     }
-    if(adapter==='roster')records+=orders.length;else if(!adapter.startsWith('metorik_'))records+=new Set(evidence.map(r=>r.order_id)).size;
-    await commit({bigquery,project,dataset:o.dataset,jobKey,source:o.source,adapter,revision,expectedCursor:cursor,cursor:next,complete,orders,evidence});cursor=next;
+    if(!adapter.startsWith('metorik_'))pendingRecords=new Set(evidence.map(r=>r.order_id)).size;
+    await commit({bigquery,project,dataset:o.dataset,jobKey,source:o.source,adapter,revision,expectedCursor:cursor,cursor:next,complete,orders,evidence});cursor=next;records+=pendingRecords;run.committed_batches++;run.committed_records=records;
   }
   return {source:o.source,adapter,status:complete?'complete':'resumable',batches:processed,records,requests:budget.requests,bytes:budget.bytes};
 }
@@ -186,7 +218,7 @@ export async function publishHistory({bigquery,project,dataset,snapshot,revision
     ASSERT (SELECT COUNTIF(resolution='matched') FROM ${t('identity_order_links')} WHERE snapshot_id=@snapshot)>0 AS 'No supported cross-source matches';
     INSERT INTO ${t('identity_snapshots')} SELECT @snapshot,'ready',@start,@end,COUNT(*),CURRENT_TIMESTAMP() FROM ${t('identity_order_links')} WHERE snapshot_id=@snapshot;
     COMMIT TRANSACTION;`;
-  await bigquery.query({query,params:{snapshot,revision,start:BigQuery.date(HISTORY_SCOPE.start),end:BigQuery.date(HISTORY_SCOPE.end)},types:{start:'DATE',end:'DATE'},maximumBytesBilled:SCOPE.bytes,jobTimeoutMs:20000});
+  await historyQuery(bigquery,{query,params:{snapshot,revision,start:BigQuery.date(HISTORY_SCOPE.start),end:BigQuery.date(HISTORY_SCOPE.end)},types:{start:'DATE',end:'DATE'},maximumBytesBilled:SCOPE.bytes,jobTimeoutMs:20000},{stage:'publish',write:true});
   return {status:'published',snapshot,mode:'email_candidate_v2'};
 }
 export async function main(argv=process.argv.slice(2),env=process.env){
@@ -199,7 +231,7 @@ export async function main(argv=process.argv.slice(2),env=process.env){
   if(o.start<HISTORY_SCOPE.start||o.start>o.end||o.end>HISTORY_SCOPE.end)throw Error('History dates outside bound');
   if(!['plan','setup','collect','preview','status','check','publish'].includes(command)||o.apply!==['setup','collect','publish'].includes(command))throw Error('Writes require --apply; reads reject it');
   const {bigquery,project}=createBigQueryClient(env);
-  if(command==='plan'){const [rows]=await read(bigquery,`WITH selected AS (${historyRosterSql(project,o.source)}) SELECT COUNT(*) orders FROM selected`,{start:o.start,end:o.end},{start:'DATE',end:'DATE'});const n=Number(rows[0]?.orders),valid=Number.isSafeInteger(n)&&n>0&&n<=60000;if(!valid)process.exitCode=2;return {read_only:true,source:o.source,orders:n,within_bound:valid};}
+  if(command==='plan'){const [rows]=await historyQuery(bigquery,{query:`WITH selected AS (${historyRosterSql(project,o.source)}) SELECT COUNT(*) orders FROM selected`,params:{start:o.start,end:o.end},types:{start:'DATE',end:'DATE'},maximumBytesBilled:SCOPE.bytes,jobTimeoutMs:20000},{stage:'roster_count'});const n=Number(rows[0]?.orders),valid=Number.isSafeInteger(n)&&n>0&&n<=60000;if(!valid)process.exitCode=2;return {read_only:true,source:o.source,orders:n,within_bound:valid};}
   if(command==='setup')return setupHistory({bigquery,project,dataset:o.dataset});
   if(command==='collect')return collectHistory({bigquery,project,o,adapter:extra.adapter,batches:Number(extra.batches||5),revision:extra.revision,evidenceTable:extra['evidence-table'],env});
   if(command==='status'){const [jobs]=await read(bigquery,`SELECT source,adapter,revision,COUNT(*) jobs,COUNTIF(complete) completed_jobs FROM ${fq(project,o.dataset,'history_progress')} GROUP BY source,adapter,revision ORDER BY source,adapter,revision`);return {read_only:true,jobs};}
@@ -219,4 +251,4 @@ export async function main(argv=process.argv.slice(2),env=process.env){
   }
   return publishHistory({bigquery,project,dataset:o.dataset,snapshot:extra.snapshot,revision:extra.revision});
 }
-if(import.meta.url===pathToFileURL(process.argv[1]||'').href)main().then(r=>console.log(JSON.stringify(r))).catch(error=>{console.error(JSON.stringify({status:'failed',message:'History operation stopped; resume the same bounded command after resolving access or correspondence. No customer values logged.',failure_category:/correspondence|identity|contract|pagination/.test(error.message)?'source_contract':/bound|cap|deadline/.test(error.message)?'bound':/configuration/.test(error.message)?'configuration':'access_or_storage'}));process.exitCode=2;});
+if(import.meta.url===pathToFileURL(process.argv[1]||'').href)main().then(r=>console.log(JSON.stringify(r))).catch(error=>{console.error(JSON.stringify(historyFailure(error,{operation:process.argv[2],...error.history_context})));process.exitCode=2;});
