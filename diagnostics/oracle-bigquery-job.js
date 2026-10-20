@@ -4,6 +4,9 @@ import {pathToFileURL} from 'node:url';
 import {createBigQueryClient} from '../bigquery/client.js';
 import {boundedEvidenceRead} from '../oracle/bounded-evidence-read.js';
 const fields=(value,keys)=>Object.fromEntries(keys.map(key=>[key,value?.[key]??null]));
+// Operator kinds help evaluate candidate materialisation boundaries. Substeps can
+// contain SQL expressions, literals and identifiers and must never be emitted.
+const operatorKinds=new Set(['READ','WRITE','COMPUTE','FILTER','AGGREGATE','SORT','JOIN','ANALYTIC_FUNCTION','LIMIT','UNION']);
 export async function inspectBigQueryJob({bigquery,jobId,location,expectedHash}){
  if(!/^[A-Za-z0-9_-]{1,100}$/.test(jobId||'')||!/^[A-Za-z0-9-]{1,100}$/.test(location||''))throw Error('Explicit job ID and location required');
  if(expectedHash&&!/^[a-f0-9]{64}$/.test(expectedHash))throw Error('Invalid SQL hash');
@@ -18,7 +21,10 @@ export async function inspectBigQueryJob({bigquery,jobId,location,expectedHash})
   ...fields(q,['cacheHit','totalBytesBilled','statementType']),
   totalBytesProcessed:q.totalBytesProcessed??s.totalBytesProcessed??null,totalSlotMs:q.totalSlotMs??s.totalSlotMs??null,
   creation_to_start_ms:duration(s.creationTime,s.startTime),start_to_end_ms:duration(s.startTime,s.endTime),
-  query_plan:(q.queryPlan||[]).slice(0,100).map(stage=>fields(stage,['id','name','status','startMs','endMs','inputStages','parallelInputs','completedParallelInputs','recordsRead','recordsWritten','shuffleOutputBytes','shuffleOutputBytesSpilled','slotMs','waitRatioAvg','waitRatioMax','readRatioAvg','computeRatioAvg','writeRatioAvg'])),
+  configured_bounds:fields(m.configuration,['jobTimeoutMs']),
+  query_bounds:fields(m.configuration?.query,['maximumBytesBilled','priority','useQueryCache']),
+  plan_stage_count:(q.queryPlan||[]).length,plan_truncated:(q.queryPlan||[]).length>100,
+  query_plan:(q.queryPlan||[]).slice(0,100).map(stage=>({...fields(stage,['id','name','status','startMs','endMs','inputStages','parallelInputs','completedParallelInputs','recordsRead','recordsWritten','shuffleOutputBytes','shuffleOutputBytesSpilled','slotMs','waitRatioAvg','waitRatioMax','readRatioAvg','computeRatioAvg','writeRatioAvg']),operator_kinds:[...new Set((stage.steps||[]).filter(step=>operatorKinds.has(step?.kind)).map(step=>step.kind))]})),
   timeline:(q.timeline||[]).slice(-30).map(sample=>fields(sample,['elapsedMs','totalSlotMs','pendingUnits','completedUnits','activeUnits'])),
   cancellation:m.status?.state==='DONE'?(m.status?.errorResult?.reason==='stopped'?'stopped':'terminal_without_cancellation_proof'):'not_terminal',
   limitation:'Metadata does not verify returned cohort calculations or isolate network submission/result polling time.'};
