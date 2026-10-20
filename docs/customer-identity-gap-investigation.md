@@ -1,5 +1,10 @@
 # Bounded relationship and email investigation — 2026-10-20
 
+Follow-up: [Metorik-first identity completion](metorik-identity-completion.md)
+records the operator's resolved live samples, demonstrated collector email
+omissions, separate ID semantics, retained-evidence design and remaining blockers.
+Do not interpret this older run's unavailable samples as upstream email absence.
+
 Production figures supplied by the operator (not remeasured here): WW 24,462
 selected orders; USD 3,734; Shopify 14,102 relationships selected. Three sampled
 Woo orders/source had no usable emails. Shopify had 3/3 usable order/customer
