@@ -18,7 +18,9 @@ sequencing, first-to-second timing, repeat metrics and product/journey analysis.
 ## Source contracts and selection
 
 * Roster: original `metorik_uk.orders`, `metorik_us.orders`, and Shopify
-  `order_locations`, inclusive UTC dates 2022-09-24–2026-10-19, all statuses.
+  `order_locations`, all retained original history through 2026-10-19 UTC, all statuses. The technical
+  lower guard is 1900-01-01, not a business launch-date assertion; the older
+  diagnostic’s 2022 start date does not truncate historical enrichment.
   Deduplicate by store/order. At most 60,000 original orders/source. No products,
   currencies, transaction eligibility, classification or original dates change.
 * Retained native evidence: explicit existing `dataset.table`, original `order_id`

@@ -10,7 +10,7 @@ import {read,setup as legacySetup} from './operations.js';
 import {sourceClient,boundedFetch} from './runtime.js';
 import {emailFields} from './historical-evidence.js';
 import {emailState} from './email.js';
-import {HISTORY_TABLES,historyRosterSql,historyCoverageSql,historyLinkCtes} from './history-sql.js';
+import {HISTORY_TABLES,HISTORY_SCOPE,historyRosterSql,historyCoverageSql,historyLinkCtes} from './history-sql.js';
 
 const hash=value=>createHash('sha256').update(value).digest('hex');
 const stamp=value=>{if(!value)return null;const text=String(value);const d=new Date(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?$/.test(text)?text+'Z':text);return Number.isNaN(d.valueOf())?null:d.toISOString();};
@@ -186,15 +186,18 @@ export async function publishHistory({bigquery,project,dataset,snapshot,revision
     ASSERT (SELECT COUNTIF(resolution='matched') FROM ${t('identity_order_links')} WHERE snapshot_id=@snapshot)>0 AS 'No supported cross-source matches';
     INSERT INTO ${t('identity_snapshots')} SELECT @snapshot,'ready',@start,@end,COUNT(*),CURRENT_TIMESTAMP() FROM ${t('identity_order_links')} WHERE snapshot_id=@snapshot;
     COMMIT TRANSACTION;`;
-  await bigquery.query({query,params:{snapshot,revision,start:BigQuery.date(SCOPE.start),end:BigQuery.date(SCOPE.end)},types:{start:'DATE',end:'DATE'},maximumBytesBilled:SCOPE.bytes,jobTimeoutMs:20000});
+  await bigquery.query({query,params:{snapshot,revision,start:BigQuery.date(HISTORY_SCOPE.start),end:BigQuery.date(HISTORY_SCOPE.end)},types:{start:'DATE',end:'DATE'},maximumBytesBilled:SCOPE.bytes,jobTimeoutMs:20000});
   return {status:'published',snapshot,mode:'email_candidate_v2'};
 }
 export async function main(argv=process.argv.slice(2),env=process.env){
   const [command,...args]=argv,extra={};
-  const base=args.filter(a=>{const m=/^--(adapter|batches|evidence-table|snapshot|revision)=(.+)$/.exec(a);if(!m)return true;extra[m[1]]=m[2];return false;});
+  const base=args.filter(a=>{const m=/^--(adapter|batches|evidence-table|snapshot|revision|start|end)=(.+)$/.exec(a);if(!m)return true;extra[m[1]]=m[2];return false;});
   if(!base.some(a=>a.startsWith('--source=')))base.push('--source=ww');
   if(base.some(a=>a.startsWith('--max-orders=')))throw Error('History roster has a fixed 60000-order source cap');
-  const o=options(base);if(!['plan','setup','collect','preview','status','check','publish'].includes(command)||o.apply!==['setup','collect','publish'].includes(command))throw Error('Writes require --apply; reads reject it');
+  const o={...options(base),start:extra.start||HISTORY_SCOPE.start,end:extra.end||HISTORY_SCOPE.end};
+  for(const value of [o.start,o.end])if(!/^\d{4}-\d{2}-\d{2}$/.test(value)||Number.isNaN(Date.parse(value))||new Date(value).toISOString().slice(0,10)!==value)throw Error('Invalid history dates');
+  if(o.start<HISTORY_SCOPE.start||o.start>o.end||o.end>HISTORY_SCOPE.end)throw Error('History dates outside bound');
+  if(!['plan','setup','collect','preview','status','check','publish'].includes(command)||o.apply!==['setup','collect','publish'].includes(command))throw Error('Writes require --apply; reads reject it');
   const {bigquery,project}=createBigQueryClient(env);
   if(command==='plan'){const [rows]=await read(bigquery,`WITH selected AS (${historyRosterSql(project,o.source)}) SELECT COUNT(*) orders FROM selected`,{start:o.start,end:o.end},{start:'DATE',end:'DATE'});const n=Number(rows[0]?.orders),valid=Number.isSafeInteger(n)&&n>0&&n<=60000;if(!valid)process.exitCode=2;return {read_only:true,source:o.source,orders:n,within_bound:valid};}
   if(command==='setup')return setupHistory({bigquery,project,dataset:o.dataset});

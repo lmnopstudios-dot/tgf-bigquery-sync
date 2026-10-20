@@ -99,7 +99,7 @@ test('actual Oracle SQL deduplicates guest Woo originals, excludes import copies
   const q=rs.find(r=>r.name==='qualifying_orders');q.body=expandReplace(q.body,'q',[...cols,'governed_customer_ref']);
   const resolved=resolutions();const mappingCols=['source_store','source_order_id','source_customer_id','canonical_customer_ref','resolution','financial_status','cancelled'];
   const actual={...tables,fixture_raw:{columns:cols,rows:rawRows},fixture_mapping:{columns:mappingCols,rows:resolved.map(r=>[r.source,r.order_id,r.customer_id,r.canonical_customer_ref,r.resolution,r.financial_status,r.cancelled])}};
-  const ctes='ci_mapping AS (SELECT * FROM fixture_mapping),'+rs.map(r=>`${r.name} AS (${r.body})`).join(',');
+  const ctes='ci_mapping AS (SELECT * FROM fixture_mapping),'+parsed.relations.find(r=>r.name==='ci_aliases').body.replace(/^/, 'ci_aliases AS (')+'),'+rs.map(r=>`${r.name} AS (${r.body})`).join(',');
   const params={time_zone:'UTC',observation_end:'2026-10-19',first_order_semantic:'first_observed_ever',cohort_entry_start:'2024-01-01',cohort_entry_end:'2026-10-19',entry_source:null,entry_channel:null};
   const rows=execute(`WITH ${ctes} SELECT source_store,order_ref,source_customer_id,governed_customer_ref,order_sequence FROM ranked_orders`,actual,params);
   assert.equal(rows.length,6);assert.ok(!rows.some(r=>r.order_ref==='import'));
@@ -107,6 +107,14 @@ test('actual Oracle SQL deduplicates guest Woo originals, excludes import copies
   assert.ok(rows.filter(r=>r.source_store==='ww').every(r=>r.source_customer_id===null));
   const entry=execute(`WITH ${ctes} SELECT source_store,order_ref FROM entry_orders`,actual,params);
   assert.equal(entry.length,3);assert.ok(entry.some(r=>r.source_store==='ww'&&r.order_ref==='1'));assert.ok(!entry.some(r=>r.source_store==='shopify'));
+  // A source-local registered ID can bring in an older order arriving after
+  // the frozen roster, without inventing an ID for either guest record.
+  const sharedRef=resolved.find(r=>r.source==='ww'&&r.order_id==='1').canonical_customer_ref;
+  const extended={...actual,fixture_raw:{columns:cols,rows:[...rawRows,raw('ww','older','REGISTERED','2019-01-01T00:00:00Z'),raw('ww','known','REGISTERED','2024-01-05T00:00:00Z')]},fixture_mapping:{columns:mappingCols,rows:[...actual.fixture_mapping.rows,['ww','known','REGISTERED',sharedRef,'matched',null,false]]}};
+  const extendedRows=execute(`WITH ${ctes} SELECT source_store,order_ref,order_sequence FROM ranked_orders`,extended,params);
+  assert.equal(extendedRows.find(r=>r.order_ref==='older').order_sequence,1);assert.equal(extendedRows.find(r=>r.order_ref==='s1').order_sequence,6);
+  const extendedEntry=execute(`WITH ${ctes} SELECT source_store,order_ref FROM entry_orders`,extended,params);
+  assert.equal(extendedEntry.length,2);assert.ok(!extendedEntry.some(r=>r.order_ref==='1'||r.source_store==='shopify'));
 });
 
 test('evidence IDs are idempotent; placeholder/null and changed usable revisions remain additive',()=>{
@@ -140,7 +148,7 @@ test('atomic staging deduplicates retries and never advances a checkpoint on fai
 });
 test('publication verifies original rosters, adapter completion and matches before atomically marking readiness',async()=>{
   const queries=[];await publishHistory({bigquery:{query:async q=>queries.push(q)},project:'fixture',dataset:'identity',snapshot:'v2'});
-  assert.equal(queries.length,1);const q=queries[0];assert.equal(q.params.start.value,'2022-09-24');assert.match(q.query,/Canonical roster missing/);assert.match(q.query,/Shopify collection incomplete/);assert.match(q.query,/No supported cross-source matches/);assert.match(q.query,/COMMIT TRANSACTION/);assert.equal(q.maximumBytesBilled,'1000000000');
+  assert.equal(queries.length,1);const q=queries[0];assert.equal(q.params.start.value,'1900-01-01');assert.match(q.query,/Canonical roster missing/);assert.match(q.query,/Shopify collection incomplete/);assert.match(q.query,/No supported cross-source matches/);assert.match(q.query,/COMMIT TRANSACTION/);assert.equal(q.maximumBytesBilled,'1000000000');
 });
 
 test('Metorik collector uses the production page/auth contract and retains positive guest customer IDs',async()=>{

@@ -1,5 +1,8 @@
 import {fq} from './collect.js';
 
+// Technical historical lower bound, not an asserted business launch date.
+export const HISTORY_SCOPE=Object.freeze({start:'1900-01-01',end:'2026-10-19'});
+
 export const HISTORY_TABLES={
   history_orders:[['source','STRING'],['order_id','STRING'],['customer_id','STRING'],['created_at','TIMESTAMP'],['currency','STRING'],['financial_status','STRING'],['cancelled','BOOLEAN']],
   email_observations:[['evidence_id','STRING'],['source','STRING'],['order_id','STRING'],['profile_key','STRING'],['provider','STRING'],['record_id','STRING'],['field_path','STRING'],['email','STRING'],['normalized','STRING'],['email_state','STRING'],['native_customer_id','STRING'],['metorik_customer_id','STRING'],['observed_at','TIMESTAMP'],['retrieved_at','TIMESTAMP']],

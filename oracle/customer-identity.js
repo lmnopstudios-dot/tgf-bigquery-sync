@@ -1,6 +1,7 @@
 import {cohortRelations} from './cohort-execution.js';
 import {boundedQuery} from './bounded-query.js';
 import {fq,SCOPE} from '../customer-identity/collect.js';
+import {HISTORY_SCOPE} from '../customer-identity/history-sql.js';
 
 export function identityConfiguration(env=process.env) {
   if (!['email_candidate_v1','email_candidate_v2'].includes(env.ORACLE_CUSTOMER_IDENTITY_MODE)) return null;
@@ -43,7 +44,7 @@ export function applyCustomerIdentitySql(sql,project,identity,reference='custome
     const gate=/source_customer_id IS NOT NULL AND source_customer_id NOT IN \(''\s*,\s*'0'\) AND /;
     if(!gate.test(qualifying.body))throw Error('Missing shared customer eligibility gate');
     qualifying.body=qualifying.body.replace(gate,'');
-    qualifying.body=`SELECT q.* REPLACE(COALESCE(m.canonical_customer_ref,IF(q.source_customer_id IS NOT NULL AND q.source_customer_id NOT IN ('','0'),q.${reference},NULL),CONCAT('c_',TO_HEX(SHA256(CONCAT('unlinked-order|',q.source_store,'|',q.${oid}))))) AS ${reference})
+    qualifying.body=`SELECT q.* REPLACE(COALESCE(m.canonical_customer_ref,(SELECT canonical_customer_ref FROM ci_aliases WHERE local_ref=q.${reference}),IF(q.source_customer_id IS NOT NULL AND q.source_customer_id NOT IN ('','0'),q.${reference},NULL),CONCAT('c_',TO_HEX(SHA256(CONCAT('unlinked-order|',q.source_store,'|',q.${oid}))))) AS ${reference})
       FROM (${qualifying.body}) q LEFT JOIN ci_mapping m ON m.source_store=q.source_store AND m.source_order_id=q.${oid}`;
     const aliases=`ci_aliases AS (SELECT CONCAT('c_',TO_HEX(SHA256(CONCAT(IF(source_store='shopify','shopify','woo'),'|',source_store,'|',source_customer_id)))) local_ref,MIN(canonical_customer_ref) canonical_customer_ref FROM ci_mapping WHERE source_customer_id IS NOT NULL AND source_customer_id NOT IN ('','0') GROUP BY source_store,source_customer_id HAVING COUNT(DISTINCT canonical_customer_ref)=1)`;
     const result=reference==='customer_ref'?parsed.result.replaceAll('= @customer_ref','= COALESCE((SELECT canonical_customer_ref FROM ci_aliases WHERE local_ref=@customer_ref),@customer_ref)'):parsed.result;
@@ -98,7 +99,7 @@ export function identityAwareService(options,factory,coverageSql) {
       },{maximumMs:5000,...(args[1]?.signal?{signal:args[1].signal}:{})});
       const snapshot=snapshots[0];
       if (snapshots.length!==1 || snapshot.state!=='ready' || Number(snapshot.mapping_count)<1 ||
-        (snapshot.start_date?.value||snapshot.start_date)!==SCOPE.start || (snapshot.end_date?.value||snapshot.end_date)!==SCOPE.end) throw Error('Snapshot not ready');
+        (snapshot.start_date?.value||snapshot.start_date)!==(config.orderLinks?HISTORY_SCOPE.start:SCOPE.start) || (snapshot.end_date?.value||snapshot.end_date)!==SCOPE.end) throw Error('Snapshot not ready');
       const [counts]=await boundedQuery(options.bigquery,{
         query:identityCoverageSql(coverageSql(options.project),options.project,config),
         params:{matrixify_app_id:'gid://shopify/App/1758145'},maximumBytesBilled:SCOPE.bytes,jobTimeoutMs:5000,
