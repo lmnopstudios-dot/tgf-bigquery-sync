@@ -53,7 +53,7 @@ export function answerCompleteness(context,result){
     if(nested&&evidence.rows?.length&&!evidence.coverage?.failed_sources?.length&&(!(evidence.rows||[]).some(r=>r.entry_product_ref)||!(evidence.rows||[]).some(r=>!r.entry_product_ref)))missing.push('grouping');
     for(const c of evidence.coverage?.classification||[]){
       const counts=['eligible_first_customers','named_customers','generic_only_customers','unknown_customers'];
-      if(!counts.every(k=>Number.isSafeInteger(c[k])&&c[k]>=0)||c.named_customers+c.generic_only_customers+c.unknown_customers!==c.eligible_first_customers)missing.push('classification_coverage');
+      if(!counts.every(k=>Number.isSafeInteger(c[k])&&c[k]>=0)||c.named_customers+c.generic_only_customers+c.unknown_customers+(c.core_only_customers||0)!==c.eligible_first_customers)missing.push('classification_coverage');
     }
     const expectedChannel=context.channel==='online'?'Online':context.channel==='instore'?'In-store':null;
     if((evidence.definition?.cohort?.entry_channel||null)!==expectedChannel||(evidence.definition?.subsequent?.channel||null)!==expectedChannel)missing.push('population');
@@ -64,6 +64,10 @@ export function answerCompleteness(context,result){
       const key=JSON.stringify([r.source_platform,r.source_store,r.collaboration_name,r.entry_product_ref||null,r.window_days]);
       if(memberships.has(key))missing.push('duplicate_cohort');memberships.add(key);
       if(['collaboration','collaborations'].includes(r.collaboration_name))missing.push('classification_granularity');
+      if(!['unverified','verified_continuous'].includes(r.observation_coverage_status))missing.push('observation_coverage');
+      if(r.observation_coverage_status==='verified_continuous'&&(!r.verified_coverage_start||!r.verified_coverage_end||!r.coverage_evidence))missing.push('observation_coverage');
+      if(r.observation_coverage_status==='unverified'&&(r.mature_customers!==0||r.repeat_customers!==0||r.repeat_rate!==null))missing.push('observation_coverage');
+      if(r.observation_coverage_status!=null&&(!Number.isInteger(r.observed_repeat_customers)||r.observed_repeat_customers<r.repeat_customers||r.observed_repeat_customers>r.cohort_customers))missing.push('observed_returns');
       const buckets=['same_collaboration','different_collaboration','core_range','unknown'];
       if(buckets.some(k=>r[k]!=null)&&(!buckets.every(k=>Number.isInteger(r[k])&&r[k]>=0)||buckets.reduce((n,k)=>n+r[k],0)!==r.repeat_customers))missing.push('second_purchase_classification');
       if((product||r.entry_product_ref)&&(!r.entry_product_ref||typeof r.entry_product!=='string'))missing.push('product_identity');

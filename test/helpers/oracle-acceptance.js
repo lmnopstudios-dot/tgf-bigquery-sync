@@ -1,7 +1,7 @@
 import { createHistoricalEventDependencies } from '../../oracle/historical-event-provider.js';
 import { fixtureRetention,retentionEvents } from './retention-events.js';
 import { createMemoryExportStore } from '../../oracle/product-priority-storage.js';
-import { cohortRows } from './cohort-retention-fixture.js';
+import { cohortRows,fixtureObservationCertificates } from './cohort-retention-fixture.js';
 import { population } from './basket-fixture.js';
 import { BASKET_LINE_COLUMNS } from '../../oracle/basket-provider.js';
 import assert from 'node:assert/strict';
@@ -15,7 +15,7 @@ import { createMemoryAnalysisJobStore } from '../../oracle/analysis-jobs.js';
 import { executeGovernedAgentAnalysis } from '../../oracle/analysis-route-dispatcher.js';
 import { transitionAnalysisContext } from '../../oracle/analysis-context.js';
 export const NOW=Date.parse('2026-10-14T12:00:00Z');
-export function acceptanceFixture({fail_start=null,campaigns=false,country_conversion=false,retention=false,retention_events=false,named_events=false,now=NOW}={}){
+export function acceptanceFixture({fail_start=null,campaigns=false,country_conversion=false,retention=false,retention_events=false,named_events=false,observationCertificates=fixtureObservationCertificates,now=NOW}={}){
   const exportStore=createMemoryExportStore();
   const calls=[],sql=[],queries=[],wireQueries=[],state={fail_start,campaigns,country_conversion,retention,retention_events,named_events};
   const native=createShopifySalesKpiService({getShop:async()=>({id:'gid://shopify/Shop/fixture',currencyCode:'GBP',ianaTimezone:'Europe/London'}),runReport:async query=>{
@@ -50,13 +50,13 @@ export function acceptanceFixture({fail_start=null,campaigns=false,country_conve
     if(query.query.includes('window_coverage'))return [[{month_start:'2026-09-01',month_end:'2026-09-30',status:'collected',retrieved_at:'2026-10-01T12:00:00Z'}]];
     throw Error('Unexpected fixture query');
   }};
-  const deps=createOracleProviderDependencies({project:'fixture',env:{},shopifySales:native,bigquery});
-  const live=createOracleProviderDependencies({project:'fixture',bigquery,env:{KLAVIYO_PRIVATE_API_KEY:'fixture',KLAVIYO_API_REVISION:'2026-07-15'},klaviyoFetch:async(url,options)=>{
+  const deps=createOracleProviderDependencies({observationCertificates,project:'fixture',env:{},shopifySales:native,bigquery});
+  const live=createOracleProviderDependencies({observationCertificates,project:'fixture',bigquery,env:{KLAVIYO_PRIVATE_API_KEY:'fixture',KLAVIYO_API_REVISION:'2026-07-15'},klaviyoFetch:async(url,options)=>{
     calls.push({provider:'campaigns',discovery:true,url,method:options.method});assert.equal(options.method,'GET');
     const page=new URL(url).searchParams.has('page[cursor]')?1:0;
     return {ok:true,status:200,json:async()=>({data:(page?[1,3,5]:[6,4,2]).map(i=>({type:'campaign',id:'c'+i,attributes:{name:'Campaign '+i,status:'Sent',send_time:`2026-09-${29-i}T23:30:00Z`,send_strategy:{method:'static'}},relationships:{'campaign-messages':{data:[{id:'m'+i},{id:'ab'+i}]}}})),links:{next:page?null:'/api/campaigns?page[cursor]=next'}})};
   }});
-  const countryDeps=createOracleProviderDependencies({project:'fixture',bigquery,env:{},now:()=>new Date(now),shopifyCountryGraphql:async(query,variables)=>{
+  const countryDeps=createOracleProviderDependencies({observationCertificates,project:'fixture',bigquery,env:{},now:()=>new Date(now),shopifyCountryGraphql:async(query,variables)=>{
     calls.push({provider:'country_conversion',args:{query,variables}});assert.doesNotMatch(query,/mutation/);
     if(query.includes('OracleCountryCapability'))return {shop:{id:'gid://shopify/Shop/42',ianaTimezone:'Europe/London'},currentAppInstallation:{accessScopes:[{handle:'read_reports'}]}};
     const rest=variables.query.includes("session_country_code != 'GB'"),local=!rest&&variables.query.includes("session_country_code = 'GB'"),names=['day',...(local?['session_country_code']:[]),'sessions','sessions_that_completed_checkout'];

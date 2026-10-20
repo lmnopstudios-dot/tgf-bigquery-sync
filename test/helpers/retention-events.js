@@ -1,3 +1,4 @@
+import {observationWindow} from '../../oracle/observation-coverage.js';
 // Event fixture with independently hand-counted expectations in the incident suite.
 // No real identities or production counts are used.
 export const RETENTION_REQUEST=`Which TGF collaborations bring customers back after their first purchase?
@@ -49,8 +50,10 @@ export function fixtureRetention(events,args,{pieces=false}={}){
    const memberships=new Map();for(const p of classified){const name=names(p)[0];memberships.set(name+(pieces?'/'+p.id:''),{name,p});}
    for(const {name,p} of memberships.values())for(const window of [90,180]){
     const key=[first.source_platform,first.source_store,name,pieces?p.id:'',window].join('/');
-    let b=buckets.get(key);if(!b){b={source_platform:first.source_platform,source_store:first.source_store,collaboration_name:name,...(pieces?{entry_product_ref:first.source_platform+':'+first.source_store+':'+p.id,entry_product_title:p.title}:{}),window_days:window,cohort_customers:0,mature_customers:0,repeat_customers:0,same_collaboration:0,different_collaboration:0,core_range:0,unknown:0,days:[]};buckets.set(key,b);}
-    b.cohort_customers++;const age=(Date.parse(args.observation_end)-Date.parse(date(first.timestamp)))/86400000;if(age<window)continue;b.mature_customers++;
+    let b=buckets.get(key);if(!b){b={source_platform:first.source_platform,source_store:first.source_store,collaboration_name:name,...(pieces?{entry_product_ref:first.source_platform+':'+first.source_store+':'+p.id,entry_product_title:p.title}:{}),observation_coverage_status:args.coverage_status||'verified_continuous',verified_coverage_start:args.coverage_start||'2020-01-01',verified_coverage_end:args.coverage_end||args.observation_end,coverage_evidence:args.coverage_evidence||'fixture:hand-counted',observed_repeat_customers:0,window_days:window,cohort_customers:0,mature_customers:0,repeat_customers:0,same_collaboration:0,different_collaboration:0,core_range:0,unknown:0,days:[]};buckets.set(key,b);}
+    b.cohort_customers++;
+    const returns=second&&(Date.parse(date(second.timestamp))-Date.parse(date(first.timestamp)))/86400000<=window;if(returns)b.observed_repeat_customers++;
+    if(!observationWindow({entry:date(first.timestamp),days:window,requestedEnd:args.observation_end,coverage:{status:b.observation_coverage_status,start:b.verified_coverage_start,end:b.verified_coverage_end}}))continue;b.mature_customers++;
     if(!second||(Date.parse(date(second.timestamp))-Date.parse(date(first.timestamp)))/86400000>window)continue;
     b.repeat_customers++;b.days.push((Date.parse(second.timestamp)-Date.parse(first.timestamp))/86400000);
     const kinds=new Set(second.pieces.map(p=>names(p).length===1?(names(p)[0]===name?'same_collaboration':'different_collaboration'):['core','core_range'].includes(p.group)?'core_range':'unknown'));
