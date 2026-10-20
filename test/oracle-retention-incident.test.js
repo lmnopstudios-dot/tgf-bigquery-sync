@@ -15,7 +15,7 @@ function verify(r,f){
  assert.equal(r.analysis_context.current_day_included,false);assert.equal(r.evidence.definition.time_zone,'Europe/London');
  assert.equal(r.evidence.ranking_window,90);assert.equal(f.calls.length,6);
  assert.deepEqual(f.calls.map(c=>c.args.entry_source).sort(),['shopify','shopify','woo','woo','woo','woo']);
- for(const q of f.queries){assert.equal(q.params.time_zone,'Europe/London');assert.equal(q.params.ranking_window,90);assert.equal(q.params.observation_end,'2026-10-18');assert.equal(q.params.first_order_semantic,'first_observed_ever');assert.equal(q.params.entry_channel,null);assert.equal(q.params.subsequent_channel,null);assert.equal(q.maximumBytesBilled,'20000000000');assert.doesNotMatch(q.query,q.params.entry_source==='woo'?/shopify_data\./:/metorik_uk\.|metorik_us\./);}
+ for(const q of f.queries){assert.equal(q.params.time_zone,'Europe/London');assert.equal(q.params.ranking_window,90);assert.equal(q.params.observation_end,'2026-10-18');assert.equal(q.params.first_order_semantic,'first_observed_ever');assert.equal(q.params.entry_channel,null);assert.equal(q.params.subsequent_channel,null);assert.equal(q.maximumBytesBilled,'2500000000');assert.doesNotMatch(q.query,q.params.entry_source==='woo'?/shopify_data\./:/metorik_uk\.|metorik_us\./);}
  const row=(name,window,piece)=>r.evidence.rows.find(x=>x.source_platform==='woo'&&x.collaboration_name===name&&x.window_days===window&&(piece?x.entry_product_ref?.endsWith(':'+piece):!x.entry_product_ref));
  assert.deepEqual([row('alpha',90).cohort_customers,row('alpha',90).mature_customers,row('alpha',90).repeat_customers],[4,3,1]);
  assert.equal(row('alpha',90).repeat_rate,1/3);assert.equal(row('alpha',90).median_days_to_second,10);

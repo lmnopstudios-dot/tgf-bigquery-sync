@@ -992,6 +992,15 @@
         "pagination cancellation, partial pages and expired leases",
         "real production cohort factory across Woo WW, Woo USD and Shopify"
       ]
+    },
+    {
+      "id": "cohort-transactional-decomposition",
+      "file": "test/cohort-execution.test.js",
+      "covers": [
+        "single snapshot and temporary-only materialisation for all six source/group routes",
+        "distinct client and warehouse bounds; complete calculation output with child-job timings",
+        "timing-read failure retains completed aggregate evidence"
+      ]
     }
   ]
 }
