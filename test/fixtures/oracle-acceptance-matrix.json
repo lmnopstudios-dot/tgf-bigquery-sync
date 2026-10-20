@@ -1023,6 +1023,15 @@
         "direct interactive durable followups and recovery with independent source failure",
         "legacy evidence cannot resurrect unsupported rates; London through yesterday"
       ]
+    },
+    {
+      "id": "customer-migration-history-evidence",
+      "file": "test/customer-migration-history.test.js",
+      "covers": [
+        "aggregate migration evidence with namespace and profile conflicts",
+        "source-qualified history contract through direct interactive durable follow-ups and recovery",
+        "Matrixify copies excluded and unknown bridge counts never zero"
+      ]
     }
   ]
 }

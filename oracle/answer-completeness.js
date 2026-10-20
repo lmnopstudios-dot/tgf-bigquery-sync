@@ -1,3 +1,4 @@
+import { validCustomerHistoryContract } from './customer-history.js';
 import { assertBasketEvidence } from './basket-composition.js';
 import { assertPopulationConversionEvidence } from './population-conversion.js';
 // Operation proof is independent of presentation and saved plan stamps. A plan
@@ -40,6 +41,7 @@ export function answerCompleteness(context,result){
   if(operation==='basket_composition'&&evidence?.kind==='governed_basket_composition'){try{assertBasketEvidence({...context,source_store:result.analysis_context?.source_store||context.source_store},evidence);}catch{missing.push('calculations_or_subset');}}
   if(operation==='population_comparison'&&evidence?.kind==='governed_population_conversion'){try{assertPopulationConversionEvidence(context,evidence);}catch{missing.push('population_or_grouping_or_coverage');}}
   if(operation==='cohort_retention'&&evidence?.kind==='governed_cohort_retention'){
+    if(evidence.coverage?.customer_history!=null&&!validCustomerHistoryContract(evidence.coverage.customer_history))missing.push('customer_history');
     if(evidence.subject!=='customer_journey'||evidence.operation!==operation)missing.push('subject');
     if(!Array.isArray(evidence.rows))missing.push('cohort_outputs');
     if(!evidence.periods?.some(p=>p.start_date===context.start_date&&p.end_date===context.end_date))missing.push('period');

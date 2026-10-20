@@ -1,3 +1,4 @@
+import { HISTORY_LIMITATION } from './customer-history.js';
 import { observationCoverage } from './observation-coverage.js';
 import {classificationReaderCtes,collaborationStateSql} from './classification-reader.js';
 import { bigQueryDate,bigQueryDateParameters } from '../bigquery/date-parameters.js';
@@ -72,7 +73,7 @@ export const JOURNEY_SEMANTICS=Object.freeze({
   first_observed:'first_observed_ever sequences all available governed history before applying the cohort-entry dates; first_observed_in_period is the explicit window-relative alternative.',
   historical_coverage:'First observed ever means first observed in available governed history, not necessarily the customer\'s first-ever TGF purchase.',
   returning_customer:'A governed identified customer with at least one qualifying order strictly after the entry order.',
-  identity:'Source-qualified stable customer IDs are used. No Woo-to-Shopify bridge is asserted because no governed deterministic cross-source key is currently persisted.',
+  identity:HISTORY_LIMITATION,
   classification:'Only active governed product classifications attached directly to a source product or propagated across an active human-approved product mapping qualify. Requested unclassified coverage is returned explicitly as unclassified, never silently treated as non-matching. Suggested/fuzzy mappings never qualify.',
   money:'Source-native refund-adjusted operational line sales are grouped by currency and never converted or represented as canonical company finance.',
   privacy:'Only aggregates are returned. Customer references, source IDs and all PII remain server-side.'
