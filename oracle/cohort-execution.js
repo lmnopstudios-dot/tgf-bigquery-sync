@@ -27,7 +27,7 @@ export const COHORT_BOUNDARIES=Object.freeze(['orders','ranked_orders','classifi
 // Conservatively cap each statement so even per-statement billing enforcement
 // cannot multiply the existing 20 GB execution allowance.
 export const COHORT_STATEMENT_BYTES='2500000000';
-export function cohortExecutionPlan(sql){
+export function cohortExecutionPlan(sql,boundaries=COHORT_BOUNDARIES){
   const {relations,result}=cohortRelations(sql),completed=new Set();
   const prefix=(end,root)=>{
     const candidates=relations.slice(0,end).map(r=>({...r,body:completed.has(r.name)?`SELECT * FROM _SESSION.cohort_${r.name}`:r.body}));
@@ -36,7 +36,7 @@ export function cohortExecutionPlan(sql){
     visit(root);
     return candidates.filter(r=>needed.has(r.name)).map(r=>`${r.name} AS (${r.body})`).join(',\n');
   };
-  const stages=COHORT_BOUNDARIES.map(name=>{
+  const stages=boundaries.map(name=>{
     const index=relations.findIndex(r=>r.name===name);if(index<0)throw Error('Not a retention query');
     const query=`WITH ${prefix(index+1,name)} SELECT * FROM ${name}`;
     completed.add(name);return {name,query};
@@ -61,4 +61,15 @@ export function cohortExecutionOptions(sql,timeoutMs){
  return {query:decomposedCohortSql(sql),jobTimeoutMs:timeoutMs,
   scriptOptions:{statementTimeoutMs:String(Math.min(timeoutMs,15000)),statementByteBudget:COHORT_STATEMENT_BYTES},
   maximumBytesBilled:COHORT_STATEMENT_BYTES};
+}
+
+/** Diagnostic decomposition retains the same transaction snapshot and ownership. */
+export function auditExecutionOptions(sql,boundaries,timeoutMs=20000){
+ const plan=cohortExecutionPlan(sql,boundaries);
+ return {query:`BEGIN TRANSACTION;
+ ${plan.stages.map(({name,query})=>`CREATE TEMP TABLE cohort_${name} AS ${query};`).join('\n')}
+ CREATE TEMP TABLE cohort_result AS ${plan.result};
+ COMMIT TRANSACTION;
+ SELECT * FROM cohort_result;`,jobTimeoutMs:timeoutMs,
+ scriptOptions:{statementTimeoutMs:String(Math.min(timeoutMs,15000)),statementByteBudget:'500000000'},maximumBytesBilled:'500000000'};
 }

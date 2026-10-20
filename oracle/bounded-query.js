@@ -40,6 +40,7 @@ export async function boundedQuery(bigquery,settings,options={}) {
       if(typeof bigquery.createQueryJob!=='function')return bigquery.query(query);
       emit({stage:'query_submission',dry_run:settings.dryRun===true});
       [job]=await bigquery.createQueryJob(query);
+      options.onQueryAllocated?.(job);
       emit({stage:'query_response',dry_run:settings.dryRun===true,query_id:/^[A-Za-z0-9_-]{1,100}$/.test(job.id||'')?job.id:undefined,query_location:job.metadata?.jobReference?.location||settings.location});
       if(ended||options.signal?.aborted||expired()){cancel();throw Object.assign(Error('Query interrupted'),{code:options.signal?.aborted?'REQUEST_CANCELLED':'ORACLE_AGENT_DEADLINE'});}
       emit({stage:'query_running',query_location:settings.location,query_timeout_ms:query.jobTimeoutMs,query_id:/^[A-Za-z0-9_-]{1,100}$/.test(job.id||'')?job.id:undefined});

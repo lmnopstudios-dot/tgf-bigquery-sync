@@ -1,27 +1,78 @@
 # Exact-email customer history audit
 
-Run from the checkout containing this change on Render with its existing warehouse
-identity:
+Run this single bounded diagnostic from the existing Render service shell. It
+extracts the PR branch without changing the running checkout or deploying it:
 
 ```sh
-timeout --signal=TERM --kill-after=3s 100s node diagnostics/customer-email-history.js
+git fetch --no-tags origin fix/email-audit-stages
+email_revision="$(git rev-parse FETCH_HEAD)"
+email_probe_root="$(mktemp -d /tmp/email-audit.XXXXXX)"
+git archive "$email_revision" | tar -x -C "$email_probe_root"
+ln -s "$PWD/node_modules" "$email_probe_root/node_modules"
+printf 'Email audit revision: %s\n' "$email_revision"
+timeout --signal=TERM --kill-after=3s 100s node "$email_probe_root/diagnostics/customer-email-history.js"
 ```
 
-No new credentials, connector, collection, backfill, inventory scan, schema change,
-source mutation, scheduled job, deployment or persistent customer mapping is needed.
-Default stdout is one compact aggregate JSON object. A failed component gives a
-nonzero exit status and preserves independent source results. SIGINT/SIGTERM cancel
-owned queries, including allocation that completes after cancellation.
+Existing warehouse credentials are reused. No collection, backfill, source
+mutation, persistent mapping, deployment or merge occurs. Stdout contains one
+compact aggregate JSON object. A failed component returns nonzero and keeps
+independent successful results; missing reads retain null counts. SIGINT/SIGTERM
+cancel owned queries, including late allocation.
 
-The audit owns a 90-second total deadline, 20-second per-job deadline, at most 11
-warehouse jobs and 200 returned aggregate rows per job. Four jobs inspect only
-known customer/order table columns (at most 200 metadata rows each; no inventory
-is printed). Each data statement is capped at 1 GB billed. Two conditional linked
-calculations reuse the existing eight-statement temporary-table cohort plan, so
-conservatively allow 25 GB total across all data statements. Temp tables are job
-session data, with no persistent destination. Query/result pagination and late
-cancellation use the shared boundedQuery ownership mechanism. The external timeout
-allows cleanup; it does not grant extra query ownership.
+The total ownership deadline remains 90 seconds and each job remains capped at
+20 seconds, with 15-second script statement caps, at most 11 query jobs and 200
+aggregate rows per result. Source-local audits run first. Overlap runs only over
+successfully evaluated sources; linked repeats/cohorts then run conditionally.
+Availability no longer depends on product classification, collaboration membership
+or entry-history sequencing. Its unambiguous-customer count is explicitly local
+to that source; cross-source matching and linked calculations still apply global
+conflict/shared-address exclusions across the evaluated source set.
+
+The shared dependency-pruning decomposition materializes normalized email states,
+profile summaries and canonical orders once per source audit. Overlap also
+materializes eligible profiles/addresses and deduplicates addresses before joining
+sources. Linked scripts retain shared order/classification/cohort boundaries plus
+email states/profiles. Every script uses one transaction snapshot and session-only
+temporary tables. No temporary relation survives the job session. Cross-migration
+counts compare earliest eligible Woo and latest eligible Shopify timestamps per
+linked record: existence of a strictly later pair is equivalent, without an
+order-by-order self-join. Original order deduplication, cancellation, eligibility,
+source namespaces, Matrixify exclusions and strict timestamp rules are unchanged.
+
+At most 47 data statements (including final reads) are capped at 500 MB each,
+for a conservative 23.5 GB data allowance; four bounded metadata queries retain
+the 1 GB cap. These are upper billing bounds, not predicted scan sizes. Each
+allocated script also permits one child-job metadata listing, limited to 100
+entries, no pagination, at most one second and the remaining overall deadline.
+Unavailable telemetry stays null and never invalidates completed calculations.
+
+`source_outcomes` reports elapsed wall time and a small lifecycle allowlist:
+submission, allocation response, result retrieval, completion/failure and
+cancellation acknowledgement. `execution_stages` reports child-statement queue
+and execution milliseconds for email states/profiles, orders, eligibility,
+classification, membership and final aggregate stages where present. SQL, job IDs,
+schema rows and customer identifiers are never printed. Submission latency
+includes authentication/network/allocation; result retrieval includes server
+execution and polling, so it must not be called pure execution time. Child-job
+statistics isolate server queue/execution for completed stages. Missing statistics
+or inaccessible child metadata do not establish a fast or completed stage.
+
+### Incident evidence and verification boundary
+
+The supplied Render run completed schema reads and USD in 19,690 ms with
+`email_field_available=false`; Shopify failed at 20,262 ms and WW at 20,287 ms with
+`ORACLE_AGENT_DEADLINE`. Only USD was evaluated. WW/Shopify email availability,
+matching, overlap and linked repeats were unknown, never missing-email/zero-match
+results. USD's raw Woo payload evaluation was null: the absence concerns only
+supported stored fields actually evaluated, not upstream Woo email availability.
+
+Inspection found that each old source audit embedded all-source email evidence
+and retained entry sequencing plus product/collaboration classification. Repeated
+CTE references could expand these scans and joins. The old report has no
+submission/child-stage telemetry, so the exact contribution of authentication,
+queueing, execution and result polling to those deadlines is **not established**.
+The new telemetry is required to measure that split; a suspected expensive SQL
+path is not itself a measured production bottleneck.
 
 ## Demonstrated repository evidence
 
@@ -77,7 +128,7 @@ profile wins. Shared addresses, email changes and unknown aliases remain limits.
 
 Source JSON includes eligible denominators, usable/missing/malformed/placeholder
 and conflicting customer/order evidence, distinct usable addresses, duplicate
-profiles, customer/order disagreements and collaboration coverage. Some error
+profiles and customer/order disagreements. Collaboration calculations run later. Some error
 buckets overlap. Distinct-address and exact-overlap counts include usable values
 on conflicted profiles; unique candidate counts exclude those conflicts. Pair
 results include explicit eligible-customer, unevaluable and unmatched counts.
@@ -89,8 +140,8 @@ observed eligible histories in multiple sources. Persisted customer mappings
 remain zero: this diagnostic persists nothing.
 
 A failed source is unknown. Supported independent pairs can still be evaluated;
-WW is excluded from linkage when its additional raw-order evidence could not be
-evaluated. `email_field_available: false` describes supported stored fields in
+WW remains unknown when its required raw-order schema read fails; no missing-email
+counts are synthesized from incomplete evidence. `email_field_available: false` describes supported stored fields in
 successfully inspected relations. It does not describe upstream email availability
 or prove no alternative table exists.
 
@@ -141,8 +192,16 @@ complete 90/180-day calculations, incomplete observation coverage, fresh/retaine
 answers and direct/interactive/durable/recovery delivery. Local adapters do not
 verify BigQuery dialect or deployed schema.
 
-The 20 October 2026 workspace attempt failed with HTTP 403 before warehouse
-results. No live source availability, email overlap, unique candidate counts,
-linked cohorts or repeat counts have been demonstrated. This is not evidence of
-a Render failure. Run the command above in Render to establish those findings;
-missing evidence remains unknown and no migration spreadsheet is required first.
+The current workspace live attempt on 20 October 2026 failed at OAuth token
+acquisition (`oauth2.googleapis.com`, HTTP 403, about 80 ms) before job allocation.
+It returned no warehouse calculations. This is separate from the supplied Render
+run and does not establish a Render failure. No new live WW/Shopify availability,
+matching, overlap, linked cohorts or cross-migration counts are verified here.
+The Render command above remains the required live verification.
+
+Local validation for this revision: 13 focused email tests pass, including actual
+production availability and cross-migration arithmetic through the SQLite adapter.
+Shared acceptance passes 592/592, and browser acceptance passes 21 conversations
+at desktop/mobile widths with durable refresh. Shared bounded-query cancellation
+and polling regressions also pass. These checks do not verify BigQuery dialect,
+Render execution, live counts or production stage timings.
