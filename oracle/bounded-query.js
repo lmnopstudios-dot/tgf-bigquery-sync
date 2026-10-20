@@ -5,6 +5,9 @@ export async function boundedQuery(bigquery,settings,options={}) {
   let job,ended=false,cancellation;
   const started=performance.now();
   const expired=()=>options.deadlineAt!=null&&Date.now()>=options.deadlineAt||performance.now()-started>=(options.maximumMs??45000);
+  const assertOwned=()=>{
+    if(ended||options.signal?.aborted||expired())throw Object.assign(Error('Query interrupted'),{code:options.signal?.aborted?'REQUEST_CANCELLED':'ORACLE_AGENT_DEADLINE'});
+  };
   const emit=event=>options.onProviderStage?.({...event,elapsed_ms:Math.min(3600000,Math.max(0,Math.round(performance.now()-started)))});
   const cancel=()=>{
     if(!job)return;
@@ -41,10 +44,20 @@ export async function boundedQuery(bigquery,settings,options={}) {
       emit({stage:'query_running',query_location:settings.location,query_timeout_ms:query.jobTimeoutMs,query_id:/^[A-Za-z0-9_-]{1,100}$/.test(job.id||'')?job.id:undefined});
       // A dry run has no executable result job and commonly has no job ID.
       if(settings.dryRun)return [job];
-      const result=await job.getQueryResults();
-      if(ended||options.signal?.aborted||expired())throw Object.assign(Error('Query interrupted'),{code:options.signal?.aborted?'REQUEST_CANCELLED':'ORACLE_AGENT_DEADLINE'});
+      // SDK auto-pagination also polls incomplete jobs. Own that loop so an
+      // in-flight response cannot initiate more requests after ownership ends.
+      const rows=[];
+      let next={},response;
+      do {
+        assertOwned();
+        const [page,continuation,metadata]=await job.getQueryResults({...next,autoPaginate:false});
+        assertOwned();
+        if(metadata?.jobComplete!==false)for(const row of page)rows.push(row);
+        next=continuation;
+        response=metadata;
+      } while(next||response?.jobComplete===false);
       emit({stage:'query_results'});
-      return result;
+      return [rows,null,response];
     },options);
   }catch(error){ended=true;emit({stage:'query_failed'});await cancel();throw error;}
   finally{ended=true;options.signal?.removeEventListener('abort',abort);}

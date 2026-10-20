@@ -978,6 +978,15 @@
         "late query rows rejected after deadline",
         "read-only metadata without SQL or customer data"
       ]
+    },
+    {
+      "id": "query-polling-ownership",
+      "file": "test/oracle-query-polling-ownership.test.js",
+      "covers": [
+        "installed SDK incomplete-job polling after deadline",
+        "pagination cancellation, partial pages and expired leases",
+        "real production cohort factory across Woo WW, Woo USD and Shopify"
+      ]
     }
   ]
 }
