@@ -18,16 +18,17 @@ function runLinkSql(input){
  const parsed=cohortRelations(`WITH ${emailEvidenceCtes('fixture',schemas)} SELECT * FROM email_links`);
  const sql='WITH '+parsed.relations.filter(r=>r.name!=='email_raw').map(r=>`${r.name} AS (${r.body})`).join(',')+' SELECT source_store,COUNT(*) profiles FROM email_links GROUP BY 1';
  const python=`import sqlite3,json,sys,re
-p=json.load(sys.stdin);c=sqlite3.connect(':memory:');c.row_factory=sqlite3.Row
+p=json.loads(sys.argv[1]);c=sqlite3.connect(':memory:');c.row_factory=sqlite3.Row
 c.execute('CREATE TABLE email_raw(source_store,profile,evidence_level,evidence_order,email)')
 c.executemany('INSERT INTO email_raw VALUES(?,?,?,?,?)',p['input'])
 c.create_function('REGEXP_CONTAINS',2,lambda s,r: bool(re.search(r,s)) if s else False)
+c.create_function('IF',3,lambda condition,yes,no: yes if condition else no)
 q=p['sql'].replace('UNION DISTINCT','UNION').replace("SELECT AS STRUCT source_store,profile",'SELECT source_store,profile')
 q=re.sub(r"(?<![A-Za-z0-9_])r'((?:[^']|'')*)'",lambda m:"'"+m.group(1)+"'",q)
 # COUNTIF contains no nested calls in the factory relations under test.
 q=re.sub(r'COUNTIF\\(([^()]+)\\)',r'SUM(CASE WHEN \\1 THEN 1 ELSE 0 END)',q)
 print(json.dumps([dict(x) for x in c.execute(q)]))`;
- const result=spawnSync('python3',['-c',python],{input:JSON.stringify({sql,input}),encoding:'utf8'});assert.equal(result.status,0,result.stderr);return JSON.parse(result.stdout);
+ const result=spawnSync('python3',['-c',python,JSON.stringify({sql,input})],{stdio:['ignore','pipe','pipe'],encoding:'utf8',timeout:10000});assert.equal(result.status,0,result.stderr);return JSON.parse(result.stdout);
 }
 test('production email link SQL excludes duplicate profiles, shared addresses and customer/order disagreement globally',()=>{
  const row=(store,id,email,level='order')=>[store,id,level,'o',email];

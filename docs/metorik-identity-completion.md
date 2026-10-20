@@ -26,6 +26,37 @@ the reader's profile model would also exclude guest customer profiles. This prov
 an extraction/storage limitation, **not** that Metorik currently exposes the
 original email, and not privacy restrictions, deletion or anonymization.
 
+### Verified request contract and repository writer lineage
+
+The probe uses the same `METORIK_UK_API_KEY` and `METORIK_US_API_KEY` environment
+variables as `METORIK_STORES`, the same `https://app.metorik.com/api/v1/store/`
+base, `Accept: application/json` and `Authorization: Bearer <key>`. It does not
+invent a store ID, API-key query parameter or alternative authentication. Like
+the historical production customer collector, it omits discovery analytical
+date parameters. Both production and probe accept a top-level array, `data`
+array or resource-named array. Pagination metadata precedence is `pagination`,
+`meta`, then `links`. The probe now honors all three aliases, validates supplied
+page metadata, and stops when pagination is absent rather than guessing another
+page. Page/request/byte/deadline caps and no retries remain intentional diagnostic
+differences from full production collection. Tests execute the production request
+and response helpers extracted from `server.js` against the same fake transport
+as the probe, without booting the credential-dependent server or sync routes.
+This verifies compatibility with repository code, not live provider access.
+
+These are traced code paths, rather than origins inferred from dataset names:
+
+| Destination | Repository writer path | Persisted email/raw behavior |
+|---|---|---|
+| `metorik_uk.orders`, `metorik_us.orders` and their `order_line_items` | `/sync-metorik-{uk,us}-orders` → `syncMetorikOrders` → `fetchAllMetorikOrders` → `transformMetorikOrder` / `transformMetorikLineItems` → `safelyReplaceMetorikTables` → expiring staging tables → transactional DELETE/INSERT into `store.dataset` selected by `METORIK_STORES` | Explicit schemas and transforms omit order/customer emails and complete raw payloads. Line metadata and selected financial JSON subobjects are retained. |
+| `metorik_uk.customers`, `metorik_us.customers` | `/sync-metorik-{uk,us}-customers` → `syncMetorikCustomers` → `fetchAllMetorikCustomers` → `transformMetorikCustomer` → `safelyReplaceMetorikCustomers` → staging table → transactional DELETE/INSERT | Positive Metorik ID retained separately from nullable/zero Woo ID; email and complete raw customer JSON omitted. |
+| `woocommerce_uk.orders_api` | `/sync-woo-uk-orders` → `syncWooUKOrders` → native REST v3 orders with Basic auth from `WOO_UK_*` → `transformWooUKOrder` → `ensureWooUKOrdersTable` and page `table.insert` after initial TRUNCATE | Full original native response is serialized as `raw_json`; billing email can exist there even without a selected email column. This writer is separate from Metorik. |
+| `commerce.order_geography` | `metorik/geography.js` CSV import → validated expiring stage and promotion | Selected shipping geography only; does not replace original Metorik orders or preserve a complete email export. |
+| Other discovered tables, including any `woocommerce_us` payloads or external migration exports | No origin established by this investigation | Treat as unknown until writer/job/import provenance is verified. A matching dataset or table name is insufficient. |
+
+None of these writer routes was called by this task. Repository writer capability
+does not prove which job last populated a live table, or exclude older/manual
+imports. Production job/audit provenance and schema reads remain unavailable.
+
 ## Live attempts and remaining unknowns
 
 The bounded probe attempted WW customers/orders and USD customers/orders: four

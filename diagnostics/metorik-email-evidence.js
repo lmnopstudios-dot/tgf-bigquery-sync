@@ -35,8 +35,11 @@ export async function sampleMetorik({key,fetchImpl=fetch}) {
         if(!response.ok){out.push({resource,page,status:'http_failure',http_status:response.status});break;}
         const body=await response.json(),records=Array.isArray(body)?body:Array.isArray(body?.data)?body.data:body?.[resource];
         if(!Array.isArray(records)||records.length>10)throw Error('Invalid bounded collection');
+        // Same metadata precedence as getMetorikPagination in server.js.
+        const pagination=body?.pagination||body?.meta||body?.links;
+        if(pagination&&(Number(pagination.current_page)!==page||!Number.isInteger(Number(pagination.per_page))||Number(pagination.per_page)<1||Number(pagination.per_page)>10||typeof pagination.has_more_pages!=='boolean'))throw Error('Invalid pagination');
         out.push({resource,page,status:'succeeded',...summarizeRecords(records,resource)});
-        if(records.length<10||body?.pagination?.has_more_pages===false)break;
+        if(!pagination||pagination.has_more_pages===false)break;
       }catch{out.push({resource,page,status:'unavailable_or_invalid_response'});break;}
     }
   }
