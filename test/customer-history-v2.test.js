@@ -144,14 +144,14 @@ test('collector resumes a committed Shopify batch, preserves explicit null custo
 
 test('atomic staging deduplicates retries and never advances a checkpoint on failed load',async()=>{
   const stages=[],loaded=[],queries=[],deleted=[];let fail=false;
-  const ds={createTable:async name=>{stages.push(name);},table:name=>({load:async file=>{loaded.push((await readFile(file,'utf8')).split('\n').map(JSON.parse));if(fail)throw Error('load unavailable');},delete:async()=>deleted.push(name)})};
-  const bq={dataset:()=>ds,query:async q=>{queries.push(q);}};
+  const ds={createTable:async name=>{stages.push(name);},table:name=>({createLoadJob:async file=>{loaded.push((await readFile(file,'utf8')).split('\n').map(JSON.parse));if(fail)throw Error('load unavailable');return [{getMetadata:async()=>[{status:{state:'DONE'}}]}];},delete:async()=>deleted.push(name)})};
+  const bq={dataset:()=>ds,query:async q=>{queries.push(q);return [[]];}};
   const e=makeObs('ww','1','kept@real.org');const args={bigquery:bq,project:'fixture',dataset:'identity',jobKey:'job',source:'ww',adapter:'native',revision:'v2',cursor:'1',expectedCursor:'',complete:true,evidence:[...e,...e]};
   await commitBatch(args);assert.equal(loaded[0].length,e.length);assert.equal(queries.length,1);assert.match(queries[0].query,/Concurrent progress changed/);assert.equal(deleted.length,1);
-  fail=true;await assert.rejects(commitBatch(args));assert.equal(queries.length,1);assert.equal(deleted.length,2);
+  fail=true;await assert.rejects(commitBatch(args));assert.equal(queries.length,1);assert.equal(deleted.length,1);
 });
 test('publication verifies original rosters, adapter completion and matches before atomically marking readiness',async()=>{
-  const queries=[];await publishHistory({bigquery:{query:async q=>queries.push(q)},project:'fixture',dataset:'identity',snapshot:'v2'});
+  const queries=[];await publishHistory({bigquery:{query:async q=>{queries.push(q);return [[]];}},project:'fixture',dataset:'identity',snapshot:'v2'});
   assert.equal(queries.length,1);const q=queries[0];assert.equal(q.params.start.value,'1900-01-01');assert.match(q.query,/Canonical roster missing/);assert.match(q.query,/Shopify collection incomplete/);assert.match(q.query,/No supported cross-source matches/);assert.match(q.query,/COMMIT TRANSACTION/);assert.equal(q.maximumBytesBilled,'1000000000');
 });
 
