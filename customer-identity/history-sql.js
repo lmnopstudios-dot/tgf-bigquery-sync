@@ -32,9 +32,9 @@ export function historyLinkCtes(project,dataset){
     SELECT o.source,o.order_id,CONCAT(IF(o.source='shopify','shopify','woo'),':',o.source,':',o.customer_id) profile_key FROM h_orders o WHERE o.customer_id IS NOT NULL AND o.customer_id NOT IN ('','0')
     UNION DISTINCT SELECT e.source,e.order_id,e.profile_key FROM h_evidence e JOIN h_orders o USING(source,order_id) WHERE e.profile_key IS NOT NULL
   ), h_aliases AS (
-    SELECT p.source,p.profile_key,MIN(CASE WHEN o.customer_id IS NOT NULL AND o.customer_id NOT IN ('','0') THEN CONCAT(IF(o.source='shopify','shopify','woo'),':',o.source,':',o.customer_id) ELSE p.profile_key END) canonical_profile_key
+    SELECT p.source,p.profile_key,COALESCE(MIN(CASE WHEN o.customer_id IS NOT NULL AND o.customer_id NOT IN ('','0') THEN CONCAT(IF(o.source='shopify','shopify','woo'),':',o.source,':',o.customer_id) ELSE NULL END),p.profile_key) canonical_profile_key
     FROM h_edges p JOIN h_orders o USING(source,order_id) GROUP BY p.source,p.profile_key
-    HAVING COUNT(DISTINCT CASE WHEN o.customer_id IS NOT NULL AND o.customer_id NOT IN ('','0') THEN CONCAT(IF(o.source='shopify','shopify','woo'),':',o.source,':',o.customer_id) ELSE p.profile_key END)=1
+    HAVING COUNT(DISTINCT CASE WHEN o.customer_id IS NOT NULL AND o.customer_id NOT IN ('','0') THEN CONCAT(IF(o.source='shopify','shopify','woo'),':',o.source,':',o.customer_id) ELSE NULL END)<=1
   ), h_direct_values AS (
     SELECT e.source,e.order_id,e.normalized FROM h_evidence e JOIN h_orders o USING(source,order_id) WHERE e.normalized IS NOT NULL
     UNION DISTINCT SELECT o.source,o.order_id,c.normalized FROM h_edges o JOIN h_evidence c ON c.source=o.source AND c.profile_key=o.profile_key WHERE c.normalized IS NOT NULL

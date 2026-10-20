@@ -70,6 +70,10 @@ test('registered historical IDs propagate usable order evidence even when curren
   more.email_observations.rows.push(...[...aliasCustomer,...aliasOrder].map(r=>ec.map(c=>r[c])));
   const aliasRows=execute(`WITH ${linksSql} SELECT * FROM h_resolved`,more);
   assert.ok(aliasRows.every(r=>r.resolution==='matched'));assert.equal(aliasRows.find(r=>r.order_id==='r1').shared_email,0);
+  more.history_orders.rows.push(['ww','later-guest',null,'2024-03-01T00:00:00Z','GBP',null,false]);
+  more.email_observations.rows.push(...observations({source:'ww',record:{metorik_customer_id:123,customer_id:0,email:null},provider:'metorik_orders',recordId:'later-guest',orderId:'later-guest',profileKey:'metorik:ww:123'}).map(r=>ec.map(c=>r[c])));
+  const continued=execute(`WITH ${linksSql} SELECT * FROM h_resolved`,more);
+  assert.ok(continued.every(r=>r.resolution==='matched'));assert.equal(continued.find(r=>r.order_id==='later-guest').customer_id,null);
 });
 
 function expandReplace(body,alias,columns){
