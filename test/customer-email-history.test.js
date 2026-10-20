@@ -2,8 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {spawnSync} from 'node:child_process';
 import {emailState,emailEvidenceCtes,emailLinkedJourneySql,emailSchemaSql} from '../oracle/email-linked-history.js';
-import {cohortRelations,cohortExecutionOptions} from '../oracle/cohort-execution.js';
-import {diagnoseEmailHistory,SOURCE_COUNTS,OVERLAP_COUNTS,emailOverlapSql} from '../diagnostics/customer-email-history.js';
+import {cohortRelations,cohortExecutionOptions,auditExecutionOptions} from '../oracle/cohort-execution.js';
+import {diagnoseEmailHistory,SOURCE_COUNTS,OVERLAP_COUNTS,emailOverlapSql,emailAuditSql,SOURCE_BOUNDARIES,executionStages,emailCrossMigrationSql} from '../diagnostics/customer-email-history.js';
 const schemas=Object.fromEntries(['metorik_uk','metorik_us','shopify_data','woocommerce_uk'].map(d=>[d,(d==='woocommerce_uk'?['orders_api']:d==='shopify_data'?['order_customers','customers']:['orders','customers']).flatMap(table_name=>['customer_id','order_id','email','raw_json'].map(column_name=>({table_name,column_name,data_type:'STRING'})))]));
 test('conservative email policy preserves plus and dots, rejects missing malformed placeholders',()=>{
  assert.deepEqual(emailState(' A.B+News@Actual.org '),{state:'usable',normalized:'a.b+news@actual.org'});
@@ -75,9 +75,12 @@ test('Render audit exercises real provider arguments and returns aggregate-only 
  assert.equal(r.linked.state,'fulfilled');assert.equal(r.linked.cross_migration_repeat_customers,2);assert.equal(r.linked.cohorts[0].observed_repeat_customers,2);assert.equal(r.linked.baseline[0].repeat_rate,null);
  assert.equal(r.queries,11);assert.equal(r.activated_customer_mappings,0);
  assert.doesNotMatch(JSON.stringify(r),/private-do-not-leak|private body|@actual|raw_json|column_name|SELECT /);
- assert.ok(f.calls.every(o=>o.maximumBytesBilled==='1000000000'&&o.jobTimeoutMs<=20000));
+ assert.ok(f.calls.every(o=>Number(o.maximumBytesBilled)<=1000000000&&o.jobTimeoutMs<=20000));
  assert.ok(f.calls.every(o=>o.params.matrixify_app_id==='gid://shopify/App/1758145'&&o.params.coverage_status==='unverified'));
- const linked=f.calls.filter(o=>o.query.includes('BEGIN TRANSACTION'));assert.equal(linked.length,2);assert.ok(linked.every(o=>o.scriptOptions));
+ const linked=f.calls.filter(o=>o.query.includes('BEGIN TRANSACTION'));assert.equal(linked.length,7);assert.ok(linked.every(o=>o.scriptOptions));
+ assert.equal(linked.reduce((n,o)=>n+(o.query.match(/CREATE TEMP TABLE/g)||[]).length+1,0),47);
+ assert.ok(linked.every(o=>o.maximumBytesBilled==='500000000'));
+ assert.ok(linked.every(o=>!/(?:INSERT INTO|UPDATE|DELETE FROM|CREATE TABLE)/.test(o.query)));
 });
 test('a failed source stays unknown while a supported independent pair is evaluated',async()=>{
  const f=fakeProvider({failed:'metorik_uk'}),r=await diagnoseEmailHistory({project:'fixture',bigquery:f.bigquery,now});
@@ -147,4 +150,84 @@ print(json.dumps([dict(x) for x in c.execute(q)]))`;
  const r=spawnSync('python3',['-c',python],{input:JSON.stringify({sql,input}),encoding:'utf8'});assert.equal(r.status,0,r.stderr);const rows=JSON.parse(r.stdout),ww=rows.find(r=>r.a==='ww'&&r.b==='shopify'),usd=rows.find(r=>r.a==='usd');
  assert.deepEqual(ww,{a:'ww',b:'shopify',exact_email_overlap:2,unique_candidate_emails:1,ambiguous_candidate_emails:1,left_eligible_customers:4,right_eligible_customers:3,left_unevaluable_customers:1,right_unevaluable_customers:0,left_unmatched_customers:0,right_unmatched_customers:1});
  assert.equal(usd.exact_email_overlap,1);assert.equal(usd.unique_candidate_emails,0);assert.equal(usd.ambiguous_candidate_emails,1);assert.equal(usd.left_unevaluable_customers,1);assert.equal(usd.left_unmatched_customers,1);
+});
+
+test('availability is source-local, product-free and uses shared bounded materialization',()=>{
+ for(const store of ['ww','shopify']){
+  const sql=emailAuditSql('fixture',schemas,store),options=auditExecutionOptions(sql,SOURCE_BOUNDARIES);
+  assert.doesNotMatch(sql,/entry_matches|classified_lines|order_line_items|ranked_orders|collaboration/);
+  assert.doesNotMatch(sql,store==='ww'?/fixture.shopify_data|fixture.metorik_us/:/fixture.woocommerce_uk|fixture.metorik_uk|fixture.metorik_us/);
+  assert.match(options.query,/BEGIN TRANSACTION/);
+  for(const name of SOURCE_BOUNDARIES)assert.equal(options.query.split('CREATE TEMP TABLE cohort_'+name+' AS').length,2);
+  assert.match(options.query,/_SESSION.cohort_email_states/);
+ }
+});
+test('execution metadata exposes bounded stage times without query text or identifiers',async()=>{
+ const r=await executionStages({getJobs:async o=>{
+  assert.equal(o.maxResults,100);assert.equal(o.autoPaginate,false);
+  return [[{metadata:{configuration:{query:{query:'CREATE TEMP TABLE cohort_email_states AS SELECT secret'}},statistics:{creationTime:'100',startTime:'120',endTime:'200'},status:{state:'DONE'}}}]];
+ }},{id:'private'});
+ assert.deepEqual(r,[{stage:'email_states',state:'done',queue_ms:20,execution_ms:80}]);
+ assert.doesNotMatch(JSON.stringify(r),/secret|private|SELECT/);
+});
+
+test('production availability aggregates execute eligibility, anonymous orders and conflicting evidence',()=>{
+ const parsed=cohortRelations(emailAuditSql('fixture',schemas,'ww'));
+ const rs=parsed.relations.filter(r=>r.name!=='email_raw').map(r=>{
+  if(r.name==='raw_orders')return 'raw_orders AS (SELECT * FROM order_input)';
+  if(r.name==='orders')return 'orders AS (SELECT DISTINCT * FROM raw_orders)';
+  return `${r.name} AS (${r.body})`;
+ });
+ const sql='WITH '+rs.join(',')+parsed.result;
+ const input=[['ww','1','order','1','one@real.org'],['ww','2','customer',null,'two@real.org'],['ww','2','order','2','changed@real.org'],['ww','0','order','3','guest@real.org'],['ww','3','order','4',null]];
+ const order=(id,profile,cancelled=0)=>['woo','ww','Online',id,profile,'2025-01-01','completed',100,0,0,cancelled];
+ const orders=[order('1','1'),order('1','1'),order('2','2'),order('3','0'),order('4','3'),order('5','5',1)];
+ const python=`import sqlite3,json,sys,re,hashlib
+p=json.load(sys.stdin);c=sqlite3.connect(':memory:');c.row_factory=sqlite3.Row
+c.execute('CREATE TABLE email_raw(source_store,profile,evidence_level,evidence_order,email)');c.executemany('INSERT INTO email_raw VALUES(?,?,?,?,?)',p['input'])
+c.execute('CREATE TABLE order_input(source_platform,source_store,channel,order_ref,source_customer_id,order_timestamp,status,order_total,refunds,migrated,cancelled)');c.executemany('INSERT INTO order_input VALUES(?,?,?,?,?,?,?,?,?,?,?)',p['orders'])
+c.create_function('REGEXP_CONTAINS',2,lambda s,r: bool(re.search(r,s)) if s else False)
+c.create_function('DATE',2,lambda s,t:s[:10] if s else None)
+c.create_function('IF',3,lambda a,b,d:b if a else d)
+c.create_function('SHA256',1,lambda x:hashlib.sha256(x.encode()).hexdigest())
+c.create_function('TO_HEX',1,lambda x:x)
+c.create_function('CONCAT',-1,lambda *x:''.join(x))
+q=p['sql'].replace('UNION DISTINCT','UNION').replace('SELECT AS STRUCT source_store,profile','SELECT source_store,profile')
+q=re.sub(r"(?<![A-Za-z0-9_])r'((?:[^']|'')*)'",lambda m:"'"+m.group(1)+"'",q)
+while 'COUNTIF(' in q:
+ start=q.index('COUNTIF(');i=start+8;begin=i;depth=1
+ while depth:
+  if q[i]=='(':depth+=1
+  if q[i]==')':depth-=1
+  i+=1
+ expression=q[begin:i-1];q=q[:start]+'SUM(CASE WHEN '+expression+' THEN 1 ELSE 0 END)'+q[i:]
+print(json.dumps(dict(c.execute(q,{'time_zone':'UTC','observation_end':'2026-10-19','first_order_semantic':'first_observed_ever','cohort_entry_start':'2025-01-01'}).fetchone())))`;
+ const r=spawnSync('python3',['-c',python],{input:JSON.stringify({sql,input,orders}),encoding:'utf8'});assert.equal(r.status,0,r.stderr);
+ const n=JSON.parse(r.stdout);
+ assert.equal(n.raw_order_rows,6);assert.equal(n.distinct_orders,5);assert.equal(n.eligible_online_orders,4);assert.equal(n.identified_online_orders,3);assert.equal(n.anonymous_online_orders,1);
+ assert.equal(n.customers_usable_email,1);assert.equal(n.customers_conflicting_email,1);assert.equal(n.customers_missing_email,1);assert.equal(n.customer_order_disagreements,1);
+ assert.equal(n.orders_usable_email,2);assert.equal(n.orders_placeholder_email,1);assert.equal(n.orders_missing_email,1);assert.equal(n.unambiguous_email_customers,1);
+});
+
+test('production cross-migration aggregate preserves strict later semantics without order-pair fanout',()=>{
+ const sql=emailCrossMigrationSql(emailLinkedJourneySql('fixture',schemas));
+ const query=cohortRelations(sql).result;
+ assert.doesNotMatch(query,/JOIN ranked_orders/);
+ const python=`import sqlite3,json,sys
+p=json.load(sys.stdin);c=sqlite3.connect(':memory:');c.row_factory=sqlite3.Row
+c.execute('CREATE TABLE ranked_orders(governed_customer_ref,source_platform,source_store,source_customer_id,order_timestamp)')
+c.executemany('INSERT INTO ranked_orders VALUES(?,?,?,?,?)',[('a','woo','ww','1','2025-01-01'),('a','woo','ww','1','2025-01-02'),('a','shopify','shopify','1','2025-01-03'),('a','shopify','shopify','1','2025-01-04'),('b','woo','usd','1','2025-02-01'),('b','shopify','shopify','2','2025-02-01'),('c','shopify','shopify','3','2025-01-01'),('c','woo','ww','3','2025-03-01')])
+c.create_function('IF',3,lambda a,b,d:b if a else d)
+c.create_function('CONCAT',-1,lambda *x:''.join(x))
+print(json.dumps(dict(c.execute(p['query']).fetchone())))`;
+ const r=spawnSync('python3',['-c',python],{input:JSON.stringify({query}),encoding:'utf8'});assert.equal(r.status,0,r.stderr);
+ assert.deepEqual(JSON.parse(r.stdout),{eligible_email_linked_records:3,eligible_source_customer_profiles:6,multi_source_email_linked_records:3,woo_email_linked_customer_denominator:3,cross_migration_repeat_customers:1});
+});
+
+test('failed WW raw evidence remains unknown rather than missing while independent sources survive',async()=>{
+ const f=fakeProvider({failed:'woocommerce_uk'}),r=await diagnoseEmailHistory({project:'fixture',bigquery:f.bigquery,now});
+ assert.equal(r.sources.ww.counts,null);assert.equal(r.sources.ww.blocker,'raw_woo_schema_unavailable');
+ assert.equal(r.sources.shopify.state,'fulfilled');assert.equal(r.sources.usd.state,'fulfilled');
+ assert.deepEqual(r.evaluated_linkage_sources,['usd','shopify']);
+ assert.equal(r.overlap.find(x=>x.sources[0]==='ww').exact_email_overlap,null);
 });

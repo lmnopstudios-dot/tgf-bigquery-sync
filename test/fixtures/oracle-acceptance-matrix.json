@@ -1039,7 +1039,10 @@
       "covers": [
         "conservative normalization and global ambiguity exclusion",
         "bounded aggregate audit with partial source failure",
-        "shared original history sequencing and linked baseline SQL"
+        "shared original history sequencing and linked baseline SQL",
+        "source-local availability arithmetic without classification or history scans",
+        "bounded materialized email evidence and aggregate-only stage metadata",
+        "cross-migration aggregate with strict timestamps and no order-pair fanout"
       ]
     }
   ]
