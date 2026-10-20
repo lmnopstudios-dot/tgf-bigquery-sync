@@ -1001,6 +1001,17 @@
         "distinct client and warehouse bounds; complete calculation output with child-job timings",
         "timing-read failure retains completed aggregate evidence"
       ]
+    },
+    {
+      "id": "cohort-warehouse-failure-evidence",
+      "file": "test/cohort-failure-evidence.test.js",
+      "covers": [
+        "structured 499 with independent warehouse statement evidence",
+        "dry-run versus script and retrieval failure",
+        "whole-script versus per-statement SDK limits",
+        "deadline cancellation provenance and late result fencing",
+        "metadata failures preserve execution outcomes"
+      ]
     }
   ]
 }

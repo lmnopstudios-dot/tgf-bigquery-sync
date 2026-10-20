@@ -54,3 +54,11 @@ ${plan.stages.map(({name})=>`DROP TABLE _SESSION.cohort_${name};`).join('\n')}
 COMMIT TRANSACTION;
 SELECT * FROM cohort_result ORDER BY cohort_rank,window_days;`;
 }
+
+/** jobTimeoutMs bounds the entire script; statementTimeoutMs bounds each child.
+ * Both remain subordinate to boundedQuery's remaining ownership deadline. */
+export function cohortExecutionOptions(sql,timeoutMs){
+ return {query:decomposedCohortSql(sql),jobTimeoutMs:timeoutMs,
+  scriptOptions:{statementTimeoutMs:String(Math.min(timeoutMs,15000)),statementByteBudget:COHORT_STATEMENT_BYTES},
+  maximumBytesBilled:COHORT_STATEMENT_BYTES};
+}
