@@ -255,7 +255,7 @@ function createSourceCustomerQueryService({ bigquery, project, identity=null }) 
         SUM(source_order_value) OVER(PARTITION BY currency) currency_order_value, COUNT(*) OVER(PARTITION BY currency) currency_order_count
         FROM enriched_period p)`, { start_date, end_date, source_store, inactive_since, minimum_order_count, matrixify_app_id: MATRIXIFY_APP_ID },
       { source_store: 'STRING', inactive_since: 'STRING', minimum_order_count: 'INT64' }));
-    return { mode, start_date, end_date, source_store, ...(clean(rows)[0] || {}), definition: identity ? REPEAT_DEFINITION.replace('source-qualified, non-guest customer','analytically linked or source-local, non-guest customer') : REPEAT_DEFINITION, identity_semantics: identity ? 'Activated email candidate snapshot; unmatched source-qualified identities retained.' : IDENTITY_SEMANTICS, monetary_semantics: MONEY_SEMANTICS };
+    return { mode, start_date, end_date, source_store, ...(clean(rows)[0] || {}), definition: identity ? REPEAT_DEFINITION.replace('source-qualified, non-guest customer',identity.orderLinks?'email-linked record or unmatched source-local record (including guests)':'analytically linked or source-local, non-guest customer') : REPEAT_DEFINITION, identity_semantics: identity ? 'Activated email candidate snapshot; unmatched source-qualified identities retained.' : IDENTITY_SEMANTICS, monetary_semantics: MONEY_SEMANTICS };
   }
   async function getCustomerCohort({ cohort_start, cohort_end, return_start, return_end, source_store = null }) {
     for (const f of ['cohort_start', 'cohort_end', 'return_start', 'return_end']) validDate(arguments[0][f], f, true);
@@ -282,7 +282,7 @@ function createSourceCustomerQueryService({ bigquery, project, identity=null }) 
       SELECT COUNT(*) customer_count, APPROX_QUANTILES(days_to_second, 100)[OFFSET(50)] median_days,
         ROUND(AVG(days_to_second), 2) average_days, APPROX_QUANTILES(days_to_second, 100)[OFFSET(25)] p25_days,
         APPROX_QUANTILES(days_to_second, 100)[OFFSET(75)] p75_days FROM gaps`, { start_date, end_date, source_store, matrixify_app_id: MATRIXIFY_APP_ID }, { source_store: 'STRING' }));
-    return { ...(clean(rows)[0] || {}), start_date, end_date, definition: identity ? REPEAT_DEFINITION.replace('source-qualified, non-guest customer','analytically linked or source-local, non-guest customer') : REPEAT_DEFINITION, observed_history_warning: OBSERVED_WARNING };
+    return { ...(clean(rows)[0] || {}), start_date, end_date, definition: identity ? REPEAT_DEFINITION.replace('source-qualified, non-guest customer',identity.orderLinks?'email-linked record or unmatched source-local record (including guests)':'analytically linked or source-local, non-guest customer') : REPEAT_DEFINITION, observed_history_warning: OBSERVED_WARNING };
   }
   async function getProductPurchaseSequence({ product_id = null, sku = null, product_title = null, source_store = null, limit = 20 }) {
     for (const [v, f] of [[product_id, 'product_id'], [sku, 'sku'], [product_title, 'product_title']]) string(v, f);

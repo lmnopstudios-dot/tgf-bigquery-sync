@@ -1,5 +1,10 @@
 # Metorik-first identity completion — 20 October 2026
 
+Implementation follow-up: [Woo → Shopify execution package](customer-history-execution.md)
+supersedes the diagnostic-only implementation status below. Collectors, additive
+storage, resumable enrichment, guest order mappings and Oracle integration are
+now implemented. Earlier live-access findings remain historical evidence.
+
 Status: investigation and ingestion design only. No production writes,
 collection runs, activation or deployment. Based on latest main `d033d7d`,
 including merged #353. This document supersedes the earlier assumption that
