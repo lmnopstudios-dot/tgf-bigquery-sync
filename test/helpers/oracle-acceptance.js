@@ -15,7 +15,7 @@ import { createMemoryAnalysisJobStore } from '../../oracle/analysis-jobs.js';
 import { executeGovernedAgentAnalysis } from '../../oracle/analysis-route-dispatcher.js';
 import { transitionAnalysisContext } from '../../oracle/analysis-context.js';
 export const NOW=Date.parse('2026-10-14T12:00:00Z');
-export function acceptanceFixture({fail_start=null,campaigns=false,country_conversion=false,retention=false,retention_events=false,named_events=false,observationCertificates=fixtureObservationCertificates,now=NOW}={}){
+export function acceptanceFixture({fail_start=null,campaigns=false,country_conversion=false,retention=false,retention_events=false,named_events=false,observationCertificates=fixtureObservationCertificates,identityEnv={},identityReady=true,now=NOW}={}){
   const exportStore=createMemoryExportStore();
   const calls=[],sql=[],queries=[],wireQueries=[],state={fail_start,campaigns,country_conversion,retention,retention_events,named_events};
   const native=createShopifySalesKpiService({getShop:async()=>({id:'gid://shopify/Shop/fixture',currencyCode:'GBP',ianaTimezone:'Europe/London'}),runReport:async query=>{
@@ -26,6 +26,8 @@ export function acceptanceFixture({fail_start=null,campaigns=false,country_conve
   }});
   const bigquery={dataset:()=>({getMetadata:async()=>[{location:'US'}]}),query:async query=>{
     wireQueries.push(query);
+    if(query.query.includes('identity_snapshots'))return [[{state:identityReady?'ready':'pending',start_date:'2022-09-24',end_date:'2026-10-19',mapping_count:2}]];
+    if(query.query.includes('unmatched_profiles'))return [[{source_store:'ww',identified_profiles:4,mapped_profiles:1,unmatched_profiles:3,qualifying_orders:8},{source_store:'usd',identified_profiles:2,mapped_profiles:0,unmatched_profiles:2,qualifying_orders:3},{source_store:'shopify',identified_profiles:4,mapped_profiles:1,unmatched_profiles:3,qualifying_orders:6}]];
     if(query.query.includes('retention_members'))query={...query,params:Object.fromEntries(Object.entries(query.params||{}).map(([k,v])=>[k,v?.constructor?.name==='BigQueryDate'?v.value:v]))};
     queries.push(query);
     if(query.query.includes('WITH woo_geography')){
@@ -35,7 +37,7 @@ export function acceptanceFixture({fail_start=null,campaigns=false,country_conve
       return [[row,{...row,country_code:'US'}]];
     }
     assert.match(query.query,/SELECT/);assert.doesNotMatch(query.query.replace(/CREATE TEMP TABLE cohort_[a-z_]+ AS/g,''),/INSERT|UPDATE|DELETE|MERGE|CREATE/);
-    if(query.query.includes('retention_members')){const store=query.query.includes('metorik_uk.orders')?'ww':query.query.includes('metorik_us.orders')?'usd':'shopify';calls.push({provider:'retention',args:query.params});if(state.fail_retention_source===query.params.entry_source||state.fail_retention_stores?.includes(store))throw Object.assign(Error('private upstream failure'),{code:'FIXTURE_READ_FAILED'});if(state.retention_events)return [fixtureRetention((state.retention_events===true?retentionEvents:state.retention_events).filter(e=>e.source_store===store),query.params,{pieces:query.query.includes('entry_product_title FROM entry_matches')})];return [state.retention?structuredClone(cohortRows).filter(r=>(!query.params.entry_source||r.source_platform===query.params.entry_source)&&r.source_store===store).map(r=>query.query.includes('entry_product_title FROM entry_matches')?{...r,entry_product_ref:`${r.source_platform}:${r.source_store}:${r.collaboration_name}`,entry_product_title:r.collaboration_name+' piece'}:r):[]];}
+    if(query.query.includes('retention_members')){const store=query.query.match(/WHERE source_store='(ww|usd|shopify)' AND order_sequence=1/)?.[1]||(query.query.includes('metorik_uk.orders')?'ww':query.query.includes('metorik_us.orders')?'usd':'shopify');calls.push({provider:'retention',args:query.params});if(state.fail_retention_source===query.params.entry_source||state.fail_retention_stores?.includes(store))throw Object.assign(Error('private upstream failure'),{code:'FIXTURE_READ_FAILED'});if(state.retention_events)return [fixtureRetention((state.retention_events===true?retentionEvents:state.retention_events).filter(e=>e.source_store===store),query.params,{pieces:query.query.includes('entry_product_title FROM entry_matches')})];return [state.retention?structuredClone(cohortRows).filter(r=>(!query.params.entry_source||r.source_platform===query.params.entry_source)&&r.source_store===store).map(r=>query.query.includes('entry_product_title FROM entry_matches')?{...r,entry_product_ref:`${r.source_platform}:${r.source_store}:${r.collaboration_name}`,entry_product_title:r.collaboration_name+' piece'}:r):[]];}
     if(/INFORMATION_SCHEMA|grouped_lines|represented_location_orders|GROUP BY 1,2,3/.test(query.query)){
       calls.push({provider:'baskets',args:query.params});
       if(query.query.includes('INFORMATION_SCHEMA'))return [Object.entries(BASKET_LINE_COLUMNS).map(([column_name,data_type])=>({column_name,data_type}))];
@@ -50,7 +52,7 @@ export function acceptanceFixture({fail_start=null,campaigns=false,country_conve
     if(query.query.includes('window_coverage'))return [[{month_start:'2026-09-01',month_end:'2026-09-30',status:'collected',retrieved_at:'2026-10-01T12:00:00Z'}]];
     throw Error('Unexpected fixture query');
   }};
-  const deps=createOracleProviderDependencies({observationCertificates,project:'fixture',env:{},shopifySales:native,bigquery});
+  const deps=createOracleProviderDependencies({observationCertificates,project:'fixture',env:identityEnv,shopifySales:native,bigquery});
   const live=createOracleProviderDependencies({observationCertificates,project:'fixture',bigquery,env:{KLAVIYO_PRIVATE_API_KEY:'fixture',KLAVIYO_API_REVISION:'2026-07-15'},klaviyoFetch:async(url,options)=>{
     calls.push({provider:'campaigns',discovery:true,url,method:options.method});assert.equal(options.method,'GET');
     const page=new URL(url).searchParams.has('page[cursor]')?1:0;

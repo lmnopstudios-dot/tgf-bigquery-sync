@@ -3,13 +3,8 @@
 import {customerJourneySql} from './customer-journey.js';
 import {cohortRelations} from './cohort-execution.js';
 export const EMAIL_SOURCES=Object.freeze({ww:{dataset:'metorik_uk',platform:'woo',tables:['orders','customers']},usd:{dataset:'metorik_us',platform:'woo',tables:['orders','customers']},shopify:{dataset:'shopify_data',platform:'shopify',tables:['order_customers','customers']}});
-export function emailState(value){
- const normalized=typeof value==='string'?value.trim().toLowerCase():'';
- if(!normalized)return {state:'missing',normalized:null};
- if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized))return {state:'malformed',normalized:null};
- if(/^(?:test|unknown|none|null|noemail|no-email|noreply|no-reply|guest|placeholder)(?:[+._-]|@)|@(?:example\.(?:com|org|net)|invalid\.|test\.)|\.(?:invalid|test)$/.test(normalized))return {state:'placeholder',normalized:null};
- return {state:'usable',normalized};
-}
+export {emailState} from '../customer-identity/email.js';
+
 const table=(project,dataset,name)=>{if(!/^[a-z][a-z0-9-]{4,62}$/.test(project)||![dataset,name].every(x=>/^[a-z_]+$/.test(x)))throw Error('Invalid relation');return `\`${project}.${dataset}.${name}\``;};
 export function emailSchemaSql(project,dataset){
  const relation=table(project,dataset,'columns').replace(/columns`$/,'INFORMATION_SCHEMA.COLUMNS`');

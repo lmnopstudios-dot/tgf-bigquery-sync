@@ -1,3 +1,5 @@
+import {identityAwareService,identityMappingCte} from './customer-identity.js';
+import {customerEvidenceSql} from './customer-query.js';
 const DATE=/^\d{4}-\d{2}-\d{2}$/;
 export const MATRIXIFY_APP_ID='gid://shopify/App/1758145';
 
@@ -10,7 +12,7 @@ export function validateCustomerOrderIntervalInput(input={}){
 
 /** Intervals are attributed to their later order. History before start_date is
  * retained only to find that order's immediately preceding eligible order. */
-export function customerOrderIntervalSql(project){return `WITH orders AS (
+export function customerOrderIntervalSql(project,identity=null){let sql = `WITH orders AS (
   SELECT 'woo:ww' identity_namespace,CAST(customer_id AS STRING) customer_id,CAST(order_id AS STRING) order_id,TIMESTAMP(order_created_at) order_timestamp
   FROM \`${project}.metorik_uk.orders\` WHERE LOWER(status) IN ('completed','processing')
   UNION ALL
@@ -37,11 +39,21 @@ export function customerOrderIntervalSql(project){return `WITH orders AS (
 SELECT COUNT(DISTINCT customer_ref) customer_count,COUNT(*) order_pair_count,
   AVG(days_between) average_days_between_orders,
   APPROX_QUANTILES(days_between,100)[OFFSET(50)] median_days_between_orders
-FROM pairs`}
+FROM pairs`;
+  if(identity){
+    sql=sql.replace('WITH orders AS',`WITH ${identityMappingCte(project,identity)}, orders AS`)
+      .replace("CONCAT(identity_namespace,':',customer_id) customer_ref", "COALESCE(m.canonical_customer_ref,CONCAT(identity_namespace,':',customer_id)) customer_ref")
+      .replace('FROM orders WHERE',"FROM orders LEFT JOIN ci_mapping m ON m.source_customer_id=orders.customer_id AND m.source_store=CASE identity_namespace WHEN 'woo:ww' THEN 'ww' WHEN 'woo:usd' THEN 'usd' ELSE 'shopify' END WHERE");
+  }
+  return sql;
+}
 
-export function createCustomerOrderIntervalService({bigquery,project}){
+export function createCustomerOrderIntervalService(options){
+  return identityAwareService(options,opts=>({getInterval:createSourceCustomerOrderIntervalService(opts)}),customerEvidenceSql).getInterval;
+}
+function createSourceCustomerOrderIntervalService({bigquery,project,identity=null}){
   if(!bigquery?.query||!project)throw new Error('bigquery and project are required');
-  return async input=>{const params=validateCustomerOrderIntervalInput(input);const [rows]=await bigquery.query({query:customerOrderIntervalSql(project),params:{...params,matrixify_app_id:MATRIXIFY_APP_ID},useLegacySql:false,maximumBytesBilled:'20000000000',labels:{component:'customer_order_interval',operation:'aggregate'}});const row=JSON.parse(JSON.stringify(rows[0]||{}));return {period:params,customer_count:Number(row.customer_count||0),order_pair_count:Number(row.order_pair_count||0),average_days_between_orders:row.average_days_between_orders==null?null:Number(row.average_days_between_orders),median_days_between_orders:row.median_days_between_orders==null?null:Number(row.median_days_between_orders),semantics:{boundary:'Inclusive start and end dates apply to the later order in each pair; its immediately preceding eligible order may be before the start date.',customers:'Customers with only one eligible order through the period end produce no pair. Guests and unresolved customer IDs are excluded.',orders:'Only completed/processing Woo orders and paid/partially paid/partially refunded, non-cancelled Shopify online orders qualify.',imports:'Shopify Matrixify-imported orders are excluded.',identity:'Woo ww, Woo usd, and Shopify customer IDs remain separate namespaces. No cross-platform customer bridge is inferred.',privacy:'Aggregate-only; no customer or order identifiers are returned.'}}};
+  return async input=>{const params=validateCustomerOrderIntervalInput(input);const [rows]=await bigquery.query({query:customerOrderIntervalSql(project,identity),params:{...params,matrixify_app_id:MATRIXIFY_APP_ID},useLegacySql:false,maximumBytesBilled:'20000000000',labels:{component:'customer_order_interval',operation:'aggregate'}});const row=JSON.parse(JSON.stringify(rows[0]||{}));return {period:params,customer_count:Number(row.customer_count||0),order_pair_count:Number(row.order_pair_count||0),average_days_between_orders:row.average_days_between_orders==null?null:Number(row.average_days_between_orders),median_days_between_orders:row.median_days_between_orders==null?null:Number(row.median_days_between_orders),semantics:{boundary:'Inclusive start and end dates apply to the later order in each pair; its immediately preceding eligible order may be before the start date.',customers:'Customers with only one eligible order through the period end produce no pair. Guests and unresolved customer IDs are excluded.',orders:'Only completed/processing Woo orders and paid/partially paid/partially refunded, non-cancelled Shopify online orders qualify.',imports:'Shopify Matrixify-imported orders are excluded.',identity:identity?'Activated email candidate snapshot; unmatched identities remain source-local.':'Woo ww, Woo usd, and Shopify customer IDs remain separate namespaces. No cross-platform customer bridge is inferred.',privacy:'Aggregate-only; no customer or order identifiers are returned.'}}};
 }
 
 export const CUSTOMER_ORDER_INTERVAL_TOOL_DEFINITION={type:'function',name:'get_average_customer_order_interval',strict:true,description:'Calculate aggregate average and approximate median days between consecutive eligible online orders for identified customers. Returns customer and order-pair counts; never bridges Woo and Shopify identities.',parameters:{type:'object',additionalProperties:false,properties:{start_date:{type:'string',description:'Inclusive YYYY-MM-DD date for the later order in each pair.'},end_date:{type:'string',description:'Inclusive YYYY-MM-DD date for the later order in each pair.'}},required:['start_date','end_date']}};
