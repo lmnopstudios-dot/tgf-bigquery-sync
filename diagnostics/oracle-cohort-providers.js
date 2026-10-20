@@ -30,7 +30,7 @@ export async function diagnoseCohortProviders({bigquery,project,now=Date.now(),e
   const deps=createOracleProviderDependencies({project,bigquery:{query:async value=>{settings=value;return [[]];}}});
   const item={request_id,source_platform:source,source_store,bound:typeof deps.customerJourney?.analyzeCustomerJourney==='function'};
   try{
-   await measure('classification_sql_generation',()=>deps.customerJourney.analyzeCustomerJourney({...definition,cohort:{...definition.cohort,entry_source:source}},{sourceStore:source_store,timeoutMs:maximumMs}));
+   await measure('classification_sql_generation',()=>deps.customerJourney.analyzeCustomerJourney({...definition,cohort:{...definition.cohort,entry_source:source}},{sourceStore:source_store,timeoutMs:maximumMs,decompose:false}));
    item.sql_summary={sha256:createHash('sha256').update(settings.query).digest('hex'),bytes:Buffer.byteLength(settings.query),cte_count:(settings.query.match(/\bAS\s*\(/gi)||[]).length,classification_resolution:'warehouse execution; not a separate client RPC'};
    // Use the same SDK auth object as submission; never retain tokens or headers.
    if(bigquery.authClient?.getClient){

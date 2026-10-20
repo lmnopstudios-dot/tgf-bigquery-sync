@@ -14,7 +14,7 @@ export async function classificationDiagnosticOptions({project,source,store,now,
  let settings;
  const deps=createOracleProviderDependencies({project,bigquery:{query:async q=>{settings=q;return [[]];}}});
  const context=transitionAnalysisContext(null,QUESTION,{now}).context,definition=retentionDefinition(context);
- await deps.customerJourney.analyzeCustomerJourney({...definition,cohort:{...definition.cohort,entry_source:source}},{sourceStore:store});
+ await deps.customerJourney.analyzeCustomerJourney({...definition,cohort:{...definition.cohort,entry_source:source}},{sourceStore:store,decompose:false});
  const probes={
   'first-orders':'SELECT COUNT(*) orders FROM entry_orders',
   subsequent:'SELECT COUNT(*) orders FROM downstream_orders',

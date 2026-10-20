@@ -11,16 +11,18 @@ import {classificationDiagnosticOptions} from './diagnostics/oracle-classificati
 import {createOracleProviderDependencies} from './oracle/provider-dependencies.js';
 import {retentionDefinition} from './oracle/cohort-retention.js';
 import {transitionAnalysisContext} from './oracle/analysis-context.js';
+import {cohortExecutionPlan} from './oracle/cohort-execution.js';
 const now=Date.parse('2026-10-19T12:00:00Z');let q;
 const deps=createOracleProviderDependencies({project:'fixture',bigquery:{query:async x=>{q=x;return [[]];}}});
 const c=transitionAnalysisContext(null,'Rank collaborations by repeat purchase rate online in the last 3 years.',{now}).context;
-const d=retentionDefinition(c);await deps.customerJourney.analyzeCustomerJourney({...d,cohort:{...d.cohort,entry_source:'woo'}},{sourceStore:'ww'});
-const retention=q;await deps.customerJourney.analyzeCustomerJourney({...d,cohort:{...d.cohort,entry_source:'woo'},group_by:['retention_piece_windows']},{sourceStore:'ww'});const pieces=q;await deps.customerJourney.analyzeCustomerJourney({...d,cohort:{...d.cohort,entry_source:'woo'},group_by:['downstream_product'],subsequent:{...d.subsequent,product_classification:'collaboration'}},{sourceStore:'ww'});const downstream=q;await deps.customerJourney.analyzeCustomerJourney({...d,cohort:{...d.cohort,entry_source:'shopify'}},{sourceStore:'shopify'});const shopify=q;
-await deps.customerJourney.analyzeCustomerJourney({...d,cohort:{...d.cohort,entry_source:'woo'}},{sourceStore:'usd'});const usd=q;
-await deps.customerJourney.analyzeCustomerJourney({...d,cohort:{...d.cohort,entry_source:'woo'},group_by:['retention_piece_windows']},{sourceStore:'usd'});const usdPieces=q;
-await deps.customerJourney.analyzeCustomerJourney({...d,cohort:{...d.cohort,entry_source:'shopify'},group_by:['retention_piece_windows']},{sourceStore:'shopify'});const shopifyPieces=q;
+const d=retentionDefinition(c);await deps.customerJourney.analyzeCustomerJourney({...d,cohort:{...d.cohort,entry_source:'woo'}},{decompose:false,sourceStore:'ww'});
+const retention={...q,query:(await import('./oracle/customer-journey.js')).customerJourneySql('fixture','retention_windows','woo','ww')};await deps.customerJourney.analyzeCustomerJourney({...d,cohort:{...d.cohort,entry_source:'woo'},group_by:['retention_piece_windows']},{decompose:false,sourceStore:'ww'});const pieces=q;await deps.customerJourney.analyzeCustomerJourney({...d,cohort:{...d.cohort,entry_source:'woo'},group_by:['downstream_product'],subsequent:{...d.subsequent,product_classification:'collaboration'}},{decompose:false,sourceStore:'ww'});const downstream=q;await deps.customerJourney.analyzeCustomerJourney({...d,cohort:{...d.cohort,entry_source:'shopify'}},{decompose:false,sourceStore:'shopify'});const shopify=q;
+await deps.customerJourney.analyzeCustomerJourney({...d,cohort:{...d.cohort,entry_source:'woo'}},{decompose:false,sourceStore:'usd'});const usd=q;
+await deps.customerJourney.analyzeCustomerJourney({...d,cohort:{...d.cohort,entry_source:'woo'},group_by:['retention_piece_windows']},{decompose:false,sourceStore:'usd'});const usdPieces=q;
+await deps.customerJourney.analyzeCustomerJourney({...d,cohort:{...d.cohort,entry_source:'shopify'},group_by:['retention_piece_windows']},{decompose:false,sourceStore:'shopify'});const shopifyPieces=q;
 const diagnostics={};for(const stage of ['gaps','identity','history','keys','first-orders','subsequent','members','aggregation','full'])diagnostics[stage]=await classificationDiagnosticOptions({project:'fixture',source:'woo',store:'ww',stage,now});diagnostics.catalogue=await classificationDiagnosticOptions({project:'fixture',source:'shopify',store:'shopify',stage:'catalogue',now});
-console.log(JSON.stringify({diagnostics,pieces,shopify,usd,usdPieces,shopifyPieces,downstream,shared:'WITH '+classificationReaderCtes('fixture')+' SELECT * FROM cr_resolved',retention,stages:await classificationDiagnosticOptions({project:'fixture',source:'woo',store:'ww',stage:'stages',now})}));
+const plans=Object.fromEntries(Object.entries({retention,pieces,shopify,usd,usdPieces,shopifyPieces}).map(([k,v])=>[k,cohortExecutionPlan(v.query)]));
+console.log(JSON.stringify({plans,diagnostics,pieces,shopify,usd,usdPieces,shopifyPieces,downstream,shared:'WITH '+classificationReaderCtes('fixture')+' SELECT * FROM cr_resolved',retention,stages:await classificationDiagnosticOptions({project:'fixture',source:'woo',store:'ww',stage:'stages',now})}));
 """
 queries=json.loads(subprocess.check_output(['node','--input-type=module','-e',node],text=True))
 c=duckdb.connect();c.execute("ATTACH ':memory:' AS fixture")
@@ -32,6 +34,7 @@ c.execute("INSERT INTO fixture.commerce.product_family_decisions VALUES ('f1','f
 c.execute('CREATE TABLE fixture.commerce.product_classifications(classification_id VARCHAR,subject_ref VARCHAR,classification_type VARCHAR,classification_value VARCHAR,provenance VARCHAR,status VARCHAR,effective_from DATE,effective_to DATE,supersedes_classification_id VARCHAR)')
 product=[('p4','woo:ww:4','product_group','core','human_approved','active'),('p5a','woo:ww:5','collaboration_name','alpha','human_approved','conflict'),('p5b','woo:ww:5','collaboration_name','beta','human_approved','conflict'),('p6','woo:ww:6','product_group','collaboration','human_approved','active'),('p8a','woo:ww:8','product_group','core','human_approved','active'),('p8b','woo:ww:8','collaboration_name','gamma','human_approved','active'),('stale','shopify:shopify:103','collaboration_name','stale','shopify_governed_collection','active'),('variant','shopify:shopify:gid://shopify/ProductVariant/100','collaboration_name','wrong_variant','human_approved','active')]
 c.executemany('INSERT INTO fixture.commerce.product_classifications VALUES (?,?,?,?,?,?,NULL,NULL,NULL)',product)
+c.execute("INSERT INTO fixture.commerce.product_classifications VALUES ('future','woo:ww:1','collaboration_name','future_name','human_approved','active','2099-01-01',NULL,NULL),('expired','woo:ww:1','collaboration_name','expired_name','human_approved','active',NULL,'2000-01-01',NULL)")
 c.execute('CREATE TABLE fixture.commerce.collection_classifications(classification_id VARCHAR,platform VARCHAR,collection_id VARCHAR,classification_type VARCHAR,classification_value VARCHAR,status VARCHAR,reviewed_at TIMESTAMP)')
 c.execute("INSERT INTO fixture.commerce.collection_classifications VALUES ('c0','shopify','10','collaboration_name','old_name','active','2025-01-01'),('c1','shopify','10','collaboration_name','alpha','active','2026-01-01'),('c2','shopify','11','collaboration_name','beta','active','2026-01-01'),('c3','shopify','12','collection_group','collaboration','active','2026-01-01'),('c4','shopify','13','collaboration_name','stale','revoked','2026-01-01')")
 c.execute('CREATE TABLE fixture.shopify_catalogue.product_collections(product_id VARCHAR,collection_id VARCHAR)')
@@ -48,7 +51,7 @@ shared=execute(queries['shared'])
 assert any(r['subject_ref']=='woo:ww:1' and r['classification_value']=='alpha' for r in shared)
 assert any(r['subject_ref']=='woo:ww:2' and r['classification_value']=='beta' for r in shared)
 assert not any(r['subject_ref'] in ['woo:ww:3','woo:usd:1','woo:ww:5'] for r in shared)
-assert not any(r['classification_value'] in ['stale','old_name','wrong_variant','gamma'] for r in shared)
+assert not any(r['classification_value'] in ['stale','old_name','wrong_variant','gamma','future_name','expired_name'] for r in shared)
 c.execute('CREATE TABLE fixture.metorik_uk.orders(order_id BIGINT,customer_id BIGINT,order_created_at TIMESTAMP,status VARCHAR,currency VARCHAR,total DOUBLE,total_refunds DOUBLE)')
 c.execute('CREATE TABLE fixture.metorik_uk.order_line_items(order_id BIGINT,product_id BIGINT,variation_id BIGINT,name VARCHAR,quantity INT,total DOUBLE,currency VARCHAR)')
 events=[(1,1,'2025-01-01',1),(2,1,'2025-01-31',4),(3,2,'2025-01-01',2),(4,2,'2025-05-01',1),(5,3,'2025-01-01',99),(6,4,'2025-01-01',6),(7,5,'2025-01-01',5),(8,6,'2025-01-01',3),(9,7,'2025-01-01',8),(10,8,'2026-10-01',1),(11,None,'2025-01-01',1),(12,9,'2025-01-01',0)]
@@ -87,6 +90,10 @@ c.execute('CREATE TABLE fixture.shopify_data.order_financials(order_id VARCHAR,p
 c.execute('CREATE TABLE fixture.shopify_data.order_line_items(order_id VARCHAR,product_id VARCHAR,title VARCHAR,name VARCHAR,quantity INT,discounted_total_presentment DOUBLE,presentment_currency VARCHAR)')
 for order,customer,when,product,app in [('s1','gid://shopify/Customer/1','2025-11-16','gid://shopify/Product/100',None),('s2','gid://shopify/Customer/1','2025-12-16','101',None),('s3','gid://shopify/Customer/2','2025-11-16','102',None),('s4','gid://shopify/Customer/3','2025-11-16','gid://shopify/ProductVariant/100',None),('s5','gid://shopify/Customer/4','2025-11-16','100','gid://shopify/App/1758145')]:
  c.execute('INSERT INTO fixture.shopify_data.order_locations VALUES (?,NULL,?,?)',[order,when,app]);c.execute("INSERT INTO fixture.shopify_data.order_customers VALUES (?,?,'paid',NULL,FALSE)",[order,customer]);c.execute("INSERT INTO fixture.shopify_data.order_financials VALUES (?,'GBP',100,0)",[order]);c.execute("INSERT INTO fixture.shopify_data.order_line_items VALUES (?,?,'Synthetic option',NULL,1,100,'GBP')",[order,product])
+# A cancelled older Shopify order must not move first-observed entry backwards.
+c.execute("INSERT INTO fixture.shopify_data.order_locations VALUES ('cancelled',NULL,'2020-01-01',NULL)")
+c.execute("INSERT INTO fixture.shopify_data.order_customers VALUES ('cancelled','gid://shopify/Customer/1','paid','2020-01-02',FALSE)")
+c.execute("INSERT INTO fixture.shopify_data.order_financials VALUES ('cancelled','GBP',100,0)")
 assert_previous_equivalent(queries['shopify'])
 shop=run(queries['shopify'])
 a=next(r for r in shop if r['collaboration_name']=='alpha' and r['window_days']==90)
@@ -184,3 +191,22 @@ old_refs=expanded_references(baseline(queries['retention']),'entry_matches')
 new_refs=expanded_references(queries['retention'],'entry_matches')
 assert (old_refs,new_refs)==(3,2),(old_refs,new_refs)
 print(json.dumps({'logical_entry_matches_dependencies_before':old_refs,'after':new_refs,'physical_materialisation':'not inferred'}))
+
+# Execute real factory decomposition boundaries against the complete final fixture.
+# Compare entire rows, including nested coverage, exact medians and truncation.
+def assert_decomposed(key, overrides=None):
+    plan=queries['plans'][key]
+    options={**queries[key], 'params':{**queries[key]['params'],**(overrides or {})}}
+    for stage in plan['stages']:
+        translated=sqlglot.transpile(stage['query'].replace('_SESSION.', ''),read='bigquery',write='duckdb')[0]
+        import re
+        params={k:(v['value'] if isinstance(v,dict) and 'value' in v else v) for k,v in options['params'].items()}
+        used=set(re.findall(r'\$([A-Za-z_][A-Za-z_0-9]*)',translated))
+        c.execute('CREATE OR REPLACE TEMP TABLE cohort_'+stage['name']+' AS '+translated,{k:v for k,v in params.items() if k in used})
+    decomposed=run({**options, 'query':plan['result'].replace('_SESSION.', '')})
+    assert decomposed==run(options), ('Decomposition differs', key, overrides)
+for key in queries['plans']:
+    assert_decomposed(key)
+    for overrides in [{'entry_product_ref':'absent'},{'subsequent_channel':'In-store'},{'entry_channel':'In-store'},{'cohort_limit':2,'limit':4},{'ranking_window':180,'retention_sort':'repeat_rate_desc'}]:
+        assert_decomposed(key,overrides)
+print('Complete decomposed rows equal monolithic rows for all six source/group routes, empty/filter/limit/ranking cases')

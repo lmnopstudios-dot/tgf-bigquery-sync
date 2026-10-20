@@ -8,7 +8,7 @@ export async function dryRunCohortRetention({bigquery,project,now=Date.now(),pie
   let options;
   const service=createCustomerJourneyService({project,bigquery:{query:async value=>{options=value;return [[]];}}});
   const context=transitionAnalysisContext(null,pieces?'Can I have a breakdown of what collaboration pieces that are the first purchase a customer has ever made lead to the most return customers. Use both online and instore sales from the last 3 years.':'Rank collaborations by repeat purchase rate after the first order, online in the last 3 years.',{now}).context;
-  await service.analyzeCustomerJourney(retentionDefinition(context));
+  await service.analyzeCustomerJourney(retentionDefinition(context),{decompose:false});
   const [job]=await bigquery.createQueryJob({...options,dryRun:true,jobTimeoutMs:30000});
   return {read_only:true,dry_run:true,verified:true,operation:'cohort_retention',total_bytes_processed:job.metadata?.statistics?.totalBytesProcessed||null,entry_start:context.start_date,entry_end:context.end_date,live_results_executed:false};
 }

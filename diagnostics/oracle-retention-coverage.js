@@ -11,7 +11,7 @@ export async function probeRetentionCoverage({bigquery,project,now=Date.now(),ex
   let stage='query_definition';
   try{
    let options;
-   await createCustomerJourneyService({project,bigquery:{query:async o=>{options=o;return [[]];}}}).analyzeCustomerJourney({...definition,cohort:{...definition.cohort,entry_source:source},group_by:[group]});
+   await createCustomerJourneyService({project,bigquery:{query:async o=>{options=o;return [[]];}}}).analyzeCustomerJourney({...definition,cohort:{...definition.cohort,entry_source:source},group_by:[group]},{decompose:false});
    const remaining=deadline-Date.now();if(remaining<1000)throw Object.assign(Error('Deadline'),{code:'DEADLINE_EXCEEDED'});
    options.jobTimeoutMs=Math.min(10000,remaining);options.maximumBytesBilled='20000000000';
    stage=execute?'aggregate_read':'sql_dry_run';

@@ -17,7 +17,7 @@ test('source keys retain Woo stores and reject variant identities as parent prod
 test('real provider factory and category reader share current approved evidence and exclusions',async()=>{
  let query;const deps=createOracleProviderDependencies({project:'fixture',bigquery:{query:async q=>{query=q;return [[]];}}});
  const context=transitionAnalysisContext(null,'Rank collaborations by repeat purchase rate online in the last 3 years.',{now}).context;
- await deps.customerJourney.analyzeCustomerJourney({...retentionDefinition(context),cohort:{entry_source:'woo'}},{sourceStore:'usd'});
+ await deps.customerJourney.analyzeCustomerJourney({...retentionDefinition(context),cohort:{entry_source:'woo'}},{sourceStore:'usd',decompose:false});
  const shared=classificationReaderCtes('fixture');
  assert.ok(query.query.includes(shared));assert.ok(categorySalesSql('fixture').includes(shared));
  assert.match(shared,/cr_collection_current[\s\S]*ROW_NUMBER[\s\S]*c.status='active'/);

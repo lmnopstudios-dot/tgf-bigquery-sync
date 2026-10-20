@@ -69,7 +69,7 @@ for(const [source,store] of [['woo','ww'],['woo','usd'],['shopify','shopify']])f
  const provider=createOracleProviderDependencies({bigquery:f.sdk,project:'fixture'}).customerJourney;
  const result=await provider.analyzeCustomerJourney(definition,{sourceStore:store});
  assert.equal(f.calls.length,2);assert.equal(f.settings.length,1);
- assert.equal(f.settings[0].maximumBytesBilled,'20000000000');
+ assert.equal(f.settings[0].maximumBytesBilled,'2500000000'); // Eight data statements remain within 20 GB total.
  assert.equal(f.settings[0].params.observation_end.value,'2026-10-18');
  const baseline=createOracleProviderDependencies({bigquery:{query:async()=>[expected]},project:'fixture'}).customerJourney;
  const prior=await baseline.analyzeCustomerJourney(definition,{sourceStore:store});
