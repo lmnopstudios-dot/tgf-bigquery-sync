@@ -16,8 +16,11 @@ const deps=createOracleProviderDependencies({project:'fixture',bigquery:{query:a
 const c=transitionAnalysisContext(null,'Rank collaborations by repeat purchase rate online in the last 3 years.',{now}).context;
 const d=retentionDefinition(c);await deps.customerJourney.analyzeCustomerJourney({...d,cohort:{...d.cohort,entry_source:'woo'}},{sourceStore:'ww'});
 const retention=q;await deps.customerJourney.analyzeCustomerJourney({...d,cohort:{...d.cohort,entry_source:'woo'},group_by:['retention_piece_windows']},{sourceStore:'ww'});const pieces=q;await deps.customerJourney.analyzeCustomerJourney({...d,cohort:{...d.cohort,entry_source:'woo'},group_by:['downstream_product'],subsequent:{...d.subsequent,product_classification:'collaboration'}},{sourceStore:'ww'});const downstream=q;await deps.customerJourney.analyzeCustomerJourney({...d,cohort:{...d.cohort,entry_source:'shopify'}},{sourceStore:'shopify'});const shopify=q;
+await deps.customerJourney.analyzeCustomerJourney({...d,cohort:{...d.cohort,entry_source:'woo'}},{sourceStore:'usd'});const usd=q;
+await deps.customerJourney.analyzeCustomerJourney({...d,cohort:{...d.cohort,entry_source:'woo'},group_by:['retention_piece_windows']},{sourceStore:'usd'});const usdPieces=q;
+await deps.customerJourney.analyzeCustomerJourney({...d,cohort:{...d.cohort,entry_source:'shopify'},group_by:['retention_piece_windows']},{sourceStore:'shopify'});const shopifyPieces=q;
 const diagnostics={};for(const stage of ['gaps','identity','history','keys','first-orders','subsequent','members','aggregation','full'])diagnostics[stage]=await classificationDiagnosticOptions({project:'fixture',source:'woo',store:'ww',stage,now});diagnostics.catalogue=await classificationDiagnosticOptions({project:'fixture',source:'shopify',store:'shopify',stage:'catalogue',now});
-console.log(JSON.stringify({diagnostics,pieces,shopify,downstream,shared:'WITH '+classificationReaderCtes('fixture')+' SELECT * FROM cr_resolved',retention,stages:await classificationDiagnosticOptions({project:'fixture',source:'woo',store:'ww',stage:'stages',now})}));
+console.log(JSON.stringify({diagnostics,pieces,shopify,usd,usdPieces,shopifyPieces,downstream,shared:'WITH '+classificationReaderCtes('fixture')+' SELECT * FROM cr_resolved',retention,stages:await classificationDiagnosticOptions({project:'fixture',source:'woo',store:'ww',stage:'stages',now})}));
 """
 queries=json.loads(subprocess.check_output(['node','--input-type=module','-e',node],text=True))
 c=duckdb.connect();c.execute("ATTACH ':memory:' AS fixture")
@@ -108,3 +111,76 @@ assert diag['full']==rows
 assert diag['catalogue'][0]['historical_product_lines']==4 and diag['catalogue'][0]['missing_shopify_catalogue_lines']==1,diag['catalogue']
 assert any(r['evidence_table']=='collection_classifications' and r['status']=='revoked' for r in diag['keys']),diag['keys']
 print('All diagnostic SQL stages execute: gap identities, customer coverage, raw classification history and missing catalogue counts passed')
+
+# Reconstruct the exact pre-optimisation dependencies, then execute both versions.
+# This checks SQL results, rather than returning predetermined provider rows.
+def baseline(options):
+    import re
+    old=dict(options)
+    old['query']=re.sub(r", retention_next_orders AS \(.*?\n  \), retention_members AS \(", ", retention_members AS (", old['query'], flags=re.S)
+    old['query']=old['query'].replace('LEFT JOIN retention_next_orders d ON', 'LEFT JOIN (SELECT * FROM downstream_orders QUALIFY ROW_NUMBER() OVER(PARTITION BY governed_customer_ref ORDER BY order_timestamp,order_ref)=1) d ON')
+    old['query']=old['query'].replace('  entry_named_customers AS (SELECT governed_customer_ref,COUNTIF(collaboration_name IS NOT NULL)>0 named FROM entry_matches GROUP BY governed_customer_ref),\n', '')
+    old['query']=old['query'].replace('COUNTIF(COALESCE(m.named,FALSE))>0 named,','COUNTIF(m.collaboration_name IS NOT NULL)>0 named,').replace('LEFT JOIN entry_named_customers m ON','LEFT JOIN entry_matches m ON')
+    assert old['query'] != options['query']
+    return old
+
+# Add a first order containing multiple named pieces plus generic/unknown lines.
+# Same customer belongs to alpha and beta; membership must remain overlapping.
+for product in [2,6,99]:
+ c.execute("INSERT INTO fixture.metorik_uk.order_line_items VALUES (1,?,900,'Extra piece',1,10,'GBP')",[product])
+# An equal-timestamp order must not become the subsequent purchase.
+c.execute("INSERT INTO fixture.metorik_uk.orders VALUES (13,1,'2025-01-01','completed','GBP',100,0)")
+c.execute("INSERT INTO fixture.metorik_uk.order_line_items VALUES (13,99,900,'Tie',1,100,'GBP')")
+# Same source IDs in another store must remain independent.
+c.execute('CREATE SCHEMA fixture.metorik_us')
+for table in ['orders','order_line_items']:
+ c.execute(f'CREATE TABLE fixture.metorik_us.{table} AS SELECT * FROM fixture.metorik_uk.{table}')
+c.execute("INSERT INTO fixture.commerce.product_classifications SELECT classification_id||'_usd',replace(subject_ref,'woo:ww:','woo:usd:'),classification_type,classification_value,provenance,status,effective_from,effective_to,supersedes_classification_id FROM fixture.commerce.product_classifications WHERE subject_ref LIKE 'woo:ww:%'")
+c.execute("INSERT INTO fixture.commerce.product_classifications VALUES ('usd-alpha','woo:usd:1','collaboration_name','alpha','human_approved','active',NULL,NULL,NULL),('usd-beta','woo:usd:2','collaboration_name','beta','human_approved','active',NULL,NULL,NULL)")
+for key in ['retention','pieces','usd','usdPieces','shopify','shopifyPieces','downstream']:
+ options=queries[key]
+ assert run(baseline(options))==run(options), f'Full baseline/result mismatch for {key}'
+# Demonstrate reduced coverage intermediate cardinality, using the real CTEs.
+def coverage_join_count(options,relation):
+ probe=dict(options)
+ probe['query']=options['query'].split(', retention_next_orders AS (')[0]+f' SELECT COUNT(*) n FROM entry_orders e LEFT JOIN classified_lines l USING(source_platform,source_store,order_ref) LEFT JOIN {relation} m ON m.governed_customer_ref=e.governed_customer_ref'
+ return run(probe)[0]['n']
+old_count=coverage_join_count(queries['retention'],'entry_matches')
+new_count=coverage_join_count(queries['retention'],'entry_named_customers')
+assert old_count>new_count,(old_count,new_count)
+rows=run(queries['retention'])
+a=next(r for r in rows if r['collaboration_name']=='alpha' and r['window_days']==90)
+b=next(r for r in rows if r['collaboration_name']=='beta' and r['window_days']==90)
+assert (a['cohort_customers'],a['mature_customers'],a['repeat_customers'],a['median_days_to_second'])==(2,1,1,30),a
+assert (b['cohort_customers'],b['mature_customers'],b['repeat_customers'],b['median_days_to_second'])==(2,2,1,30),b
+assert (a['core_range'],b['core_range'])==(1,1)
+print(json.dumps({'complete_baseline_comparisons':7,'coverage_join_rows_before':old_count,'coverage_join_rows_after':new_count,'overlapping_cohorts_and_tied_timestamp':'passed','production_performance':'unverified'}))
+# A conflicting second purchase must remain unknown, even if a later core order exists.
+for order,when,product in [(20,'2025-01-01',1),(21,'2025-01-11',5),(22,'2025-01-21',4)]:
+ c.execute("INSERT INTO fixture.metorik_uk.orders VALUES (?,10,?,'completed','GBP',100,0)",[order,when])
+ c.execute("INSERT INTO fixture.metorik_uk.order_line_items VALUES (?,?,900,'Unknown repeat fixture',1,100,'GBP')",[order,product])
+for key in ['retention','pieces']:
+ assert run(baseline(queries[key]))==run(queries[key])
+a=next(r for r in run(queries['retention']) if r['collaboration_name']=='alpha' and r['window_days']==90)
+assert (a['cohort_customers'],a['mature_customers'],a['repeat_customers'],a['unknown'],a['median_days_to_second'])==(3,2,2,1,20),a
+for overrides in [{'entry_product_ref':'absent'},{'entry_product_ref':'woo:ww:2'},{'subsequent_channel':'In-store'},{'entry_channel':'In-store'}]:
+ options={**queries['retention'],'params':{**queries['retention']['params'],**overrides}}
+ assert run(baseline(options))==run(options),overrides
+print('Unknown first subsequent order, exact median, product filters, empty coverage and channel boundaries: passed')
+# Count logical reachable dependencies, without claiming physical materialisation.
+def expanded_references(options,target):
+ from sqlglot import exp
+ root=sqlglot.parse_one(options['query'],read='bigquery')
+ ctes={cte.alias_or_name:cte.this for cte in root.args['with_'].expressions}
+ root.set('with_',None)
+ def count(node):
+  total=0
+  for table in node.find_all(exp.Table):
+   if not table.db and table.name==target: total+=1
+   if not table.db and table.name in ctes: total+=count(ctes[table.name])
+  return total
+ return count(root)
+old_refs=expanded_references(baseline(queries['retention']),'entry_matches')
+new_refs=expanded_references(queries['retention'],'entry_matches')
+assert (old_refs,new_refs)==(3,2),(old_refs,new_refs)
+print(json.dumps({'logical_entry_matches_dependencies_before':old_refs,'after':new_refs,'physical_materialisation':'not inferred'}))

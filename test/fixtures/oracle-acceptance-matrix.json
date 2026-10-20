@@ -869,7 +869,12 @@
       ]
     },
     {
-      "file": "test/oracle-cohort-retention.test.js"
+      "file": "test/oracle-cohort-retention.test.js",
+      "covers": [
+        "retention next-order selection before named membership",
+        "source, calendar maturity, medians, classification and independent outcomes",
+        "coverage membership aggregated per customer"
+      ]
     },
     {
       "file": "test/oracle-monthly-country-conversion.test.js",

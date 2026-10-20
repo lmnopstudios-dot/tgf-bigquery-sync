@@ -78,4 +78,4 @@ export async function main(env=process.env){
   console.log(JSON.stringify(result,null,2));if(result.status!=='read_only_diagnostic_passed')process.exitCode=1;
 }
 
-if(import.meta.url===pathToFileURL(process.argv[1]).href)main().catch(error=>{console.error(JSON.stringify({status:'read_only_diagnostic_failed',message:redactKlaviyo(error.message)}));process.exitCode=1;});
+if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href)main().catch(error=>{console.error(JSON.stringify({status:'read_only_diagnostic_failed',message:redactKlaviyo(error.message)}));process.exitCode=1;});

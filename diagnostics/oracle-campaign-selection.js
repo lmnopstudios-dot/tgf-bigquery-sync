@@ -165,7 +165,7 @@ export async function main({
   write(JSON.stringify(summary) + '\n');
   return summary;
 }
-if (import.meta.url === pathToFileURL(process.argv[1]).href)
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href)
   main().catch((error) => {
     const code = [
       'PROJECT_SELECTION_REQUIRED',

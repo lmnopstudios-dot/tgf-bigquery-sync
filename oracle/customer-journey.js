@@ -91,7 +91,16 @@ function retentionWindowResultSql(product=false,nested=false){
   const keys='source_platform,source_store,collaboration_name'+(product?',entry_product_ref':'');
   const eligible="collaboration_name IS NOT NULL AND collaboration_name NOT IN ('collaboration','collaborations')";
   const members=`SELECT governed_customer_ref,${keys},entry_timestamp${product?',MIN(entry_product_title) entry_product_title':''} FROM entry_matches WHERE ${eligible} GROUP BY governed_customer_ref,${keys},entry_timestamp`;
-  return `, retention_members AS (
+  // Retention only needs the next qualifying order for each entry customer.
+  // Selecting it before joining named membership avoids a second expansion of
+  // entry_matches (and its governed classification resolver) through cohort.
+  return `, retention_next_orders AS (
+    SELECT r.* FROM ranked_orders r JOIN entry_orders e USING(governed_customer_ref)
+    WHERE r.order_sequence>=@minimum_sequence AND (@maximum_sequence IS NULL OR r.order_sequence<=@maximum_sequence)
+      AND r.order_timestamp>e.order_timestamp AND (@within_days IS NULL OR TIMESTAMP_DIFF(r.order_timestamp,e.order_timestamp,DAY)<=@within_days)
+      AND (@subsequent_source IS NULL OR r.source_platform=@subsequent_source) AND (@subsequent_channel IS NULL OR r.channel=@subsequent_channel)
+    QUALIFY ROW_NUMBER() OVER(PARTITION BY governed_customer_ref ORDER BY r.order_timestamp,r.order_ref)=1
+  ), retention_members AS (
     SELECT em.*,window_days,DATE_ADD(DATE(em.entry_timestamp,@time_zone),INTERVAL window_days DAY)<=@observation_end mature,
       IF(DATE_DIFF(DATE(d.order_timestamp,@time_zone),DATE(em.entry_timestamp,@time_zone),DAY)<=window_days,TIMESTAMP_DIFF(d.order_timestamp,em.entry_timestamp,SECOND)/86400.0,NULL) days_to_second,
       CASE WHEN d.order_ref IS NULL THEN NULL
@@ -100,7 +109,7 @@ function retentionWindowResultSql(product=false,nested=false){
         WHEN sc.unknown_lines=0 AND sc.core_lines=sc.product_lines AND ARRAY_LENGTH(sc.names)=0 THEN 'core_range'
         ELSE 'unknown' END second_purchase_classification
     FROM (${members}) em CROSS JOIN UNNEST([90,180]) window_days
-    LEFT JOIN (SELECT * FROM downstream_orders QUALIFY ROW_NUMBER() OVER(PARTITION BY governed_customer_ref ORDER BY order_timestamp,order_ref)=1) d ON d.governed_customer_ref=em.governed_customer_ref
+    LEFT JOIN retention_next_orders d ON d.governed_customer_ref=em.governed_customer_ref
     LEFT JOIN order_classification_sets sc ON sc.source_platform=d.source_platform AND sc.source_store=d.source_store AND sc.order_ref=d.order_ref
   ), retention_with_medians AS (
     SELECT *,PERCENTILE_CONT(IF(mature,days_to_second,NULL),0.5) OVER(PARTITION BY ${keys},window_days) median_days_to_second FROM retention_members
@@ -166,11 +175,12 @@ export function customerJourneySql(project,groupBy='downstream_product',source=n
     WHERE (@entry_product_ref IS NULL OR l.source_product_ref=@entry_product_ref) AND (@entry_classification IS NULL OR CONCAT('product_group=',@entry_classification) IN UNNEST(l.classifications) OR CONCAT('product_category=',@entry_classification) IN UNNEST(l.classifications) OR CONCAT('product_type=',@entry_classification) IN UNNEST(l.classifications) OR (@entry_classification='collaboration' AND EXISTS(SELECT 1 FROM UNNEST(l.classifications) x WHERE STARTS_WITH(x,'collaboration_name='))))),
   entry_stage_coverage AS (SELECT e.source_platform,e.source_store,COALESCE(l.collaboration_state,'product_identity_unmatched') collaboration_state,COUNT(l.order_ref) product_lines,COUNT(DISTINCT e.governed_customer_ref) customers FROM entry_orders e LEFT JOIN line_classification_sets l USING(source_platform,source_store,order_ref) GROUP BY 1,2,3),
   entry_stage_arrays AS (SELECT source_platform,source_store,ARRAY_AGG(STRUCT(collaboration_state,product_lines,customers) ORDER BY collaboration_state) classification_stages FROM entry_stage_coverage GROUP BY 1,2),
+  entry_named_customers AS (SELECT governed_customer_ref,COUNTIF(collaboration_name IS NOT NULL)>0 named FROM entry_matches GROUP BY governed_customer_ref),
   entry_coverage AS (SELECT e.source_platform,e.source_store,e.governed_customer_ref,
-    COUNTIF(m.collaboration_name IS NOT NULL)>0 named,
+    COUNTIF(COALESCE(m.named,FALSE))>0 named,
     COUNTIF('product_group=collaboration' IN UNNEST(l.classifications) OR 'collaboration_name=collaborations' IN UNNEST(l.classifications) OR 'collaboration_name=collaboration' IN UNNEST(l.classifications))>0 generic,
     COUNTIF('classification_conflict=true' IN UNNEST(l.classifications) OR (SELECT COUNT(*) FROM UNNEST(l.classifications) x WHERE STARTS_WITH(x,'collaboration_name=') AND x NOT IN ('collaboration_name=collaboration','collaboration_name=collaborations'))>1)>0 conflicting
-    FROM entry_orders e LEFT JOIN classified_lines l USING(source_platform,source_store,order_ref) LEFT JOIN entry_matches m ON m.governed_customer_ref=e.governed_customer_ref GROUP BY 1,2,3),
+    FROM entry_orders e LEFT JOIN classified_lines l USING(source_platform,source_store,order_ref) LEFT JOIN entry_named_customers m ON m.governed_customer_ref=e.governed_customer_ref GROUP BY 1,2,3),
   source_history AS (SELECT source_platform,source_store,MIN(DATE(order_timestamp,@time_zone)) history_start,MAX(DATE(order_timestamp,@time_zone)) history_end,
     COUNTIF(source_customer_id IS NOT NULL AND source_customer_id NOT IN ('','0')) identified_orders,
     COUNTIF(source_customer_id IS NULL OR source_customer_id IN ('','0')) anonymous_orders,COUNTIF(migrated) migrated_orders,COUNTIF(cancelled) cancelled_orders,

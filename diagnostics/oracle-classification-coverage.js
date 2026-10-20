@@ -22,7 +22,7 @@ export async function classificationDiagnosticOptions({project,source,store,now,
   aggregation:'SELECT COUNT(*) cohorts FROM retention_totals'
  };
  if(stage==='full'||probes[stage])return {...settings,query:stage==='full'?settings.query:settings.query.split('  SELECT r.*,c.coverage FROM')[0]+' '+probes[stage],jobTimeoutMs:15000};
- const sql=settings.query.split(', retention_members AS (')[0];
+ const sql=settings.query.split(', retention_next_orders AS (')[0];
  const selections={
   stages:`SELECT st.* FROM entry_stage_coverage st ORDER BY collaboration_state LIMIT 20`,
   gaps:`SELECT l.source_platform,l.source_store,l.source_product_ref,l.collaboration_state,COUNT(*) product_lines,COUNT(DISTINCT e.governed_customer_ref) first_customers,EXISTS(SELECT 1 FROM cr_routes r WHERE r.source_ref=l.source_product_ref) approved_route FROM entry_orders e JOIN line_classification_sets l USING(source_platform,source_store,order_ref) WHERE l.collaboration_state IN ('product_identity_unmatched','classification_absent','generic_only','conflicting') GROUP BY ALL ORDER BY first_customers DESC,source_product_ref LIMIT 100`,

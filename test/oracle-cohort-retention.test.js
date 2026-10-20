@@ -25,7 +25,7 @@ test('journey SQL retains historical lookback, source identities, approved class
  assert.match(sql,/COALESCE\(l.source_app_id=@matrixify_app_id,FALSE\)/);
  assert.match(sql,/classification_links/);assert.match(sql,/JOIN cr_direct/);assert.doesNotMatch(sql,/fuzzy|suggested/);
  assert.match(sql,/UNNEST\(\[90,180\]\)/);assert.match(sql,/COUNTIF\(mature\)/);assert.match(sql,/PERCENTILE_CONT/);
- assert.match(sql,/FROM downstream_orders QUALIFY ROW_NUMBER/);assert.match(sql,/cohort_rank<=DIV\(@cohort_limit/);
+ assert.match(sql,/LEFT JOIN retention_next_orders d/);assert.match(sql,/cohort_rank<=DIV\(@cohort_limit/);
  let options;const r=await dryRunCohortRetention({project:'fixture',now:NOW,bigquery:{createQueryJob:async value=>{options=value;return [{metadata:{statistics:{totalBytesProcessed:'123'}}}];}}});
  assert.equal(r.verified,true);assert.equal(options.dryRun,true);assert.equal(options.jobTimeoutMs,30000);assert.equal(options.maximumBytesBilled,'20000000000');assert.equal(options.params.entry_channel,'Online');
 });
@@ -109,7 +109,7 @@ test('piece cohort SQL uses mature fixed windows, distinct entry membership and 
  assert.match(sql,/DATE_ADD\(DATE\(em.entry_timestamp,@time_zone\),INTERVAL window_days DAY\)<=@observation_end/);
  assert.match(sql,/DATE_DIFF\(DATE\(d.order_timestamp,@time_zone\),DATE\(em.entry_timestamp,@time_zone\),DAY\)<=window_days/);
  assert.match(sql,/COUNTIF\(mature AND days_to_second IS NOT NULL\)/);
- assert.match(sql,/FROM downstream_orders QUALIFY ROW_NUMBER/);
+ assert.match(sql,/LEFT JOIN retention_next_orders d/);
  assert.match(sql,/GROUP BY governed_customer_ref,source_platform,source_store,collaboration_name,entry_product_ref,entry_timestamp/);
  assert.doesNotMatch(sql,/d\.entry_product_ref=em\.entry_product_ref/);
 });
