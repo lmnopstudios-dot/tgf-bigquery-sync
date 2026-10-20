@@ -1044,6 +1044,24 @@
         "bounded materialized email evidence and aggregate-only stage metadata",
         "cross-migration aggregate with strict timestamps and no order-pair fanout"
       ]
+    },
+    {
+      "id": "customer-identity-activation",
+      "file": "test/customer-identity-activation.test.js",
+      "covers": [
+        "production identity SQL with cross-source order ID collisions, refunds, guests and Matrixify exclusion",
+        "Woo to Shopify repeats and first-observed cohort reassignment",
+        "unmatched source-local fallback, preflight privacy and incomplete publication refusal"
+      ]
+    },
+    {
+      "id": "customer-identity-delivery",
+      "file": "test/customer-identity-delivery.test.js",
+      "covers": [
+        "activation metadata through direct, interactive, durable and polling recovery",
+        "unverified maturity preserved with active analytical identity snapshots",
+        "source-local fallback when snapshot unavailable"
+      ]
     }
   ]
 }

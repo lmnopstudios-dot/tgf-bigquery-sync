@@ -42,7 +42,7 @@ test('repeat, refunds, values, currencies, and first/latest semantics are explic
   const bq = fakeBigQuery([[{ customer_ref:`c_${'b'.repeat(64)}`, currencies:['GBP','USD'], qualifying_order_count:2 }]]);
   const result = await createCustomerQueryService({ bigquery:bq, project:'p' }).getCustomerSummary({ customer_ref:`c_${'b'.repeat(64)}` });
   const query = bq.calls[0].query;
-  assert.match(query, /COUNT\(DISTINCT source_order_id\) >= 2 repeat_customer/);
+  assert.match(query, /COUNT\(DISTINCT CONCAT\(source_platform,'\|',source_store,'\|',source_order_id\)\) >= 2 repeat_customer/);
   assert.match(query, /COALESCE\(source_order_value, 0\) > COALESCE\(source_refund_value, 0\)/);
   assert.match(query, /GROUP BY customer_ref, currency/); assert.match(query, /MIN\(order_date\)/); assert.match(query, /MAX\(order_date\)/);
   assert.match(result.monetary_semantics, /grouped by currency/); assert.equal(result.found, true);
@@ -80,7 +80,7 @@ test('tool contract is strict, read-only, parameterized, PII-free, and routable'
   const serialized=JSON.stringify(CUSTOMER_TOOL_DEFINITIONS).toLowerCase();
   for (const pii of ['email','phone','postcode','address','customer_id','raw_json']) assert.doesNotMatch(serialized,new RegExp(pii));
   const diagnostics=[]; const call=await executeCustomerToolCall({async getCustomerSummary(){return {found:true};}},'get_customer_summary',{customer_ref:`c_${'d'.repeat(64)}`},d=>diagnostics.push(d));
-  assert.equal(call.handled,true); assert.equal(diagnostics.length,1);
+  assert.equal(call.handled,true); assert.equal(diagnostics.length,1);assert.equal(diagnostics[0].has_customer_reference,true);assert.doesNotMatch(JSON.stringify(diagnostics),/c_dddd/);
 });
 
 test('validator emits structured non-PII evidence and covers namespaces, guests, migration, lines and geography', async () => {

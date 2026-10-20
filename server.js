@@ -164,8 +164,8 @@ const orderQueryService = createOrderQueryService({
   bigquery,
   project: GOOGLE_PROJECT_ID
 });
-const customerQueryService = createCustomerQueryService({ bigquery, project: GOOGLE_PROJECT_ID });
-const customerJourneyService = createCustomerJourneyService({ bigquery, project: GOOGLE_PROJECT_ID });
+const customerQueryService = createCustomerQueryService({ bigquery, project: GOOGLE_PROJECT_ID, env:process.env });
+const customerJourneyService = createCustomerJourneyService({ bigquery, project: GOOGLE_PROJECT_ID, env:process.env });
 const knowledgeService = createKnowledgeService({
   bigquery,
   project: GOOGLE_PROJECT_ID,

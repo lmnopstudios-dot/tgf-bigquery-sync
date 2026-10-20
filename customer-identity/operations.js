@@ -1,0 +1,194 @@
+import {randomUUID} from 'node:crypto';
+import {SOURCES,SCOPE,SCHEMA,fq,selectionSql,retrieve,store} from './collect.js';
+import {mappingSql} from './linkage.js';
+import {sourceClient,requestBudget} from './runtime.js';
+import {safeReadFailure} from '../oracle/read-failure.js';
+import {boundedQuery} from '../oracle/bounded-query.js';
+
+const canonicalType=value=>({INT64:'INTEGER',BOOL:'BOOLEAN',FLOAT64:'FLOAT',STRUCT:'RECORD'}[value]||value);
+export const TABLES = {
+  order_identity:SCHEMA,
+  enrichment_runs:[['run_id','STRING'],['source','STRING'],['start_date','DATE'],['end_date','DATE'],['requested','INT64'],['returned','INT64'],['status','STRING'],['completed_at','TIMESTAMP']].map(([name,type])=>({name,type})),
+  identity_links:[['snapshot_id','STRING'],['source_store','STRING'],['source_customer_id','STRING'],['canonical_customer_ref','STRING']].map(([name,type])=>({name,type})),
+  identity_snapshots:[['snapshot_id','STRING'],['state','STRING'],['start_date','DATE'],['end_date','DATE'],['mapping_count','INT64'],['created_at','TIMESTAMP']].map(([name,type])=>({name,type})),
+};
+export const read = (bigquery,query,params={},types={},maximumMs=20000) => boundedQuery(bigquery,{query,params,types,maximumBytesBilled:SCOPE.bytes,jobTimeoutMs:maximumMs},{maximumMs});
+export async function selectedIds(bigquery,project,o) {
+  const [rows] = await read(bigquery,selectionSql(project,o),{start:o.start,end:o.end},{start:'DATE',end:'DATE'});
+  if (rows.length > o.maxOrders) throw Error('Selection exceeds cap; narrow window or increase within proposed bound');
+  return rows.map(row=>row.order_id);
+}
+export async function destinationReadiness(bigquery,project,dataset) {
+  const ds = bigquery.dataset(dataset), [exists] = await ds.exists();
+  if (!exists) return {exists:false,ready:false,setup_required:true};
+  const [metadata] = await ds.getMetadata();
+  const publicAccess = (metadata.access || []).some(entry=>['allUsers','allAuthenticatedUsers','projectReaders','projectWriters'].includes(entry.specialGroup));
+  const tables = {};
+  for (const [name,schema] of Object.entries(TABLES)) {
+    const table = ds.table(name), [present] = await table.exists();
+    if (!present) {tables[name]={exists:false}; continue;}
+    const [m] = await table.getMetadata();
+    const fields = new Map((m.schema?.fields || []).map(f=>[f.name,f.type]));
+    const compatible = schema.every(f=>canonicalType(fields.get(f.name))===canonicalType(f.type));
+    const permissions = ['bigquery.tables.getData','bigquery.tables.updateData'];
+    const [granted] = await table.testIamPermissions(permissions);
+    tables[name] = {exists:true,compatible,read:(granted.permissions||[]).includes('bigquery.tables.getData'),write:(granted.permissions||[]).includes('bigquery.tables.updateData')};
+  }
+  return {exists:true,location:metadata.location,public_access_detected:publicAccess,tables,
+    ready:!publicAccess && Object.values(tables).every(t=>t.exists&&t.compatible&&t.read&&t.write),
+    setup_required:Object.values(tables).some(t=>!t.exists)};
+}
+export async function provision({bigquery,project,dataset,principal}) {
+  if(!/^[^\s@]+@[^\s@]+\.gserviceaccount\.com$/.test(principal||''))throw Error('Configured service account principal required');
+  const [exists]=await bigquery.dataset(dataset).exists();
+  if(exists)throw Error('Dataset exists; inspect its access before setup');
+  const locations=[];
+  for(const source of Object.values(SOURCES)){const [m]=await bigquery.dataset(source.dataset).getMetadata();locations.push(m.location);}
+  if(new Set(locations).size!==1||!locations[0])throw Error('Source locations differ');
+  await bigquery.createDataset(dataset,{location:locations[0],access:[{role:'OWNER',userByEmail:principal}],defaultTableExpirationMs:'31536000000'});
+  return {provisioned:true,dataset,location:locations[0],retention_days:365,explicit_access:'configured_service_account_only',inherited_project_iam_requires_review:true};
+}
+export function relationshipSql(project,o) {
+  return `WITH parent AS (SELECT DISTINCT order_id FROM ${fq(project,'shopify_data','order_locations')} WHERE DATE(created_at) BETWEEN @start AND @end),
+    customers AS (SELECT order_id,COUNT(*) row_count,COUNTIF(customer_id IS NOT NULL AND NOT STARTS_WITH(customer_id,'gid://shopify/Customer/')) invalid_customer_ids FROM ${fq(project,'shopify_data','order_customers')} GROUP BY order_id)
+    SELECT COUNT(*) parent_orders,COUNTIF(c.order_id IS NULL) missing_relationship_rows,
+      COUNTIF(c.row_count>1) duplicate_relationship_orders,COALESCE(SUM(c.invalid_customer_ids),0) invalid_customer_ids
+    FROM parent p LEFT JOIN customers c USING(order_id)`;
+}
+export async function setup({bigquery,project,dataset}) {
+  const ds = bigquery.dataset(dataset), [exists] = await ds.exists();
+  if (!exists) throw Error('Restricted dataset must be provisioned explicitly with reviewed IAM');
+  const [meta] = await ds.getMetadata();
+  if ((meta.access||[]).some(e=>['allUsers','allAuthenticatedUsers','projectReaders','projectWriters'].includes(e.specialGroup))) throw Error('Destination access requires restriction');
+  for (const [name,schema] of Object.entries(TABLES)) {
+    const table = ds.table(name), [present] = await table.exists();
+    if (!present) await ds.createTable(name,{schema});
+    else {
+      const [m] = await table.getMetadata();
+      if (!schema.every(f=>(m.schema?.fields||[]).some(x=>x.name===f.name&&canonicalType(x.type)===canonicalType(f.type)))) throw Error('Existing identity schema is incompatible');
+    }
+  }
+  return {schema_ready:true,tables:Object.keys(TABLES)};
+}
+export async function preflight({bigquery,project,o,env=process.env,client=sourceClient}) {
+  const result={read_only:true,source:o.source,scope:{start:o.start,end:o.end}};
+  try {result.destination=await destinationReadiness(bigquery,project,o.dataset);}
+  catch(error) {result.destination={ready:false,state:'unavailable',failure:safeReadFailure(error,'diagnostic')};}
+  let ids;
+  try {ids=await selectedIds(bigquery,project,o);result.selected_orders=ids.length;}
+  catch(error) {return {...result,source_access:'unverified',failure_stage:'warehouse_selection',failure:safeReadFailure(error,'diagnostic')};}
+  if(o.source==='shopify'){
+    try {const [rows]=await read(bigquery,relationshipSql(project,o),{start:o.start,end:o.end},{start:'DATE',end:'DATE'});result.order_customer_relationship=rows[0];}
+    catch(error){result.order_customer_relationship={state:'unavailable',failure:safeReadFailure(error,'diagnostic')};}
+  }
+  const sample=ids.slice(0,3);
+  try {
+    const transport=sample.length ? await client(o.source,env,AbortSignal.timeout(90000),requestBudget(o.source,true)) : {};
+    let scopes=null;
+    if(transport.graphql){
+      const data=await transport.graphql('{currentAppInstallation{accessScopes{handle}}}',{});
+      const handles=new Set(data?.currentAppInstallation?.accessScopes?.map(s=>s.handle)||[]);
+      scopes={read_orders:handles.has('read_orders'),read_all_orders:handles.has('read_all_orders'),read_customers:handles.has('read_customers')};
+    }
+    const rows=await retrieve({source:o.source,ids:sample,...transport});
+    Object.assign(result,{sample_orders:rows.length,email_query_succeeded:rows.length>0,
+      usable_order_emails:rows.filter(r=>r.order_email_normalized).length,
+      usable_customer_emails:rows.filter(r=>r.customer_email_normalized).length,
+      source_access:rows.length?'sampled':'unverified_empty_selection',scopes});
+  } catch(error) {Object.assign(result,{source_access:'unavailable',failure_stage:'source_email',failure:safeReadFailure(error,'diagnostic')});}
+  try {const [meta]=await bigquery.dataset(SOURCES[o.source].dataset).getMetadata();result.location_matches=result.destination.location===meta.location;}
+  catch {result.location_matches=null;}
+  return {...result,limitation:'Null-only responses do not establish usable email coverage; sampled access does not certify all historical orders.'};
+}
+
+export async function enrich({bigquery,project,o,env=process.env,client=sourceClient}) {
+  const readiness = await destinationReadiness(bigquery,project,o.dataset);
+  if (!readiness.ready) throw Error('Destination is not ready');
+  if(o.source==='shopify'){
+    const [rows]=await read(bigquery,relationshipSql(project,o),{start:o.start,end:o.end},{start:'DATE',end:'DATE'});
+    if(!rows[0]||['missing_relationship_rows','duplicate_relationship_orders','invalid_customer_ids'].some(k=>Number(rows[0][k])!==0))throw Error('Repair Shopify order to customer relationships before enrichment');
+  }
+  const ids = await selectedIds(bigquery,project,o), runId = randomUUID();
+  await bigquery.query({query:`INSERT INTO ${fq(project,o.dataset,'enrichment_runs')} VALUES(@id,@source,@start,@end,@requested,0,'running',CURRENT_TIMESTAMP())`,params:{id:runId,source:o.source,start:o.start,end:o.end,requested:ids.length},types:{start:'DATE',end:'DATE'},maximumBytesBilled:SCOPE.mergeBytes,jobTimeoutMs:20000});
+  let returned = 0;
+  const deadline = Date.now()+SCOPE.maxMs;
+  const budget=requestBudget(o.source);
+  try {
+    for (let i=0; i<ids.length; i+=SCOPE.batchSize) {
+      if (Date.now()>=deadline) throw Error('Historical operation deadline');
+      const transport = await client(o.source,env,AbortSignal.timeout(Math.min(90000,deadline-Date.now())),budget);
+      const rows = await retrieve({source:o.source,ids:ids.slice(i,i+SCOPE.batchSize),...transport});
+      await store({bigquery,project,dataset:o.dataset,rows});
+      returned += rows.length;
+    }
+    await bigquery.query({query:`UPDATE ${fq(project,o.dataset,'enrichment_runs')} SET status='complete',returned=@returned,completed_at=CURRENT_TIMESTAMP() WHERE run_id=@id`,params:{id:runId,returned},maximumBytesBilled:SCOPE.mergeBytes,jobTimeoutMs:20000});
+    return {source:o.source,status:'complete',requested:ids.length,returned};
+  } catch {
+    await bigquery.query({query:`UPDATE ${fq(project,o.dataset,'enrichment_runs')} SET status='failed',returned=@returned,completed_at=CURRENT_TIMESTAMP() WHERE run_id=@id`,params:{id:runId,returned},maximumBytesBilled:SCOPE.mergeBytes,jobTimeoutMs:20000}).catch(()=>{});
+    throw Error('Historical enrichment incomplete; repeat the bounded window before publishing');
+  }
+}
+export function verificationSql(project,o) {
+  const selection = selectionSql(project,o);
+  return `WITH selected AS (${selection}), identity_rows AS (
+    SELECT * FROM ${fq(project,o.dataset,'order_identity')} WHERE source=@source
+  ) SELECT (SELECT COUNT(*) FROM selected) selected_orders,
+    COUNTIF(i.order_id IS NOT NULL) enriched_orders,
+    COUNTIF(i.order_id IS NULL) missing_orders,
+    COUNTIF(i.order_id IS NOT NULL AND i.customer_id IS NULL) guest_orders,
+    COUNTIF(i.email_state='candidate') candidate_email_orders,
+    COUNTIF(i.email_state='conflict') conflicting_email_orders,
+    COUNTIF(i.email_state IN ('missing','malformed','placeholder')) unusable_email_orders,
+    COUNT(*)-COUNT(DISTINCT s.order_id) duplicate_identity_rows
+    FROM selected s LEFT JOIN identity_rows i USING(order_id)`;
+}
+export async function verify({bigquery,project,o}) {
+  const [rows] = await read(bigquery,verificationSql(project,o),{source:o.source,start:o.start,end:o.end},{source:'STRING',start:'DATE',end:'DATE'});
+  const r = rows[0];
+  const valid = r && Number(r.selected_orders)<=o.maxOrders && Number(r.missing_orders)===0 && Number(r.duplicate_identity_rows)===0;
+  return {read_only:true,source:o.source,valid,counts:r};
+}
+export async function publish({bigquery,project,dataset,snapshot}) {
+  // Exact full proposed window and all three sources are required for publication.
+  const o = {start:SCOPE.start,end:SCOPE.end,maxOrders:SCOPE.maxOrders,dataset};
+  for (const source of Object.keys(SOURCES)) {
+    const result = await verify({bigquery,project,o:{...o,source}});
+    if (!result.valid || Number(result.counts.selected_orders)===0) throw Error('Complete nonempty proposed source coverage required');
+  }
+  const query = `BEGIN TRANSACTION;
+    ASSERT NOT EXISTS(SELECT 1 FROM ${fq(project,dataset,'identity_snapshots')} WHERE snapshot_id=@snapshot) AS 'Immutable snapshot already exists';
+    ASSERT (SELECT COUNT(DISTINCT source) FROM ${fq(project,dataset,'enrichment_runs')} WHERE status='complete' AND start_date=@start AND end_date=@end AND requested=returned)=3 AS 'Three complete source runs required';
+    ASSERT NOT EXISTS(
+      SELECT 1 FROM ${fq(project,dataset,'enrichment_runs')} r LEFT JOIN (
+        SELECT source,MAX(completed_at) latest_complete FROM ${fq(project,dataset,'enrichment_runs')}
+        WHERE status='complete' AND start_date=@start AND end_date=@end GROUP BY source
+      ) c USING(source)
+      WHERE r.start_date=@start AND r.end_date=@end AND r.status!='complete'
+      AND r.completed_at>=COALESCE(c.latest_complete,TIMESTAMP '1970-01-01')
+    ) AS 'Incomplete later run blocks publication';
+    INSERT INTO ${fq(project,dataset,'identity_links')}
+      SELECT @snapshot,source_store,source_customer_id,canonical_customer_ref FROM (${mappingSql(project,dataset)});
+    ASSERT (SELECT COUNT(*) FROM ${fq(project,dataset,'identity_links')} WHERE snapshot_id=@snapshot)>0 AS 'No candidate links';
+    INSERT INTO ${fq(project,dataset,'identity_snapshots')}
+      SELECT @snapshot,'ready',@start,@end,COUNT(*),CURRENT_TIMESTAMP() FROM ${fq(project,dataset,'identity_links')} WHERE snapshot_id=@snapshot;
+    COMMIT TRANSACTION;`;
+  await bigquery.query({query,params:{snapshot,start:SCOPE.start,end:SCOPE.end},types:{start:'DATE',end:'DATE'},maximumBytesBilled:SCOPE.mergeBytes,jobTimeoutMs:20000});
+  return {published:true,snapshot,mode:'email_candidate_v1'};
+}
+
+export async function verifyLinkage({bigquery,project,dataset}) {
+  const [rows]=await read(bigquery,`WITH candidates AS (${mappingSql(project,dataset)})
+    SELECT source_store,COUNT(*) mapped_profiles,COUNT(DISTINCT canonical_customer_ref) linked_histories
+    FROM candidates GROUP BY source_store`);
+  return {read_only:true,mode:'analytical_email_candidates',sources:rows};
+}
+export async function activationCheck({bigquery,project,dataset,snapshot,env=process.env}) {
+  const {createCustomerJourneyService}=await import('../oracle/customer-journey.js');
+  // Bound the ordinary shared path without changing its SQL, filters or bindings.
+  const bounded={query:settings=>bigquery.query({...settings,maximumBytesBilled:SCOPE.bytes,jobTimeoutMs:20000})};
+  if(bigquery.createQueryJob)bounded.createQueryJob=settings=>bigquery.createQueryJob({...settings,maximumBytesBilled:settings.maximumBytesBilled==='10000000'?'10000000':SCOPE.bytes,jobTimeoutMs:Math.min(settings.jobTimeoutMs||20000,20000)});
+  const service=createCustomerJourneyService({bigquery:bounded,project,env:{...env,
+    ORACLE_CUSTOMER_IDENTITY_MODE:'email_candidate_v1',ORACLE_CUSTOMER_IDENTITY_DATASET:dataset,ORACLE_CUSTOMER_IDENTITY_SNAPSHOT:snapshot}});
+  const result=await service.analyzeCustomerJourney({start_date:SCOPE.start,end_date:SCOPE.end,group_by:['summary']},{timeoutMs:20000,decompose:false});
+  return {read_only:true,valid:result.identity_evidence?.activation==='active',identity_evidence:result.identity_evidence||null,cohort:result.cohort};
+}
