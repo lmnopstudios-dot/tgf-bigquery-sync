@@ -43,7 +43,7 @@ try{
           await page.locator('#message').fill('Export that to Excel and show a chart.');await page.locator('#send').click();await page.waitForFunction(()=>!document.querySelector('#send').disabled);
           const optional=page.locator('.analytical-answer').last();assert.match(await optional.innerText(),/supported table is retained/);assert.match(await optional.innerText(),/33.33%/);assert.match(await optional.innerText(),/XLSX: unsupported/);assert.match(await optional.innerText(),/CHART: unsupported/);assert.equal(f.calls.length,count);
         }
-        if(turn.check==='retention'){assert.match(answer,/75\.00%/);assert.match(answer,/50\.00%/);assert.match(answer,/mature customers/i);assert.equal(f.calls.length,offset+(turn.provider_count||1));}
+        if(turn.check==='retention'){assert.match(answer,/75\.00%/);assert.match(answer,/50\.00%/);assert.match(answer,/Mature 90-day customers/i);assert.equal(f.calls.length,offset+(turn.provider_count||1));}
         if(turn.check==='campaigns-available'){
           assert.match(answer,/Campaign 1/);assert.match(answer,/Campaign 2/);assert.match(answer,/Campaign 3/);assert.match(answer,/30\.00 GBP/);
           assert.equal(f.calls.filter(c=>c.discovery).length,2*(name==='desktop'?1:2));
@@ -142,5 +142,23 @@ try{
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);
     assert.deepEqual(errors,[]);await page.screenshot({path:`${output}/${name}.png`,fullPage:true});await page.close();
   }
+  // The default deployment has no certified continuous follow-up interval.
+  // Verify its honest partial answer in the browser and after durable recovery.
+  const uncertainFixture=acceptanceFixture({retention:true,retention_events:true,observationCertificates:[]});
+  uncertainFixture.state.fail_retention_stores=['usd'];
+  const uncertainServer=await acceptanceServer(uncertainFixture,{durable:true});
+  try{
+    const {RETENTION_ANSWER_QUESTION}=await import('./oracle-retention-answer.js');
+    for(const width of [1280,390]){
+      const page=await browser.newPage({viewport:{width,height:900}});
+      await page.goto(uncertainServer.origin+'/oracle/');await page.locator('#password').fill('fixture');await page.locator('#login-form button').click();await page.locator('#app').waitFor({state:'visible'});
+      await page.locator('#message').fill(RETENTION_ANSWER_QUESTION);await page.locator('#send').click();await page.waitForFunction(()=>!document.querySelector('#send').disabled&&document.querySelector('.analytical-answer'));
+      const last=page.locator('.analytical-answer').last(),answer=await last.innerText();
+      assert.match(answer,/coverage is unverified/);assert.match(answer,/observed \(coverage unverified\)/);assert.doesNotMatch(answer,/highest observed repeat purchase rate|\d+\.\d+%|<details>|<summary>/);
+      assert.equal(await last.locator('details').count(),1);assert.equal(await last.locator('table').count(),2);
+      const count=uncertainFixture.calls.length;await page.reload();await page.waitForFunction(()=>!document.querySelector('#send').disabled&&document.querySelector('.analytical-answer'));
+      assert.match(await page.locator('.analytical-answer').last().innerText(),/coverage is unverified/);assert.equal(uncertainFixture.calls.length,count);await page.close();
+    }
+  }finally{uncertainServer.close();}
   console.log(JSON.stringify({status:'passed',conversations:matrix.conversations.length,viewports:['desktop','mobile'],durable_refresh:true,output}));
 }finally{await browser.close();h.close();}

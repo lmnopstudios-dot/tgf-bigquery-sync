@@ -106,7 +106,7 @@ for(const mode of ['direct','interactive','durable'])test(`production pending re
 });
 test('piece cohort SQL uses mature fixed windows, distinct entry membership and unconditional later-purchase outcome',()=>{
  const sql=customerJourneySql('fixture','retention_product_windows');
- assert.match(sql,/DATE_ADD\(DATE\(em.entry_timestamp,@time_zone\),INTERVAL window_days DAY\)<=@observation_end/);
+ assert.match(sql,/DATE_ADD\(DATE\(em.entry_timestamp,@time_zone\),INTERVAL window_days DAY\)<=LEAST\(@observation_end,@coverage_end\)/);
  assert.match(sql,/DATE_DIFF\(DATE\(d.order_timestamp,@time_zone\),DATE\(em.entry_timestamp,@time_zone\),DAY\)<=window_days/);
  assert.match(sql,/COUNTIF\(mature AND days_to_second IS NOT NULL\)/);
  assert.match(sql,/LEFT JOIN retention_next_orders d/);

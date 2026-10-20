@@ -1,3 +1,4 @@
+import {fixtureObservationCertificates} from './helpers/cohort-retention-fixture.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { QUESTION, diagnoseCohortProviders } from '../diagnostics/oracle-cohort-providers.js';
@@ -15,7 +16,7 @@ const storeOf=q=>q.includes('metorik_uk.orders')?'ww':q.includes('metorik_us.ord
 const events=[...retentionEvents,...retentionEvents.filter(e=>['one','two'].includes(e.customer)).map(e=>({...e,source_store:'usd'}))];
 function factory({fail=[],empty=false,unclassified=false,invalid=false}={}){
  const queries=[];
- const deps=createOracleProviderDependencies({env:{},project:'fixture',bigquery:{query:async q=>{
+ const deps=createOracleProviderDependencies({observationCertificates:fixtureObservationCertificates,env:{},project:'fixture',bigquery:{query:async q=>{
   queries.push(q);const args=Object.fromEntries(Object.entries(q.params).map(([k,v])=>[k,v?.constructor?.name==='BigQueryDate'?v.value:v]));const store=storeOf(q.query);
   if(fail.includes(store))throw Object.assign(Error('private credentials and raw row must never escape [42:7]'),{code:400,errors:[{reason:'invalidQuery',message:'Unrecognized name: private_column [42:7]'}]});
   if(empty)return [[]];

@@ -1012,6 +1012,17 @@
         "deadline cancellation provenance and late result fencing",
         "metadata failures preserve execution outcomes"
       ]
+    },
+    {
+      "id": "observation-coverage-contract",
+      "file": "test/observation-coverage.test.js",
+      "covers": [
+        "verified retirement boundaries versus requested cutoff and observed activity",
+        "independent 90/180 maturity and observed returns without certified follow-up",
+        "complete SQL projections and distinct overlapping cohort membership",
+        "direct interactive durable followups and recovery with independent source failure",
+        "legacy evidence cannot resurrect unsupported rates; London through yesterday"
+      ]
     }
   ]
 }

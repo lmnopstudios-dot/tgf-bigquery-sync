@@ -43,7 +43,7 @@ for(const mode of ['direct','interactive','durable'])for(const unrelated of [fal
  }
 });
 test('ranking uses requested window, never the longest available window or generic membership',()=>{
- const base={source_platform:'woo',source_store:'ww',cohort_customers:20,mature_customers:20,median_days_to_second:20};
+ const base={observation_coverage_status:'verified_continuous',verified_coverage_start:'2020-01-01',verified_coverage_end:'2026-10-18',coverage_evidence:'fixture:hand-counted',observed_repeat_customers:20,source_platform:'woo',source_store:'ww',cohort_customers:20,mature_customers:20,median_days_to_second:20};
  const rows=retentionRows([{...base,collaboration_name:'collaborations',window_days:90,repeat_customers:20},{...base,collaboration_name:'alpha',window_days:90,repeat_customers:10},{...base,collaboration_name:'beta',window_days:90,repeat_customers:5},{...base,collaboration_name:'alpha',window_days:180,repeat_customers:10},{...base,collaboration_name:'beta',window_days:180,repeat_customers:15}]);
  const e={rows,periods:[{start_date:'2025-01-01',end_date:'2025-12-31'}],observation_end:'2026-10-18',definition:{}};
  assert.match(retentionMarkdown(e),/Alpha\*\* has the highest observed repeat purchase rate at 90/);
