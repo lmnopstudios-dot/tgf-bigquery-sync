@@ -109,13 +109,18 @@ export function checkpointDiscoverySql(project) {
     COUNTIF(job_key IS NULL OR source IS NULL OR adapter IS NULL OR revision IS NULL) missing_lookup_rows
   FROM fields`;
 }
-export function recoveryDecision({discovery,checkpoint,historical,active,processes,confirmed,candidates,compatible}) {
+export function recoveryDecision({discovery,checkpoint,active,processes,confirmed,candidates,compatible,finalActive,finalProcesses}) {
   const reasons=[];
   if(!compatible)reasons.push('checkpoint_schema_incompatible');
   if(discovery.exact_key_rows!==1 || discovery.exact_selection_rows!==1 || checkpoint.rows!==1)
     reasons.push(discovery.exact_key_rows===0?(discovery.namespace_revision_rows>0?'checkpoint_selection_mismatch':'exact_checkpoint_absent'):'checkpoint_ambiguous_or_namespace_incompatible');
   if(typeof checkpoint.complete!=='boolean' || !checkpoint.updated_at)reasons.push('checkpoint_state_unverified');
-  if(!historical.complete)reasons.push('historical_listing_truncated');
+  // Historical attribution is advisory; the safety proof is quiescence plus
+  // the writer's atomic evidence/checkpoint transaction, not old job totals.
+  if(!finalActive?.complete)reasons.push('final_active_listing_unverified');
+  if(finalActive?.jobs.length)reasons.push('late_active_identity_work');
+  if(!Number.isSafeInteger(finalProcesses)||finalProcesses<0)reasons.push('final_local_process_state_unverified');
+  else if(finalProcesses)reasons.push('late_local_collector_work');
   if(!active.complete)reasons.push('active_listing_truncated');
   if(active.jobs.length)reasons.push('active_identity_work');
   if(candidates.some(j=>j.state!=='DONE'))reasons.push('corresponding_work_uncertain');
@@ -124,7 +129,7 @@ export function recoveryDecision({discovery,checkpoint,historical,active,process
   if(!confirmed)reasons.push('operator_must_confirm_all_executors_quiescent');
   return {status:reasons.length?'blocked':checkpoint.complete?'complete':'recoverable',safe_to_unlock:reasons.length===0,reasons};
 }
-export async function recover({bigquery,project,principal,processCheck=localWork,windowRead=incidentWindow,executorsQuiescent=false}) {
+export async function recover({bigquery,project,principal,processCheck=localWork,executorsQuiescent=false}) {
   if(!principal)throw Error('configured_identity_missing');
   const deadlineAt=Date.now()+90000;
   const bounded=(work,stage='job_metadata')=>boundedEvidenceRead(work,{maximumMs:10000,deadlineAt}).catch(error=>{error.recovery_stage=stage;throw error;});
@@ -134,16 +139,9 @@ export async function recover({bigquery,project,principal,processCheck=localWork
   const query=(sql,params,stage)=>bounded(()=>historyQuery(bigquery,{query:sql,params,
     types:Object.fromEntries(Object.keys(params).map(k=>[k,'STRING'])),location,
     maximumBytesBilled:SCOPE.bytes,jobTimeoutMs:10000},{stage:'progress_read',maximumMs:10000}),stage);
-  const window=await bounded(windowRead);
-  const historical=await listJobs(bigquery,{minCreationTime:window.min,maxCreationTime:window.max},work=>bounded(work,'incident_job_listing'));
-  const metadata=[];
-  for(const job of historical.jobs){
-    // Full jobs.list projection already contains configuration/status. Avoid
-    // hundreds of redundant metadata calls, preserving the 90 second budget.
-    if(job.metadata?.configuration&&job.metadata?.status)metadata.push(job.metadata);
-    else {const [m]=await bounded(()=>job.getMetadata({maxRetries:0}));metadata.push(m);}
-  }
-  const candidates=classifyJobs(metadata,project,principal);
+  // No historical scan is needed to establish atomic resumption. Retain the
+  // provenance helpers for targeted incident diagnosis, separately from this gate.
+  const candidates=[];
   // Quiescence across this identity covers even unlinked pre-transaction loads.
   // Historical attribution to the lost child is not needed for atomic resumption.
   const active=await listJobs(bigquery,{stateFilter:['pending','running']},work=>bounded(work,'active_job_listing'));
@@ -162,17 +160,24 @@ export async function recover({bigquery,project,principal,processCheck=localWork
     updated_at:rows.length===1&&typeof rows[0].updated_at==='string'&&/^\d{4}-\d\d-\d\d[ T]\d\d:\d\d:\d\d(?:\.\d+)?(?:Z|\+00(?::00)?)?$/.test(rows[0].updated_at)?rows[0].updated_at:null};
   const [counts]=await query(`SELECT COUNT(*) observation_rows,COUNT(DISTINCT record_id) observed_provider_records FROM ${fq(project,INCIDENT.dataset,'email_observations')} WHERE source=@source AND provider=@adapter`,
     {source:INCIDENT.source,adapter:INCIDENT.adapter},'persisted_evidence_read');
-  const decision=recoveryDecision({discovery,checkpoint,historical,active,processes,confirmed:executorsQuiescent,candidates,compatible});
+  // Bracket the checkpoint/evidence reads. The operator barrier must already
+  // include draining all submission RPCs, and remain held through launch.
+  const finalActive=await listJobs(bigquery,{stateFilter:['pending','running']},work=>bounded(work,'active_job_listing'));
+  const finalProcesses=await bounded(processCheck,'local_process_check');
+  const decision=recoveryDecision({discovery,checkpoint,active,processes,confirmed:executorsQuiescent,candidates,compatible,finalActive,finalProcesses});
   const result={read_only:true,incident:INCIDENT,identity_scope:'configured_service_account_only',location,
     selection:{start:HISTORY_SCOPE.start,end:HISTORY_SCOPE.end,evidence_table:null,revision:INCIDENT.revision},
     discovery,checkpoint,checkpoint_schema_compatible:compatible,
-    search_scope:window.scope,candidate_jobs:candidates,inspected_jobs:metadata.length,
-    unmatched_jobs:metadata.length-candidates.length,listing_complete:historical.complete,listing_pages:historical.pages,
+    search_scope:'not scanned; historical attribution is not required for atomic resumption',candidate_jobs:candidates,inspected_jobs:0,
+    unmatched_jobs:0,listing_complete:null,listing_pages:0,
     active_identity_jobs:active.jobs.length,active_listing_complete:active.complete,local_runner_or_child_processes:processes,
+    final_active_identity_jobs:finalActive.jobs.length,final_active_listing_complete:finalActive.complete,
+    final_local_runner_or_child_processes:finalProcesses,
     operator_confirmed_executors_quiescent:executorsQuiescent,
+    operator_barrier:'All hosts and identities stopped; outstanding submissions drained and their jobs terminal; prevent new submissions until this sole runner launches. The flag asserts these facts, it does not enforce them.',
     persisted_evidence:{scope:'WW metorik_orders across revisions; not runner totals',observation_rows:countValue(counts?.[0]?.observation_rows),observed_provider_records:countValue(counts?.[0]?.observed_provider_records)},
     ...decision,
-    recovery_contract:'After all executors and warehouse work are terminal, reread the same atomic checkpoint. A committed transaction advanced evidence and cursor together; rollback advanced neither. Unlinked stage loads cannot advance evidence. No attribution to the suppressed child is required. Cancellation acknowledgement alone is insufficient.'};
+    recovery_contract:'After all executors and in-flight submissions are drained, warehouse work is terminal, and a submission barrier is held through launch, reread the same atomic checkpoint. A committed transaction advanced evidence and cursor together; rollback advanced neither. Unlinked stage loads cannot advance evidence. No attribution to the suppressed child is required. Cancellation acknowledgement alone is insufficient.'};
   if(decision.safe_to_unlock){
     const key=createLockKey();
     result.unlock_command=`rmdir /tmp/customer-history-runner-${key}.lock`;
