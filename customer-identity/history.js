@@ -1,4 +1,5 @@
 import {historySignal,checkHistorySignal,withHistorySignal} from './history-cancellation.js';
+import {historySelectionKey} from './history-selection.js';
 import {createHash,randomUUID} from 'node:crypto';
 import {mkdtemp,writeFile,rm} from 'node:fs/promises';
 import {join} from 'node:path';
@@ -125,7 +126,7 @@ async function collectHistoryRun({bigquery,project,o,adapter,batches=5,run,revis
   if((adapter==='shopify')!==(o.source==='shopify')&&adapter!=='roster'&&adapter!=='retained'&&adapter!=='migration')throw Error('Adapter/source mismatch');
   if(['retained','migration'].includes(adapter)&&!/^\w+\.\w+$/.test(evidenceTable||''))throw Error('Explicit existing evidence table required');
   if(!/^[A-Za-z0-9_-]{1,100}$/.test(revision))throw Error('Invalid revision');
-  const jobKey=hash(JSON.stringify([o.source,adapter,o.start,o.end,evidenceTable,revision]));
+  const jobKey=historySelectionKey({...o,adapter,evidenceTable,revision});
   const warehouseRead=(query,params={},types={})=>historyQuery(bigquery,{query,params,types,maximumBytesBilled:SCOPE.bytes,jobTimeoutMs:20000},{stage:'batch_read'});
   const [progress]=await historyQuery(bigquery,{query:`SELECT cursor,complete FROM ${fq(project,o.dataset,'history_progress')} WHERE job_key=@job LIMIT 2`,params:{job:jobKey},maximumBytesBilled:SCOPE.bytes,jobTimeoutMs:20000},{stage:'progress_read'});
   if(progress.length>1)throw Object.assign(Error('Duplicate progress'),{history_diagnostic:{stage:'progress_read'}});
@@ -223,7 +224,7 @@ export async function publishHistory({bigquery,project,dataset,snapshot,revision
   await historyQuery(bigquery,{query,params:{snapshot,revision,start:BigQuery.date(HISTORY_SCOPE.start),end:BigQuery.date(HISTORY_SCOPE.end)},types:{start:'DATE',end:'DATE'},maximumBytesBilled:SCOPE.bytes,jobTimeoutMs:20000},{stage:'publish',write:true});
   return {status:'published',snapshot,mode:'email_candidate_v2'};
 }
-export async function main(argv=process.argv.slice(2),env=process.env){
+export function parseHistoryArgs(argv){
   const [command,...args]=argv,extra={};
   const base=args.filter(a=>{const m=/^--(adapter|batches|evidence-table|snapshot|revision|start|end)=(.+)$/.exec(a);if(!m)return true;extra[m[1]]=m[2];return false;});
   if(!base.some(a=>a.startsWith('--source=')))base.push('--source=ww');
@@ -232,6 +233,10 @@ export async function main(argv=process.argv.slice(2),env=process.env){
   for(const value of [o.start,o.end])if(!/^\d{4}-\d{2}-\d{2}$/.test(value)||Number.isNaN(Date.parse(value))||new Date(value).toISOString().slice(0,10)!==value)throw Error('Invalid history dates');
   if(o.start<HISTORY_SCOPE.start||o.start>o.end||o.end>HISTORY_SCOPE.end)throw Error('History dates outside bound');
   if(!['plan','setup','collect','preview','status','check','publish'].includes(command)||o.apply!==['setup','collect','publish'].includes(command))throw Error('Writes require --apply; reads reject it');
+  return {command,extra,o};
+}
+export async function main(argv=process.argv.slice(2),env=process.env){
+  const {command,extra,o}=parseHistoryArgs(argv);
   const {bigquery,project}=createBigQueryClient(env);
   if(command==='plan'){const [rows]=await historyQuery(bigquery,{query:`WITH selected AS (${historyRosterSql(project,o.source)}) SELECT COUNT(*) orders FROM selected`,params:{start:o.start,end:o.end},types:{start:'DATE',end:'DATE'},maximumBytesBilled:SCOPE.bytes,jobTimeoutMs:20000},{stage:'roster_count'});const n=Number(rows[0]?.orders),valid=Number.isSafeInteger(n)&&n>0&&n<=60000;if(!valid)process.exitCode=2;return {read_only:true,source:o.source,orders:n,within_bound:valid};}
   if(command==='setup')return setupHistory({bigquery,project,dataset:o.dataset});
