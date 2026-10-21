@@ -1,3 +1,4 @@
+import {historySignal,checkHistorySignal} from './history-cancellation.js';
 import {boundedQuery} from '../oracle/bounded-query.js';
 import {boundedEvidenceRead} from '../oracle/bounded-evidence-read.js';
 import {safeReadFailure} from '../oracle/read-failure.js';
@@ -48,12 +49,12 @@ export function historyFailure(error,context={}) {
 
 export async function historyStage(stage,work) {
   const start=performance.now();
-  try{return await work();}catch(error){
+  try{checkHistorySignal();return await work();}catch(error){
     error.history_diagnostic={stage,elapsed_ms:Math.round(performance.now()-start),...error.history_diagnostic};throw error;
   }
 }
 
-export async function historyQuery(bigquery,settings,{stage,maximumMs=20000,signal,write=false,validateRows}={}) {
+export async function historyQuery(bigquery,settings,{stage,maximumMs=20000,signal=historySignal(),write=false,validateRows}={}) {
   let job,submitted=false,cancellation_state;
   const submittedId=`history_${randomUUID().replaceAll('-','')}`;
   return historyStage(stage,async()=>{
@@ -106,7 +107,7 @@ export async function loadHistoryStage(table,file,settings,{maximumMs=20000}={})
         await new Promise(resolve=>setTimeout(resolve,Math.min(1000,Math.max(1,maximumMs-(performance.now()-started)))));
       }
       throw Object.assign(Error('Load ownership ended'),{code:'ORACLE_AGENT_DEADLINE'});
-    },{maximumMs});}
+    },{maximumMs,signal:historySignal()});}
     catch(error){ended=true;await cancel();error.history_diagnostic={job_id:jobId(job?.id)||submittedId,cancellation_state};throw error;}
     finally{ended=true;}
   });

@@ -1,3 +1,4 @@
+import {historySignal,checkHistorySignal,withHistorySignal} from './history-cancellation.js';
 import {createHash,randomUUID} from 'node:crypto';
 import {mkdtemp,writeFile,rm} from 'node:fs/promises';
 import {join} from 'node:path';
@@ -132,11 +133,12 @@ async function collectHistoryRun({bigquery,project,o,adapter,batches=5,run,revis
   if(adapter==='roster')return collectRoster({bigquery,project,o,jobKey,revision,batches,cursor:progress[0]?.cursor||'',run});
   let cursor=progress[0]?.cursor||'',records=0,processed=0,complete=false;
   const deadline=Date.now()+600000,budget={requests:0,bytes:0,maxRequests:adapter==='native'?120000:2400,maxBytes:268435456};
-  const signal=AbortSignal.timeout(600000);let transport;
+  const signal=AbortSignal.any([AbortSignal.timeout(600000),... (historySignal()?[historySignal()]:[])]);let transport;
   if(adapter==='native')transport=await nativeClient(o.source,env,signal,budget);
   if(adapter==='shopify')transport=await client('shopify',env,signal,budget);
   const fetchPage=boundedFetch(budget,fetchImpl);
   for(;processed<batches&&!complete;processed++){
+    checkHistorySignal();
     if(Date.now()>=deadline)break;
     let orders=[],evidence=[],next=cursor,pendingRecords=0;
     if(adapter.startsWith('metorik_')){
@@ -251,4 +253,12 @@ export async function main(argv=process.argv.slice(2),env=process.env){
   }
   return publishHistory({bigquery,project,dataset:o.dataset,snapshot:extra.snapshot,revision:extra.revision});
 }
-if(import.meta.url===pathToFileURL(process.argv[1]||'').href)main().then(r=>console.log(JSON.stringify(r))).catch(error=>{console.error(JSON.stringify(historyFailure(error,{operation:process.argv[2],...error.history_context})));process.exitCode=2;});
+if(import.meta.url===pathToFileURL(process.argv[1]||'').href){
+  const controller=new AbortController(),stop=()=>controller.abort();
+  process.on('SIGTERM',stop);process.on('SIGINT',stop);
+  withHistorySignal(controller.signal,()=>main()).then(r=>{
+    checkResult();console.log(JSON.stringify(r));
+  }).catch(error=>{console.error(JSON.stringify(historyFailure(error,{operation:process.argv[2],...error.history_context})));process.exitCode=2;})
+    .finally(()=>{process.off('SIGTERM',stop);process.off('SIGINT',stop);});
+  function checkResult(){if(controller.signal.aborted)throw Object.assign(Error('History interrupted'),{code:'REQUEST_CANCELLED'});}
+}
