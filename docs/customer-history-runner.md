@@ -140,8 +140,12 @@ filters do not participate in hashing. Evidence counts intentionally span revisi
 
 Stop/prevent submissions by all collectors and runners for this selection on all
 hosts and identities, and keep them stopped through review, unlock and launch.
-Account for any other executor's pending/running warehouse jobs using that
-executor's identity or administrator visibility. This workspace cannot attest to
+Drain outstanding submission RPCs and delayed callbacks, including a job creation
+request whose response was lost or timed out. A stopped local PID or cancellation
+acknowledgement does not establish that an outstanding request cannot still create
+a warehouse job. Reconcile those known submissions to terminal jobs before asserting
+quiescence. Account for any other executor's pending/running warehouse jobs using
+that executor's identity or administrator visibility. This workspace cannot attest to
 those facts. Once the operator has confirmed them, run on the existing Render
 runner host with its existing protected configuration:
 
@@ -156,13 +160,22 @@ jobs, or removes locks. It may cancel only its own timed-out diagnostic SELECTs.
 The shared 90-second budget, individual ten-second reads, 1 GB per-query billing
 ceiling, and outer 100-second timeout remain. Keep sanitized output beside the log.
 
-Historical jobs use bounded pagination: at most ten pages of 200, with full metadata
-where available. Repeated/missing continuation tokens, a remaining page, failed
-reads or deadline exhaustion cannot establish completeness. Active jobs are checked
-separately across the configured identity with the same page bound. A terminal
-historical match alone never proves present quiescence. Local `/proc` inspection
-counts collectors/runners without printing arguments. Cross-host and cross-identity
-absence must come from the operator; the flag cannot substitute for that work.
+Recovery does **not** scan historical jobs. The previous 2,000-job/ten-page
+truncation was a diagnostic coverage limit, not a violation of atomic resumption.
+`listing_complete:null`, `listing_pages:0` and `inspected_jobs:0` explicitly report
+that history was not scanned. Previously captured historical evidence is retained.
+
+Instead, the probe exhausts pending/running work across the configured identity
+before checkpoint reads and repeats that check after all diagnostic SELECTs finish.
+Each listing retains the ten-page cap: a remaining page, missing/repeated token,
+failed read or deadline exhaustion blocks recovery. It also checks local `/proc`
+for collectors/runners at both ends, without printing arguments. Any initial or
+late active work blocks commands. Two empty observations help detect a violated
+barrier; they cannot establish a distributed submission fence or prove that an
+invisible, in-flight creation request will never arrive. The operator assertion
+therefore includes the drained-submission condition above and holds until the sole
+resumed runner launches. Other hosts/identities require their own exhaustive checks;
+`allUsers:false` is deliberately not represented as administrator visibility.
 
 After job checks, aggregate-only checkpoint discovery reports exact-key and
 exact-selection row counts, the legacy reader-key count, same-namespace/revision
@@ -171,15 +184,15 @@ field types. Discovery uses JSON field extraction so older schemas can be diagno
 without selecting private cursors. Unknown hashes cannot reveal arbitrary start/end
 or evidence-table components: a same-namespace mismatch is reported, never guessed
 or replaced with the nearest/newest row. Zero exact matches, duplicate exact keys,
-incompatible namespaces/schema/state, active/uncertain work or incomplete listings
+incompatible namespaces/schema/state, active/uncertain work or incomplete active listings
 block recovery. A missing table/read failure also blocks. Evidence alone never
 proves checkpoint presence, absence, deletion or loss.
 
 Output `status` is `blocked`, `recoverable`, or `complete`, with stable machine
 `reasons`. `safe_to_unlock:true` (exit 0) requires one compatible authoritative
-checkpoint, verified boolean completion and timestamp, complete listings, terminal
-corresponding work, zero active identity jobs, zero local collectors, and the
-operator assertion. `blocked` exits 2, emits no unlock/resume commands and must
+checkpoint, verified boolean completion and timestamp, two complete active listings, terminal
+corresponding work, zero active identity jobs and zero local collectors at both observations, and the
+operator submission-barrier assertion. `blocked` exits 2, emits no unlock/resume commands and must
 be resolved first. Errors also emit `status:blocked` and `safe_to_unlock:false`.
 
 A safe result supplies `unlock_command`, an exact `rmdir /tmp/customer-history-runner-<hash>.lock`
@@ -188,13 +201,37 @@ launch at the top of this document (20 batches, 40 invocations, six hours, 650
 seconds per invocation). Review the fresh result, run only that exact `rmdir` if
 the retained empty lock exists, then its resume command while other submitters
 remain stopped. Do not use wildcard deletion. A complete result requires no launch.
-No unconditional removal command is provided before production checks pass.
+The incident-specific commands below are conditional on a fresh passing probe and
+the continuing operator barrier; they are not executed by the probe.
+
+### Exact commands for the reported checkpoint (not executed here)
+
+The operator-reported checkpoint is uniquely selected by `1900-01-01` through
+`2026-10-19`, null evidence-table selection, and `history-20261020-v2`; it is
+incomplete, last updated `2026-10-21 08:11:51.998+00`. The reported 15,000 persisted
+provider records are evidence, not a replacement cursor or a per-run count. Preserve
+that row, revision, all evidence and existing logs. With the drained-submission
+barrier held, run the read-only probe above from this change's code on the existing
+runner host. Only on exit 0 with `status:recoverable` and `safe_to_unlock:true`,
+review its exact commands and run:
+
+```sh
+rmdir /tmp/customer-history-runner-548d195ee1121da71503b0debd552ca421e9734c11ac1301071da2a1f49b111c.lock
+nohup node customer-identity/history-runner.js --source=ww --adapter=metorik_orders --dataset=customer_identity --batches=20 --revision=history-20261020-v2 --max-invocations=40 --total-ms=21600000 --invocation-ms=650000 --apply </dev/null >>/tmp/customer-history-ww-metorik-orders.log 2>&1 &
+```
+
+If the retained lock exists, `rmdir` must succeed on this exact empty directory;
+do not force removal or continue past an unexpected error. Keep other submitters
+stopped through launch. If the fresh checkpoint is complete, no resume is needed.
+The supplied production snapshot supports the recovery invariant under the operator
+barrier; it is not a fresh execution of this updated probe. No production lock has
+been removed or collector launched by this change.
 
 ### Why lost child attribution does not prevent recovery
 
 Every batch merges additive evidence and checkpoint cursor/completion in one
-BigQuery transaction with an expected-cursor assertion. Once all prior work is
-terminal and submitters are stopped, reread the authoritative checkpoint: a committed
+BigQuery transaction with an expected-cursor assertion. Once all prior work and outstanding submissions are
+drained, warehouse jobs are terminal and the submission barrier is held, reread the authoritative checkpoint: a committed
 transaction advanced both, and a rolled-back transaction advanced neither. The next
 child rereads that same key; it never derives a page from runner totals. A load
 before a transaction only fills a random staging table and cannot update canonical
@@ -206,8 +243,14 @@ Cancellation acknowledgement alone proves neither terminal state nor rollback.
 
 Exact SQL/key/source/adapter/revision transaction matching remains useful diagnostic
 evidence, with children and stage loads linked only through verified provenance.
-Missing matches are no longer a permanent blocker when complete identity-wide work
-checks and operator confirmation establish quiescence. This recovery contract does
+Neither missing matches nor an incomplete historical listing is a blocker when
+complete identity-wide active-work checks and the operator barrier establish
+quiescence. Historical success/failure cannot select the resume cursor. If separate
+failure diagnosis needs historical evidence, use the existing exact SQL/checkpoint
+key/source/adapter/revision provenance helpers and the failure log's invocation
+elapsed interval (falling back to the known runner interval), not an arbitrarily
+larger scan. Such attribution is advisory and must never be called exhaustive
+when pagination is capped. This recovery contract does
 not diagnose the suppressed production failure or guarantee the next API call.
 
 The runner retains sanitized stage/code/reason, job ID, commit outcome, cancellation

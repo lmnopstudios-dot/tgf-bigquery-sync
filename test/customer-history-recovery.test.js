@@ -32,25 +32,26 @@ test('links loads only by exact verified transaction stage and children by verif
   assert.equal(result.length,3);assert.equal(result.find(r=>r.job_id==='history_load_fixture').state,'RUNNING');
   assert.doesNotMatch(JSON.stringify(result),/PRIVATE_CURSOR|private customer|fixture@|MERGE/);
 });
-function fixture({truncated=false,active=false,processes=0,checkpointRows=1,confirmed=false,discovery={},compatible=true}={}){
-  const calls=[];let listings=0;
+function fixture({truncated=false,active=false,processes=0,checkpointRows=1,confirmed=false,discovery={},compatible=true,lateActive=false,lateProcesses=0,lateReadError=false}={}){
+  const calls=[];let listings=0,processChecks=0;
   const bigquery={dataset:()=>({getMetadata:async()=>[{location:'EU'}],table:()=>({getMetadata:async()=>[{schema:{fields:compatible?HISTORY_TABLES.history_progress:[]}}]})}),getJobs:async options=>{
-    calls.push(options);return !options.stateFilter?[[{getMetadata:async()=>[transaction()]}],truncated?{pageToken:'private'}:null]:[active?[{}]:[],null];
+    calls.push(options);assert.deepEqual(options.stateFilter,['pending','running']);listings++;if(lateReadError&&listings>1)throw Error('final listing unavailable');return [active||lateActive&&listings>1?[{}]:[],truncated?{pageToken:'private'}:null];
   },query:async options=>{calls.push(options);return options.query.includes('WITH fields')?[[{total_rows:2,exact_key_rows:checkpointRows,exact_selection_rows:checkpointRows,legacy_scope_rows:0,namespace_revision_rows:checkpointRows,other_revision_rows:1,missing_lookup_rows:0,...discovery}]]:options.query.includes('SELECT complete')?
     [Array.from({length:checkpointRows},()=>({complete:false,updated_at:'2026-10-21 08:12:10+00'}))]:[[{observation_rows:'11000',observed_provider_records:'5000'}]];}};
-  return {calls,run:()=>recover({bigquery,project,principal,processCheck:async()=>processes,executorsQuiescent:confirmed})};
+  return {calls,run:()=>recover({bigquery,project,principal,processCheck:async()=>++processChecks===1?processes:lateProcesses,executorsQuiescent:confirmed})};
 }
 test('bounded read-only probe reports aggregates and requires other-executor confirmation',async()=>{
   const f=fixture(),r=await f.run();
-  assert.equal(r.candidate_jobs.length,1);assert.equal(r.checkpoint.complete,false);
+  assert.equal(r.candidate_jobs.length,0);assert.equal(r.checkpoint.complete,false);
   assert.equal(r.persisted_evidence.observed_provider_records,5000);assert.equal(r.safe_to_unlock,false);
   assert.deepEqual(r.reasons,['operator_must_confirm_all_executors_quiescent']);
   assert.doesNotMatch(JSON.stringify(r),/PRIVATE_CURSOR|private customer|fixture@|MERGE|pageToken/);
   assert.equal(f.calls[0].autoPaginate,false);assert.equal(f.calls[0].allUsers,false);assert.equal(f.calls[0].maxResults,200);
-  assert.deepEqual(f.calls[1].stateFilter,['pending','running']);
+  assert.deepEqual(f.calls.at(-1).stateFilter,['pending','running']);
+  assert.equal(r.inspected_jobs,0);assert.equal(r.listing_pages,0);assert.equal(r.listing_complete,null);
   assert.ok(f.calls.filter(c=>c.query).every(c=>/^(SELECT |WITH )/.test(c.query)&&c.maximumBytesBilled&&c.jobTimeoutMs===10000));
 });
-test('truncated metadata, pending work, live processes and duplicate checkpoints fail closed',async()=>{
+test('truncated active listing, pending work, live processes and duplicate checkpoints fail closed',async()=>{
   const r=await fixture({truncated:true,active:true,processes:1,checkpointRows:2}).run();
   assert.equal(r.safe_to_unlock,false);assert.equal(r.checkpoint.complete,null);
   for(const pattern of [/truncated/,/active_identity/,/local_collector/,/ambiguous/])assert.match(r.reasons.join(' '),pattern);
@@ -125,7 +126,7 @@ test('bounded pagination consumes full metadata, reports cap and active work ind
     assert.equal(o.pageToken,calls===1?undefined:'token');return [[{metadata:transaction()}],calls===1?{pageToken:'token'}:null];}};
   const r=await listJobs(bigquery,{},f=>f());assert.equal(calls,2);assert.equal(r.complete,true);assert.equal(r.jobs.length,2);
   calls=0;assert.equal((await listJobs(bigquery,{},f=>f(),1)).complete,false);
-  const good={discovery:{exact_key_rows:1,exact_selection_rows:1},checkpoint:{rows:1,complete:false,updated_at:'2026-10-21 08:12:10+00'},historical:{complete:true},active:{complete:true,jobs:[]},processes:0,confirmed:true,candidates:[],compatible:true};
+  const good={discovery:{exact_key_rows:1,exact_selection_rows:1},checkpoint:{rows:1,complete:false,updated_at:'2026-10-21 08:12:10+00'},historical:{complete:true},active:{complete:true,jobs:[]},processes:0,confirmed:true,candidates:[],compatible:true,finalActive:{complete:true,jobs:[]},finalProcesses:0};
   for(const failed of [false,true]){
     const decision=recoveryDecision({...good,candidates:[{state:'DONE',failed}]});assert.equal(decision.status,'recoverable');
   }
@@ -188,6 +189,33 @@ test('installed SDK job pagination preserves selection, location and full metada
 
 test('complete authoritative checkpoints emit no collection launch',async()=>{
   const {recoveryDecision}=await import('../diagnostics/customer-history-recovery.js');
-  const d=recoveryDecision({discovery:{exact_key_rows:1,exact_selection_rows:1},checkpoint:{rows:1,complete:true,updated_at:'2026-10-21 08:12:10+00'},historical:{complete:true},active:{jobs:[],complete:true},processes:0,confirmed:true,candidates:[],compatible:true});
+  const d=recoveryDecision({discovery:{exact_key_rows:1,exact_selection_rows:1},checkpoint:{rows:1,complete:true,updated_at:'2026-10-21 08:12:10+00'},historical:{complete:true},active:{jobs:[],complete:true},processes:0,confirmed:true,candidates:[],compatible:true,finalActive:{complete:true,jobs:[]},finalProcesses:0});
   assert.equal(d.status,'complete');assert.equal(d.safe_to_unlock,true);
+});
+
+ test('terminal historical truncation is advisory, but incomplete or late active work blocks commands',async()=>{
+  const {recoveryDecision}=await import('../diagnostics/customer-history-recovery.js');
+  const good={discovery:{exact_key_rows:1,exact_selection_rows:1},checkpoint:{rows:1,complete:false,updated_at:'2026-10-21 08:11:51.998+00'},historical:{complete:false,pages:10},active:{complete:true,jobs:[]},processes:0,confirmed:true,candidates:[{state:'DONE'}],compatible:true,finalActive:{complete:true,jobs:[]},finalProcesses:0};
+  assert.equal(recoveryDecision(good).safe_to_unlock,true);
+  for(const patch of [{confirmed:false},{active:{complete:false,jobs:[]}},{finalActive:{complete:false,jobs:[]}},{finalActive:{complete:true,jobs:[{}]}},{finalProcesses:1},{candidates:[{state:'RUNNING'}]}])assert.equal(recoveryDecision({...good,...patch}).safe_to_unlock,false);
+  for(const options of [{lateActive:true},{lateProcesses:1},{truncated:true}]){
+    const r=await fixture({...options,confirmed:true}).run();assert.equal(r.safe_to_unlock,false);assert.equal(r.unlock_command,undefined);assert.equal(r.resume_command,undefined);
+  }
+ });
+ test('checkpoint reads are bracketed by full active and local checks without historical calls',async()=>{
+  const f=fixture({confirmed:true});const r=await f.run();assert.equal(r.safe_to_unlock,true);
+  assert.ok(f.calls[0].stateFilter);assert.ok(f.calls.at(-1).stateFilter);
+  assert.equal(f.calls.filter(c=>c.stateFilter).length,2);
+  assert.match(r.operator_barrier,/outstanding submissions drained/);
+ });
+
+test('active continuation failures and final read failures cannot emit recovery commands',async()=>{
+  const {listJobs}=await import('../diagnostics/customer-history-recovery.js');
+  for(const continuation of [{pageToken:'repeat'},{}]){
+    let calls=0;
+    const result=await listJobs({getJobs:async()=>{calls++;return [[],continuation];}}, {stateFilter:['pending','running']},f=>f());
+    assert.equal(result.complete,false);assert.ok(calls<=2);
+  }
+  // A final verification failure after successful checkpoint reads fails closed.
+  await assert.rejects(fixture({confirmed:true,lateReadError:true}).run(),/final listing unavailable/);
 });
