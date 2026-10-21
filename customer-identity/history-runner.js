@@ -1,3 +1,4 @@
+import {runnerFailureDiagnostic} from './history-warehouse.js';
 import {spawn} from 'node:child_process';
 import {mkdir, rmdir} from 'node:fs/promises';
 import {createHash} from 'node:crypto';
@@ -41,7 +42,7 @@ function resultFrom(output, o) {
         r.committed_batches > o.batches || r.committed_records > o.batches * 100 ||
         !['unknown','committed','not_committed'].includes(r.commit_outcome)) return null;
     return {status:'failed', records:r.committed_records, batches:r.committed_batches,
-      unknown:r.commit_outcome === 'unknown',
+      diagnostic:runnerFailureDiagnostic(r), unknown:r.commit_outcome === 'unknown',
       uncertain:['requested','acknowledged','unverified'].includes(r.cancellation_state)};
   }
   if (!['complete','resumable'].includes(r.status) || r.source !== o.source || r.adapter !== o.adapter ||
@@ -104,6 +105,7 @@ export async function runHistory(o, {childPath=collector, lockRoot='/tmp', grace
       if (r?.unknown || r?.uncertain || stopped || outcome.signal || !r || (outcome.code !== 0 && r.status !== 'failed')) retainLock=true;
       report(reason || r.status,{result:r?.status || 'invalid',records_committed:records,
         commit_outcome:r?.unknown?'unknown':records===null?'unverified':'reported_committed',
+        ...(r?.diagnostic?{failure:r.diagnostic,commit_outcome:r.diagnostic.commit_outcome}:{}),
         invocation_elapsed_ms:Math.round(performance.now()-invocationStart)});
       if (reason) return {status:reason,exitCode:2};
       if (r.status==='complete') return {status:'complete',exitCode:0};

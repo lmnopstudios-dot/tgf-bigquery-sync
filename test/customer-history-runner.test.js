@@ -123,3 +123,34 @@ test('acknowledged cancellation without confirmed completion retains the host lo
   assert.equal((await runHistory(options(),f.config)).status,'collector_failed');
   await assert.rejects(runHistory(options(),f.config),/concurrent_or_uncertain_run/);
 });
+
+test('nonzero collector failures retain actionable allowlisted diagnostics and exact outcomes',async t=>{
+  const f=await fixture(t,[{stderr:true,code:2,result:{status:'failed',committed_records:850,committed_batches:17,
+    stage:'batch_commit',code:'ORACLE_AGENT_DEADLINE',bigquery_code:503,bigquery_reason:'backendError',provider_reason:'ECONNRESET',
+    job_id:'history_abc123',commit_outcome:'unknown',cancellation_state:'acknowledged',
+    message:'private@customer.test',cursor:'secret',sql:'secret',provider_body:'secret'}}]);
+  assert.equal((await runHistory(options(),f.config)).status,'child_nonzero');
+  assert.deepEqual(f.logs.at(-1).failure,{stage:'batch_commit',code:'ORACLE_AGENT_DEADLINE',bigquery_code:503,
+    bigquery_reason:'backendError',provider_reason:'ECONNRESET',job_id:'history_abc123',commit_outcome:'unknown',
+    cancellation_state:'acknowledged',statement_location:null});
+  assert.equal(f.logs.at(-1).records_committed,850);
+  assert.equal(f.logs.at(-1).commit_outcome,'unknown');
+  assert.doesNotMatch(JSON.stringify(f.logs),/private@|secret|provider_body|cursor/);
+  assert.equal(await f.count(),1);await assert.rejects(runHistory(options(),f.config),/concurrent_or_uncertain_run/);
+});
+for(const outcome of ['committed','not_committed'])test('failure preserves '+outcome+' without mislabelling prior commits',async t=>{
+  const f=await fixture(t,[{code:2,result:{status:'failed',committed_records:50,committed_batches:1,commit_outcome:outcome,
+    stage:'private@customer.test',code:'private@customer.test',bigquery_reason:'private@customer.test',
+    provider_reason:'private@customer.test',job_id:'private@customer.test',cancellation_state:'private@customer.test'}}]);
+  await runHistory(options(),f.config);
+  assert.equal(f.logs.at(-1).commit_outcome,outcome);
+  assert.equal(f.logs.at(-1).failure.job_id,null);
+  assert.doesNotMatch(JSON.stringify(f.logs),/private@/);
+});
+
+test('collector transaction-abort reason survives serialization and runner handling',async t=>{
+  const f=await fixture(t,[{code:2,stderr:true,result:{status:'failed',committed_records:0,committed_batches:0,
+    stage:'batch_commit',bigquery_reason:'aborted',commit_outcome:'unknown',job_id:'history_aborted'}}]);
+  await runHistory(options(),f.config);
+  assert.equal(f.logs.at(-1).failure.bigquery_reason,'aborted');
+});

@@ -72,8 +72,10 @@ The exact lock path can be computed without printing project configuration:
 node --input-type=module -e 'import {createHash} from "node:crypto"; import {join} from "node:path"; const key=createHash("sha256").update(JSON.stringify(["customer_identity","ww","metorik_orders","history-20261020-v2"])).digest("hex"); console.log(join("/tmp",`customer-history-runner-${key}.lock`));'
 ```
 
-After that verification, remove only that empty lock directory with `rmdir`, then
-resume with the same launch command. Do not use a wildcard or delete checkpoints.
+For the current invocation 9 incident, use the read-only recovery section below.
+Do not remove the lock or resume until the unresolved evidence has been resolved.
+An operator may remove only the exact empty lock directory after complete
+quiescence verification; never use a wildcard or delete checkpoints.
 This same-host guard does **not** replace warehouse
 checkpoint concurrency assertions. It cannot coordinate different hosts or block
 someone invoking `history.js` directly. Avoid all overlapping collectors for the
@@ -103,3 +105,77 @@ not establish that smaller invocations fix it. The runner stops on its recurrenc
 It does not change transaction deduplication, email provenance, ambiguity handling,
 Oracle integration, publish snapshots, activate Oracle, schedule work or select
 another adapter automatically. No production collection was run to test this PR.
+
+## 2026-10-21 invocation 9 recovery (read only)
+
+Incident: WW / `metorik_orders` / `customer_identity` / `history-20261020-v2`.
+Runner start `2026-10-21T07:41:18Z`; invocation 9 failed at
+`2026-10-21T08:12:12Z` with `child_nonzero`, 850 reported committed records,
+8,850 this-run reported committed records and unknown pending commit outcome.
+The old runner discarded the child stage, code/reason and job ID. Those totals
+are preserved evidence, not a cursor or a count to replay.
+
+Run this command once from the reviewed checkout on the **existing production
+runner host**, with its existing protected service-account/project configuration:
+
+```sh
+timeout --signal=TERM --kill-after=5s 100s node diagnostics/customer-history-recovery.js
+```
+
+No arguments, collection, retry, incident-job cancellation, lock removal, checkpoint mutation,
+DDL, or adapter restart. Only diagnostic SELECT jobs may cancel their own work on
+a read timeout. Exit 2 means recovery remains unresolved. Keep the
+sanitized JSON alongside the original log; do not replace the original evidence.
+The probe itself has a shared 90-second evidence budget, ten-second individual
+reads and SQL jobs, and a 1 GB billed-byte ceiling per aggregate query. It uses
+the existing configured service account, refuses an absent explicit identity,
+reads dataset location, and lists at most 200 incident jobs with pagination
+explicitly disabled. A continuation is reported as incomplete evidence.
+
+The probe reads at most 64 KiB from the tail of the existing fixed runner log.
+If exactly one failure record matches the supplied incident timestamp, source,
+adapter, invocation, committed counts and outcome, its bounded
+`invocation_elapsed_ms` narrows the invocation interval (five-second margins).
+Otherwise the entire known runner interval is searched, and the missing invocation
+start is reported in `search_scope`. Time never establishes correspondence.
+
+A checkpoint transaction must match the configured submitter, exact unchanged
+checkpoint key and source/adapter/revision parameters, and the collector's exact
+transaction SQL. Loads are linked only through destination stage tables named
+by those verified transactions. Script children link through verified parent job
+IDs. Random stage names or nearby creation times alone are insufficient. SQL,
+query parameters, identities, source payloads, error messages and private cursors
+never appear in the result. Only validated job IDs, state, allowlisted reason,
+aggregate evidence counts, checkpoint existence/completion and update time leave
+the probe. Evidence counts span revisions for this provider and source; they are
+not this-run counts, revision-specific counts, or the checkpoint cursor.
+
+The separate current pending/running job listing is limited to 100 jobs under
+that configured identity. Local `/proc` inspection reports only the count of
+runner/collector processes, never command lines. Neither read can establish
+quiescence on another host or under another identity. Preserve the lock if
+metadata is truncated, a read fails, checkpoint rows are missing/duplicated,
+corresponding work is nonterminal, or any possible work remains unaccounted for.
+
+Even all-terminal matching transactions cannot recover the suppressed failed
+child stage/job ID. A failure may precede submission of its checkpoint transaction,
+leaving an unlinked load. The probe therefore always returns `safe_to_unlock:false`
+for this incident and describes that unresolved attribution explicitly. Obtain
+independent production execution/job provenance to identify the failed work and
+confirm **all** previous runners/children and warehouse work are inactive across
+hosts and identities. Cancellation acknowledgement does not establish terminal
+state or rollback; an unknown transaction may have committed. Inspect persisted
+progress after terminal verification; never reconstruct or print a cursor.
+
+Do not run the launch at the top of this document or remove the retained lock as
+part of this probe. An exact unlock/resume sequence must be supplied only after
+the terminal-job and process evidence is reviewed and no active work remains.
+Then resume only this existing WW Metorik selection and revision, using the saved
+checkpoint; never rerun completed rosters/adapters or retry a failed collection
+automatically.
+
+The new runner forwards a revalidated `failure` object containing stage,
+code/reason, job ID, commit outcome, cancellation state and safe statement
+location. The outer `child_nonzero` status still records process failure. Earlier
+committed records remain separate from the failed operation's exact
+`not_committed` / `committed` / `unknown` outcome. Raw child output is never logged.

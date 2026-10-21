@@ -40,11 +40,20 @@ export function historyFailure(error,context={}) {
     stage:stages.has(diagnostic.stage)?diagnostic.stage:'configuration',
     failure_category,
     code:codes.has(error?.code)?error.code:null,bigquery_code:safe.http_status,bigquery_reason:reason,
-    provider_reason:safe.provider_reason||[error?.code,error?.cause?.code,error?.cause?.errno].find(c=>networkCodes.has(c))||null,endpoint,error_category:category,statement_location:safe.statement_location,
+    provider_reason:safe.provider_reason||[error?.provider_reason,error?.code,error?.cause?.code,error?.cause?.errno].find(c=>networkCodes.has(c))||null,endpoint,error_category:category,statement_location:safe.statement_location,
     job_id:jobId(diagnostic.job_id),elapsed_ms:integer(diagnostic.elapsed_ms),
     run_elapsed_ms:integer(context.elapsed_ms),committed_batches:integer(context.committed_batches),
     committed_records:integer(context.committed_records),commit_outcome:['unknown','committed'].includes(diagnostic.commit_outcome)?diagnostic.commit_outcome:'not_committed',
     cancellation_state:['requested','acknowledged','completed','unverified'].includes(diagnostic.cancellation_state)?diagnostic.cancellation_state:null};
+}
+
+// Revalidate the serialized child protocol; never trust arbitrary provider strings.
+export function runnerFailureDiagnostic(r) {
+  const safe=historyFailure({code:r.code, http_status:r.bigquery_code,
+    errors:[{reason:r.bigquery_reason}], bigquery_reason:r.bigquery_reason, provider_reason:r.provider_reason,
+    statement_location:r.statement_location, history_diagnostic:r});
+  return Object.fromEntries(['stage','code','bigquery_code','bigquery_reason','provider_reason',
+    'job_id','commit_outcome','cancellation_state','statement_location'].map(k=>[k,safe[k]]));
 }
 
 export async function historyStage(stage,work) {
