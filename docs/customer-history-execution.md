@@ -15,10 +15,11 @@ are identity evidence only and stay excluded from purchases; genuine later
 Shopify purchases count. Remapping precedes first-observed cohort assignment,
 sequencing, first-to-second timing, repeat metrics and product/journey analysis.
 
-For the blocked WW roster at revision `history-20261020-v2`, use the
-[WW recovery procedure](ww-roster-import-recovery.md), which preserves the
-reported checkpoints and supplies a WW-only bounded resume. Do not rerun the
-completed sources from the initial provisioning sequence below.
+For the current revision `history-20261020-v2`, all three rosters and WW retained
+evidence are reported complete. Use the [bounded WW Metorik orders runner](customer-history-runner.md)
+to resume only the partial WW `metorik_orders` work. Do not rerun the initial
+provisioning sequence below. The [WW roster recovery procedure](ww-roster-import-recovery.md)
+is retained for reference to the earlier blocker.
 
 ## Source contracts and selection
 
