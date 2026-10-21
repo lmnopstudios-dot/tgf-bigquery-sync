@@ -2,7 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {spawnSync} from 'node:child_process';
 import {readFile} from 'node:fs/promises';
-import {historyLinkCtes,historyCoverageSql} from '../customer-identity/history-sql.js';
+import {readFileSync} from 'node:fs';
+import {historyCoverageSql,historyLinkStages,historyLinkMaterializationSql} from '../customer-identity/history-sql.js';
 import {observations,batchMergeSql,collectHistory,commitBatch,correspondence,publishHistory} from '../customer-identity/history.js';
 import {cohortRelations} from '../oracle/cohort-execution.js';
 import {customerJourneySql} from '../oracle/customer-journey.js';
@@ -24,9 +25,12 @@ c.create_aggregate('COUNTIF',1,CountIf)
 for name,t in p['tables'].items():
  c.execute('CREATE TABLE '+name+'('+','.join(t['columns'])+')')
  c.executemany('INSERT INTO '+name+' VALUES('+','.join('?' for _ in t['columns'])+')',t['rows'])
+c.commit()
 q=p['sql'].replace('UNION DISTINCT','UNION')
 q=re.sub(r'COUNTIF\\(([^()]+)\\)',r'SUM(CASE WHEN \\1 THEN 1 ELSE 0 END)',q)
-print(json.dumps([dict(r) for r in c.execute(q,p['params'])]))`;
+for statement in q.split(';')[:-1]:
+ if statement.strip(): c.execute(statement,p['params'])
+print(json.dumps([dict(r) for r in c.execute(q.split(';')[-1],p['params'])]))`;
   const r=spawnSync('python3',['-c',script,JSON.stringify({sql,tables,params})],{stdio:['ignore','pipe','pipe'],encoding:'utf8',timeout:10000});
   assert.equal(r.status,0,r.stderr);return JSON.parse(r.stdout);
 }
@@ -40,8 +44,17 @@ const evidence=[...makeObs('ww','1','one@real.org'),...makeObs('ww','2','one@rea
  ...observations({source:'ww',orderId:'8',recordId:'8',provider:'native',failure:'unavailable'})];
 const ec=['source','order_id','profile_key','normalized','email_state','provider','native_customer_id'];
 const tables={history_orders:{columns:oc,rows:orders.map((r,i)=>[...r,`2024-01-${String(i+1).padStart(2,'0')}T00:00:00Z`,'GBP',null,false])},email_observations:{columns:ec,rows:evidence.map(r=>ec.map(c=>r[c]))}};
-const linksSql=historyLinkCtes('fixture','customer_identity').replaceAll('`fixture.customer_identity.history_orders`','history_orders').replaceAll('`fixture.customer_identity.email_observations`','email_observations');
-const resolutions=()=>execute(`WITH ${linksSql} SELECT * FROM h_resolved`,tables);
+const originalLinks=readFileSync(new URL('./fixtures/customer-history/original-link-ctes.sql',import.meta.url),'utf8');
+const localSql=sql=>sql.replaceAll('`fixture.customer_identity.history_orders`','history_orders').replaceAll('`fixture.customer_identity.email_observations`','email_observations');
+const materialized=localSql(historyLinkMaterializationSql('fixture','customer_identity'));
+const sorted=rows=>rows.toSorted((a,b)=>JSON.stringify(a).localeCompare(JSON.stringify(b)));
+function materializedResolutions(input){
+  const actual=execute(`${materialized} SELECT * FROM h_resolved`,input);
+  const original=execute(`WITH ${originalLinks} SELECT * FROM h_resolved`,input);
+  assert.deepEqual(sorted(actual),sorted(original));
+  return actual;
+}
+const resolutions=()=>materializedResolutions(tables);
 
 test('actual additive SQL preserves historical guest evidence, links stores, and globally excludes conflicts/shared addresses',()=>{
   const rows=resolutions();assert.equal(rows.length,orders.length);
@@ -52,7 +65,7 @@ test('actual additive SQL preserves historical guest evidence, links stores, and
   assert.equal(get('ww','6').resolution,'unmatched');assert.equal(get('ww','7').resolution,'unavailable');assert.equal(get('ww','8').resolution,'unavailable');
   assert.notEqual(get('ww','7').canonical_customer_ref,get('ww','9').canonical_customer_ref);
   assert.equal(get('ww','1').customer_id,null);
-  const coverage=execute(historyCoverageSql('fixture','customer_identity').replace(historyLinkCtes('fixture','customer_identity'),linksSql),tables);
+  const coverage=execute(localSql(historyCoverageSql('fixture','customer_identity')),tables);
   for(const r of coverage)assert.equal(r.matched+r.unmatched+r.ambiguous+r.unavailable,r.orders);
   assert.equal(coverage.find(r=>r.source==='ww').shared_address_orders,2);
   assert.equal(coverage.find(r=>r.source==='ww').conflicting_orders,1);
@@ -62,17 +75,17 @@ test('registered historical IDs propagate usable order evidence even when curren
   const mids=observations({source:'usd',record:{metorik_customer_id:77,customer_id:0,email:'meta@real.org'},provider:'metorik_customers',recordId:'77',profileKey:'metorik:usd:77'});
   const associated=observations({source:'usd',record:{metorik_customer_id:77,customer_id:0,email:null},provider:'metorik_orders',recordId:'m1',orderId:'m1',profileKey:'metorik:usd:77'});
   const more={history_orders:{columns:oc,rows:[['ww','r1','OLD','2024-01-01T00:00:00Z','GBP',null,false],['ww','r2','OLD','2024-01-02T00:00:00Z','GBP',null,false],['shopify','s','C','2025-01-01T00:00:00Z','GBP',null,false],['usd','m1',null,'2024-01-01T00:00:00Z','USD',null,false],['shopify','m2','M','2025-01-01T00:00:00Z','USD',null,false]]},email_observations:{columns:ec,rows:[...makeObs('ww','r1','old@real.org'),...makeObs('shopify','s','old@real.org','C'),...mids,...associated,...makeObs('shopify','m2','meta@real.org','M')].map(r=>ec.map(c=>r[c]))}};
-  const rows=execute(`WITH ${linksSql} SELECT * FROM h_resolved`,more);
+  const rows=materializedResolutions(more);
   assert.ok(rows.every(r=>r.resolution==='matched'));assert.equal(rows.find(r=>r.order_id==='r1').canonical_customer_ref,rows.find(r=>r.order_id==='r2').canonical_customer_ref);
   assert.equal(rows.find(r=>r.order_id==='m1').customer_id,null);
   const aliasCustomer=observations({source:'ww',record:{metorik_customer_id:123,customer_id:0,email:'old@real.org'},provider:'metorik_customers',recordId:'123',profileKey:'metorik:ww:123'});
   const aliasOrder=observations({source:'ww',record:{metorik_customer_id:123,customer_id:0,email:null},provider:'metorik_orders',recordId:'r1',orderId:'r1',profileKey:'metorik:ww:123'});
   more.email_observations.rows.push(...[...aliasCustomer,...aliasOrder].map(r=>ec.map(c=>r[c])));
-  const aliasRows=execute(`WITH ${linksSql} SELECT * FROM h_resolved`,more);
+  const aliasRows=materializedResolutions(more);
   assert.ok(aliasRows.every(r=>r.resolution==='matched'));assert.equal(aliasRows.find(r=>r.order_id==='r1').shared_email,0);
   more.history_orders.rows.push(['ww','later-guest',null,'2024-03-01T00:00:00Z','GBP',null,false]);
   more.email_observations.rows.push(...observations({source:'ww',record:{metorik_customer_id:123,customer_id:0,email:null},provider:'metorik_orders',recordId:'later-guest',orderId:'later-guest',profileKey:'metorik:ww:123'}).map(r=>ec.map(c=>r[c])));
-  const continued=execute(`WITH ${linksSql} SELECT * FROM h_resolved`,more);
+  const continued=materializedResolutions(more);
   assert.ok(continued.every(r=>r.resolution==='matched'));assert.equal(continued.find(r=>r.order_id==='later-guest').customer_id,null);
 });
 
@@ -152,7 +165,7 @@ test('atomic staging deduplicates retries and never advances a checkpoint on fai
 });
 test('publication verifies original rosters, adapter completion and matches before atomically marking readiness',async()=>{
   const queries=[];await publishHistory({bigquery:{query:async q=>{queries.push(q);return [[]];}},project:'fixture',dataset:'identity',snapshot:'v2'});
-  assert.equal(queries.length,1);const q=queries[0];assert.equal(q.params.start.value,'1900-01-01');assert.match(q.query,/Canonical roster missing/);assert.match(q.query,/Shopify collection incomplete/);assert.match(q.query,/No supported cross-source matches/);assert.match(q.query,/COMMIT TRANSACTION/);assert.equal(q.maximumBytesBilled,'1000000000');
+  assert.equal(queries.length,1);const q=queries[0];assert.ok(q.query.includes(historyLinkMaterializationSql('fixture','identity')));assert.ok(q.query.indexOf('Duplicate original orders')<q.query.indexOf('CREATE TEMP TABLE h_orders'));assert.ok(q.query.indexOf('CREATE TEMP TABLE h_resolved')<q.query.indexOf('INSERT INTO `fixture.identity.identity_order_links`'));assert.equal(q.params.start.value,'1900-01-01');assert.match(q.query,/Canonical roster missing/);assert.match(q.query,/Shopify collection incomplete/);assert.match(q.query,/No supported cross-source matches/);assert.match(q.query,/COMMIT TRANSACTION/);assert.equal(q.maximumBytesBilled,'1000000000');
 });
 
 test('Metorik collector uses the production page/auth contract and retains positive guest customer IDs',async()=>{
@@ -169,4 +182,23 @@ test('transport failures and mismatched original orders cannot advance collectio
   const args={bigquery:bq,project:'fixture',o:{source:'ww',dataset:'identity',start:'2022-09-24',end:'2026-10-19'},adapter:'native',commit:async()=>assert.fail('No checkpoint may advance')};
   await assert.rejects(collectHistory({...args,nativeClient:async()=>async()=>{throw Error('request unavailable');}}));
   await assert.rejects(collectHistory({...args,nativeClient:async()=>async()=>({id:2,date_created_gmt:'2024-01-01T00:00:00Z',currency:'GBP',billing:{email:'wrong@real.org'}})}),/correspondence/);
+});
+
+test('materialization bounds planner expansion to ordered physical stages without persistent writes or truncation',()=>{
+  const stages=historyLinkStages('fixture','customer_identity');
+  assert.equal(stages.length,14);
+  const seen=new Set();
+  for(const {name,sql} of stages){
+    for(const dependency of sql.match(/\bh_[a-z_]+\b/g)||[])assert.ok(seen.has(dependency),`${name} depends on ${dependency}`);
+    seen.add(name);
+  }
+  const coverage=historyCoverageSql('fixture','customer_identity');
+  assert.equal((coverage.match(/CREATE TEMP TABLE/g)||[]).length,14);
+  assert.doesNotMatch(coverage,/INSERT INTO|MERGE|DELETE|TRUNCATE|LIMIT|WITH h_orders/);
+  assert.match(coverage,/^BEGIN TRANSACTION;/);
+  assert.ok(coverage.indexOf('COMMIT TRANSACTION;')>coverage.indexOf('CREATE TEMP TABLE h_resolved'));
+  const duplicated={...tables,email_observations:{...tables.email_observations,rows:[...tables.email_observations.rows,...tables.email_observations.rows]}};
+  assert.deepEqual(sorted(materializedResolutions(duplicated)),sorted(resolutions()));
+  const empty={history_orders:{columns:oc,rows:[]},email_observations:{columns:ec,rows:[]}};
+  assert.deepEqual(materializedResolutions(empty),[]);
 });
