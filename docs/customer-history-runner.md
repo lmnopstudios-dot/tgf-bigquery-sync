@@ -1,5 +1,11 @@
 # Bounded customer-history resume on Render
 
+**2026-10-21 update:** WW metorik_orders and all three rosters plus WW retained
+are now operator-reported complete. Preserve their checkpoints and do not run the
+WW launch below. The partial/recovery instructions remain historical context. See
+[the preview planner incident](customer-history-preview-incident.md) for the
+remaining Shopify/USD prerequisites; no collector restart is part of that fix.
+
 From the reviewed checkout in the existing Render service shell, with its existing
 protected credentials and project configuration, launch **only WW Metorik orders**:
 

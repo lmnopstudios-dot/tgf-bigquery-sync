@@ -15,10 +15,11 @@ are identity evidence only and stay excluded from purchases; genuine later
 Shopify purchases count. Remapping precedes first-observed cohort assignment,
 sequencing, first-to-second timing, repeat metrics and product/journey analysis.
 
-For the current revision `history-20261020-v2`, all three rosters and WW retained
-evidence are reported complete. Use the [bounded WW Metorik orders runner](customer-history-runner.md)
-to resume only the partial WW `metorik_orders` work. Do not rerun the initial
-provisioning sequence below. The [WW roster recovery procedure](ww-roster-import-recovery.md)
+For the current revision `history-20261020-v2`, all three rosters, WW retained
+and WW `metorik_orders` are reported complete as of 2026-10-21. Preserve those
+checkpoints; do not restart the WW runner or rerun the initial provisioning
+sequence below. See the [coverage planner incident and missing collection prerequisites](customer-history-preview-incident.md)
+for the shared materialization fix and only the missing Shopify/USD selections. The [WW roster recovery procedure](ww-roster-import-recovery.md)
 is retained for reference to the earlier blocker.
 
 ## Source contracts and selection

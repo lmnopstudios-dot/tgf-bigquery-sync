@@ -7,7 +7,7 @@ import {randomUUID} from 'node:crypto';
 
 const reasons=new Set(['aborted','duplicate','concurrentUpdate','tableUnavailable','responseTooLarge']);
 const codes=new Set(['ORACLE_AGENT_DEADLINE','REQUEST_CANCELLED','INVALID_QUERY_RESULT']);
-const stages=new Set(['progress_read','roster_count','roster_read','batch_read','stage_create','stage_file','stage_load','batch_commit','roster_bulk','publish','configuration']);
+const stages=new Set(['progress_read','roster_count','roster_read','batch_read','stage_create','stage_file','stage_load','batch_commit','roster_bulk','publish','preview_coverage','preview_evidence','configuration']);
 const operations=new Set(['collect','plan','status','preview','setup','check','publish']);
 const networkCodes=new Set(['ECONNREFUSED','ECONNRESET','ENOTFOUND','ETIMEDOUT','EAI_AGAIN','ENETUNREACH','EHOSTUNREACH']);
 const sourceContracts=new Set(['Adapter/source mismatch','Metorik page contract failed','Invalid Metorik customer identity','Invalid Metorik order identities','Metorik order correspondence failed','Incomplete Shopify response','Shopify correspondence/eligibility failed','Native order correspondence failed','Native customer mismatch','Retained order correspondence failed']);

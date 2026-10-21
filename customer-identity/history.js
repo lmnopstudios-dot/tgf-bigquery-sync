@@ -12,7 +12,7 @@ import {read,setup as legacySetup} from './operations.js';
 import {sourceClient,boundedFetch} from './runtime.js';
 import {emailFields} from './historical-evidence.js';
 import {emailState} from './email.js';
-import {HISTORY_TABLES,HISTORY_SCOPE,historyRosterSql,historyCoverageSql,historyLinkCtes} from './history-sql.js';
+import {HISTORY_TABLES,HISTORY_SCOPE,historyRosterSql,historyCoverageSql,historyLinkMaterializationSql} from './history-sql.js';
 import {historyFailure,historyStage,historyQuery,loadHistoryStage} from './history-warehouse.js';
 
 const hash=value=>createHash('sha256').update(value).digest('hex');
@@ -216,13 +216,33 @@ export async function publishHistory({bigquery,project,dataset,snapshot,revision
     ASSERT (SELECT COUNT(DISTINCT source) FROM ${t('history_progress')} WHERE revision=@revision AND source IN ('ww','usd') AND adapter IN ('native','retained','metorik_orders','migration') AND complete)=2 AS 'Each Woo source needs a completed order-evidence adapter';
     ${['ww','usd','shopify'].map(source=>`ASSERT NOT EXISTS(SELECT order_id FROM (${historyRosterSql(project,source)}) EXCEPT DISTINCT SELECT order_id FROM ${t('history_orders')} WHERE source='${source}') AS 'Canonical roster missing';`).join('\n')}
     ASSERT NOT EXISTS(SELECT 1 FROM ${t('history_orders')} GROUP BY source,order_id HAVING COUNT(*)>1) AS 'Duplicate original orders';
-    INSERT INTO ${t('identity_order_links')} WITH ${historyLinkCtes(project,dataset)}
+    ${historyLinkMaterializationSql(project,dataset)}
+    INSERT INTO ${t('identity_order_links')}
       SELECT @snapshot,source,order_id,customer_id,canonical_customer_ref,resolution,financial_status,cancelled,conflicting_email,shared_email FROM h_resolved;
     ASSERT (SELECT COUNTIF(resolution='matched') FROM ${t('identity_order_links')} WHERE snapshot_id=@snapshot)>0 AS 'No supported cross-source matches';
     INSERT INTO ${t('identity_snapshots')} SELECT @snapshot,'ready',@start,@end,COUNT(*),CURRENT_TIMESTAMP() FROM ${t('identity_order_links')} WHERE snapshot_id=@snapshot;
     COMMIT TRANSACTION;`;
   await historyQuery(bigquery,{query,params:{snapshot,revision,start:BigQuery.date(HISTORY_SCOPE.start),end:BigQuery.date(HISTORY_SCOPE.end)},types:{start:'DATE',end:'DATE'},maximumBytesBilled:SCOPE.bytes,jobTimeoutMs:20000},{stage:'publish',write:true});
   return {status:'published',snapshot,mode:'email_candidate_v2'};
+}
+export function historyPreviewQueries(project,dataset){
+  return [
+    {stage:'preview_coverage',query:historyCoverageSql(project,dataset)},
+    {stage:'preview_evidence',query:`SELECT source,provider,email_state,COUNT(*) observations FROM ${fq(project,dataset,'email_observations')} GROUP BY source,provider,email_state ORDER BY source,provider,email_state LIMIT 501`},
+  ];
+}
+export async function previewHistory({bigquery,project,dataset}){
+  const start=performance.now();
+  try{
+    const results=[];
+    for(const {stage,query} of historyPreviewQueries(project,dataset)){
+      const [rows]=await historyQuery(bigquery,{query,maximumBytesBilled:SCOPE.bytes,jobTimeoutMs:20000},{stage});
+      results.push(rows);
+    }
+    const [sources,evidence]=results;
+    if(evidence.length>500)throw Error('Coverage output bound');
+    return {read_only:true,sources,evidence};
+  }catch(error){error.history_context={operation:'preview',elapsed_ms:Math.round(performance.now()-start)};throw error;}
 }
 export function parseHistoryArgs(argv){
   const [command,...args]=argv,extra={};
@@ -242,12 +262,7 @@ export async function main(argv=process.argv.slice(2),env=process.env){
   if(command==='setup')return setupHistory({bigquery,project,dataset:o.dataset});
   if(command==='collect')return collectHistory({bigquery,project,o,adapter:extra.adapter,batches:Number(extra.batches||5),revision:extra.revision,evidenceTable:extra['evidence-table'],env});
   if(command==='status'){const [jobs]=await read(bigquery,`SELECT source,adapter,revision,COUNT(*) jobs,COUNTIF(complete) completed_jobs FROM ${fq(project,o.dataset,'history_progress')} GROUP BY source,adapter,revision ORDER BY source,adapter,revision`);return {read_only:true,jobs};}
-  if(command==='preview'){
-    const [sources]=await read(bigquery,historyCoverageSql(project,o.dataset));
-    const [evidence]=await read(bigquery,`SELECT source,provider,email_state,COUNT(*) observations FROM ${fq(project,o.dataset,'email_observations')} GROUP BY source,provider,email_state ORDER BY source,provider,email_state LIMIT 501`);
-    if(evidence.length>500)throw Error('Coverage output bound');
-    return {read_only:true,sources,evidence};
-  }
+  if(command==='preview')return previewHistory({bigquery,project,dataset:o.dataset});
   if(!/^[A-Za-z0-9_-]{1,100}$/.test(extra.snapshot||''))throw Error('Snapshot required');
   if(command==='check'){
     const {createCustomerJourneyService}=await import('../oracle/customer-journey.js');

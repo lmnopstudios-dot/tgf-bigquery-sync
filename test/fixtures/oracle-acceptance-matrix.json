@@ -1069,7 +1069,8 @@
       "covers": [
         "executed additive evidence SQL including guests, shared/conflicting addresses and unavailable coverage",
         "executed Oracle order mapping, original Woo deduplication, imported-copy exclusion and cross-migration sequence/entry calculations",
-        "idempotent evidence and resumable collection without customer values in logs"
+        "idempotent evidence and resumable collection without customer values in logs",
+        "materialized preview/publication graph matches frozen original SQL with unchanged denominators, exclusions and assertions"
       ]
     },
     {
@@ -1087,6 +1088,14 @@
       "covers": [
         "two exact parent IDs, terminal provider errors and timing without SQL or parameters",
         "independent missing metadata does not discard other job evidence"
+      ]
+    },
+    {
+      "id": "customer-history-preview-diagnostics",
+      "file": "test/customer-history-preview.test.js",
+      "covers": [
+        "preview coverage/evidence failure attribution, safe job ID and fail-fast ownership",
+        "one-request unmaterialized coverage dry-run reproducer with sanitized planning failure"
       ]
     }
   ]
