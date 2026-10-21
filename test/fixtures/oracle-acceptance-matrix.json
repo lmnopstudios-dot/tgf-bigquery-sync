@@ -1071,6 +1071,23 @@
         "executed Oracle order mapping, original Woo deduplication, imported-copy exclusion and cross-migration sequence/entry calculations",
         "idempotent evidence and resumable collection without customer values in logs"
       ]
+    },
+    {
+      "id": "customer-history-commit-ownership",
+      "file": "test/customer-history-warehouse.test.js",
+      "covers": [
+        "same-job commit success after client result timeout without cancellation or resubmission",
+        "terminal stopped and unresolved outcomes preserve atomic checkpoint recovery",
+        "explicit abort, late metadata fencing and unchanged other caller contracts"
+      ]
+    },
+    {
+      "id": "customer-history-exact-job-metadata",
+      "file": "test/customer-history-commit-jobs.test.js",
+      "covers": [
+        "two exact parent IDs, terminal provider errors and timing without SQL or parameters",
+        "independent missing metadata does not discard other job evidence"
+      ]
     }
   ]
 }

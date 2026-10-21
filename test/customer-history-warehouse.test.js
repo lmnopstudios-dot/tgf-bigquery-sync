@@ -187,3 +187,65 @@ test('terminal load errors expose their allowlisted reason without row/provider 
     const safe=historyFailure(error);assert.equal(safe.stage,'stage_load');assert.equal(safe.bigquery_reason,'invalid');assert.equal(safe.error_category,'type_mismatch');assert.doesNotMatch(JSON.stringify(safe),/private@|raw private/);return true;
   });
 });
+
+test('commit success after result wait expiry reconciles the same job without cancellation or resubmission',async()=>{
+  let submissions=0,cancels=0,reads=0,deliver;
+  const job={id:'commit-job',getQueryResults:()=>new Promise(r=>deliver=r),
+    getMetadata:async()=>{reads++;return [{status:{state:'DONE'}}];},cancel:async()=>{cancels++;}};
+  const result=await historyQuery({createQueryJob:async settings=>{
+    submissions++;assert.equal(settings.jobTimeoutMs,5);return [job];
+  }},{query:'BEGIN TRANSACTION; COMMIT TRANSACTION;',jobTimeoutMs:20000},
+  {stage:'batch_commit',write:true,maximumMs:5});
+  assert.equal(result[2].jobComplete,true);assert.equal(submissions,1);
+  assert.equal(reads,1);assert.equal(cancels,0);
+  deliver([[],null,{jobComplete:true}]);await tick();assert.equal(submissions,1);
+});
+
+test('terminal stopped commit preserves provider error and uncertainty without cancelling a terminal job',async()=>{
+  let cancels=0,submissions=0;
+  await assert.rejects(historyQuery({createQueryJob:async()=>{submissions++;return [{id:'stopped-job',
+    getQueryResults:pending,getMetadata:async()=>[{status:{state:'DONE',errorResult:{reason:'stopped',message:'Job cancelled'}}}],
+    cancel:async()=>{cancels++;}}];}},
+  {query:'BEGIN TRANSACTION; COMMIT TRANSACTION;'}, {stage:'batch_commit',write:true,maximumMs:5}),error=>{
+    assert.equal(error.errors[0].reason,'stopped');
+    assert.equal(historyFailure(error).commit_outcome,'unknown');return true;
+  });
+  assert.equal(cancels,0);assert.equal(submissions,1);
+});
+
+test('explicit abort during commit reconciliation cancels once and never accepts terminal success',async()=>{
+  const controller=new AbortController();let cancels=0;
+  await assert.rejects(historyQuery({createQueryJob:async()=>[{id:'aborted-job',getQueryResults:pending,
+    getMetadata:async()=>{controller.abort();return [{status:{state:'DONE'}}];},
+    cancel:async()=>{cancels++;}}]}, {query:'COMMIT TRANSACTION;'},
+  {stage:'batch_commit',write:true,maximumMs:5,signal:controller.signal}),{code:'REQUEST_CANCELLED'});
+  assert.equal(cancels,1);
+});
+
+test('nonterminal reconciliation expires, cancels once and fences late metadata',async()=>{
+  const finishes=[];let cancels=0,reads=0;
+  await assert.rejects(historyQuery({createQueryJob:async()=>[{id:'pending-commit',getQueryResults:pending,
+    getMetadata:()=>{reads++;return new Promise(r=>finishes.push(r));},cancel:async()=>{cancels++;}}]},
+  {query:'COMMIT TRANSACTION;'}, {stage:'batch_commit',write:true,maximumMs:5}),{code:'ORACLE_AGENT_DEADLINE'});
+  assert.equal(cancels,1);
+  const before=reads;for(const finish of finishes)finish([{status:{state:'RUNNING'}}]);await tick();
+  assert.equal(reads,before);
+});
+
+for(const [stage,write] of [['roster_bulk',true],['publish',true],['progress_read',false],['batch_read',false],['batch_commit',false]])
+test(`${stage} write=${write} retains immediate deadline cancellation instead of commit reconciliation`,async()=>{
+  let cancels=0,metadataReads=0;
+  await assert.rejects(historyQuery({createQueryJob:async()=>[{id:'other-job',getQueryResults:pending,
+    cancel:async()=>{cancels++;},getMetadata:async()=>{metadataReads++;return [{status:{state:'DONE'}}];}}]},
+  {query:'SELECT 1'}, {stage,write,maximumMs:5}),{code:'ORACLE_AGENT_DEADLINE'});
+  assert.equal(cancels,1);assert.equal(metadataReads,1); // cancellation confirmation only
+});
+
+test('batch commit provider failure does not enter deadline reconciliation',async()=>{
+  let cancels=0,metadataReads=0;
+  await assert.rejects(historyQuery({createQueryJob:async()=>[{id:'failed-job',
+    getQueryResults:async()=>{throw Object.assign(Error('fixture failure'),{code:503});},
+    cancel:async()=>{cancels++;},getMetadata:async()=>{metadataReads++;return [{status:{state:'DONE'}}];}}]},
+  {query:'COMMIT TRANSACTION;'}, {stage:'batch_commit',write:true,maximumMs:500}),{code:503});
+  assert.equal(cancels,1);assert.equal(metadataReads,1);
+});

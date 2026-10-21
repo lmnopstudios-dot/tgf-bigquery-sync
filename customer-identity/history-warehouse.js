@@ -63,12 +63,39 @@ export async function historyStage(stage,work) {
   }
 }
 
+// One additional observation window, using the existing per-read bound. This
+// does not change the server execution timeout or submit another transaction.
+async function reconcileCommit(job,{maximumMs,signal}) {
+  let ended=false;
+  const started=performance.now();
+  const owned=()=>!ended&&!signal?.aborted&&performance.now()-started<maximumMs;
+  try {
+    return await boundedEvidenceRead(async()=>{
+      while(owned()){
+        const [metadata]=await job.getMetadata({maxRetries:0});
+        if(!owned())break;
+        if(metadata.status?.state==='DONE'){
+          if(metadata.status.errorResult)return {error:Object.assign(Error('Commit job failed'),{
+            queryTerminal:true,errors:[metadata.status.errorResult,...(metadata.status.errors||[])]})};
+          return {result:[[],null,{jobComplete:true,totalRows:'0'}]};
+        }
+        await new Promise(resolve=>setTimeout(resolve,Math.min(1000,Math.max(1,maximumMs-(performance.now()-started)))));
+      }
+      throw Object.assign(Error('Reconciliation ended'),{code:signal?.aborted?'REQUEST_CANCELLED':'ORACLE_AGENT_DEADLINE'});
+    },{maximumMs,signal});
+  } finally {ended=true;}
+}
+
 export async function historyQuery(bigquery,settings,{stage,maximumMs=20000,signal=historySignal(),write=false,validateRows}={}) {
   let job,submitted=false,cancellation_state;
   const submittedId=`history_${randomUUID().replaceAll('-','')}`;
   return historyStage(stage,async()=>{
     try {
       const result=await boundedQuery(bigquery,{...settings,jobId:submittedId,params:typedParams(settings.params||{},settings.types||{})},{maximumMs,signal,
+        // Only batch_commit ends at COMMIT and needs no result rows. Roster and
+        // publish scripts have different result/transaction contracts.
+        reconcileDeadline:write&&stage==='batch_commit'
+          ?allocated=>reconcileCommit(allocated,{maximumMs,signal}):undefined,
         onQueryAllocated:allocated=>{job=allocated;},
         onProviderStage:event=>{if(event.stage==='query_start')submitted=true;if(event.cancellation_state)cancellation_state=event.cancellation_state;}});
       if(!Array.isArray(result?.[0])||typeof bigquery.createQueryJob==='function'&&result[2]?.jobComplete!==true)
