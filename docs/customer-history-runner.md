@@ -110,72 +110,109 @@ another adapter automatically. No production collection was run to test this PR.
 
 Incident: WW / `metorik_orders` / `customer_identity` / `history-20261020-v2`.
 Runner start `2026-10-21T07:41:18Z`; invocation 9 failed at
-`2026-10-21T08:12:12Z` with `child_nonzero`, 850 reported committed records,
-8,850 this-run reported committed records and unknown pending commit outcome.
-The old runner discarded the child stage, code/reason and job ID. Those totals
-are preserved evidence, not a cursor or a count to replay.
+`2026-10-21T08:12:12Z`, with 850 reported committed records, 8,850 this-run
+reported committed records, and an unknown pending commit outcome. Preserve
+that original log. These totals are neither a cursor nor persisted row counts.
 
-Run this command once from the reviewed checkout on the **existing production
-runner host**, with its existing protected service-account/project configuration:
+### Demonstrated reader defect
+
+The collector CLI overrides legacy `collect.js` dates with `HISTORY_SCOPE`:
+`1900-01-01` through `2026-10-19`. The runner supplies no date or evidence-table
+arguments. The writer hashes JSON `[source, adapter, start, end, null, revision]`
+in that exact order. Its default revision is `history-20261020-v2`. Each successful
+child rereads `history_progress` by that key, so sequential invocations select the
+same checkpoint. The old recovery reader incorrectly used `SCOPE.start`,
+`2022-09-24`, producing a different key for both checkpoint reads and transaction
+provenance. This explains how a reader could return zero while the writer resumed.
+It does not prove the actual production checkpoint exists or identify the old
+child failure. Both end dates are fixed at `2026-10-19`, not computed from today;
+there is no daily rollover. A shared key helper now preserves the writer's exact
+serialization, including prior revisions, without rewriting any stored keys.
+
+Both readers use the configured `GOOGLE_PROJECT_ID`, dataset `customer_identity`,
+table `history_progress`, source `ww`, adapter `metorik_orders`, and unchanged
+revision. The evidence table defaults to null for this adapter. `email_observations`
+is the additive destination, not an `evidenceTable` selection argument. String
+hash parameters serialize as BigQuery STRING; DATE wrappers used for roster date
+filters do not participate in hashing. Evidence counts intentionally span revisions.
+
+### Operator procedure
+
+Stop/prevent submissions by all collectors and runners for this selection on all
+hosts and identities, and keep them stopped through review, unlock and launch.
+Account for any other executor's pending/running warehouse jobs using that
+executor's identity or administrator visibility. This workspace cannot attest to
+those facts. Once the operator has confirmed them, run on the existing Render
+runner host with its existing protected configuration:
 
 ```sh
-timeout --signal=TERM --kill-after=5s 100s node diagnostics/customer-history-recovery.js
+timeout --signal=TERM --kill-after=5s 100s node diagnostics/customer-history-recovery.js --confirm-executors-quiescent
 ```
 
-No arguments, collection, retry, incident-job cancellation, lock removal, checkpoint mutation,
-DDL, or adapter restart. Only diagnostic SELECT jobs may cancel their own work on
-a read timeout. Exit 2 means recovery remains unresolved. Keep the
-sanitized JSON alongside the original log; do not replace the original evidence.
-The probe itself has a shared 90-second evidence budget, ten-second individual
-reads and SQL jobs, and a 1 GB billed-byte ceiling per aggregate query. It uses
-the existing configured service account, refuses an absent explicit identity,
-reads dataset location, and lists at most 200 incident jobs with pagination
-explicitly disabled. A continuation is reported as incomplete evidence.
+The flag records an operator assertion; it does not stop processes, grant access,
+or cancel jobs. Omit the flag for discovery without that assertion; output then
+remains blocked. This command never collects, changes checkpoints, cancels incident
+jobs, or removes locks. It may cancel only its own timed-out diagnostic SELECTs.
+The shared 90-second budget, individual ten-second reads, 1 GB per-query billing
+ceiling, and outer 100-second timeout remain. Keep sanitized output beside the log.
 
-The probe reads at most 64 KiB from the tail of the existing fixed runner log.
-If exactly one failure record matches the supplied incident timestamp, source,
-adapter, invocation, committed counts and outcome, its bounded
-`invocation_elapsed_ms` narrows the invocation interval (five-second margins).
-Otherwise the entire known runner interval is searched, and the missing invocation
-start is reported in `search_scope`. Time never establishes correspondence.
+Historical jobs use bounded pagination: at most ten pages of 200, with full metadata
+where available. Repeated/missing continuation tokens, a remaining page, failed
+reads or deadline exhaustion cannot establish completeness. Active jobs are checked
+separately across the configured identity with the same page bound. A terminal
+historical match alone never proves present quiescence. Local `/proc` inspection
+counts collectors/runners without printing arguments. Cross-host and cross-identity
+absence must come from the operator; the flag cannot substitute for that work.
 
-A checkpoint transaction must match the configured submitter, exact unchanged
-checkpoint key and source/adapter/revision parameters, and the collector's exact
-transaction SQL. Loads are linked only through destination stage tables named
-by those verified transactions. Script children link through verified parent job
-IDs. Random stage names or nearby creation times alone are insufficient. SQL,
-query parameters, identities, source payloads, error messages and private cursors
-never appear in the result. Only validated job IDs, state, allowlisted reason,
-aggregate evidence counts, checkpoint existence/completion and update time leave
-the probe. Evidence counts span revisions for this provider and source; they are
-not this-run counts, revision-specific counts, or the checkpoint cursor.
+After job checks, aggregate-only checkpoint discovery reports exact-key and
+exact-selection row counts, the legacy reader-key count, same-namespace/revision
+counts, other revision counts and missing lookup fields. Metadata checks required
+field types. Discovery uses JSON field extraction so older schemas can be diagnosed
+without selecting private cursors. Unknown hashes cannot reveal arbitrary start/end
+or evidence-table components: a same-namespace mismatch is reported, never guessed
+or replaced with the nearest/newest row. Zero exact matches, duplicate exact keys,
+incompatible namespaces/schema/state, active/uncertain work or incomplete listings
+block recovery. A missing table/read failure also blocks. Evidence alone never
+proves checkpoint presence, absence, deletion or loss.
 
-The separate current pending/running job listing is limited to 100 jobs under
-that configured identity. Local `/proc` inspection reports only the count of
-runner/collector processes, never command lines. Neither read can establish
-quiescence on another host or under another identity. Preserve the lock if
-metadata is truncated, a read fails, checkpoint rows are missing/duplicated,
-corresponding work is nonterminal, or any possible work remains unaccounted for.
+Output `status` is `blocked`, `recoverable`, or `complete`, with stable machine
+`reasons`. `safe_to_unlock:true` (exit 0) requires one compatible authoritative
+checkpoint, verified boolean completion and timestamp, complete listings, terminal
+corresponding work, zero active identity jobs, zero local collectors, and the
+operator assertion. `blocked` exits 2, emits no unlock/resume commands and must
+be resolved first. Errors also emit `status:blocked` and `safe_to_unlock:false`.
 
-Even all-terminal matching transactions cannot recover the suppressed failed
-child stage/job ID. A failure may precede submission of its checkpoint transaction,
-leaving an unlinked load. The probe therefore always returns `safe_to_unlock:false`
-for this incident and describes that unresolved attribution explicitly. Obtain
-independent production execution/job provenance to identify the failed work and
-confirm **all** previous runners/children and warehouse work are inactive across
-hosts and identities. Cancellation acknowledgement does not establish terminal
-state or rollback; an unknown transaction may have committed. Inspect persisted
-progress after terminal verification; never reconstruct or print a cursor.
+A safe result supplies `unlock_command`, an exact `rmdir /tmp/customer-history-runner-<hash>.lock`
+for this selection, and, only if incomplete, `resume_command` with the identical
+launch at the top of this document (20 batches, 40 invocations, six hours, 650
+seconds per invocation). Review the fresh result, run only that exact `rmdir` if
+the retained empty lock exists, then its resume command while other submitters
+remain stopped. Do not use wildcard deletion. A complete result requires no launch.
+No unconditional removal command is provided before production checks pass.
 
-Do not run the launch at the top of this document or remove the retained lock as
-part of this probe. An exact unlock/resume sequence must be supplied only after
-the terminal-job and process evidence is reviewed and no active work remains.
-Then resume only this existing WW Metorik selection and revision, using the saved
-checkpoint; never rerun completed rosters/adapters or retry a failed collection
-automatically.
+### Why lost child attribution does not prevent recovery
 
-The new runner forwards a revalidated `failure` object containing stage,
-code/reason, job ID, commit outcome, cancellation state and safe statement
-location. The outer `child_nonzero` status still records process failure. Earlier
-committed records remain separate from the failed operation's exact
-`not_committed` / `committed` / `unknown` outcome. Raw child output is never logged.
+Every batch merges additive evidence and checkpoint cursor/completion in one
+BigQuery transaction with an expected-cursor assertion. Once all prior work is
+terminal and submitters are stopped, reread the authoritative checkpoint: a committed
+transaction advanced both, and a rolled-back transaction advanced neither. The next
+child rereads that same key; it never derives a page from runner totals. A load
+before a transaction only fills a random staging table and cannot update canonical
+evidence or progress. Its terminal state is covered by identity-wide quiescence,
+even if its relationship to the suppressed child is unknown. Failed/uncertain
+stages retain their original TTL. No manual cursor edits, uncertain-write retries,
+new revisions, completed adapters, truncation or evidence deletion are needed.
+Cancellation acknowledgement alone proves neither terminal state nor rollback.
+
+Exact SQL/key/source/adapter/revision transaction matching remains useful diagnostic
+evidence, with children and stage loads linked only through verified provenance.
+Missing matches are no longer a permanent blocker when complete identity-wide work
+checks and operator confirmation establish quiescence. This recovery contract does
+not diagnose the suppressed production failure or guarantee the next API call.
+
+The runner retains sanitized stage/code/reason, job ID, commit outcome, cancellation
+state and statement location. Earlier committed records remain separate from the
+failed operation's exact outcome. Existing runtime/API/query/billing caps, host
+locking, cancellation and transaction safeguards remain intact. No production writes,
+collection, incident-job cancellation, lock removal, merge or deployment are part
+of this task.
