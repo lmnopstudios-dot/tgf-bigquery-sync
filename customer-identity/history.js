@@ -23,7 +23,7 @@ const profile=(source,cid)=>cid?`${source==='shopify'?'shopify':'woo'}:${source}
 export function observations({source,record,provider,orderId=null,profileKey=null,recordId,now=new Date().toISOString(),failure=null}){
   const observed=stamp(record?.updatedAt||record?.date_modified_gmt||record?.updated_at||record?.order_updated_at||record?.date_modified);
   const native=id(record?.customer_id),metorik=id(record?.metorik_customer_id||record?.customer?.metorik_customer_id);
-  const values=failure?[{field:'availability',value:null,state:failure}]:emailFields(record);
+  const values=failure?[{field:'availability',value:null,state:failure}]:emailFields(record,{metorikOrder:provider==='metorik_orders'});
   return values.map(f=>{
     if(f.value!=null&&(typeof f.value!=='string'||f.value.length>320))return {...f,value:null,state:'extraction_failure'};return f;
   }).map(f=>{
