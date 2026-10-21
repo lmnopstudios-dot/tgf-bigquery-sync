@@ -17,8 +17,11 @@ export function historicalEvidence({store,orderId,metorikCustomerId=null,wooCust
     normalized:usable.length===1?usable[0]:null,analysisLabel:'email-linked record'};
 }
 
-export function emailFields(record) {
+export function emailFields(record,{metorikOrder=false}={}) {
   const fields=['email','billing_email','customer_email','billing.email','customer.email'];
+  // Official /orders contract: https://metorik.dev/#orders
+  // Add a distinct field observation; never replace earlier extraction failures.
+  if(metorikOrder)fields.push('billing_address_email');
   return fields.map(field=>{
     let value=record,present=true;
     for(const part of field.split('.')){if(!value||!Object.hasOwn(value,part)){present=false;break;}value=value[part];}
