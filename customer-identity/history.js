@@ -14,6 +14,7 @@ import {emailFields} from './historical-evidence.js';
 import {emailState} from './email.js';
 import {HISTORY_TABLES,HISTORY_SCOPE,historyRosterSql,historyCoverageSql,historyLinkMaterializationSql} from './history-sql.js';
 import {historyFailure,historyStage,historyQuery,loadHistoryStage} from './history-warehouse.js';
+import {HISTORY_SCRIPT_BUDGETS,HISTORY_PREVIEW_MAXIMUM_MS,HISTORY_PUBLICATION_MAXIMUM_MS} from './history-budgets.js';
 
 const hash=value=>createHash('sha256').update(value).digest('hex');
 const stamp=value=>{if(!value)return null;const text=String(value);const d=new Date(/^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?$/.test(text)?text+'Z':text);return Number.isNaN(d.valueOf())?null:d.toISOString();};
@@ -206,7 +207,9 @@ async function collectHistoryRun({bigquery,project,o,adapter,batches=5,run,revis
   return {source:o.source,adapter,status:complete?'complete':'resumable',batches:processed,records,requests:budget.requests,bytes:budget.bytes};
 }
 
-export async function publishHistory({bigquery,project,dataset,snapshot,revision='history-20261020-v2'}){
+export async function publishHistory({bigquery,project,dataset,snapshot,revision='history-20261020-v2',deadlineAt,signal=historySignal()}){
+  deadlineAt=Math.min(deadlineAt??Infinity,Date.now()+HISTORY_PUBLICATION_MAXIMUM_MS);
+  const budget=HISTORY_SCRIPT_BUDGETS.publish;
   const t=name=>fq(project,dataset,name);
   const query=`BEGIN TRANSACTION;
     ASSERT NOT EXISTS(SELECT 1 FROM ${t('identity_snapshots')} WHERE snapshot_id=@snapshot) AS 'Immutable snapshot exists';
@@ -222,7 +225,9 @@ export async function publishHistory({bigquery,project,dataset,snapshot,revision
     ASSERT (SELECT COUNTIF(resolution='matched') FROM ${t('identity_order_links')} WHERE snapshot_id=@snapshot)>0 AS 'No supported cross-source matches';
     INSERT INTO ${t('identity_snapshots')} SELECT @snapshot,'ready',@start,@end,COUNT(*),CURRENT_TIMESTAMP() FROM ${t('identity_order_links')} WHERE snapshot_id=@snapshot;
     COMMIT TRANSACTION;`;
-  await historyQuery(bigquery,{query,params:{snapshot,revision,start:BigQuery.date(HISTORY_SCOPE.start),end:BigQuery.date(HISTORY_SCOPE.end)},types:{start:'DATE',end:'DATE'},maximumBytesBilled:SCOPE.bytes,jobTimeoutMs:20000},{stage:'publish',write:true});
+  await historyQuery(bigquery,{query,params:{snapshot,revision,start:BigQuery.date(HISTORY_SCOPE.start),end:BigQuery.date(HISTORY_SCOPE.end)},types:{start:'DATE',end:'DATE'},maximumBytesBilled:SCOPE.bytes,jobTimeoutMs:budget.maximumMs,
+    scriptOptions:{statementTimeoutMs:budget.statementMs}},
+    {stage:'publish',write:true,...budget,deadlineAt,signal});
   return {status:'published',snapshot,mode:'email_candidate_v2'};
 }
 export function historyPreviewQueries(project,dataset){
@@ -231,12 +236,16 @@ export function historyPreviewQueries(project,dataset){
     {stage:'preview_evidence',query:`SELECT source,provider,email_state,COUNT(*) observations FROM ${fq(project,dataset,'email_observations')} GROUP BY source,provider,email_state ORDER BY source,provider,email_state LIMIT 501`},
   ];
 }
-export async function previewHistory({bigquery,project,dataset}){
+export async function previewHistory({bigquery,project,dataset,deadlineAt,signal=historySignal()}){
+  deadlineAt=Math.min(deadlineAt??Infinity,Date.now()+HISTORY_PREVIEW_MAXIMUM_MS);
   const start=performance.now();
   try{
     const results=[];
     for(const {stage,query} of historyPreviewQueries(project,dataset)){
-      const [rows]=await historyQuery(bigquery,{query,maximumBytesBilled:SCOPE.bytes,jobTimeoutMs:20000},{stage});
+      const budget=HISTORY_SCRIPT_BUDGETS[stage];
+      const [rows]=await historyQuery(bigquery,{query,maximumBytesBilled:SCOPE.bytes,jobTimeoutMs:budget?.maximumMs??20000,
+        ...(budget?{scriptOptions:{statementTimeoutMs:budget.statementMs}}:{})},
+        {stage,maximumMs:budget?.maximumMs??20000,deadlineAt,signal});
       results.push(rows);
     }
     const [sources,evidence]=results;

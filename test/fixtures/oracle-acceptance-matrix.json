@@ -1097,6 +1097,15 @@
         "preview coverage/evidence failure attribution, safe job ID and fail-fast ownership",
         "one-request unmaterialized coverage dry-run reproducer with sanitized planning failure"
       ]
+    },
+    {
+      "id": "customer-history-script-budgets",
+      "file": "test/customer-history-script-budgets.test.js",
+      "covers": [
+        "31,321ms coverage script fits explicit statement and whole-script budgets; ordinary evidence limits remain unchanged",
+        "publication remains atomic with separately bounded same-job reconciliation, no replay and sanitized unknown outcomes",
+        "absolute caller deadlines, aborts, late allocation and late result fencing"
+      ]
     }
   ]
 }

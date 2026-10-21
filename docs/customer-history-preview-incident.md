@@ -1,5 +1,9 @@
 # History coverage planner failure, 2026-10-21
 
+For the subsequent failed-parent runtime evidence, separate statement/script
+budgets and compatible Render verification timeout, see
+[history script execution budgets](customer-history-script-budgets.md).
+
 ## Evidence and cause
 
 The Render one-request dry run identified `preview_coverage`, HTTP 400,
@@ -42,9 +46,10 @@ All historical observations still participate; DISTINCT/UNION DISTINCT, Metorik
 native-ID corroboration, alias restrictions, global shared/conflicting-address
 exclusions, guest/source-local fallback hashes and coverage aggregation are unchanged.
 No row sampling, LIMIT, join pruning or approximate aggregation was introduced.
-The 1 GB billing setting, 20-second warehouse/client bounds, cancellation and
-unknown-write-outcome handling remain. Materialization is bounded by these existing
-limits; it is not a promise that production execution fits them.
+The 1 GB billing setting, cancellation and unknown-write-outcome handling remain.
+The initial materialization change retained 20-second warehouse/client bounds.
+The subsequent Render evidence below justifies explicit script budgets instead;
+ordinary reads and collectors retain their existing bounds.
 
 The actual preview entry point now uses historyQuery for preview_coverage and
 preview_evidence, recording allocated/proposed query ID, stage timing and whole-run

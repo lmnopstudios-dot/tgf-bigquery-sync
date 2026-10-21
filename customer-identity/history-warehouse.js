@@ -63,12 +63,12 @@ export async function historyStage(stage,work) {
   }
 }
 
-// One additional observation window, using the existing per-read bound. This
+// One additional observation window, clipped to absolute caller ownership. This
 // does not change the server execution timeout or submit another transaction.
-async function reconcileCommit(job,{maximumMs,signal}) {
+async function reconcileCommit(job,{maximumMs,deadlineAt,signal}) {
   let ended=false;
   const started=performance.now();
-  const owned=()=>!ended&&!signal?.aborted&&performance.now()-started<maximumMs;
+  const owned=()=>!ended&&!signal?.aborted&&Date.now()<deadlineAt&&performance.now()-started<maximumMs;
   try {
     return await boundedEvidenceRead(async()=>{
       while(owned()){
@@ -82,20 +82,26 @@ async function reconcileCommit(job,{maximumMs,signal}) {
         await new Promise(resolve=>setTimeout(resolve,Math.min(1000,Math.max(1,maximumMs-(performance.now()-started)))));
       }
       throw Object.assign(Error('Reconciliation ended'),{code:signal?.aborted?'REQUEST_CANCELLED':'ORACLE_AGENT_DEADLINE'});
-    },{maximumMs,signal});
+    },{maximumMs,deadlineAt,signal});
   } finally {ended=true;}
 }
 
-export async function historyQuery(bigquery,settings,{stage,maximumMs=20000,signal=historySignal(),write=false,validateRows}={}) {
+export async function historyQuery(bigquery,settings,{stage,maximumMs=20000,deadlineAt,signal=historySignal(),write=false,validateRows,reconciliationMs}={}) {
   let job,submitted=false,cancellation_state;
+  // Pin absolute ownership before submission. Reconciliation has a separately
+  // bounded reserve, clipped by any caller's earlier operation deadline.
+  const startedAt=Date.now();
+  const queryDeadlineAt=deadlineAt==null?undefined:Math.min(startedAt+maximumMs,deadlineAt);
+  const reserve=write?(stage==='batch_commit'?reconciliationMs??maximumMs:stage==='publish'?reconciliationMs??0:0):0;
+  const reconciliationDeadlineAt=Math.min(startedAt+maximumMs+reserve,deadlineAt??Infinity);
   const submittedId=`history_${randomUUID().replaceAll('-','')}`;
   return historyStage(stage,async()=>{
     try {
-      const result=await boundedQuery(bigquery,{...settings,jobId:submittedId,params:typedParams(settings.params||{},settings.types||{})},{maximumMs,signal,
-        // Only batch_commit ends at COMMIT and needs no result rows. Roster and
-        // publish scripts have different result/transaction contracts.
-        reconcileDeadline:write&&stage==='batch_commit'
-          ?allocated=>reconcileCommit(allocated,{maximumMs,signal}):undefined,
+      const result=await boundedQuery(bigquery,{...settings,jobId:submittedId,params:typedParams(settings.params||{},settings.types||{})},{maximumMs,deadlineAt:queryDeadlineAt,signal,
+        // These writers end at COMMIT and need no result rows. Publication opts
+        // in explicitly; ordinary callers keep their existing wait limits.
+        reconcileDeadline:reserve>0
+          ?allocated=>reconcileCommit(allocated,{maximumMs:reserve,deadlineAt:reconciliationDeadlineAt,signal}):undefined,
         onQueryAllocated:allocated=>{job=allocated;},
         onProviderStage:event=>{if(event.stage==='query_start')submitted=true;if(event.cancellation_state)cancellation_state=event.cancellation_state;}});
       if(!Array.isArray(result?.[0])||typeof bigquery.createQueryJob==='function'&&result[2]?.jobComplete!==true)
