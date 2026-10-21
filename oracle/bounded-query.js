@@ -65,6 +65,21 @@ export async function boundedQuery(bigquery,settings,options={}) {
     },options);
   }catch(error){
     ended=true;
+    // A transactional writer may reconcile the same allocated job after its
+    // result wait expires. Fence the old result loop before transferring ownership.
+    // Explicit aborts and all ordinary readers retain immediate cancellation.
+    if(error.code==='ORACLE_AGENT_DEADLINE'&&!options.signal?.aborted&&job&&options.reconcileDeadline){
+      try {
+        const terminal=await options.reconcileDeadline(job);
+        if(terminal){
+          if(terminal.error)throw terminal.error;
+          return terminal.result;
+        }
+      }catch(reconciliationError){
+        if(reconciliationError.queryTerminal)throw reconciliationError;
+        if(options.signal?.aborted)error=Object.assign(Error('Query interrupted'),{code:'REQUEST_CANCELLED'});
+      }
+    }
     stopCause=options.signal?.aborted||error.code==='REQUEST_CANCELLED'?'caller_abort':error.code==='ORACLE_AGENT_DEADLINE'?'client_deadline':'failure_cleanup';
     emit({stage:'query_failed',phase,failure:safeReadFailure(error,settings.dryRun?'population_dry_run':'population_query'),cancellation_provenance:stopCause});
     await cancel();throw error;
