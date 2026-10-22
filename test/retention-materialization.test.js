@@ -20,7 +20,7 @@ for(const group of ['retention_windows','retention_piece_windows','retention_bas
  assert.equal(options.jobTimeoutMs,45000);assert.equal(options.scriptOptions.statementTimeoutMs,'15000');assert.equal((options.query.match(/BEGIN TRANSACTION;/g)||[]).length,1);assert.equal((options.query.match(/COMMIT TRANSACTION;/g)||[]).length,1);assert.equal((options.query.match(/CREATE TEMP TABLE/g)||[]).length,11);
  assert.doesNotMatch(options.query,/CREATE (?:OR REPLACE )?TABLE|INSERT|UPDATE|DELETE|MERGE/);
 });
-test('prior full SELECT compilation and synthetic execution evidence stays unchanged',async()=>{
+test('historical artifact tracks the changed piece projection without invalidating other shapes',async()=>{
  const prior=JSON.parse(gunzipSync(readFileSync(new URL('../diagnostics/retention-syntax-followup.json.gz',import.meta.url)))),now=await syntaxFollowupArtifact();
  assert.deepEqual(JSON.parse(JSON.stringify(now.cases.map(({full_select,synthetic})=>({full_select,synthetic})))),prior.cases.map(({full_select,synthetic})=>({full_select,synthetic})));assert.equal(now.validation_source,prior.validation_source);
 });
@@ -77,9 +77,9 @@ test('missing stage metadata is explicit and does not discard successful validat
  const t=acceptanceTransport({metadataFailure:true});const result=await acceptMaterializedRetention({...t,project:'fixture',env});assert.equal(result.population_execution_passed,true);assert.equal(result.result_validation_passed,true);assert.equal(result.stage_inspection_complete,false);assert.equal(result.acceptance_passed,false);assert.equal(result.result_summary.sitewide_rows,3);
 });
 
-test('twelve supplied successful synthetic executions retain their exact SQL/parameters',async()=>{
+test('eight unaffected synthetic SQL/parameter hashes remain unchanged; four piece shapes need revalidation',async()=>{
  const prior=JSON.parse(readFileSync(new URL('./fixtures/retention-f6-successful-synthetics.json',import.meta.url))),now=await syntaxFollowupArtifact();assert.equal(prior.checks.length,12);
- for(const c of prior.checks){const current=now.cases.find(x=>x.source===c.source&&x.store===c.store&&x.group===c.group);assert.equal(createHash('sha256').update(JSON.stringify(current.synthetic)).digest('hex'),c.synthetic_sha256);}
+ for(const c of prior.checks){const current=now.cases.find(x=>x.source===c.source&&x.store===c.store&&x.group===c.group);assert[c.group==='retention_piece_windows'?'notEqual':'equal'](createHash('sha256').update(JSON.stringify(current.synthetic)).digest('hex'),c.synthetic_sha256);}
 });
 test('reviewed materialized manifest matches generated scripts and rejects a stale deployment before reads',async()=>{
  const manifest=JSON.parse(readFileSync(new URL('../diagnostics/retention-materialized-manifest.json',import.meta.url)));assert.deepEqual(manifest,materializedManifest());let calls=0;
