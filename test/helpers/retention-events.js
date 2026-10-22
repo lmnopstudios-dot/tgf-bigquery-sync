@@ -31,7 +31,7 @@ export const retentionEvents=[
  event('shop','18','2025-03-02T12:00:00Z',[piece('b',['beta'])],{source_platform:'shopify',source_store:'shopify'})
 ];
 // Aggregate-only fixture adapter. Membership is calculated from events, not supplied rates.
-export function fixtureRetention(events,args,{pieces=false,baseline=false}={}){
+export function fixtureRetention(events,args,{pieces=false,baseline=false,allProducts=false,entryYear=null}={}){
  const date=t=>new Intl.DateTimeFormat('en-CA',{timeZone:args.time_zone||'UTC',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(t));
  const names=p=>p.names.filter(n=>!['collaboration','collaborations'].includes(n));
  const buckets=new Map(),sources=new Map();
@@ -43,11 +43,12 @@ export function fixtureRetention(events,args,{pieces=false,baseline=false}={}){
   let eligible=0,named=0,generic=0,unknown=0;
   for(const history of customers.values()){
    history.sort((a,b)=>a.timestamp.localeCompare(b.timestamp)||a.order.localeCompare(b.order));const first=history[0];
+   if(entryYear!==null&&Number(date(first.timestamp).slice(0,4))!==entryYear)continue;
    if(date(first.timestamp)<args.cohort_entry_start||date(first.timestamp)>args.cohort_entry_end)continue;eligible++;
    const classified=first.pieces.filter(p=>names(p).length===1),isGeneric=first.pieces.some(p=>p.group==='collaboration'||p.names.includes('collaborations'));
    if(classified.length)named++;else if(isGeneric)generic++;else unknown++;
    const second=history.find(e=>e.timestamp>first.timestamp);
-   const memberships=new Map();if(baseline)memberships.set('sitewide',{name:'Sitewide',p:null});for(const p of baseline?[]:pieces?first.pieces.filter(p=>names(p).length===1||p.group==='collaboration'||p.names.some(n=>['collaboration','collaborations'].includes(n))):classified){const name=names(p).length===1?names(p)[0]:null;memberships.set(name+(pieces?'/'+p.id:''),{name,p});}
+   const memberships=new Map();if(baseline)memberships.set('sitewide',{name:'Sitewide',p:null});for(const p of baseline?[]:pieces?first.pieces.filter(p=>allProducts||names(p).length===1||p.group==='collaboration'||p.names.some(n=>['collaboration','collaborations'].includes(n))):classified){const name=!allProducts&&names(p).length===1?names(p)[0]:null;memberships.set(name+(pieces?'/'+p.id:''),{name,p});}
    for(const {name,p} of memberships.values())for(const window of [90,180,360]){
     const key=[first.source_platform,first.source_store,name,pieces?p.id:'',window].join('/');
     let b=buckets.get(key);if(!b){b={source_platform:first.source_platform,source_store:first.source_store,collaboration_name:name,...(pieces?{entry_product_ref:first.source_platform+':'+first.source_store+':'+p.id,entry_product_title:p.title}:{}),observation_coverage_status:args.coverage_status||'verified_continuous',verified_coverage_start:args.coverage_start||'2020-01-01',verified_coverage_end:args.coverage_end||args.observation_end,coverage_evidence:args.coverage_evidence||'fixture:hand-counted',observed_repeat_customers:0,window_days:window,cohort_customers:0,mature_customers:0,repeat_customers:0,same_collaboration:0,different_collaboration:0,core_range:0,unknown:0,days:[],second_order_products:[]};buckets.set(key,b);}
@@ -63,4 +64,17 @@ export function fixtureRetention(events,args,{pieces=false,baseline=false}={}){
   const first=all[0],ds=all.map(e=>date(e.timestamp)).sort();coverage.push({source_platform:first.source_platform,source_store:first.source_store,eligible_first_customers:eligible,named_customers:named,generic_only_customers:generic,unknown_customers:unknown,history_start:ds[0],history_end:ds.at(-1),identified_orders:all.filter(e=>e.customer).length,anonymous_orders:all.filter(e=>!e.customer).length,migrated_orders:all.filter(e=>e.migrated||e.cancelled).length,excluded_orders:all.filter(e=>e.refunded).length});
  }
  return [...buckets.values()].map(({days,...b})=>{days.sort((a,b)=>a-b);return {...b,second_order_products:b.second_order_products.sort((a,b)=>b.observed_customers-a.observed_customers||a.product_ref.localeCompare(b.product_ref)).slice(0,10),coverage,median_days_to_second:days.length?(days[Math.floor((days.length-1)/2)]+days[Math.floor(days.length/2)])/2:null};});
+}
+
+// Supplemental fixture uses complete histories before filtering entry years.
+export function fixtureRetentionSections(events,args,{baseline=false}={}){
+ if(baseline){
+   const years=[...new Set(events.map(e=>Number(e.timestamp.slice(0,4))))];
+   return years.flatMap(year=>fixtureRetention(events,args,{baseline:true,entryYear:year}).map(r=>({...r,cohort_year:year}))).slice(0,150);
+ }
+ const rows=fixtureRetention(events,args,{pieces:true,allProducts:true});
+ const primary=rows.filter(r=>r.window_days===args.ranking_window);
+ const counts=[...primary].sort((a,b)=>b.observed_repeat_customers-a.observed_repeat_customers||a.entry_product_ref.localeCompare(b.entry_product_ref));
+ const rates=primary.filter(r=>r.mature_customers>0).sort((a,b)=>b.repeat_customers/b.mature_customers-a.repeat_customers/a.mature_customers||a.entry_product_ref.localeCompare(b.entry_product_ref));
+ return rows.map(r=>({...r,count_rank:counts.findIndex(x=>x.entry_product_ref===r.entry_product_ref)+1,rate_rank:rates.some(x=>x.entry_product_ref===r.entry_product_ref)?rates.findIndex(x=>x.entry_product_ref===r.entry_product_ref)+1:null})).filter(r=>r.count_rank<=10||r.rate_rank!==null&&r.rate_rank<=10);
 }
