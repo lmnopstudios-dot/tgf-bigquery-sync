@@ -1,3 +1,4 @@
+import {publicationGuardSql} from './publication-guard.js';
 import {historySignal,checkHistorySignal,withHistorySignal} from './history-cancellation.js';
 import {historySelectionKey} from './history-selection.js';
 import {createHash,randomUUID} from 'node:crypto';
@@ -212,7 +213,9 @@ export async function publishHistory({bigquery,project,dataset,snapshot,revision
   const budget=HISTORY_SCRIPT_BUDGETS.publish;
   const t=name=>fq(project,dataset,name);
   const query=`BEGIN TRANSACTION;
+    ${publicationGuardSql(project,dataset)}
     ASSERT NOT EXISTS(SELECT 1 FROM ${t('identity_snapshots')} WHERE snapshot_id=@snapshot) AS 'Immutable snapshot exists';
+    ASSERT NOT EXISTS(SELECT 1 FROM ${t('identity_order_links')} WHERE snapshot_id=@snapshot) AS 'Orphan snapshot links exist';
     ASSERT (SELECT COUNT(DISTINCT source) FROM ${t('history_orders')})=3 AS 'Three roster sources required';
     ASSERT (SELECT COUNT(DISTINCT source) FROM ${t('history_progress')} WHERE revision=@revision AND adapter='roster' AND complete)=3 AS 'Three complete rosters required';
     ASSERT EXISTS(SELECT 1 FROM ${t('history_progress')} WHERE revision=@revision AND source='shopify' AND adapter='shopify' AND complete) AS 'Shopify collection incomplete';
@@ -276,7 +279,7 @@ export async function main(argv=process.argv.slice(2),env=process.env){
   if(command==='check'){
     const {createCustomerJourneyService}=await import('../oracle/customer-journey.js');
     const service=createCustomerJourneyService({bigquery,project,env:{...env,ORACLE_CUSTOMER_IDENTITY_MODE:'email_candidate_v2',ORACLE_CUSTOMER_IDENTITY_DATASET:o.dataset,ORACLE_CUSTOMER_IDENTITY_SNAPSHOT:extra.snapshot}});
-    const result=await service.analyzeCustomerJourney({start_date:o.start,end_date:o.end,group_by:['summary']},{timeoutMs:20000,decompose:false});
+    const result=await historyStage('check_query',()=>service.analyzeCustomerJourney({start_date:o.start,end_date:o.end,group_by:['summary']},{timeoutMs:20000,decompose:false,signal:historySignal()}));
     const valid=result.identity_evidence?.activation==='active';if(!valid)process.exitCode=2;
     return {read_only:true,valid,identity_evidence:result.identity_evidence,cohort:result.cohort};
   }

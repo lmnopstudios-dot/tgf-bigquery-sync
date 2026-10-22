@@ -1,0 +1,9 @@
+-- Operational SQL is withheld pending verified production prerequisites.
+-- Run the single read-only Render preflight in:
+-- docs/customer-history-prerequisite-preflight.md
+-- Do not execute the former placeholder/attestation-based repair command.
+-- No IAM attestation is required from the user; unreadable parent policies
+-- require administrator inspection with the permissions reported by preflight.
+-- After the independent results establish actual destinations, prepare only
+-- missing setup and the identical-duplicate repair using verified resources.
+-- No setup or mutation is authorized or executed by this file.

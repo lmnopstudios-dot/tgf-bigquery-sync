@@ -53,7 +53,7 @@ test('publication has an explicit script budget and retains one atomic transacti
     assert.deepEqual(q.scriptOptions,{statementTimeoutMs:30000});
     assert.equal((q.query.match(/BEGIN TRANSACTION/g)||[]).length,1);
     assert.equal((q.query.match(/COMMIT TRANSACTION/g)||[]).length,1);
-    assert.equal((q.query.match(/ASSERT /g)||[]).length,10);
+    assert.equal((q.query.match(/ASSERT /g)||[]).length,13);
     assert.equal((q.query.match(/CREATE TEMP TABLE/g)||[]).length,14);
     assert.equal((q.query.match(/INSERT INTO/g)||[]).length,2);
     assert.ok(q.query.indexOf('CREATE TEMP TABLE h_resolved')<q.query.indexOf('INSERT INTO'));

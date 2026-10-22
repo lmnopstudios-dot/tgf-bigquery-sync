@@ -1106,6 +1106,26 @@
         "publication remains atomic with separately bounded same-job reconciliation, no replay and sanitized unknown outcomes",
         "absolute caller deadlines, aborts, late allocation and late result fencing"
       ]
+    },
+    {
+      "id": "customer-history-publication-integrity",
+      "file": "test/customer-history-publication-integrity.test.js",
+      "covers": [
+        "cross-host transaction guard, concurrent same-snapshot publication and immutable sequential retry",
+        "conflicting existing duplicate links and missing/malformed publication guard fail before output",
+        "actual reader integrity SQL rejects identical/conflicting links, duplicate markers, invalid references and count mismatches",
+        "shared readiness/fallback deadline and sanitized actual-stage job diagnostics"
+      ]
+    },
+    {
+      "id": "customer-history-prerequisite-preflight",
+      "file": "test/customer-history-prerequisites.test.js",
+      "covers": [
+        "independent guard, project-wide active-job and restricted-backup inspection using SELECT and policy reads only",
+        "unknown versus absent resources; invalid singleton/schema; actual job visibility with aggregate counts",
+        "ancestor and dataset allow-policy inspection without user IAM attestations; incomplete inventory and role evidence cannot certify a destination",
+        "restricted output privacy and actionable administrator read-permission requirements"
+      ]
     }
   ]
 }

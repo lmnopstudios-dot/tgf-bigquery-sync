@@ -37,3 +37,21 @@ test('unready activation falls back through shared delivery with visible metadat
   assert.ok(r.evidence.coverage.identity_activation.every(s=>s.activation==='fallback'));
   assert.deepEqual(r.evidence.coverage.customer_history,customerHistoryContract());
 });
+for(const mode of ['direct','interactive','durable'])test(`corrupt order-link integrity falls back visibly across ${mode} follow-up and recovery`,async t=>{
+  const env={...identityEnv,ORACLE_CUSTOMER_IDENTITY_MODE:'email_candidate_v2'};
+  const f=acceptanceFixture({retention_events:true,identityEnv:env,identityIntegrity:false,now});
+  const h=await acceptanceServer(f,{durable:mode==='durable',now});t.after(h.close);
+  const send=async(message,context)=>mode==='direct'?(await (await fetch(h.origin+'/agent',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({message,analysis_context:context})})).json()):h.submit(message);
+  const result=await send(question);
+  assert.equal(result.evidence.coverage.identity,'source_qualified_only');
+  assert.ok(result.evidence.coverage.identity_activation.every(s=>s.activation==='fallback'));
+  assert.doesNotMatch(result.answer,/email candidate snapshot/i);
+  const follow=await send('Show 180 days instead.',result.analysis_context);
+  assert.equal(follow.evidence.ranking_window,180);
+  assert.equal(follow.evidence.coverage.identity,'source_qualified_only');
+  if(mode==='durable'){
+    const calls=f.wireQueries.length,recovered=await h.get('/jobs/'+follow.job_id);
+    assert.equal(recovered.evidence.coverage.identity,'source_qualified_only');
+    assert.equal(f.wireQueries.length,calls);
+  }
+});
