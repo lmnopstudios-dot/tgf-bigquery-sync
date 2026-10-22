@@ -39,7 +39,11 @@ export async function acceptMaterializedRetention({bigquery,project,env=process.
   if(component){submitted.push({...component,job_id:job.id,location:job.metadata?.jobReference?.location||'US'});onCheck({phase:'materialized_script_submitted',group:component.group,job_id:job.id,maximum_bytes_per_statement:component.maximum_bytes_per_statement});}
   return [job,...rest];
  }};
- const provider=createOracleProviderDependencies({bigquery:instrumented,project,env}).customerJourney;
+ const nativeProvider=createOracleProviderDependencies({bigquery:instrumented,project,env}).customerJourney,component_starts=[];let starts_at_first_completion=null;
+ const provider={...nativeProvider,analyzeCustomerJourney:async(definition,options)=>{
+  component_starts.push({group:definition.group_by[0],deadline_at:options.deadlineAt,allocated_ms:Math.floor(options.timeoutMs)});onCheck({phase:'combined_component_started',...component_starts.at(-1)});
+  try{return await nativeProvider.analyzeCustomerJourney(definition,options);}finally{starts_at_first_completion??=component_starts.length;}
+ }};
  const result=await answerCohortRetention({context,provider,requestId:'retention-materialized-'+randomUUID(),deadlineAt});
  const delivered=deliverOracleResult(structuredClone(result),context),e=result.evidence||{};
  const source_outcomes=(e.source_outcomes||[]).map(o=>({group:o.group,state:o.state,stage:o.stage,code:o.code,provider_reason:o.provider_reason,http_status:o.http_status,bigquery_reason:o.bigquery_reason,error_category:o.error_category,statement_location:o.statement_location,query_id:o.query_id,population_read:o.population_read,validation_reason:o.validation_reason,identity:o.identity_evidence?{activation:o.identity_evidence.activation,mode:o.identity_evidence.mode,snapshot:o.identity_evidence.snapshot}:null}));
@@ -48,13 +52,14 @@ export async function acceptMaterializedRetention({bigquery,project,env=process.
  for(const job of submitted){const evidence=await cohortWarehouseEvidence({bigquery,jobId:job.job_id,location:job.location});warehouse.push({group:job.group,...evidence});onCheck({phase:'materialized_child_execution',group:job.group,...evidence});}
  const expected=['transaction_setup',...COHORT_COMBINED_BOUNDARIES,'aggregation',...COHORT_COMBINED_BOUNDARIES.map(n=>'cleanup_'+n),'transaction_commit','result_select'];
  const stage_inspection_complete=warehouse.length===3&&warehouse.every(w=>w.parent?.outcome==='fulfilled'&&!w.children_truncated&&!w.inspection_errors.length&&expected.every(stage=>w.stages.some(s=>s.stage===stage&&s.outcome==='fulfilled')));
+ const scheduling_passed=component_starts.length===3&&starts_at_first_completion===3&&component_starts.every(c=>c.deadline_at===deadlineAt&&c.allocated_ms>0&&c.allocated_ms<=45000);
  const population_execution_passed=submitted.length===3&&source_outcomes.length===3&&source_outcomes.every(o=>o.state==='fulfilled'&&o.population_read==='completed'&&o.identity?.activation==='active'&&o.identity.snapshot===identity.snapshot);
  const result_validation_passed=['success','partial'].includes(delivered.delivery?.status)&&e.population_scope==='linked_tgf'&&(e.section_outcomes||[]).length===2&&e.section_outcomes.every(o=>o.state==='fulfilled');
  const catalogue=e.catalogue_reconciliation||[],catalogueIds=new Set(catalogue.map(c=>c.collection_id));
  const catalogue_complete=catalogue.length>0&&['ww','usd','shopify'].every(store=>{const ids=(e.catalogue_source_reconciliation||[]).filter(c=>c.source_store===store).map(c=>c.collection_id);return ids.length===catalogueIds.size&&ids.every(id=>catalogueIds.has(id));});
  return {read_only_business_data:true,persistent_writes:false,temporary_tables_only:true,report_replayed:false,report_published:false,
-  execution_shape:'one_transaction_per_combined_component',population_execution_passed,result_validation_passed,stage_inspection_complete,catalogue_complete,
-  acceptance_passed:population_execution_passed&&result_validation_passed&&stage_inspection_complete&&catalogue_complete,
+  execution_shape:'one_transaction_per_combined_component',scheduling_passed,component_starts,starts_at_first_completion,population_execution_passed,result_validation_passed,stage_inspection_complete,catalogue_complete,
+  acceptance_passed:scheduling_passed&&population_execution_passed&&result_validation_passed&&stage_inspection_complete&&catalogue_complete,
   prior_full_select_compilation_passes_preserved:11,prior_synthetic_execution_passes_preserved:12,prior_checks_rerun:0,
   actual_script_jobs:submitted.length,maximum_population_bytes:'60000000000',population_deadline_ms:45000,read_failures,source_outcomes,section_outcomes:e.section_outcomes||[],
   result_summary:{retention_rows:e.rows?.length||0,sitewide_rows:e.baseline_rows?.length||0,period_rows:e.baseline_period_rows?.length||0,whole_range_rows:e.product_ranking_rows?.length||0,governed_collection_entries:catalogue.length},warehouse};

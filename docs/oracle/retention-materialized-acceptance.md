@@ -1,5 +1,7 @@
 # Combined retention: materialized production execution
 
+Live update: the combined collaboration script has now executed successfully at `7d75e804b35461aabc70353ae085010ee3b146fc` (35,705 ms; all 24 stages; 54 rows; 25 catalogue entries reconciled). Items received only six seconds and sitewide was not attempted. See [the scheduling follow-up](retention-component-scheduling.md) for the deadline fix and exact updated acceptance command. Earlier local-blocker statements below describe the pre-deployment state.
+
 The supplied validation at deployed revision `f6ada6eda3c2bbda7707674febeff05fedea8dc0` establishes twelve successful corrected synthetic executions/result validations and eleven earlier full SELECT compilation successes. Preserve those checks. The flattened combined collaboration SELECT fails planning with “Not enough resources for query planning — query is too complex.”
 
 ## Actual execution route
@@ -47,7 +49,7 @@ const clean=e=>String(e?.message||e).replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{
 try{
  const helper=readFileSync('./diagnostics/accept-retention-materialized.js');
  const manifestBytes=readFileSync('./diagnostics/retention-materialized-manifest.json');
- if(createHash('sha256').update(helper).digest('hex')!=='821ce87dac3e68a3b219fa47eb5a6bcaa0ccfeea54c63ebf38ea687aaf7168c9'||createHash('sha256').update(manifestBytes).digest('hex')!=='0ff1b9103fcc2ef67a22dd3ad7fe6ec2ba5005b605a4e5cfa099fbaa0b40a3ed')throw Error('Deployed acceptance helper/manifest differs from reviewed fix');
+ if(createHash('sha256').update(helper).digest('hex')!=='aa9401ba693fd160fabdd4139e09823027c5fee18446e22ad11c61def7dda6f6'||createHash('sha256').update(manifestBytes).digest('hex')!=='0ff1b9103fcc2ef67a22dd3ad7fe6ec2ba5005b605a4e5cfa099fbaa0b40a3ed')throw Error('Deployed acceptance helper/manifest differs from reviewed fix');
  const {acceptMaterializedRetention}=await import('./diagnostics/accept-retention-materialized.js');
  const manifest=JSON.parse(manifestBytes),{project,credentials}=loadBigQueryConfig();
  console.log(JSON.stringify({phase:'materialized_acceptance_start',current_deployed_revision:process.env.RENDER_GIT_COMMIT||null,existing_data_only:true,temporary_tables_only:true,persistent_business_writes:false,report_replayed:false,prior_full_select_passes_preserved:11,prior_synthetic_passes_preserved:12,prior_checks_rerun:0}));
