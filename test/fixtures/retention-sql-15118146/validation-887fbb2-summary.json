@@ -1,0 +1,71 @@
+{
+  "provenance": "User-supplied live validation summary; raw output not attached in this turn",
+  "tested_revision": "887fbb212d894dd7eb7c7b21e7af2fd66c6148c4",
+  "merged_head": "e736cdb614518f9c1e5f08de028ad7702629d4d7",
+  "inspected_main": "bb7427d434416e3307fc752eb9e651889a333ff3",
+  "production_execution_verified": false,
+  "findings": [
+    {
+      "group": "retention_windows",
+      "sources": [
+        "ww",
+        "usd",
+        "shopify"
+      ],
+      "phase": "full_select_dry_run",
+      "status": "failed",
+      "message": "ARRAY subquery cannot have more than one column unless using SELECT AS STRUCT",
+      "location": {
+        "line": 147,
+        "column": 8
+      }
+    },
+    {
+      "group": "retention_windows",
+      "sources": [
+        "ww",
+        "usd",
+        "shopify"
+      ],
+      "phase": "synthetic_execution",
+      "status": "failed",
+      "message": "ARRAY subquery cannot have more than one column unless using SELECT AS STRUCT",
+      "location": {
+        "line": 69,
+        "column": 8
+      }
+    },
+    {
+      "groups": [
+        "retention_piece_windows",
+        "retention_baseline_windows"
+      ],
+      "sources": [
+        "ww",
+        "usd",
+        "shopify"
+      ],
+      "phase": "synthetic_execution",
+      "status": "execution_and_result_validation_passed",
+      "checks": 6
+    },
+    {
+      "groups": [
+        "retention_piece_windows",
+        "retention_baseline_windows"
+      ],
+      "sources": [
+        "ww",
+        "usd",
+        "shopify"
+      ],
+      "phase": "full_select_dry_run",
+      "status": "deadline_reached"
+    },
+    {
+      "phase": "transaction_script_dry_run",
+      "status": "limited",
+      "limitation": "Did not validate complete scripts"
+    }
+  ]
+}

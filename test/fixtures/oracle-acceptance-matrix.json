@@ -1214,7 +1214,10 @@
       "covers": [
         "exact linked execution script hashes and reported production SQL positions at 05b6aef across nine outcomes",
         "literal catalogue replacement and explicit STRUCT aliases survive identity wrapping and transaction decomposition",
-        "full linked validation artifact scope and unchanged identity/coverage safeguards"
+        "full linked validation artifact scope and unchanged identity/coverage safeguards",
+        "merged #374 multi-column ARRAY error at linked 147:8 and synthetic 69:8 preserves catalogue record fields",
+        "diagnostic full SELECT planning budgets are 60 seconds without changing production limits; synthetic verified/unverified coverage checks are distinct",
+        "complete live acceptance request retains all report sections and exact dates"
       ]
     }
   ]
