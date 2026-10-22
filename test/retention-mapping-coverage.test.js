@@ -22,7 +22,7 @@ test('catalogue reconciliation, review inventory and route-consumption audit hav
  assert.equal((q.match(/SELECT AS STRUCT '(?:woo|shopify)' source_platform/g)||[]).length,3);
  assert.match(q,/LIMIT 501\) review_rows/);assert.doesNotMatch(q,/LIMIT 501\) catalogue/);
  assert.match(artifact.mapping_settings.query,/^BEGIN TRANSACTION;/);
- assert.equal(artifact.mapping_settings.maximumBytesBilled,'500000000');assert.equal(artifact.mapping_settings.jobTimeoutMs,50000);
+ assert.equal(artifact.mapping_settings.maximumBytesBilled,'5500000000');assert.equal(artifact.mapping_settings.jobTimeoutMs,50000);
  assert.doesNotMatch(artifact.mapping_settings.query,/CREATE (?:OR REPLACE )?TABLE|INSERT INTO|MERGE INTO|DELETE FROM/);
  assert.equal((artifact.mapping_settings.query.match(/CREATE TEMP TABLE/g)||[]).length,10);
  assert.equal(ingestionEvidenceQueries('fixture').length,5);assert.ok(ingestionEvidenceQueries('fixture').every(x=>!x.query.includes('identity_snapshots')));

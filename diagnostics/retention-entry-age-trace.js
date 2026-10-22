@@ -109,8 +109,10 @@ export function entryAgeTraceSql(project){
  GROUP BY t.collection_id,t.display_name,t.collaboration_name,g.stage,g.source_store ORDER BY t.collection_id,g.stage,g.source_store) stage_counts,
  ARRAY(SELECT AS STRUCT * FROM trace_product_rows ORDER BY observed_orders DESC,collection_id,source_product_ref LIMIT 201) product_routes`;
 }
+// Reviewed script allowance: 10 input CTAS + result CTAS + final SELECT.
+// Keep the shared 500 MB statement cap and all timeouts unchanged.
 export function entryAgeTraceSettings(project){
- return {...auditExecutionOptions(entryAgeTraceSql(project),['orders','cr_routes','cr_collection_current','cr_resolved','classified_lines','retention_reporting_lines','line_classification_sets','ranked_orders','entry_matches','retention_members'],50000),location:'US',useLegacySql:false,
+ return {...auditExecutionOptions(entryAgeTraceSql(project),['orders','cr_routes','cr_collection_current','cr_resolved','classified_lines','retention_reporting_lines','line_classification_sets','ranked_orders','entry_matches','retention_members'],50000),maximumBytesBilled:'6000000000',location:'US',useLegacySql:false,
  params:{trace_collection_ids:ageTraceCollectionIds,trace_stages:ageTraceStages,cohort_entry_start:'2022-10-19',cohort_entry_end:'2026-10-19',observation_end:'2026-10-19',time_zone:'Europe/London',entry_source:null,entry_channel:null,entry_product_ref:null,entry_classification:'collaboration',retention_source_store:null,first_order_semantic:'first_observed_ever',matrixify_app_id:'gid://shopify/App/1758145',coverage_status:'unverified',coverage_start:null,coverage_end:null,coverage_evidence:null,minimum_sequence:2,maximum_sequence:null,within_days:null,subsequent_source:null,subsequent_channel:null},
  types:{trace_collection_ids:['STRING'],trace_stages:['STRING'],cohort_entry_start:'DATE',cohort_entry_end:'DATE',observation_end:'DATE',coverage_start:'DATE',coverage_end:'DATE',coverage_evidence:'STRING',entry_source:'STRING',entry_channel:'STRING',entry_product_ref:'STRING',retention_source_store:'STRING',maximum_sequence:'INT64',within_days:'INT64',subsequent_source:'STRING',subsequent_channel:'STRING'}};
 }

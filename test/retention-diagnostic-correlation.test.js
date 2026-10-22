@@ -16,7 +16,7 @@ test('both complete diagnostic final SELECTs replace table-correlated lookups wi
  for(const [sql,settings]of [[mappingAuditSql('fixture'),artifact.mapping_settings],[entryAgeTraceSql('fixture'),artifact.trace_settings]]){
   const relations=cohortRelations(sql).relations;
   for(const r of relations.filter(r=>/^(review|audit|trace)_/.test(r.name)))assert.doesNotMatch(r.body,/\b(?:ARRAY|EXISTS)\s*\(\s*SELECT\b/i,`${r.name}: scalar table correlation reintroduced`);
-  assert.match(settings.query,/CREATE TEMP TABLE cohort_result AS WITH/);assert.equal(settings.jobTimeoutMs,50000);assert.equal(settings.maximumBytesBilled,'500000000');
+  assert.match(settings.query,/CREATE TEMP TABLE cohort_result AS WITH/);assert.equal(settings.jobTimeoutMs,50000);assert.equal(settings.scriptOptions.statementByteBudget,'500000000');
   assert.match(settings.query,/FROM _SESSION.cohort_cr_routes/);assert.match(settings.query,/FROM _SESSION.cohort_cr_resolved/);
  }
  const review=retentionMappingReviewSql('fixture');assert.match(body(review,'review_routes'),/GROUP BY source_ref/);assert.match(body(review,'review_routes'),/LIMIT 20/);assert.match(body(review,'review_candidates'),/GROUP BY p.source_ref/);assert.match(body(review,'review_candidates'),/LIMIT 11/);
@@ -62,4 +62,24 @@ test('generated mapping candidate pairs deduplicate persisted SKU matches before
  const base=[input('skus',['source_ref','sku'],[['woo:ww:1','A'],['woo:ww:1','A'],['woo:ww:2','A'],['woo:ww:3',null]]),input('targets',['product_ref','title','sku'],[['shop1','Z archived','A'],['shop1','A archived','A'],['shop2','Second','A']])];
  const rows=run('WITH '+base.concat(`review_candidate_pairs AS (${pairs})`).join(',')+' SELECT * FROM review_candidate_pairs ORDER BY source_ref,product_ref');
  assert.equal(rows.length,4);assert.equal(rows[0].title,'A archived');assert.deepEqual(JSON.parse(rows[0].exact_skus),['A']);assert.ok(rows.every(r=>r.source_ref!=='woo:ww:3'));
+});
+
+test('two diagnostic whole-script caps cover their existing reviewed statement allocations without changing SQL, deadlines or other callers',async()=>{
+ const {auditExecutionOptions,cohortExecutionOptions}=await import('../oracle/cohort-execution.js');
+ const {customerJourneySql}=await import('../oracle/customer-journey.js');
+ const artifact=mappingCoverageArtifact('fixture');
+ for(const [settings,expected,required]of [[artifact.mapping_settings,'5500000000',178257920],[artifact.trace_settings,'6000000000',136314880]]){
+  const dataStatements=(settings.query.match(/CREATE TEMP TABLE /g)||[]).length+1;
+  assert.equal(settings.maximumBytesBilled,expected);assert.equal(BigInt(expected),BigInt(dataStatements)*500000000n);
+  assert.equal(settings.scriptOptions.statementByteBudget,'500000000');assert.ok(required<Number(settings.scriptOptions.statementByteBudget));
+  assert.equal(settings.jobTimeoutMs,50000);assert.equal(settings.scriptOptions.statementTimeoutMs,'15000');
+ }
+ // The shared diagnostic default (including email-history callers) and the
+ // production cohort allocator retain their original independent limits.
+ const simple='WITH orders AS (SELECT 1 value) SELECT * FROM orders';
+ assert.equal(auditExecutionOptions(simple,['orders']).maximumBytesBilled,'500000000');
+ const identity={dataset:'customer_identity',snapshot:'history-20261022-billing-v3',orderLinks:true};
+ const production=cohortExecutionOptions(customerJourneySql('fixture','retention_windows',null,null,identity,true),45000);
+ assert.equal(production.maximumBytesBilled,production.scriptOptions.statementByteBudget);assert.equal(production.jobTimeoutMs,45000);
+ assert.equal(BigInt(production.maximumBytesBilled),20000000000n/BigInt((production.query.match(/CREATE TEMP TABLE /g)||[]).length+1));
 });
