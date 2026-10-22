@@ -58,7 +58,10 @@ Existing required report behavior remains covered by the acceptance matrix:
 
 Seven focused local tests pass, including the exact ARRAY regression, generated
 artifact equality, complete-request scope and mocked validation failure isolation.
-The required acceptance/browser gate results are recorded in the PR after completion.
+The required acceptance gate passed **771 tests, zero failures/cancellations/skips**
+(21 central conversations and 53 regression suites). Browser acceptance passed
+**21 conversations on desktop/mobile**, with durable and activated identity
+refresh. The seven focused tests are included in the required gate.
 These tests do not establish production report acceptance. Existing follow-up
 certification remains unresolved; this SQL fix neither supplies nor fabricates it.
 
