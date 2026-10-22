@@ -114,8 +114,11 @@ query shapes and access to full results. This is not BigQuery compilation.
 Existing direct, interactive and durable fixture tests assert the verified rate
 stays unavailable while provisional estimates are present and reject a tampered
 provisional rate at final delivery. Browser tests check summary/full-results
-visibility, legacy results and refresh without provider replay. Required gate
-results are recorded in the PR after completion.
+visibility, legacy results and refresh without provider replay. The required acceptance gate passed **781 tests, zero failures/cancellations/skips**,
+including the ten new regressions (21 central conversations and 54 regression
+suites). Browser acceptance passed **21 conversations on desktop/mobile**, including
+summary/full-results visibility, activated identity and durable refresh.
+The opt-in BigQuery test remains skipped in ordinary offline tests.
 
 A fresh BigQuery dry-run attempt is blocked **before compilation** by OAuth 403:
 `Could not refresh access token: Domain forbidden`. Corrected SQL execution,
