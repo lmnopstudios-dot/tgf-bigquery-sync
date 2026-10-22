@@ -1,5 +1,7 @@
 # Retention mapping and transaction-coverage completion
 
+**Diagnostic follow-up:** the five existing-evidence reads succeeded. Mapping and entry-age SQL failed; their detailed errors are pending. Do not rerun the seven-check command below. Use the [bounded metadata-only error read](retention-diagnostic-errors-383.md#one-bounded-existing-job-error-read); corrected two-check revalidation is not yet available.
+
 ## Live report baseline: preserve it
 
 Current main includes #382. Production revision `c22df6162b9e1abdd29c8e628cdaab045496961b`, query `f7c52395-3269-4a44-af7d-7f78c1ebb395`, passed acceptance: 99 main item rows, 60 ranking rows, combined synthetic executed/validated, `acceptance_passed=true`. Successful report `279fea44-4f76-4723-9936-a0f39d916a8e` returns combined collaboration comparisons, provisional rates, sitewide baseline, individual items, whole-range rankings and second-order products. These are live successes, not local mocks. No population-scope or rate-rank fix is repeated here; no historical-error diagnostic is rerun.
