@@ -1,0 +1,75 @@
+Oracle
+Activated email candidate snapshots join Woo and Shopify histories before first-observed cohort assignment. Unmatched profiles retain source-local identities; candidate matches do not verify people, complete migration or complete follow-up.
+
+Cohort retrieval failed: Woo WW, Woo USD, Shopify. No result was calculated.
+
+These are first-observed entry-source cohorts using analytical linkage. Complete history and classification prevent a certified company-wide ranking; first-ever purchases are not established. The comparisons describe association, not causation.
+
+Guest orders with usable billing emails are included as email-linked records, separate from registered-customer identity. Unmatched anonymous orders remain isolated records; no customer IDs are invented.
+
+shopify: 4950 matched, 9914 unmatched, 103 ambiguous, 0 unavailable of 14967 snapshot orders (all statuses); 3 conflicting-email orders and 21 shared-address orders (flags may overlap).
+
+usd: 616 matched, 3678 unmatched, 28 ambiguous, 0 unavailable of 4322 snapshot orders (all statuses); 12 conflicting-email orders and 11 shared-address orders (flags may overlap).
+
+ww: 6615 matched, 32078 unmatched, 483 ambiguous, 0 unavailable of 39176 snapshot orders (all statuses); 387 conflicting-email orders and 122 shared-address orders (flags may overlap).
+
+No result was calculated for the failed components. No classified cohorts are available from the completed reads.
+
+Request reference: 15118146-147f-480c-90f7-4b21d27182f8.
+
+Woo WW
+
+Read failed; no cohort result was calculated.
+
+Woo USD
+
+Read failed; no cohort result was calculated.
+
+Shopify
+
+Read failed; no cohort result was calculated.
+
+Show details
+Cohort entry: 2022-10-19 to 2026-10-19; observation ends 2026-10-19 (Europe/London calendar dates).
+
+First observed in all available governed history, with lookback before entry dates. Prior collection coverage is unverified; first-ever purchases are not established. Left-censoring can classify an existing customer as new. This is not the first collaboration purchase of an already observed customer.
+
+Only governed named collaborations compete. Broad collaboration membership is excluded from ranking. Active classifications and approved identity/reporting-family routes describe the current governed catalogue view, not certified purchase-time classifications. Current publication status is not an eligibility filter. Conflicting names on one product are excluded from named ranking; individual items with governed collaboration membership remain visible without an inferred name. Separately classified products on the same entry order may form overlapping cohorts.
+
+Each customer counts once per named collaboration and once per piece within it. Multi-collaboration and multi-piece entry cohorts overlap and must not be added. Tied entry timestamps use source and order reference order; subsequent orders must be strictly later. Returns/cancellations follow source eligibility: fully refunded orders, cancelled Shopify orders and migrated imports are excluded; partial refunds remain eligible.
+
+Mature denominators require 90/180/360 full calendar days within evidence-backed continuous source coverage and the requested cutoff. Latest activity alone never certifies coverage. Retired sources require an evidenced coverage boundary; a public migration date does not certify complete follow-up. Unverified windows have no supported rate; observed repeats include identifiable returns even when full follow-up is unverified and are not divided by an unverified denominator. Repeat means the first subsequent eligible purchase in the requested channel within that calendar-day window. Median elapsed days is conditional on that repeat among mature entries. Same, other collaboration and explicitly governed core range are exclusive buckets; mixed, unclassified and ambiguous second orders are unknown. Missing classifications do not establish core range.
+
+Shopify eligibility includes Online and In-store orders; Woo evidence is online. Customers are assigned to their first-observed entry source after analytical linkage. Square remains excluded. Guest orders participate as email-linked records when usable billing evidence is available; unmatched anonymous orders remain isolated records. Unmatched identified profiles retain local histories. Coverage counts describe the available qualifying warehouse history, not verified people or a certified company-wide population.
+
+Numeric classification/history/linkage coverage was not returned by the provider; unavailable counts are unknown.
+
+Woo WW: provider unavailable. The population count is unknown.
+
+Woo USD: provider unavailable. The population count is unknown.
+
+Shopify: provider unavailable. The population count is unknown.
+
+Customer links use a frozen analytical email snapshot. Matrixify copies remain excluded from transactions. Prior history, follow-up, original-date/product provenance and classification coverage remain independently unverified.
+
+Source-history availability, current classification availability and customer-linkage coverage are separate limitations. Absent periods are missing evidence, never zero activity. Cohorts with fewer than 30 mature customers are small samples; no minimum-size eligibility exclusion or statistical significance claim is applied. No causal claim is applied.
+
+Source evidence unavailable: woo/retentionwindows, woo/retentionpiecewindows, woo/retentionbaselinewindows, shopify/retentionwindows, shopify/retentionpiecewindows, shopify/retentionbaselinewindows. missing sources are not zero.
+
+Woo WW calculation: read failed.  Identity: active (emailcandidatev2); snapshot history-20261022-billing-v3. Detailed diagnostics are retained with the evidence.
+
+Woo WW calculation: read failed.  Identity: active (emailcandidatev2); snapshot history-20261022-billing-v3. Detailed diagnostics are retained with the evidence.
+
+Woo WW calculation: read failed.  Identity: active (emailcandidatev2); snapshot history-20261022-billing-v3. Detailed diagnostics are retained with the evidence.
+
+Woo USD calculation: read failed.  Identity: active (emailcandidatev2); snapshot history-20261022-billing-v3. Detailed diagnostics are retained with the evidence.
+
+Woo USD calculation: read failed.  Identity: active (emailcandidatev2); snapshot history-20261022-billing-v3. Detailed diagnostics are retained with the evidence.
+
+Woo USD calculation: read failed.  Identity: active (emailcandidatev2); snapshot history-20261022-billing-v3. Detailed diagnostics are retained with the evidence.
+
+Shopify calculation: read failed.  Identity: active (emailcandidatev2); snapshot history-20261022-billing-v3. Detailed diagnostics are retained with the evidence.
+
+Shopify calculation: read failed.  Identity: active (emailcandidatev2); snapshot history-20261022-billing-v3. Detailed diagnostics are retained with the evidence.
+
+Shopify calculation: read failed.  Identity: active (emailcandidatev2); snapshot history-20261022-billing-v3. Detailed diagnostics are retained with the evidence.
