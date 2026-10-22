@@ -1228,6 +1228,10 @@
         "identical provisional calculation across all nine linked query shapes; verified coverage and identity safeguards unchanged",
         "concise business summary with full evidence accessible and provisional/verified rates distinct"
       ]
+    },
+    {
+      "file": "test/retention-combined.test.js",
+      "purpose": "Combined linked TGF population, strict scope, Woo entry to Shopify return and consolidated historical Woo mapping review."
     }
   ]
 }

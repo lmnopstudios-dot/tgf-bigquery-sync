@@ -31,15 +31,15 @@ export const retentionEvents=[
  event('shop','18','2025-03-02T12:00:00Z',[piece('b',['beta'])],{source_platform:'shopify',source_store:'shopify'})
 ];
 // Aggregate-only fixture adapter. Membership is calculated from events, not supplied rates.
-export function fixtureRetention(events,args,{pieces=false,baseline=false,allProducts=false,entryYear=null}={}){
+export function fixtureRetention(events,args,{pieces=false,baseline=false,allProducts=false,entryYear=null,combined=false}={}){
  const date=t=>new Intl.DateTimeFormat('en-CA',{timeZone:args.time_zone||'UTC',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(t));
  const names=p=>p.names.filter(n=>!['collaboration','collaborations'].includes(n));
  const buckets=new Map(),sources=new Map();
- for(const e of events){if(e.source_platform!==args.entry_source||date(e.timestamp)>args.observation_end)continue;const k=e.source_platform+'/'+e.source_store;const a=sources.get(k)||[];a.push(e);sources.set(k,a);}
+ for(const e of events){if(!combined&&e.source_platform!==args.entry_source||date(e.timestamp)>args.observation_end)continue;const k=combined?'combined':e.source_platform+'/'+e.source_store;const a=sources.get(k)||[];a.push(e);sources.set(k,a);}
  const coverage=[];
  for(const all of sources.values()){
   const valid=all.filter(e=>e.customer&&!e.migrated&&!e.cancelled&&!e.refunded),customers=new Map();
-  for(const e of valid){const a=customers.get(e.customer)||[];a.push(e);customers.set(e.customer,a);}
+  for(const e of valid){const key=combined?(e.analytical_customer_ref||e.source_platform+':'+e.source_store+':'+e.customer):e.customer;const a=customers.get(key)||[];a.push(e);customers.set(key,a);}
   let eligible=0,named=0,generic=0,unknown=0;
   for(const history of customers.values()){
    history.sort((a,b)=>a.timestamp.localeCompare(b.timestamp)||a.order.localeCompare(b.order));const first=history[0];
@@ -51,8 +51,8 @@ export function fixtureRetention(events,args,{pieces=false,baseline=false,allPro
    const productRef=(p,e)=>p.family_ref?'family:'+p.family_ref:e.source_platform+':'+e.source_store+':'+p.id;
    const memberships=new Map();if(baseline)memberships.set('sitewide',{name:'Sitewide',p:null});for(const p of baseline?[]:pieces?first.pieces.filter(p=>allProducts||names(p).length===1||p.group==='collaboration'||p.names.some(n=>['collaboration','collaborations'].includes(n))):classified){const name=!allProducts&&names(p).length===1?names(p)[0]:null;memberships.set(name+(pieces?'/'+productRef(p,first):''),{name,p});}
    for(const {name,p} of memberships.values())for(const window of [90,180,360]){
-    const key=[first.source_platform,first.source_store,name,pieces?productRef(p,first):'',window].join('/');
-    let b=buckets.get(key);if(!b){b={source_platform:first.source_platform,source_store:first.source_store,collaboration_name:name,...(pieces?{entry_product_ref:productRef(p,first),entry_product_title:p.family_title||p.title,entry_family_status:p.family_ref?'governed_family':'unmapped_item'}:{}),observation_coverage_status:args.coverage_status||'verified_continuous',verified_coverage_start:args.coverage_start||'2020-01-01',verified_coverage_end:args.coverage_end||args.observation_end,coverage_evidence:args.coverage_evidence||'fixture:hand-counted',provisional_eligible_customers:0,provisional_repeat_customers:0,observed_repeat_customers:0,window_days:window,cohort_customers:0,mature_customers:0,repeat_customers:0,same_collaboration:0,different_collaboration:0,core_range:0,unknown:0,days:[],second_order_products:[]};buckets.set(key,b);}
+    const key=[combined?'tgf':first.source_platform,combined?'combined':first.source_store,name,pieces?productRef(p,first):'',window].join('/');
+    let b=buckets.get(key);if(!b){b={...(combined?{population_scope:'linked_tgf'}:{}),source_platform:combined?'tgf':first.source_platform,source_store:combined?'combined':first.source_store,collaboration_name:name,...(pieces?{entry_product_ref:productRef(p,first),entry_product_title:p.family_title||p.title,entry_family_status:p.family_ref?'governed_family':'unmapped_item'}:{}),observation_coverage_status:args.coverage_status||'verified_continuous',verified_coverage_start:args.coverage_start||'2020-01-01',verified_coverage_end:args.coverage_end||args.observation_end,coverage_evidence:args.coverage_evidence||'fixture:hand-counted',provisional_eligible_customers:0,provisional_repeat_customers:0,observed_repeat_customers:0,window_days:window,cohort_customers:0,mature_customers:0,repeat_customers:0,same_collaboration:0,different_collaboration:0,core_range:0,unknown:0,days:[],second_order_products:[]};buckets.set(key,b);}
     b.cohort_customers++;
     const provisional=(Date.parse(args.observation_end)-Date.parse(date(first.timestamp)))/86400000>=window;
     if(provisional)b.provisional_eligible_customers++;
@@ -66,16 +66,16 @@ export function fixtureRetention(events,args,{pieces=false,baseline=false,allPro
   }
   const first=all[0],ds=all.map(e=>date(e.timestamp)).sort();coverage.push({source_platform:first.source_platform,source_store:first.source_store,eligible_first_customers:eligible,named_customers:named,generic_only_customers:generic,unknown_customers:unknown,history_start:ds[0],history_end:ds.at(-1),identified_orders:all.filter(e=>e.customer).length,anonymous_orders:all.filter(e=>!e.customer).length,migrated_orders:all.filter(e=>e.migrated||e.cancelled).length,excluded_orders:all.filter(e=>e.refunded).length});
  }
- return [...buckets.values()].map(({days,...b})=>{days.sort((a,b)=>a-b);return {...b,provisional_repeat_rate:b.provisional_eligible_customers?b.provisional_repeat_customers/b.provisional_eligible_customers:null,second_order_products:b.second_order_products.sort((a,b)=>b.observed_customers-a.observed_customers||a.product_ref.localeCompare(b.product_ref)).slice(0,10),coverage,median_days_to_second:days.length?(days[Math.floor((days.length-1)/2)]+days[Math.floor(days.length/2)])/2:null};});
+ return [...buckets.values()].map(({days,...b})=>{days.sort((a,b)=>a-b);return {...b,provisional_repeat_rate:b.provisional_eligible_customers?b.provisional_repeat_customers/b.provisional_eligible_customers:null,second_order_products:b.second_order_products.sort((a,b)=>b.observed_customers-a.observed_customers||a.product_ref.localeCompare(b.product_ref)).slice(0,10),coverage:combined?[]:coverage,median_days_to_second:days.length?(days[Math.floor((days.length-1)/2)]+days[Math.floor(days.length/2)])/2:null};});
 }
 
 // Supplemental fixture uses complete histories before filtering entry years.
-export function fixtureRetentionSections(events,args,{baseline=false}={}){
+export function fixtureRetentionSections(events,args,{baseline=false,combined=false}={}){
  if(baseline){
    const years=[...new Set(events.map(e=>Number(e.timestamp.slice(0,4))))];
-   return years.flatMap(year=>fixtureRetention(events,args,{baseline:true,entryYear:year}).map(r=>({...r,cohort_year:year}))).slice(0,150);
+   return years.flatMap(year=>fixtureRetention(events,args,{baseline:true,entryYear:year,combined}).map(r=>({...r,cohort_year:year}))).slice(0,150);
  }
- const rows=fixtureRetention(events,args,{pieces:true,allProducts:true});
+ const rows=fixtureRetention(events,args,{pieces:true,allProducts:true,combined});
  const primary=rows.filter(r=>r.window_days===args.ranking_window);
  const counts=[...primary].sort((a,b)=>b.provisional_repeat_customers-a.provisional_repeat_customers||a.entry_product_ref.localeCompare(b.entry_product_ref));
  const rates=primary.filter(r=>r.mature_customers>0).sort((a,b)=>b.repeat_customers/b.mature_customers-a.repeat_customers/a.mature_customers||a.entry_product_ref.localeCompare(b.entry_product_ref));
