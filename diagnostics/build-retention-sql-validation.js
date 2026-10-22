@@ -13,7 +13,7 @@ export async function retentionValidationCases(){
    return [[...['ww','usd','shopify'].map(source_store=>({source_store,identified_profiles:1,mapped_profiles:1,unmatched_profiles:0,qualifying_orders:1,matched_orders:1,unmatched_orders:0,ambiguous_orders:0,unavailable_orders:0,email_linked_guest_or_unknown_records:0,conflicting_orders:0,shared_address_orders:0}))]];
   }};
   const service=createCustomerJourneyService({bigquery,project,env:{ORACLE_CUSTOMER_IDENTITY_MODE:'email_candidate_v2',ORACLE_CUSTOMER_IDENTITY_DATASET:identity.dataset,ORACLE_CUSTOMER_IDENTITY_SNAPSHOT:identity.snapshot}});
-  await service.analyzeCustomerJourney({cohort_entry_start:'2022-10-19',cohort_entry_end:'2026-10-19',observation_end:'2026-10-19',time_zone:'Europe/London',first_order_semantic:'first_observed_ever',cohort:{entry_source:source,entry_product_classification:group==='retention_baseline_windows'?null:'collaboration'},group_by:[group],limit:99},{sourceStore:store});
+  await service.analyzeCustomerJourney({cohort_entry_start:'2022-10-19',cohort_entry_end:'2026-10-19',observation_end:'2026-10-19',time_zone:'Europe/London',first_order_semantic:'first_observed_ever',cohort:{entry_source:source,entry_product_classification:group==='retention_baseline_windows'?null:'collaboration'},group_by:[group],sort:'repeat_rate_desc',ranking_window:90,limit:group==='retention_baseline_windows'?3:99},{sourceStore:store});
   if(!captured?.query.includes('ci_mapping'))throw Error('Missing captured linked execution');
   const settings={params:captured.params,types:captured.types,useLegacySql:false,location:'US',maximumBytesBilled:'20000000000',jobTimeoutMs:10000};
   const synthetic=retentionBigQueryFixture(group,source,store);
@@ -21,4 +21,4 @@ export async function retentionValidationCases(){
  }
  return cases;
 }
-if(process.argv[1]===new URL(import.meta.url).pathname){const cases=await retentionValidationCases();writeFileSync(new URL('./retention-sql-validation.json.gz',import.meta.url),gzipSync(JSON.stringify({project:'gf-full-data',snapshot:'history-20261022-billing-v3',cases}),{mtime:0}));console.log('Built nine full linked SELECT/script and synthetic execution cases');}
+if(process.argv[1]===new URL(import.meta.url).pathname){const cases=await retentionValidationCases();writeFileSync(new URL('./retention-sql-validation.json.gz',import.meta.url),gzipSync(JSON.stringify({base_revision:'bb7427d434416e3307fc752eb9e651889a333ff3',project:'gf-full-data',snapshot:'history-20261022-billing-v3',cases}),{mtime:0}));console.log('Built nine full linked SELECT/script and synthetic execution cases');}
