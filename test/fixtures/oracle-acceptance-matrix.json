@@ -1155,6 +1155,15 @@
         "linked identity, all windows, baseline, individual items, second products and independent partial results",
         "authenticated polling, disconnect recovery and same-ID idempotency without provider replay; mocked warehouse transport"
       ]
+    },
+    {
+      "id": "durable-mixed-revision-recovery",
+      "file": "test/oracle-job-revision-recovery.test.js",
+      "covers": [
+        "revision-pinned ordinary and targeted atomic claims without incompatible attempts or head-of-line blocking",
+        "read-only exact-job recovery plan, owner/payload/state fingerprint fencing and immutable same-submission identity",
+        "refuse saved evidence, cancellation, active lease, stale fingerprint and repeat recovery; preserve original failure audit"
+      ]
     }
   ]
 }

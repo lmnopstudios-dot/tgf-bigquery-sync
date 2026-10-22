@@ -1,75 +1,106 @@
-# Failed durable collaboration acceptance: investigation remains open
+# Mixed-revision durable collaboration failure
 
-The deployed PR #367 revision is `7c9d02b91a1780c120ab8aa93fecd90e90d3abf5`.
-The supplied sequence establishes a successful claim at attempt 1 followed by an
-analysis-stage `INVALID_ANALYSIS_CONTEXT`, with no saved answer/evidence/artifact.
-It does not identify the rejected field or attribute the earlier claim-stage
-400/invalidQuery to that job, attempt or worker.
+## Confirmed trace
 
-The retained full report currently passes planning and repeated context validation,
-JSON serialization/hydration, durable worker execution, evidence validation and
-owned polling locally. Its context requests collaboration_piece, 90/180/360,
-sitewide baselines and second-order products, ranked by repeat_rate_90. The new
-regression uses the production BigQuery queue implementation, including MERGE
-serialization, ordinary claim, JSON hydration, lease fences and terminal writes.
-Only the queue's SQL transport and provider warehouse responses are doubles.
-This cannot verify BigQuery SQL execution or the actual persisted production row.
-Browser acceptance uses this same queue transport double for the full report.
+The exact existing job was inspected read-only in Render, with no resubmission.
+The shell revision was `7c9d02b91a1780c120ab8aa93fecd90e90d3abf5` (PR #367).
+The job is failed, attempts=1, with `INVALID_ANALYSIS_CONTEXT` at analysis.
+Its recorded execution revision is
+`1fdab55313a3f46d02a515bb2cb32503887b1ff9` (PR #366).
+Dataset metadata reports US. Stored and previous contexts pass the deployed #367
+validator. Reconstructed planning passes and has no differing fields.
 
-The requested existing-job inspection was attempted read-only. The configured
-proxy rejected the BigQuery destination as `EGRESS_FORBIDDEN`. No production job
-was created, replayed, claimed or modified. No raw payload was retrieved. The
-production rejected invariant therefore remains **unidentified**; this change
-preserves all scope validation and contains no speculative parser exception.
+Running the exact #366 validator from Git against the retained full report's #367
+planned context reproduces `INVALID_ANALYSIS_CONTEXT`, validation_field
+`unknown_field`, validation_rule `recognized_field`, with rejected key
+`retention_windows`. #366 lacks all three new retention fields. Because #367's
+empty context includes these fields, the incompatibility also affects other
+subjects serialized by #367, not just this report or its exact wording.
 
-The incident inspector now reads the stored context, validates it internally and
-returns only the validator revision and rejected field/rule. It never emits the
-stored context. Future worker failures preserve existing validation field/rule
-metadata in the terminal failure and logs. This cannot retroactively recover
-metadata that was discarded by the deployed worker.
+Planning/serialization were consistent with #367. The queue's ordinary lookup and
+atomic claim had no execution-revision compatibility predicate. A #366 worker
+claimed the #367 payload, recorded its revision, hydrated JSON and entered analysis.
+The dispatcher's first strict context validation rejected the new key before any
+provider calculation or delivery checkpoint. This explains the empty answer,
+evidence and artifact. The validator is correct and remains unchanged.
 
-## Read-only completion procedure
+New durable submissions record their producer execution revision. Ordinary
+candidate selection and the atomic claim UPDATE require that revision (or an
+explicit recovery revision) to match the worker's actual build revision. Both
+ordinary and targeted claims enforce the same predicate. Legacy unpinned payloads
+retain existing behavior; explicit recovery pins them in lifecycle metadata.
+Claim logs now retain worker ID and execution revision after tick cleanup.
 
-From an environment already authorized to reach BigQuery, using existing runtime
-configuration and credentials, run the inspector with the supplied request and
-job IDs (do not submit the report):
+This is deliberately exact revision routing, not a claim that arbitrary builds
+are analytically compatible. Drain revision-pinned queued work on its producing
+build before retiring it. A replacement build does not silently reinterpret it.
+Workers deployed before this fence do not honor it: retire those processes before
+recovery. Merely deploying a new web instance does not prove worker retirement.
+
+## Separate claim error
+
+The earlier claim-stage HTTP 400/invalidQuery is still not attributable to a
+specific worker, revision, query or retry from the available logs. It may be a
+separate attempt; this is not established. It did not prevent this job's successful
+attempt-1 claim and is not the cause of its validator rejection. No claim SQL
+syntax defect or concurrency abort is asserted. The queue implementation is identical
+between #366 and #367 (`git diff` for `oracle/analysis-jobs.js` is empty).
+The fix adds revision eligibility
+to existing claim SQL, not a speculative repair for that 400. Correlating the
+original error still requires its historical worker/query diagnostics; the exact
+job-row inspection alone cannot supply them.
+
+## Explicit same-submission recovery (not performed)
+
+The tool defaults to a bounded SELECT-only plan. It reads only the supplied request
+and job, uses dataset metadata for location, validates stored and previous contexts
+with its deployed validator, and returns sanitized metadata plus a row fingerprint.
+It refuses active/cancelled jobs, saved content, repeat recovery, invalid contexts,
+and failures not matching this mixed-revision pre-analysis failure.
+
+After reviewing/deploying this fix and **retiring all pre-fence workers**, run from
+that fixed Render build with existing credentials (use the original private IDs):
 
 ```
-node diagnostics/oracle-analysis-incident.js REQUEST_ID JOB_ID --inspect-query
+node diagnostics/oracle-context-job-recovery.js REQUEST_ID JOB_ID
 ```
 
-Record execution revision and worker ID separately from the inspector revision.
-If the stored context fails, its field/rule identifies the current validator's
-rejection; compare against the deployed validator before declaring root cause.
-If it passes, inspect the deployed worker/provider transformations and correlated
-logs rather than assuming serialization was responsible.
+Review its eligible state, original failed execution revision and required current
+revision. Then, only when explicitly authorized to recover the original job:
 
-Investigate claim separately: correlate each claim error by timestamp, worker,
-revision, query job ID and retry number. Inspect that query's metadata/error and
-exact submitted SQL privately. `invalidQuery` alone does not distinguish syntax
-from a concurrent-update abort; only the latter is eligible for the existing
-bounded contention retry. A later attempt-1 successful claim establishes neither
-identity nor cause for the earlier failure. No available logs establish whether
-it was another worker. Do not change claim SQL speculatively.
+```
+node diagnostics/oracle-context-job-recovery.js REQUEST_ID JOB_ID --execute --legacy-workers-retired --fingerprint=FINGERPRINT_FROM_PLAN
+```
 
-## Same-submission recovery after a verified fix
+Do not run the execute command during investigation. The retirement flag is an
+explicit operator attestation, not an automated check of Render deployments.
+Execution makes one transaction with no automatic application or SDK retry. It
+asserts a singleton row, fences its complete original state (including owner,
+payload, failure, attempts and lease) and target build revision against the reviewed fingerprint and asserts
+exactly one updated row. It clears terminal failure/old lease ownership, requeues
+that row, and pins execution to the fixed build in lifecycle recovery metadata.
+It preserves original payload, owner, request ID, job ID and attempt count, and
+archives the original result/lifecycle in the recovery audit. Subsequent heartbeats
+preserve that audit; the next successful claim increments attempts from 1 to 2.
 
-There is currently no supported requeue endpoint for a failed terminal job.
-Resubmitting the original message with the same owner and correlation ID returns
-the existing failed job; a new correlation creates a duplicate submission.
-Refreshing/polling cannot recover this job because no evidence was persisted.
+The tool neither submits a report nor calls a provider/worker itself. After an
+explicit requeue, the ordinary compatible worker performs the calculation once.
+Poll the original job from the original owning browser and refresh after completion;
+verify saved evidence, all windows, baseline/product results, identity/coverage and
+no further calculation. On timeout or uncertain transaction outcome, inspect the
+original row read-only; never automatically retry execution. Same-ID POST remains
+idempotent and must not be used to create a replacement report.
 
-After identifying and fixing the invariant, validate the existing stored payload
-read-only using the deployed fixed validator, then review an explicit one-job
-requeue operation. It must fence on original job ID, request ID, owner, failed
-status, error code, attempts and absence of saved evidence/artifacts; preserve
-payload and identifiers, retain an audit of the original terminal failure, and
-require an affected-row count of exactly one. Only then allow one worker claim
-and poll the original job from the original owning browser. Inspect the saved
-result and refresh without a further calculation. Stop on any fence mismatch.
-This document authorizes and performs no requeue. A concrete supported recovery
-operation is still outstanding and must accompany the actual fix.
+## Verification boundary
 
-No collection, publication, snapshot repair, IAM or identity-setting changes.
-The customer snapshot was untouched. This is a diagnostic/regression draft,
-not a certified fix or successful live acceptance.
+The retained report passes real HTTP enqueue, production BigQuery queue
+serialization/hydration, claimed worker analysis, strict scope/evidence checks,
+authenticated polling and browser refresh. Tests cover all windows, linked identity,
+named collaborations and items, comparable baselines, second products, independent
+component failures and disconnect/same-ID recovery. Queue SQL transport and warehouse
+responses are doubles; no live BigQuery SQL or recovery UPDATE was executed.
+The historical #366 validator reproduction used its actual archived Git tree.
+
+No production mutation, provider replay, new report, collection, publication,
+snapshot repair, IAM or identity-setting change occurred. The verified customer
+snapshot remains intact. Successful live acceptance after recovery remains pending.

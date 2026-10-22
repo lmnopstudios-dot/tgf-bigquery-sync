@@ -82,7 +82,7 @@ export function acceptanceFixture({fail_start=null,campaigns=false,country_conve
   })});
   return {baseline,calls,sql,queries,wireQueries,state,exportStore};
 }
-export async function acceptanceServer(f,{durable=false,now=NOW,jobStore=null}={}){
+export async function acceptanceServer(f,{durable=false,now=NOW,jobStore=null,revision=null}={}){
   const app=express(),jobs=jobStore||createMemoryAnalysisJobStore();
   app.use('/oracle',express.static(new URL('../../public/oracle',import.meta.url).pathname));
   // Same shared direct entrypoint and result contract invoked by server /agent.
@@ -93,7 +93,7 @@ export async function acceptanceServer(f,{durable=false,now=NOW,jobStore=null}={
   }catch(e){next(e);}});
   app.use('/api/oracle',createOracleUiRouter({bigquery:{},project:'fixture',knowledgeService:{},baselineOverview:f.baseline,
     chat:async(message,options)=>{assert.equal(options?.toolsAllowed,false,'Unexpected analytical model fallback');return {answer:'Edited text: collaboration retention, country conversion and basket composition need attention.',tools:[]};},generateProposals:async()=>[],analysisJobStore:jobs,exportStore:f.exportStore,
-    env:{ORACLE_UI_PASSWORD:'fixture',ORACLE_UI_SESSION_SECRET:'fixture-session-secret-with-enough-bytes',ORACLE_UI_ADMIN_NAME:'staff',ORACLE_ANALYSIS_JOBS_ENABLED:String(durable)},now:()=>now}));
+    env:{RENDER_GIT_COMMIT:revision,ORACLE_UI_PASSWORD:'fixture',ORACLE_UI_SESSION_SECRET:'fixture-session-secret-with-enough-bytes',ORACLE_UI_ADMIN_NAME:'staff',ORACLE_ANALYSIS_JOBS_ENABLED:String(durable)},now:()=>now}));
   const server=await new Promise((resolve,reject)=>{const s=app.listen(0,'127.0.0.1',()=>resolve(s));s.on('error',reject);});
   const origin=`http://127.0.0.1:${server.address().port}`,base=origin+'/api/oracle';
   const login=await fetch(base+'/auth/login',{method:'POST',headers:{origin,'content-type':'application/json'},body:JSON.stringify({password:'fixture'})});

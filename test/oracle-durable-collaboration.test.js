@@ -10,10 +10,10 @@ const now=Date.parse('2026-10-22T12:00:00Z');
 for(const partial of [false,true])test('full collaboration submission through production durable store JSON wire, worker and polling: partial='+partial,async t=>{
  const f=acceptanceFixture({retention_events:true,observationCertificates:[],now,identityEnv:{ORACLE_CUSTOMER_IDENTITY_MODE:'email_candidate_v2',ORACLE_CUSTOMER_IDENTITY_DATASET:'customer_identity',ORACLE_CUSTOMER_IDENTITY_SNAPSHOT:'fixture-order-email-v2'}});
  if(partial)f.state.fail_retention_stores=['usd'];
- const wire=durableJsonWire(),h=await acceptanceServer(f,{durable:true,now,jobStore:wire.store});t.after(h.close);
+ const wire=durableJsonWire(),h=await acceptanceServer(f,{durable:true,now,jobStore:wire.store,revision:'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'});t.after(h.close);
  const submit=()=>fetch(h.base+'/jobs',{method:'POST',headers:{...h.headers,'x-request-id':'full-report'},body:JSON.stringify({message})});
  const response=await submit();assert.equal(response.status,202);const queued=await response.json();
- const stored=wire.rows.get(queued.job_id),context=validateAnalysisContext(stored.payload_json.analysis_context);
+ const stored=wire.rows.get(queued.job_id);assert.equal(stored.payload_json.execution_revision,'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');const context=validateAnalysisContext(stored.payload_json.analysis_context);
  assert.deepEqual(context.retention_windows,[90,180,360]);assert.equal(context.retention_baseline,true);assert.equal(context.retention_second_products,true);assert.equal(context.journey_group_by,'collaboration_piece');assert.equal(context.ranking_metric,'repeat_rate_90');
  await assert.rejects(pollOracleJob({get:async()=>{throw TypeError('disconnected');},pause:async()=>{}}),e=>e.jobStatusUnknown===true);
  const result=await pollOracleJob({get:()=>h.get('/jobs/'+queued.job_id),pause:()=>new Promise(r=>setTimeout(r,5))});
@@ -46,4 +46,24 @@ test('claim errors retain worker and revision even after tick context cleanup',a
  const logs=[];const worker=createAnalysisJobWorker({store:{claim:async()=>{throw Object.assign(Error('private query'),{code:400,errors:[{reason:'invalidQuery',location:'q'}]});}},run:async()=>{},workerId:'claim-worker',revision:'claim-revision',pollMs:1,logger:{error:(_label,value)=>logs.push(value)}});
  worker.start();for(let n=0;n<100&&!logs.length;n++)await new Promise(r=>setTimeout(r,2));await worker.stop();
  assert.equal(logs[0].worker_id,'claim-worker');assert.equal(logs[0].execution_revision,'claim-revision');assert.equal(logs[0].stage,'claim');assert.equal(logs[0].bigquery_reason,'invalidQuery');assert.doesNotMatch(JSON.stringify(logs),/private query/);
+});
+
+import {recoverContextJob} from '../oracle/job-recovery.js';
+test('explicit recovery uses original durable submission, increments attempt once and restores original browser polling',async t=>{
+ const revision='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+ const f=acceptanceFixture({retention_events:true,observationCertificates:[],now,identityEnv:{ORACLE_CUSTOMER_IDENTITY_MODE:'email_candidate_v2',ORACLE_CUSTOMER_IDENTITY_DATASET:'customer_identity',ORACLE_CUSTOMER_IDENTITY_SNAPSHOT:'fixture-order-email-v2'}});
+ const wire=durableJsonWire(),h=await acceptanceServer(f,{durable:true,now,jobStore:wire.store,revision});t.after(h.close);
+ // Simulate the retained pre-fence worker failure after real HTTP serialization,
+ // before the ordinary local worker's next tick. No provider fixture is invoked.
+ const response=await fetch(h.base+'/jobs',{method:'POST',headers:{...h.headers,'x-request-id':'33333333-3333-4333-8333-333333333333'},body:JSON.stringify({message})});assert.equal(response.status,202);const queued=await response.json(),row=wire.rows.get(queued.job_id);
+ Object.assign(row,{status:'failed',error_code:'INVALID_ANALYSIS_CONTEXT',attempts:1,lease_until:null,lifecycle_json:{execution_revision:'1fdab55313a3f46d02a515bb2cb32503887b1ff9'},result_json:{code:'INVALID_ANALYSIS_CONTEXT',failed_stage:'analysis'}});
+ const payload=structuredClone(row.payload_json),owner=row.owner_key;
+ const args={bigquery:wire.bigquery,project:'fixture',dataset:'commerce',table:'jobs',requestId:row.request_id,jobId:row.job_id,revision};
+ const plan=await recoverContextJob(args);assert.equal(row.status,'failed');assert.equal(f.wireQueries.length,0);
+ await recoverContextJob({...args,execute:true,legacyWorkersRetired:true,fingerprint:plan.fingerprint});
+ const result=await pollOracleJob({get:()=>h.get('/jobs/'+queued.job_id),pause:()=>new Promise(r=>setTimeout(r,5))});assert.equal(result.status,'completed',JSON.stringify(result));
+ assert.equal(row.attempts,2);assert.equal(wire.rows.size,1);assert.equal(row.owner_key,owner);assert.deepEqual(row.payload_json,payload);assert.equal(row.lifecycle_json.recovery.previous_result.code,'INVALID_ANALYSIS_CONTEXT');
+ assert.match(result.answer,/360-day rate/);assert.match(result.answer,/Comparable sitewide/);assert.match(result.answer,/Second-order products/);assert.match(result.answer,/email-linked records/);
+ const calls=f.wireQueries.length;assert.equal((await h.get('/jobs/'+queued.job_id)).answer,result.answer);assert.equal(f.wireQueries.length,calls);
+ await assert.rejects(recoverContextJob({...args,execute:true,legacyWorkersRetired:true,fingerprint:plan.fingerprint}));
 });
