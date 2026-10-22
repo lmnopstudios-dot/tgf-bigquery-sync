@@ -1,3 +1,4 @@
+import {publicationGuardSql} from './publication-guard.js';
 import {randomUUID} from 'node:crypto';
 import {BigQuery} from '@google-cloud/bigquery';
 import {SOURCES,SCOPE,SCHEMA,fq,selectionSql,retrieve,store} from './collect.js';
@@ -212,7 +213,9 @@ export async function publish({bigquery,project,dataset,snapshot}) {
     if (!result.valid || Number(result.counts.selected_orders)===0) throw Error('Complete nonempty proposed source coverage required');
   }
   const query = `BEGIN TRANSACTION;
+    ${publicationGuardSql(project,dataset)}
     ASSERT NOT EXISTS(SELECT 1 FROM ${fq(project,dataset,'identity_snapshots')} WHERE snapshot_id=@snapshot) AS 'Immutable snapshot already exists';
+    ASSERT NOT EXISTS(SELECT 1 FROM ${fq(project,dataset,'identity_links')} WHERE snapshot_id=@snapshot) AS 'Orphan snapshot links exist';
     ASSERT (SELECT COUNT(DISTINCT source) FROM ${fq(project,dataset,'enrichment_runs')} WHERE status='complete' AND start_date=@start AND end_date=@end AND requested=returned)=3 AS 'Three complete source runs required';
     ASSERT NOT EXISTS(
       SELECT 1 FROM ${fq(project,dataset,'enrichment_runs')} r LEFT JOIN (

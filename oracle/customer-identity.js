@@ -13,13 +13,21 @@ export function identityConfiguration(env=process.env) {
 export function customerReferenceSql(identity) {
   return identity ? 'COALESCE((SELECT canonical_customer_ref FROM ci_aliases WHERE local_ref=@customer_ref),@customer_ref)' : '@customer_ref';
 }
+// Recheck inside the analytical query as well as the readiness read. Never
+// silently drop duplicate keys or choose a canonical reference from conflicts.
+export function orderSnapshotGuardSql(project,identity){
+  if(!/^[A-Za-z0-9_-]{1,100}$/.test(identity.snapshot||''))throw Error('Invalid snapshot');
+  const links=fq(project,identity.dataset,'identity_order_links');
+  const markers=fq(project,identity.dataset,'identity_snapshots');
+  return `(SELECT IF(COUNT(*)=1 AND COUNTIF(state='ready' AND start_date=DATE '${HISTORY_SCOPE.start}' AND end_date=DATE '${SCOPE.end}' AND mapping_count=(SELECT COUNT(*) FROM ${links} WHERE snapshot_id='${identity.snapshot}'))=1
+    AND NOT EXISTS(SELECT 1 FROM ${links} WHERE snapshot_id='${identity.snapshot}' GROUP BY source_store,source_order_id HAVING COUNT(*)>1)
+    AND NOT EXISTS(SELECT 1 FROM ${links} WHERE snapshot_id='${identity.snapshot}' AND (source_store IS NULL OR source_store NOT IN ('ww','usd','shopify') OR source_order_id IS NULL OR source_order_id='' OR canonical_customer_ref IS NULL OR NOT REGEXP_CONTAINS(canonical_customer_ref,r'^c_[A-Fa-f0-9]{64}$') OR resolution IS NULL OR resolution NOT IN ('matched','unmatched','ambiguous','unavailable'))),TRUE,ERROR('Identity snapshot integrity failed')) FROM ${markers} WHERE snapshot_id='${identity.snapshot}')`;
+}
 export function identityMappingCte(project,identity) {
   if(!/^[A-Za-z0-9_-]{1,100}$/.test(identity.snapshot||''))throw Error('Invalid snapshot');
   if(identity.orderLinks)return `ci_mapping AS (
-    SELECT source_store,source_order_id,ANY_VALUE(source_customer_id) source_customer_id,MIN(canonical_customer_ref) canonical_customer_ref,
-      ANY_VALUE(resolution) resolution,ANY_VALUE(financial_status) financial_status,LOGICAL_OR(cancelled) cancelled
-    FROM ${fq(project,identity.dataset,'identity_order_links')} WHERE snapshot_id='${identity.snapshot}' AND REGEXP_CONTAINS(canonical_customer_ref,r'^c_[A-Fa-f0-9]{64}$')
-    GROUP BY source_store,source_order_id HAVING COUNT(*)=1
+    SELECT source_store,source_order_id,source_customer_id,canonical_customer_ref,resolution,financial_status,cancelled
+    FROM ${fq(project,identity.dataset,'identity_order_links')} WHERE snapshot_id='${identity.snapshot}' AND ${orderSnapshotGuardSql(project,identity)}
   )`;
   return `ci_mapping AS (
     SELECT source_store,source_customer_id,MIN(canonical_customer_ref) canonical_customer_ref
@@ -64,7 +72,7 @@ export function identityCoverageSql(baseSql,project,identity) {
     COUNTIF(resolution='matched') matched_orders,COUNTIF(resolution='unmatched') unmatched_orders,COUNTIF(resolution='ambiguous') ambiguous_orders,COUNTIF(resolution='unavailable') unavailable_orders,
     COUNTIF(source_customer_id IS NULL OR source_customer_id IN ('','0')) email_linked_guest_or_unknown_records
     ,COUNTIF(conflicting_email) conflicting_orders,COUNTIF(shared_email) shared_address_orders
-    FROM ${fq(project,identity.dataset,'identity_order_links')} WHERE snapshot_id='${identity.snapshot}' GROUP BY source_store)
+    FROM ${fq(project,identity.dataset,'identity_order_links')} WHERE snapshot_id='${identity.snapshot}' AND ${orderSnapshotGuardSql(project,identity)} GROUP BY source_store)
     SELECT *,identified_profiles-mapped_profiles unmatched_profiles FROM ci_counts`;
   const parsed=cohortRelations(baseSql);
   const end=parsed.relations.findIndex(r=>r.name==='qualifying_orders');
@@ -92,19 +100,35 @@ export function identityAwareService(options,factory,coverageSql) {
     }
     let coverage;
     const started=Date.now();
+    const deadlineAt=Math.min(args[1]?.deadlineAt??Infinity,started+Number(args[1]?.timeoutMs||45000));
+    const remainingMs=()=>Math.max(1,deadlineAt-Date.now());
+    const observed=async(stage,work)=>{
+      let allocated;
+      const began=performance.now();
+      try{return await work({deadlineAt,maximumMs:Math.min(5000,remainingMs()),
+        ...(args[1]?.signal?{signal:args[1].signal}:{}),
+        onQueryAllocated:job=>{allocated=job;args[1]?.onQueryAllocated?.(job);},
+        onProviderStage:event=>args[1]?.onProviderStage?.(event)});}
+      catch(error){error.history_diagnostic={stage,job_id:allocated?.id||null,elapsed_ms:Math.round(performance.now()-began),...error.history_diagnostic};throw error;}
+    };
+    const execute=async(service,stage)=>observed(stage,async hooks=>{
+      if(Date.now()>=deadlineAt)throw Object.assign(Error('Identity read deadline'),{code:'ORACLE_AGENT_DEADLINE'});
+      return service[method](args[0],{...args[1],...hooks,maximumMs:remainingMs(),timeoutMs:remainingMs()});
+    });
     try {
-      const [snapshots]=await boundedQuery(options.bigquery,{
+      const [snapshots]=await observed('snapshot_read',hooks=>boundedQuery(options.bigquery,{
         query:`SELECT state,start_date,end_date,mapping_count FROM ${fq(options.project,config.dataset,'identity_snapshots')} WHERE snapshot_id=@snapshot LIMIT 2`,
         params:{snapshot:config.snapshot},maximumBytesBilled:'10000000',jobTimeoutMs:5000,
-      },{maximumMs:5000,...(args[1]?.signal?{signal:args[1].signal}:{})});
+      },hooks));
       const snapshot=snapshots[0];
       if (snapshots.length!==1 || snapshot.state!=='ready' || Number(snapshot.mapping_count)<1 ||
         (snapshot.start_date?.value||snapshot.start_date)!==(config.orderLinks?HISTORY_SCOPE.start:SCOPE.start) || (snapshot.end_date?.value||snapshot.end_date)!==SCOPE.end) throw Error('Snapshot not ready');
-      const [counts]=await boundedQuery(options.bigquery,{
+      const [counts]=await observed('identity_coverage',hooks=>boundedQuery(options.bigquery,{
         query:identityCoverageSql(coverageSql(options.project),options.project,config),
         params:{matrixify_app_id:'gid://shopify/App/1758145'},maximumBytesBilled:SCOPE.bytes,jobTimeoutMs:5000,
-      },{maximumMs:5000,...(args[1]?.signal?{signal:args[1].signal}:{})});
+      },hooks));
       if(counts.length!==3||new Set(counts.map(r=>r.source_store)).size!==3)throw Error('Incomplete identity coverage');
+      if(config.orderLinks && counts.reduce((sum,row)=>sum+Number(row.qualifying_orders),0)!==Number(snapshot.mapping_count))throw Error('Identity count mismatch');
       coverage=counts.map(row=>{
         const result={source_store:row.source_store};
         if (!['ww','usd','shopify'].includes(row.source_store)) throw Error('Invalid identity coverage');
@@ -120,15 +144,13 @@ export function identityAwareService(options,factory,coverageSql) {
       });
     } catch(error) {
       if(args[1]?.signal?.aborted||error.code==='REQUEST_CANCELLED'||error.code==='LEASE_NOT_OWNED')throw error;
-      const result=await base[method](...args);
+      const result=await execute(base,'fallback_query');
       return {...result,identity_evidence:{mode:'source_qualified_only',activation:'fallback',reason:'snapshot_or_coverage_unavailable'}};
     }
-    const remaining=Number(args[1]?.timeoutMs||45000)-(Date.now()-started);
-    if(remaining<=0)throw Error('Identity read deadline');
+    const remaining=deadlineAt-Date.now();
+    if(remaining<=0)throw Object.assign(Error('Identity read deadline'),{code:'ORACLE_AGENT_DEADLINE',history_diagnostic:{stage:'identity_query',elapsed_ms:Date.now()-started}});
     const active=factory({...options,identity:config});
-    const activeArgs=[...args];
-    if(method==='analyzeCustomerJourney')activeArgs[1]={...args[1],timeoutMs:remaining};
-    const result=await active[method](...activeArgs);
+    const result=await execute(active,'identity_query');
     return {...result,identity_evidence:{mode:config.mode,snapshot:config.snapshot,activation:'active',coverage_scope:config.orderLinks?'snapshot original orders, all statuses; email-linked records include guests; unmatched anonymous orders remain separate records':'all qualifying source history; guests excluded',...(config.orderLinks?{identity_unit:'email-linked records; registered source IDs preserved; anonymous unmatched orders are isolated records',version:'order_email_v2'}:{}),sources:coverage,
       limitation:'Email links are analytical candidates, not verified people. Missing and unmatched profiles retain source-local identity; first-ever and complete follow-up coverage remain unverified.'}};
   }]));

@@ -15,7 +15,7 @@ import { createMemoryAnalysisJobStore } from '../../oracle/analysis-jobs.js';
 import { executeGovernedAgentAnalysis } from '../../oracle/analysis-route-dispatcher.js';
 import { transitionAnalysisContext } from '../../oracle/analysis-context.js';
 export const NOW=Date.parse('2026-10-14T12:00:00Z');
-export function acceptanceFixture({fail_start=null,campaigns=false,country_conversion=false,retention=false,retention_events=false,named_events=false,observationCertificates=fixtureObservationCertificates,identityEnv={},identityReady=true,now=NOW}={}){
+export function acceptanceFixture({fail_start=null,campaigns=false,country_conversion=false,retention=false,retention_events=false,named_events=false,observationCertificates=fixtureObservationCertificates,identityEnv={},identityReady=true,identityIntegrity=true,now=NOW}={}){
   const exportStore=createMemoryExportStore();
   const calls=[],sql=[],queries=[],wireQueries=[],state={fail_start,campaigns,country_conversion,retention,retention_events,named_events};
   const native=createShopifySalesKpiService({getShop:async()=>({id:'gid://shopify/Shop/fixture',currencyCode:'GBP',ianaTimezone:'Europe/London'}),runReport:async query=>{
@@ -26,7 +26,8 @@ export function acceptanceFixture({fail_start=null,campaigns=false,country_conve
   }});
   const bigquery={dataset:()=>({getMetadata:async()=>[{location:'US'}]}),query:async query=>{
     wireQueries.push(query);
-    if(query.query.includes('identity_snapshots'))return [[{state:identityReady?'ready':'pending',start_date:identityEnv.ORACLE_CUSTOMER_IDENTITY_MODE==='email_candidate_v2'?'1900-01-01':'2022-09-24',end_date:'2026-10-19',mapping_count:2}]];
+    if(query.query.startsWith('SELECT state,start_date,end_date,mapping_count'))return [[{state:identityReady?'ready':'pending',start_date:identityEnv.ORACLE_CUSTOMER_IDENTITY_MODE==='email_candidate_v2'?'1900-01-01':'2022-09-24',end_date:'2026-10-19',mapping_count:identityEnv.ORACLE_CUSTOMER_IDENTITY_MODE==='email_candidate_v2'?17:2}]];
+    if(!identityIntegrity&&query.query.includes('Identity snapshot integrity failed'))throw Error('Identity snapshot integrity failed');
     if(query.query.includes('unmatched_profiles'))return [[{source_store:'ww',identified_profiles:4,mapped_profiles:1,unmatched_profiles:3,qualifying_orders:8,matched_orders:3,unmatched_orders:2,ambiguous_orders:1,unavailable_orders:2,email_linked_guest_or_unknown_records:4,conflicting_orders:1,shared_address_orders:0},{source_store:'usd',identified_profiles:2,mapped_profiles:0,unmatched_profiles:2,qualifying_orders:3,matched_orders:0,unmatched_orders:2,ambiguous_orders:0,unavailable_orders:1,email_linked_guest_or_unknown_records:1,conflicting_orders:0,shared_address_orders:0},{source_store:'shopify',identified_profiles:4,mapped_profiles:1,unmatched_profiles:3,qualifying_orders:6,matched_orders:2,unmatched_orders:2,ambiguous_orders:1,unavailable_orders:1,email_linked_guest_or_unknown_records:1,conflicting_orders:0,shared_address_orders:0}]];
     if(query.query.includes('retention_members'))query={...query,params:Object.fromEntries(Object.entries(query.params||{}).map(([k,v])=>[k,v?.constructor?.name==='BigQueryDate'?v.value:v]))};
     queries.push(query);
