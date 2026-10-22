@@ -15,7 +15,7 @@ export function retentionBigQueryFixture(group,platform,store,combined=false){
  const inputs=`fixture_collections AS (SELECT 1 collection_id,'Reviewed fixture' title,1 product_count),
  fixture_product_collections AS (SELECT 1 collection_id,1 product_id),
  cr_collection_current AS (SELECT '1' collection_id,'Reviewed fixture' collection_title,'collection_group' classification_type,'collaboration' classification_value,'active' status UNION ALL SELECT '1','Reviewed fixture','collaboration_name','alpha','active'),
- cr_identity AS (SELECT CAST(NULL AS STRING) source_ref,CAST(NULL AS STRING) classification_ref WHERE FALSE),
+ cr_identity AS (SELECT CAST(NULL AS STRING) source_ref,CAST(NULL AS STRING) classification_ref FROM UNNEST(ARRAY<INT64>[])),
  cr_routes AS (SELECT '${platform}:${store}:1' source_ref,'shopify:shopify:1' classification_ref,'approved_reporting_family' mapping_type),
  cr_family AS (SELECT '${platform}:${store}:1' source_ref,'shopify:shopify:1' classification_ref),
  cr_family_current AS (SELECT 'shopify:shopify:1' shopify_parent_ref,'Reviewed fixture family' shopify_parent_title,'active' status),
