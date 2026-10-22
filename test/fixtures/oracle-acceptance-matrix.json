@@ -1162,7 +1162,7 @@
       "covers": [
         "revision-pinned ordinary and targeted atomic claims without incompatible attempts or head-of-line blocking",
         "read-only exact-job recovery plan, owner/payload/state fingerprint fencing and immutable same-submission identity",
-        "refuse saved evidence, cancellation, active lease, stale fingerprint and repeat recovery; preserve original failure audit"
+        "refuse saved evidence, cancellation, active lease, stale fingerprint and repeat recovery; preserve original failure audit; lowercase BigQuery fingerprint plan -> CLI -> execute, malformed input and transactional full-row mismatch rejection"
       ]
     }
   ]

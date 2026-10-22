@@ -28,12 +28,13 @@ export async function recoverContextJob({bigquery,project,dataset,table,requestI
  const [rows]=await boundedEvidenceRead(()=>bigquery.query({...options,query:`SELECT TO_JSON_STRING(jobs) AS row_internal,TO_HEX(SHA256(CONCAT(@revision,TO_JSON_STRING(jobs)))) AS fingerprint FROM \`${target}\` AS jobs WHERE request_id=@request_id AND job_id=@job_id LIMIT 2`,params:{request_id:requestId,job_id:jobId,revision}}),{maximumMs:18000});
  if(rows.length!==1)reject('RECOVERY_ROW_COUNT_REJECTED');
  const row=parse(rows[0].row_internal),state=assertRecoverableContextJob(row,revision);
+ // BigQuery TO_HEX emits lowercase; keep the plan, audit and SQL parameter canonical.
  const expected=rows[0].fingerprint;
- if(!/^[A-F0-9]{64}$/.test(expected||''))reject('RECOVERY_FINGERPRINT_INVALID');
+ if(!/^[a-f0-9]{64}$/.test(expected||''))reject('RECOVERY_FINGERPRINT_INVALID');
  const plan={read_only:!execute,revision,status:'eligible',job_state:row.status,attempts:state.attempts,failed_execution_revision:state.execution_revision,required_execution_revision:revision,actual_location:location,fingerprint:expected,legacy_workers_must_be_retired:true};
  if(!execute)return plan;
  if(!legacyWorkersRetired)reject('RECOVERY_LEGACY_WORKERS_NOT_RETIRED');
- if(fingerprint!==expected)reject('RECOVERY_FINGERPRINT_MISMATCH');
+ if(typeof fingerprint!=='string'||fingerprint.toLowerCase()!==expected)reject('RECOVERY_FINGERPRINT_MISMATCH');
  const audit={version:1,required_execution_revision:revision,prepared_fingerprint:expected,previous_status:row.status,previous_error_code:row.error_code,previous_attempts:row.attempts,previous_result:parse(row.result_json),previous_lifecycle:parse(row.lifecycle_json)};
  // Fence the entire original row (including owner, payload, lease and failure),
  // assert singleton inside the transaction, and leave immutable identity intact.
