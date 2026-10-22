@@ -4,6 +4,8 @@ import {createMemoryAnalysisJobStore,createAnalysisJobWorker} from '../oracle/an
 import {durableJsonWire} from './helpers/durable-json-wire.js';
 import {recoverContextJob,assertRecoverableContextJob} from '../oracle/job-recovery.js';
 import {transitionAnalysisContext} from '../oracle/analysis-context.js';
+import {createHash} from 'node:crypto';
+import {parseRecoveryArguments} from '../diagnostics/oracle-context-job-recovery.js';
 import {readFileSync} from 'node:fs';
 const old='1fdab55313a3f46d02a515bb2cb32503887b1ff9',current='7c9d02b91a1780c120ab8aa93fecd90e90d3abf5';
 const requestId='11111111-1111-4111-8111-111111111111',jobId='22222222-2222-4222-8222-222222222222';
@@ -22,8 +24,12 @@ for(const production of [false,true])test('revision selection skips incompatible
  if(wire){const scripts=wire.calls.filter(q=>q.query.startsWith('BEGIN TRANSACTION;'));assert.ok(scripts.every(q=>q.query.includes("queued.payload_json,'$.execution_revision'")&&q.query.includes("queued.lifecycle_json,'$.recovery.required_execution_revision'")));}
 });
 function transport(row=failed()){
- const calls=[];let writes=0;const fingerprint='A'.repeat(64);
- const bigquery={dataset:()=>({getMetadata:async()=>[{location:'US'}]}),query:async q=>{calls.push(q);return [[{row_internal:JSON.stringify(row),fingerprint}]];},createQueryJob:async q=>{calls.push(q);writes++;return [{getQueryResults:async()=>[[]]}];}};
+ const calls=[];let writes=0;const fingerprint=createHash('sha256').update(current+JSON.stringify(row)).digest('hex');
+ const bigquery={dataset:()=>({getMetadata:async()=>[{location:'US'}]}),query:async q=>{calls.push(q);return [[{row_internal:JSON.stringify(row),fingerprint}]];},createQueryJob:async q=>{calls.push(q);writes++;return [{getQueryResults:async()=>{
+  const actual=createHash('sha256').update(q.params.revision+JSON.stringify(row)).digest('hex');
+  if(actual!==q.params.fingerprint)throw Object.assign(Error('RECOVERY_FENCE_REJECTED'),{code:'RECOVERY_FENCE_REJECTED'});
+  return [[]];
+ }}];}};
  return {row,calls,bigquery,get writes(){return writes;},fingerprint};
 }
 const input=f=>({bigquery:f.bigquery,project:'fixture',dataset:'commerce',table:'jobs',requestId,jobId,revision:current});
@@ -36,7 +42,7 @@ test('explicit recovery fences entire row, asserts singleton and preserves origi
  const audit=JSON.parse(write.params.audit);assert.deepEqual(audit.previous_result,f.row.result_json);assert.deepEqual(audit.previous_lifecycle,f.row.lifecycle_json);assert.equal(audit.required_execution_revision,current);
 });
 test('recovery refuses no attestation, changed fingerprint and unsafe terminal states without writes',async()=>{
- for(const extra of [{execute:true,fingerprint:'A'.repeat(64)},{execute:true,legacyWorkersRetired:true,fingerprint:'B'.repeat(64)}]){const f=transport();await assert.rejects(recoverContextJob({...input(f),...extra}));assert.equal(f.writes,0);}
+ for(const extra of [{execute:true,fingerprint:transport().fingerprint},{execute:true,legacyWorkersRetired:true,fingerprint:'b'.repeat(64)}]){const f=transport();await assert.rejects(recoverContextJob({...input(f),...extra}));assert.equal(f.writes,0);}
  for(const patch of [{status:'running'},{cancel_requested:true},{lease_until:'2027-01-01'},{result_json:{answer:'saved'}},{result_json:{failed_stage:'analysis',code:'INVALID_ANALYSIS_CONTEXT',evidence:{}}},{lifecycle_json:{execution_revision:current}},{lifecycle_json:{execution_revision:old,recovery:{}}},{payload_json:{message,analysis_context:{retention_windows:[365]}}}])assert.throws(()=>assertRecoverableContextJob({...failed(),...patch},current));
 });
 test('recovered legacy payload is pinned and its audit survives worker lifecycle checkpoints',async()=>{
@@ -48,4 +54,38 @@ test('recovered legacy payload is pinned and its audit survives worker lifecycle
   await createAnalysisJobWorker({store,revision:current,logger,run:async()=>({answer:'recovered'})}).tick();
   const result=await store.get(job.job_id,'owner');assert.equal(result.status,'completed');assert.deepEqual(result.lifecycle_json.recovery,audit);
  }
+});
+
+
+test('lowercase BigQuery fingerprint survives plan -> CLI -> execute and audit',async()=>{
+ const f=transport(),plan=await recoverContextJob(input(f));
+ assert.match(plan.fingerprint,/^[a-f0-9]{64}$/);
+ for(const supplied of [plan.fingerprint,plan.fingerprint.toUpperCase()]){
+  const parsed=parseRecoveryArguments([requestId,jobId,'--execute','--legacy-workers-retired',`--fingerprint=${supplied}`]);
+  assert.equal(parsed.fingerprint,plan.fingerprint);
+  const result=await recoverContextJob({...input(f),...parsed});
+  assert.equal(result.status,'requeued');
+  const write=f.calls.at(-1);
+  assert.equal(write.params.fingerprint,plan.fingerprint);
+  assert.equal(JSON.parse(write.params.audit).prepared_fingerprint,plan.fingerprint);
+ }
+});
+test('CLI rejects malformed fingerprints and changed plan fingerprints reject before transaction',async()=>{
+ for(const fingerprint of ['a'.repeat(63),'g'.repeat(64),'a'.repeat(65)]){
+  assert.throws(()=>parseRecoveryArguments([requestId,jobId,`--fingerprint=${fingerprint}`]),{code:'RECOVERY_ARGUMENTS_INVALID'});
+ }
+ const f=transport(),plan=await recoverContextJob(input(f));
+ const changed=(plan.fingerprint[0]==='a'?'b':'a')+plan.fingerprint.slice(1);
+ const parsed=parseRecoveryArguments([requestId,jobId,'--execute','--legacy-workers-retired',`--fingerprint=${changed}`]);
+ await assert.rejects(recoverContextJob({...input(f),...parsed}),{code:'RECOVERY_FINGERPRINT_MISMATCH'});
+ assert.equal(f.writes,0);
+});
+
+test('transaction rejects full-row changes after the SELECT without weakening its fingerprint fence',async()=>{
+ const f=transport(),plan=await recoverContextJob(input(f));
+ const read=f.bigquery.query;
+ f.bigquery.query=async q=>{const rows=await read(q);f.row.owner_key='changed-owner';return rows;};
+ await assert.rejects(recoverContextJob({...input(f),execute:true,legacyWorkersRetired:true,fingerprint:plan.fingerprint}),{code:'RECOVERY_FENCE_REJECTED'});
+ assert.equal(f.writes,1);
+ assert.ok(f.calls.at(-1).query.includes('TO_HEX(SHA256(CONCAT(@revision,TO_JSON_STRING(jobs))))=@fingerprint'));
 });

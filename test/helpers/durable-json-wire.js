@@ -6,7 +6,7 @@ import {createBigQueryAnalysisJobStore,JOB_SCHEMA,compatibleJobRevision} from '.
 // claim SQL, lease fences and terminal writes. This does not execute BigQuery SQL.
 export function durableJsonWire(){
  const rows=new Map(),calls=[];
- const fingerprint=(row,revision)=>createHash('sha256').update(revision+JSON.stringify(row)).digest('hex').toUpperCase();
+ const fingerprint=(row,revision)=>createHash('sha256').update(revision+JSON.stringify(row)).digest('hex');
  const wire=row=>row&&({...structuredClone(row),payload_json:JSON.stringify(row.payload_json),result_json:row.result_json==null?null:JSON.stringify(row.result_json),lifecycle_json:row.lifecycle_json==null?null:JSON.stringify(row.lifecycle_json)});
  const query=async q=>{
   calls.push(q);assert.equal(q.location,'US');const p=q.params||{},sql=q.query;

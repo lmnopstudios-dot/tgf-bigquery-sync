@@ -5,13 +5,18 @@ import {loadOracleJobReadinessConfig} from './oracle-job-readiness.js';
 import {recoverContextJob} from '../oracle/job-recovery.js';
 import {safeReadFailure} from '../oracle/read-failure.js';
 
-export async function main(args=process.argv.slice(2)){
+export function parseRecoveryArguments(args){
  const [requestId,jobId,...flags]=args;
  const execute=flags.includes('--execute'),legacyWorkersRetired=flags.includes('--legacy-workers-retired');
  const fingerprintFlag=flags.find(x=>x.startsWith('--fingerprint='));
- if(flags.some(x=>!['--execute','--legacy-workers-retired'].includes(x)&&!/^--fingerprint=[A-F0-9]{64}$/.test(x)))throw Object.assign(Error(),{code:'RECOVERY_ARGUMENTS_INVALID'});
+ if(flags.some(x=>!['--execute','--legacy-workers-retired'].includes(x)&&!/^--fingerprint=[a-f0-9]{64}$/i.test(x)))throw Object.assign(Error(),{code:'RECOVERY_ARGUMENTS_INVALID'});
+ return {requestId,jobId,execute,legacyWorkersRetired,fingerprint:fingerprintFlag?.slice('--fingerprint='.length).toLowerCase()};
+}
+
+export async function main(args=process.argv.slice(2)){
+ const parsed=parseRecoveryArguments(args);
  const config=loadOracleJobReadinessConfig();
- return recoverContextJob({...config,bigquery:new BigQuery({projectId:config.project,credentials:config.credentials,autoRetry:false,maxRetries:0}),requestId,jobId,revision:process.env.RENDER_GIT_COMMIT,execute,legacyWorkersRetired,fingerprint:fingerprintFlag?.slice('--fingerprint='.length)});
+ return recoverContextJob({...config,bigquery:new BigQuery({projectId:config.project,credentials:config.credentials,autoRetry:false,maxRetries:0}),...parsed,revision:process.env.RENDER_GIT_COMMIT});
 }
 if(import.meta.url===pathToFileURL(process.argv[1]||'').href){
  const timer=setTimeout(()=>{console.log(JSON.stringify({status:'unverified',diagnostic:'RECOVERY_DEADLINE',instruction:'Inspect original job read-only; do not automatically retry.'}));process.exit(1);},45000);
