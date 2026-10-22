@@ -1,0 +1,83 @@
+[
+  {
+    "source": "woo",
+    "store": "ww",
+    "group": "retention_windows",
+    "line": 254,
+    "column": 108,
+    "sha256": "c70258573302e9244746b2695282ae02bc18d5fa3d53bd0c4ab411d51d506ae2",
+    "line_text": "    SELECT DISTINCT t.collection_id,CONCAT('shopify:shopify:',REGEXP_EXTRACT(CAST(pc.product_id AS STRING),r'^(?:gid://shopify/Product/)?([0-9]+)(p.second_order_products,[]) second_order_products,STRUCT(COALESCE(pc.missing_line_customers,0) missing_line_customers,COALESCE(pc.unidentified_product_customers,0) unidentified_product_customers,COALESCE(pc.untitled_product_customers,0) untitled_product_customers) second_order_product_coverage,c.coverage FROM (SELECT * FROM retention_ranked WHERE cohort_rank<=DIV(@cohort_limit,@retention_store_count) ORDER BY cohort_rank,window_days LIMIT @limit) r LEFT JOIN retention_product_arrays p ON r.source_platform IS NOT DISTINCT FROM p.source_platform AND r.source_store IS NOT DISTINCT FROM p.source_store AND r.collaboration_name IS NOT DISTINCT FROM p.collaboration_name AND r.window_days=p.window_days"
+  },
+  {
+    "source": "woo",
+    "store": "ww",
+    "group": "retention_piece_windows",
+    "line": 277,
+    "column": 264,
+    "sha256": "37108802f12cd6cb38b9add54883b27d4a0123d37cd2064fccd21748cd5d6c42",
+    "line_text": "  ) SELECT ARRAY(SELECT AS STRUCT * FROM section_ranked WHERE count_rank<=10 OR rate_rank<=10 ORDER BY count_rank,window_days LIMIT 60) product_ranking_rows,r.*,IFNULL(p.second_order_products,[]) second_order_products,STRUCT(COALESCE(pc.missing_line_customers,0) missing_line_customers,COALESCE(pc.unidentified_product_customers,0) unidentified_product_customers,COALESCE(pc.untitled_product_customers,0) untitled_product_customers) second_order_product_coverage,c.coverage FROM (SELECT * FROM retention_ranked WHERE cohort_rank<=DIV(@cohort_limit,@retention_store_count) ORDER BY cohort_rank,window_days LIMIT @limit) r LEFT JOIN retention_product_arrays p ON r.source_platform IS NOT DISTINCT FROM p.source_platform AND r.source_store IS NOT DISTINCT FROM p.source_store AND r.collaboration_name IS NOT DISTINCT FROM p.collaboration_name AND r.entry_product_ref IS NOT DISTINCT FROM p.entry_product_ref AND r.window_days=p.window_days"
+  },
+  {
+    "source": "woo",
+    "store": "ww",
+    "group": "retention_baseline_windows",
+    "line": 267,
+    "column": 228,
+    "sha256": "572c3f5f1e78ae96eabd6e72d61a7898828285ef4a760634869048b1a8ee6167",
+    "line_text": "  ) SELECT ARRAY(SELECT AS STRUCT * FROM section_totals ORDER BY cohort_year,window_days LIMIT 150) baseline_period_rows,r.*,IFNULL(p.second_order_products,[]) second_order_products,STRUCT(COALESCE(pc.missing_line_customers,0) missing_line_customers,COALESCE(pc.unidentified_product_customers,0) unidentified_product_customers,COALESCE(pc.untitled_product_customers,0) untitled_product_customers) second_order_product_coverage,c.coverage FROM (SELECT * FROM retention_ranked WHERE cohort_rank<=DIV(@cohort_limit,@retention_store_count) ORDER BY cohort_rank,window_days LIMIT @limit) r LEFT JOIN retention_product_arrays p ON r.source_platform IS NOT DISTINCT FROM p.source_platform AND r.source_store IS NOT DISTINCT FROM p.source_store AND r.collaboration_name IS NOT DISTINCT FROM p.collaboration_name AND r.window_days=p.window_days"
+  },
+  {
+    "source": "woo",
+    "store": "usd",
+    "group": "retention_windows",
+    "line": 254,
+    "column": 108,
+    "sha256": "ff2fb88e2b06bf3e7f7549910d9bff64e2fab24cb99d63f4ed52bc03c36392b0",
+    "line_text": "    SELECT DISTINCT t.collection_id,CONCAT('shopify:shopify:',REGEXP_EXTRACT(CAST(pc.product_id AS STRING),r'^(?:gid://shopify/Product/)?([0-9]+)(p.second_order_products,[]) second_order_products,STRUCT(COALESCE(pc.missing_line_customers,0) missing_line_customers,COALESCE(pc.unidentified_product_customers,0) unidentified_product_customers,COALESCE(pc.untitled_product_customers,0) untitled_product_customers) second_order_product_coverage,c.coverage FROM (SELECT * FROM retention_ranked WHERE cohort_rank<=DIV(@cohort_limit,@retention_store_count) ORDER BY cohort_rank,window_days LIMIT @limit) r LEFT JOIN retention_product_arrays p ON r.source_platform IS NOT DISTINCT FROM p.source_platform AND r.source_store IS NOT DISTINCT FROM p.source_store AND r.collaboration_name IS NOT DISTINCT FROM p.collaboration_name AND r.window_days=p.window_days"
+  },
+  {
+    "source": "woo",
+    "store": "usd",
+    "group": "retention_piece_windows",
+    "line": 277,
+    "column": 264,
+    "sha256": "693ff2fc9b8a388762cd767d9068e3b911bc80aca4db86fbe501541d9a3f9f96",
+    "line_text": "  ) SELECT ARRAY(SELECT AS STRUCT * FROM section_ranked WHERE count_rank<=10 OR rate_rank<=10 ORDER BY count_rank,window_days LIMIT 60) product_ranking_rows,r.*,IFNULL(p.second_order_products,[]) second_order_products,STRUCT(COALESCE(pc.missing_line_customers,0) missing_line_customers,COALESCE(pc.unidentified_product_customers,0) unidentified_product_customers,COALESCE(pc.untitled_product_customers,0) untitled_product_customers) second_order_product_coverage,c.coverage FROM (SELECT * FROM retention_ranked WHERE cohort_rank<=DIV(@cohort_limit,@retention_store_count) ORDER BY cohort_rank,window_days LIMIT @limit) r LEFT JOIN retention_product_arrays p ON r.source_platform IS NOT DISTINCT FROM p.source_platform AND r.source_store IS NOT DISTINCT FROM p.source_store AND r.collaboration_name IS NOT DISTINCT FROM p.collaboration_name AND r.entry_product_ref IS NOT DISTINCT FROM p.entry_product_ref AND r.window_days=p.window_days"
+  },
+  {
+    "source": "woo",
+    "store": "usd",
+    "group": "retention_baseline_windows",
+    "line": 267,
+    "column": 228,
+    "sha256": "0ebf9cb2b78cf60744cc5c55db7819782363734ecc733616411c885a73a30c61",
+    "line_text": "  ) SELECT ARRAY(SELECT AS STRUCT * FROM section_totals ORDER BY cohort_year,window_days LIMIT 150) baseline_period_rows,r.*,IFNULL(p.second_order_products,[]) second_order_products,STRUCT(COALESCE(pc.missing_line_customers,0) missing_line_customers,COALESCE(pc.unidentified_product_customers,0) unidentified_product_customers,COALESCE(pc.untitled_product_customers,0) untitled_product_customers) second_order_product_coverage,c.coverage FROM (SELECT * FROM retention_ranked WHERE cohort_rank<=DIV(@cohort_limit,@retention_store_count) ORDER BY cohort_rank,window_days LIMIT @limit) r LEFT JOIN retention_product_arrays p ON r.source_platform IS NOT DISTINCT FROM p.source_platform AND r.source_store IS NOT DISTINCT FROM p.source_store AND r.collaboration_name IS NOT DISTINCT FROM p.collaboration_name AND r.window_days=p.window_days"
+  },
+  {
+    "source": "shopify",
+    "store": "shopify",
+    "group": "retention_windows",
+    "line": 254,
+    "column": 108,
+    "sha256": "5449eab200542fe68023ed8cf62ad813422ad756ab16941365488fbde12af612",
+    "line_text": "    SELECT DISTINCT t.collection_id,CONCAT('shopify:shopify:',REGEXP_EXTRACT(CAST(pc.product_id AS STRING),r'^(?:gid://shopify/Product/)?([0-9]+)(p.second_order_products,[]) second_order_products,STRUCT(COALESCE(pc.missing_line_customers,0) missing_line_customers,COALESCE(pc.unidentified_product_customers,0) unidentified_product_customers,COALESCE(pc.untitled_product_customers,0) untitled_product_customers) second_order_product_coverage,c.coverage FROM (SELECT * FROM retention_ranked WHERE cohort_rank<=DIV(@cohort_limit,@retention_store_count) ORDER BY cohort_rank,window_days LIMIT @limit) r LEFT JOIN retention_product_arrays p ON r.source_platform IS NOT DISTINCT FROM p.source_platform AND r.source_store IS NOT DISTINCT FROM p.source_store AND r.collaboration_name IS NOT DISTINCT FROM p.collaboration_name AND r.window_days=p.window_days"
+  },
+  {
+    "source": "shopify",
+    "store": "shopify",
+    "group": "retention_piece_windows",
+    "line": 277,
+    "column": 264,
+    "sha256": "446ef9ddae76676b9c10eeeeaaca064d28dcf62c11fa4bd54d8154c9dd99c6fd",
+    "line_text": "  ) SELECT ARRAY(SELECT AS STRUCT * FROM section_ranked WHERE count_rank<=10 OR rate_rank<=10 ORDER BY count_rank,window_days LIMIT 60) product_ranking_rows,r.*,IFNULL(p.second_order_products,[]) second_order_products,STRUCT(COALESCE(pc.missing_line_customers,0) missing_line_customers,COALESCE(pc.unidentified_product_customers,0) unidentified_product_customers,COALESCE(pc.untitled_product_customers,0) untitled_product_customers) second_order_product_coverage,c.coverage FROM (SELECT * FROM retention_ranked WHERE cohort_rank<=DIV(@cohort_limit,@retention_store_count) ORDER BY cohort_rank,window_days LIMIT @limit) r LEFT JOIN retention_product_arrays p ON r.source_platform IS NOT DISTINCT FROM p.source_platform AND r.source_store IS NOT DISTINCT FROM p.source_store AND r.collaboration_name IS NOT DISTINCT FROM p.collaboration_name AND r.entry_product_ref IS NOT DISTINCT FROM p.entry_product_ref AND r.window_days=p.window_days"
+  },
+  {
+    "source": "shopify",
+    "store": "shopify",
+    "group": "retention_baseline_windows",
+    "line": 267,
+    "column": 228,
+    "sha256": "8436a266e6ddfdd60690e51b9b378f036d4479abcab7639d1686e7782edb7691",
+    "line_text": "  ) SELECT ARRAY(SELECT AS STRUCT * FROM section_totals ORDER BY cohort_year,window_days LIMIT 150) baseline_period_rows,r.*,IFNULL(p.second_order_products,[]) second_order_products,STRUCT(COALESCE(pc.missing_line_customers,0) missing_line_customers,COALESCE(pc.unidentified_product_customers,0) unidentified_product_customers,COALESCE(pc.untitled_product_customers,0) untitled_product_customers) second_order_product_coverage,c.coverage FROM (SELECT * FROM retention_ranked WHERE cohort_rank<=DIV(@cohort_limit,@retention_store_count) ORDER BY cohort_rank,window_days LIMIT @limit) r LEFT JOIN retention_product_arrays p ON r.source_platform IS NOT DISTINCT FROM p.source_platform AND r.source_store IS NOT DISTINCT FROM p.source_store AND r.collaboration_name IS NOT DISTINCT FROM p.collaboration_name AND r.window_days=p.window_days"
+  }
+]

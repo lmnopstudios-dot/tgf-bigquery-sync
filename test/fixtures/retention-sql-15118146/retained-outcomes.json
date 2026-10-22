@@ -1,0 +1,281 @@
+{
+  "diagnostic_revision": "ecacaf5bb1565833f2cdcab393c04b2cadea1ee9",
+  "read_only": true,
+  "request_id": "15118146-147f-480c-90f7-4b21d27182f8",
+  "report_replayed": false,
+  "current_deployed_revision": "c01e024526a8d9f21132e959c74f505d67aba556",
+  "bounds": {
+    "select_jobs": 2,
+    "maximum_bytes_per_select": "1000000000",
+    "inventory_rows": 100,
+    "detail_rows": 4,
+    "source_outcomes_per_row": 9,
+    "metadata_gets": 10,
+    "shared_deadline_ms": 35000
+  },
+  "checks": [
+    {
+      "check": "job_dataset_location",
+      "status": "read_completed",
+      "location": "US"
+    },
+    {
+      "check": "retained_execution_inventory",
+      "status": "read_completed",
+      "matching_rows": 1,
+      "inventory_truncated": false,
+      "records": [
+        {
+          "job_id": "44db728a-2f95-4651-9404-97a5aafc5e33",
+          "status": "completed",
+          "error_code": null,
+          "attempts": 1,
+          "created_at": "2026-10-22T17:20:00.480Z",
+          "updated_at": "2026-10-22T17:20:21.288652000Z",
+          "requested_revision": "05b6aef9a5d30f2878fb6f38cecf8bb212629641",
+          "execution_revision": "05b6aef9a5d30f2878fb6f38cecf8bb212629641",
+          "lifecycle_stage": "query_response"
+        }
+      ]
+    },
+    {
+      "check": "exact_retained_request",
+      "status": "read_completed",
+      "target_execution_revision": "05b6aef9a5d30f2878fb6f38cecf8bb212629641",
+      "target_job_id": "44db728a-2f95-4651-9404-97a5aafc5e33",
+      "target_attempt": 1,
+      "multiple_matching_rows": false,
+      "details_truncated": false,
+      "records": [
+        {
+          "job_id": "44db728a-2f95-4651-9404-97a5aafc5e33",
+          "status": "completed",
+          "error_code": null,
+          "attempts": 1,
+          "created_at": "2026-10-22T17:20:00.480Z",
+          "updated_at": "2026-10-22T17:20:21.288652000Z",
+          "requested_revision": "05b6aef9a5d30f2878fb6f38cecf8bb212629641",
+          "execution_revision": "05b6aef9a5d30f2878fb6f38cecf8bb212629641",
+          "lifecycle_stage": "query_response",
+          "outcomes_truncated": false,
+          "outcomes": [
+            {
+              "source_platform": "woo",
+              "source_store": "ww",
+              "group": "retention_windows",
+              "state": "rejected",
+              "stage": "population_query",
+              "code": "COHORT_RETRIEVAL_FAILED",
+              "status": "retrieval_failed",
+              "provider_reason": null,
+              "bigquery_reason": "invalidQuery",
+              "error_category": "sql_syntax",
+              "timeout_category": null,
+              "query_id": null,
+              "population_read": "unavailable",
+              "validation_reason": null,
+              "validation_field": null,
+              "validation_rule": null,
+              "http_status": null,
+              "statement_location": {
+                "line": 254,
+                "column": 108
+              }
+            },
+            {
+              "source_platform": "woo",
+              "source_store": "ww",
+              "group": "retention_piece_windows",
+              "state": "rejected",
+              "stage": "population_query",
+              "code": "COHORT_RETRIEVAL_FAILED",
+              "status": "retrieval_failed",
+              "provider_reason": null,
+              "bigquery_reason": "invalidQuery",
+              "error_category": "sql_syntax",
+              "timeout_category": null,
+              "query_id": null,
+              "population_read": "unavailable",
+              "validation_reason": null,
+              "validation_field": null,
+              "validation_rule": null,
+              "http_status": null,
+              "statement_location": {
+                "line": 277,
+                "column": 264
+              }
+            },
+            {
+              "source_platform": "woo",
+              "source_store": "ww",
+              "group": "retention_baseline_windows",
+              "state": "rejected",
+              "stage": "population_query",
+              "code": "COHORT_RETRIEVAL_FAILED",
+              "status": "retrieval_failed",
+              "provider_reason": null,
+              "bigquery_reason": "invalidQuery",
+              "error_category": "sql_syntax",
+              "timeout_category": null,
+              "query_id": null,
+              "population_read": "unavailable",
+              "validation_reason": null,
+              "validation_field": null,
+              "validation_rule": null,
+              "http_status": null,
+              "statement_location": {
+                "line": 267,
+                "column": 228
+              }
+            },
+            {
+              "source_platform": "woo",
+              "source_store": "usd",
+              "group": "retention_windows",
+              "state": "rejected",
+              "stage": "population_query",
+              "code": "COHORT_RETRIEVAL_FAILED",
+              "status": "retrieval_failed",
+              "provider_reason": null,
+              "bigquery_reason": "invalidQuery",
+              "error_category": "sql_syntax",
+              "timeout_category": null,
+              "query_id": null,
+              "population_read": "unavailable",
+              "validation_reason": null,
+              "validation_field": null,
+              "validation_rule": null,
+              "http_status": null,
+              "statement_location": {
+                "line": 254,
+                "column": 108
+              }
+            },
+            {
+              "source_platform": "woo",
+              "source_store": "usd",
+              "group": "retention_piece_windows",
+              "state": "rejected",
+              "stage": "population_query",
+              "code": "COHORT_RETRIEVAL_FAILED",
+              "status": "retrieval_failed",
+              "provider_reason": null,
+              "bigquery_reason": "invalidQuery",
+              "error_category": "sql_syntax",
+              "timeout_category": null,
+              "query_id": null,
+              "population_read": "unavailable",
+              "validation_reason": null,
+              "validation_field": null,
+              "validation_rule": null,
+              "http_status": null,
+              "statement_location": {
+                "line": 277,
+                "column": 264
+              }
+            },
+            {
+              "source_platform": "woo",
+              "source_store": "usd",
+              "group": "retention_baseline_windows",
+              "state": "rejected",
+              "stage": "population_query",
+              "code": "COHORT_RETRIEVAL_FAILED",
+              "status": "retrieval_failed",
+              "provider_reason": null,
+              "bigquery_reason": "invalidQuery",
+              "error_category": "sql_syntax",
+              "timeout_category": null,
+              "query_id": null,
+              "population_read": "unavailable",
+              "validation_reason": null,
+              "validation_field": null,
+              "validation_rule": null,
+              "http_status": null,
+              "statement_location": {
+                "line": 267,
+                "column": 228
+              }
+            },
+            {
+              "source_platform": "shopify",
+              "source_store": "shopify",
+              "group": "retention_windows",
+              "state": "rejected",
+              "stage": "population_query",
+              "code": "COHORT_RETRIEVAL_FAILED",
+              "status": "retrieval_failed",
+              "provider_reason": null,
+              "bigquery_reason": "invalidQuery",
+              "error_category": "sql_syntax",
+              "timeout_category": null,
+              "query_id": null,
+              "population_read": "unavailable",
+              "validation_reason": null,
+              "validation_field": null,
+              "validation_rule": null,
+              "http_status": null,
+              "statement_location": {
+                "line": 254,
+                "column": 108
+              }
+            },
+            {
+              "source_platform": "shopify",
+              "source_store": "shopify",
+              "group": "retention_piece_windows",
+              "state": "rejected",
+              "stage": "population_query",
+              "code": "COHORT_RETRIEVAL_FAILED",
+              "status": "retrieval_failed",
+              "provider_reason": null,
+              "bigquery_reason": "invalidQuery",
+              "error_category": "sql_syntax",
+              "timeout_category": null,
+              "query_id": null,
+              "population_read": "unavailable",
+              "validation_reason": null,
+              "validation_field": null,
+              "validation_rule": null,
+              "http_status": null,
+              "statement_location": {
+                "line": 277,
+                "column": 264
+              }
+            },
+            {
+              "source_platform": "shopify",
+              "source_store": "shopify",
+              "group": "retention_baseline_windows",
+              "state": "rejected",
+              "stage": "population_query",
+              "code": "COHORT_RETRIEVAL_FAILED",
+              "status": "retrieval_failed",
+              "provider_reason": null,
+              "bigquery_reason": "invalidQuery",
+              "error_category": "sql_syntax",
+              "timeout_category": null,
+              "query_id": null,
+              "population_read": "unavailable",
+              "validation_reason": null,
+              "validation_field": null,
+              "validation_rule": null,
+              "http_status": null,
+              "statement_location": {
+                "line": 267,
+                "column": 228
+              }
+            }
+          ],
+          "section_outcomes": [],
+          "root_validation": {
+            "code": null,
+            "failed_stage": null,
+            "validation_field": null,
+            "validation_rule": null
+          }
+        }
+      ]
+    }
+  ]
+}
