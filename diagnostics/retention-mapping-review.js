@@ -24,11 +24,31 @@ export function retentionMappingReviewSql(project){
  ), targets AS (
  SELECT DISTINCT CONCAT('shopify:shopify:',REGEXP_EXTRACT(CAST(product_id AS STRING),r'^(?:gid://shopify/Product/)?([0-9]+)$')) product_ref,
  COALESCE(title,name) title,NULLIF(UPPER(TRIM(sku)),'') sku FROM \`${project}.shopify_data.order_line_items\`
+ ), review_routes AS (
+ SELECT source_ref,ARRAY_AGG(STRUCT(classification_ref AS target_ref,mapping_type) ORDER BY classification_ref,mapping_type LIMIT 20) approved_routes
+ FROM cr_routes GROUP BY source_ref
+ ), review_conflicts AS (
+ SELECT subject_ref,ARRAY_AGG(DISTINCT classification_type ORDER BY classification_type) classification_conflicts
+ FROM cr_conflicts GROUP BY subject_ref
+ ), review_names AS (
+ SELECT subject_ref,ARRAY_AGG(DISTINCT classification_value ORDER BY classification_value) governed_collaborations,
+ COUNTIF(classification_value NOT IN ('collaboration','collaborations'))>0 has_named
+ FROM cr_resolved WHERE classification_type='collaboration_name' GROUP BY subject_ref
+ ), review_families AS (
+ SELECT classification_ref,ARRAY_AGG(DISTINCT classification_ref) existing_reporting_families
+ FROM cr_family GROUP BY classification_ref
+ ), review_candidate_pairs AS (
+ SELECT s.source_ref,t.product_ref,MIN(t.title) title,ARRAY_AGG(DISTINCT s.sku ORDER BY s.sku) exact_skus
+ FROM skus s JOIN targets t USING(sku) WHERE s.sku IS NOT NULL AND t.product_ref IS NOT NULL GROUP BY s.source_ref,t.product_ref
+ ), review_candidates AS (
+ SELECT p.source_ref,ARRAY_AGG(STRUCT(p.product_ref,p.title,p.exact_skus,n.governed_collaborations,IFNULL(f.existing_reporting_families,[]) AS existing_reporting_families) ORDER BY p.product_ref LIMIT 11) candidates
+ FROM review_candidate_pairs p JOIN review_names n ON n.subject_ref=p.product_ref AND n.has_named
+ LEFT JOIN review_families f ON f.classification_ref=p.product_ref GROUP BY p.source_ref
  ), review AS (
- SELECT i.*,ARRAY(SELECT AS STRUCT r.classification_ref target_ref,r.mapping_type FROM cr_routes r WHERE r.source_ref=i.source_product_ref ORDER BY target_ref,mapping_type LIMIT 20) approved_routes,ARRAY(SELECT DISTINCT c.classification_type FROM cr_conflicts c WHERE c.subject_ref=i.source_product_ref) classification_conflicts,ARRAY(SELECT AS STRUCT t.product_ref,MIN(t.title) title,ARRAY_AGG(DISTINCT s.sku) exact_skus,
- ARRAY(SELECT DISTINCT c.classification_value FROM cr_resolved c WHERE c.subject_ref=t.product_ref AND c.classification_type='collaboration_name') governed_collaborations,ARRAY(SELECT DISTINCT f.classification_ref FROM cr_family f WHERE f.classification_ref=t.product_ref) existing_reporting_families
- FROM skus s JOIN targets t USING(sku) WHERE s.source_ref=i.source_product_ref AND s.sku IS NOT NULL AND t.product_ref IS NOT NULL AND EXISTS(SELECT 1 FROM cr_resolved c WHERE c.subject_ref=t.product_ref AND c.classification_type='collaboration_name' AND c.classification_value NOT IN ('collaboration','collaborations')) GROUP BY t.product_ref ORDER BY t.product_ref LIMIT 11) candidates
- FROM impacts i WHERE NOT i.named_classification_consumed OR 'ambiguous_family' IN UNNEST(i.routing_states) OR (i.named_classification_consumed AND 'unmapped_item' IN UNNEST(i.routing_states))
+ SELECT i.*,IFNULL(r.approved_routes,[]) approved_routes,IFNULL(f.classification_conflicts,[]) classification_conflicts,IFNULL(c.candidates,[]) candidates
+ FROM impacts i LEFT JOIN review_routes r ON r.source_ref=i.source_product_ref
+ LEFT JOIN review_conflicts f ON f.subject_ref=i.source_product_ref LEFT JOIN review_candidates c ON c.source_ref=i.source_product_ref
+ WHERE NOT i.named_classification_consumed OR 'ambiguous_family' IN UNNEST(i.routing_states) OR (i.named_classification_consumed AND 'unmapped_item' IN UNNEST(i.routing_states))
  ) SELECT *,COUNT(*) OVER() total_review_products,
  IF(named_classification_consumed,'named_classification_consumed_product_route_missing',IF(ARRAY_LENGTH(candidates)=1,'exact_sku_candidate_requires_graph_preview',IF(ARRAY_LENGTH(candidates)>1,'conflicting_exact_sku_candidates','no_supported_target_missing_mapping_or_history'))) review_status,
  IF(ARRAY_LENGTH(approved_routes)>0,'inspect_existing_route_or_classification_conflict',IF(ARRAY_LENGTH(candidates)=1,'preview_identity_or_reporting_family_then_review',IF(ARRAY_LENGTH(candidates)>1,'resolve_conflicting_candidates_in_product_mapping','retain_unattributed_request_product_key_evidence'))) required_governance_action

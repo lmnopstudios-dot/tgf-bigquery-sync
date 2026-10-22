@@ -9,13 +9,22 @@ const scope={entry_start:'2022-10-19',entry_end:'2026-10-19',cutoff:'2026-10-19'
 export function mappingAuditSql(project){
  if(!/^[A-Za-z0-9_-]+$/.test(project))throw Error('Invalid project');
  const {relations,result}=cohortRelations(retentionMappingReviewSql(project));
- return 'WITH '+relations.map(r=>`${r.name} AS (${r.body})`).join(',\n')+` SELECT
+ return 'WITH '+relations.map(r=>`${r.name} AS (${r.body})`).join(',\n')+`, audit_named_values AS (
+ SELECT DISTINCT subject_ref,classification_value FROM cr_resolved
+ WHERE classification_type='collaboration_name' AND classification_value NOT IN ('collaboration','collaborations')
+ ), audit_route_products AS (
+ SELECT l.source_store,l.source_product_ref,LOGICAL_OR(n.subject_ref IS NOT NULL) resolved_named,
+ LOGICAL_OR(n.subject_ref IS NOT NULL AND CONCAT('collaboration_name=',n.classification_value) NOT IN UNNEST(l.classifications)) resolved_not_consumed
+ FROM classified_lines l LEFT JOIN audit_named_values n ON n.subject_ref=l.source_product_ref
+ WHERE l.source_platform='woo' GROUP BY l.source_store,l.source_product_ref
+ ) SELECT
  ARRAY(${result.replace(/^SELECT /,'SELECT AS STRUCT ')}) review_rows,
  ARRAY(${stores.map(([source,store])=>`SELECT AS STRUCT '${source}' source_platform,'${store}' source_store,c.* FROM (${retentionCatalogueSql(project,source,store)}) c`).join(' UNION ALL ')}) catalogue,
- ARRAY(SELECT AS STRUCT l.source_store,COUNT(DISTINCT l.source_product_ref) historical_products,
- COUNT(DISTINCT IF(EXISTS(SELECT 1 FROM cr_resolved c WHERE c.subject_ref=l.source_product_ref AND c.classification_type='collaboration_name' AND c.classification_value NOT IN ('collaboration','collaborations')),l.source_product_ref,NULL)) resolved_named_products,
- COUNT(DISTINCT IF(EXISTS(SELECT 1 FROM cr_resolved c WHERE c.subject_ref=l.source_product_ref AND c.classification_type='collaboration_name' AND c.classification_value NOT IN ('collaboration','collaborations') AND CONCAT('collaboration_name=',c.classification_value) NOT IN UNNEST(l.classifications)),l.source_product_ref,NULL)) resolved_classification_not_consumed
- FROM classified_lines l WHERE l.source_platform='woo' GROUP BY l.source_store) route_consumption`;
+ ARRAY(SELECT AS STRUCT source_store,COUNT(DISTINCT source_product_ref) historical_products,
+ COUNT(DISTINCT IF(resolved_named,source_product_ref,NULL)) resolved_named_products,
+ COUNT(DISTINCT IF(resolved_not_consumed,source_product_ref,NULL)) resolved_classification_not_consumed
+ FROM audit_route_products GROUP BY source_store) route_consumption`;
+
 }
 const boundaries=['orders','cr_routes','cr_collection_current','cr_resolved','classified_lines','retention_reporting_lines','line_classification_sets','ranked_orders','entry_matches'];
 const table=(p,d,t)=>`\`${p}.${d}.${t}\``;

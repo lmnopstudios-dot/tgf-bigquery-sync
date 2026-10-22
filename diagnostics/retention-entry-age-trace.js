@@ -24,20 +24,29 @@ export function entryAgeTraceCtes(){return `trace_collaboration_groups AS (
  UNION DISTINCT SELECT t.collection_id,c.subject_ref FROM trace_targets t JOIN cr_resolved c ON c.classification_type='collaboration_name' AND c.classification_value=t.collaboration_name
  ), trace_candidates AS (
  SELECT DISTINCT m.collection_id,s.source_ref FROM trace_refs m JOIN targets p ON p.product_ref=m.source_ref JOIN skus s ON s.sku=p.sku
- WHERE s.sku IS NOT NULL AND NOT EXISTS(SELECT 1 FROM trace_refs r WHERE r.collection_id=m.collection_id AND r.source_ref=s.source_ref)
+ LEFT JOIN trace_refs existing ON existing.collection_id=m.collection_id AND existing.source_ref=s.source_ref
+ WHERE s.sku IS NOT NULL AND existing.source_ref IS NULL
+ ), trace_named_lines AS (
+ SELECT DISTINCT t.collection_id,c.source_platform,c.source_store,c.order_ref,c.source_product_ref
+ FROM line_classification_sets c CROSS JOIN UNNEST(c.names) name JOIN trace_targets t ON t.collaboration_name=name
+ WHERE c.collaboration_state='named'
+ ), trace_named_orders AS (
+ SELECT DISTINCT collection_id,source_platform,source_store,order_ref FROM trace_named_lines
  ), trace_history AS (
  SELECT DISTINCT r.collection_id,l.source_product_ref,o.*,
  q.governed_customer_ref,first_order.order_timestamp first_entry_timestamp,
- EXISTS(SELECT 1 FROM line_classification_sets c JOIN trace_targets t ON t.collection_id=r.collection_id WHERE c.source_platform=l.source_platform AND c.source_store=l.source_store AND c.order_ref=l.order_ref AND c.source_product_ref=l.source_product_ref AND c.collaboration_state='named' AND t.collaboration_name IN UNNEST(c.names)) named_consumed,
+ named.source_product_ref IS NOT NULL named_consumed,
  m.resolution identity_resolution,q.order_sequence,first_order.order_ref first_order_ref,
  first_order.source_platform first_source_platform,first_order.source_store first_source_store,
  r.candidate_only,
- EXISTS(SELECT 1 FROM line_classification_sets f JOIN trace_targets t ON t.collection_id=r.collection_id WHERE f.source_platform=first_order.source_platform AND f.source_store=first_order.source_store AND f.order_ref=first_order.order_ref AND f.collaboration_state='named' AND t.collaboration_name IN UNNEST(f.names)) first_order_named_consumed
+ first_named.order_ref IS NOT NULL first_order_named_consumed
  FROM (SELECT *,FALSE candidate_only FROM trace_refs UNION ALL SELECT *,TRUE candidate_only FROM trace_candidates) r
  JOIN source_lines l ON l.source_product_ref=r.source_ref JOIN orders o USING(source_platform,source_store,order_ref)
  LEFT JOIN ranked_orders q USING(source_platform,source_store,order_ref)
  LEFT JOIN ranked_orders first_order ON first_order.governed_customer_ref=q.governed_customer_ref AND first_order.order_sequence=1
  LEFT JOIN ci_mapping m ON m.source_store=o.source_store AND m.source_order_id=o.order_ref
+ LEFT JOIN trace_named_lines named ON named.collection_id=r.collection_id AND named.source_platform=l.source_platform AND named.source_store=l.source_store AND named.order_ref=l.order_ref AND named.source_product_ref=l.source_product_ref
+ LEFT JOIN trace_named_orders first_named ON first_named.collection_id=r.collection_id AND first_named.source_platform=first_order.source_platform AND first_named.source_store=first_order.source_store AND first_named.order_ref=first_order.order_ref
  ), trace_events AS (
  SELECT h.*,stage FROM trace_history h CROSS JOIN UNNEST([
  IF(candidate_only,'sku_candidate_history_not_governed','governed_product_history'),
@@ -66,6 +75,18 @@ export function entryAgeTraceCtes(){return `trace_collaboration_groups AS (
  IF(window_days=360 AND days_to_second IS NOT NULL,'observed_repeat_360',NULL),
  IF(window_days=360 AND provisional_eligible AND days_to_second IS NOT NULL,'age_qualified_repeat_360',NULL)
  ]) stage WHERE stage IS NOT NULL
+ ), trace_route_arrays AS (
+ SELECT source_ref,ARRAY_AGG(STRUCT(classification_ref,mapping_type) ORDER BY classification_ref,mapping_type LIMIT 20) approved_routes
+ FROM cr_routes GROUP BY source_ref
+ ), trace_product_totals AS (
+ SELECT collection_id,source_store,source_product_ref,candidate_only,
+ COUNT(DISTINCT order_ref) observed_orders,COUNT(DISTINCT governed_customer_ref) eligible_linked_customers,
+ MIN(DATE(order_timestamp,@time_zone)) earliest_purchase_date,MAX(DATE(order_timestamp,@time_zone)) latest_purchase_date,
+ COUNTIF(named_consumed) named_line_order_rows
+ FROM trace_history GROUP BY collection_id,source_store,source_product_ref,candidate_only
+ ), trace_product_rows AS (
+ SELECT p.*,IFNULL(r.approved_routes,[]) approved_routes,COUNT(*) OVER() total_product_rows
+ FROM trace_product_totals p LEFT JOIN trace_route_arrays r ON r.source_ref=p.source_product_ref
  )`;}
 export function entryAgeTraceSql(project){
  if(!/^[A-Za-z0-9_-]+$/.test(project))throw Error('Invalid project');
@@ -86,13 +107,7 @@ export function entryAgeTraceSql(project){
  LEFT JOIN (SELECT collection_id,source_store,source_platform,stage,CONCAT(source_platform,':',source_store,':',order_ref) purchase_ref,order_timestamp,first_entry_timestamp,governed_customer_ref,source_customer_id FROM trace_events
  UNION ALL SELECT collection_id,source_store,source_platform,stage,CONCAT('entry:',governed_customer_ref),order_timestamp,first_entry_timestamp,governed_customer_ref,CAST(NULL AS STRING) source_customer_id FROM trace_member_events) e ON e.collection_id=t.collection_id AND e.stage=g.stage AND (g.source_store='combined' OR g.source_store=e.source_store)
  GROUP BY t.collection_id,t.display_name,t.collaboration_name,g.stage,g.source_store ORDER BY t.collection_id,g.stage,g.source_store) stage_counts,
- ARRAY(SELECT AS STRUCT h.collection_id,h.source_store,h.source_product_ref,h.candidate_only,
- COUNT(DISTINCT h.order_ref) observed_orders,COUNT(DISTINCT h.governed_customer_ref) eligible_linked_customers,
- MIN(DATE(h.order_timestamp,@time_zone)) earliest_purchase_date,MAX(DATE(h.order_timestamp,@time_zone)) latest_purchase_date,
- COUNTIF(h.named_consumed) named_line_order_rows,
- ARRAY(SELECT AS STRUCT r.classification_ref,r.mapping_type FROM cr_routes r WHERE r.source_ref=h.source_product_ref ORDER BY classification_ref,mapping_type LIMIT 20) approved_routes,
- COUNT(*) OVER() total_product_rows
- FROM trace_history h GROUP BY h.collection_id,h.source_store,h.source_product_ref,h.candidate_only ORDER BY observed_orders DESC,h.collection_id,h.source_product_ref LIMIT 201) product_routes`;
+ ARRAY(SELECT AS STRUCT * FROM trace_product_rows ORDER BY observed_orders DESC,collection_id,source_product_ref LIMIT 201) product_routes`;
 }
 export function entryAgeTraceSettings(project){
  return {...auditExecutionOptions(entryAgeTraceSql(project),['orders','cr_routes','cr_collection_current','cr_resolved','classified_lines','retention_reporting_lines','line_classification_sets','ranked_orders','entry_matches','retention_members'],50000),location:'US',useLegacySql:false,

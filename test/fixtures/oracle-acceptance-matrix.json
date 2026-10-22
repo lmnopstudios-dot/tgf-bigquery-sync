@@ -1250,6 +1250,10 @@
     {
       "file": "test/retention-entry-age-trace.test.js",
       "purpose": "Mot\u00f6rhead and Iron Maiden zero 360-day provisional denominators: actual SQL old Woo entries, London boundary, observed returns with zero age eligibility, global first-entry sequencing and trace loss categories."
+    },
+    {
+      "file": "test/retention-diagnostic-correlation.test.js",
+      "purpose": "Confirmed #383 BigQuery correlated-subquery failures: complete generated diagnostic join/aggregate shape, membership equivalence and count deduplication; local fixtures do not certify BigQuery compatibility."
     }
   ]
 }
