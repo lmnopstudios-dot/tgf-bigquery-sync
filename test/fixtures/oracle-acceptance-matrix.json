@@ -1232,6 +1232,10 @@
     {
       "file": "test/retention-combined.test.js",
       "purpose": "Combined linked TGF population, strict scope, Woo entry to Shopify return and consolidated historical Woo mapping review. Literal regex insertion and BigQuery typed-empty fixture regressions preserve eleven successful compilation shapes."
+    },
+    {
+      "file": "test/retention-materialization.test.js",
+      "purpose": "Combined cohort materialization, table-reference dependency pruning, one transaction and fixed total budget; actual execution acceptance preserves independently successful results."
     }
   ]
 }

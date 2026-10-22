@@ -1,0 +1,77 @@
+{
+  "deployed_revision": "f6ada6eda3c2bbda7707674febeff05fedea8dc0",
+  "checks": [
+    {
+      "source": "woo",
+      "store": "ww",
+      "group": "retention_windows",
+      "synthetic_sha256": "53790189b613c050595009d2efeb0c7965b75e8afa736baa73efbb00d217a088"
+    },
+    {
+      "source": "woo",
+      "store": "ww",
+      "group": "retention_piece_windows",
+      "synthetic_sha256": "f90af19d28448456b6dfff942f0552cedfc5d984d60c83ccaa72e09c9c3aa8d2"
+    },
+    {
+      "source": "woo",
+      "store": "ww",
+      "group": "retention_baseline_windows",
+      "synthetic_sha256": "6655a37be7758ad4ce130a9ff188a5409049872ef1a50d93ce0fc71a69bc887d"
+    },
+    {
+      "source": "woo",
+      "store": "usd",
+      "group": "retention_windows",
+      "synthetic_sha256": "b4639aaebebd6a51611a56d45e6e73148460014fcb6ed04b0b8a47016ee8dfb9"
+    },
+    {
+      "source": "woo",
+      "store": "usd",
+      "group": "retention_piece_windows",
+      "synthetic_sha256": "0648c52b1339c08ff3c66105c092cb8a13df5f5c75ff2a250e9844c6b4a7524f"
+    },
+    {
+      "source": "woo",
+      "store": "usd",
+      "group": "retention_baseline_windows",
+      "synthetic_sha256": "63d2975ce4183875c944754b99ac7e5d346fd20752742585ebbd1ae524938239"
+    },
+    {
+      "source": "shopify",
+      "store": "shopify",
+      "group": "retention_windows",
+      "synthetic_sha256": "127f5a064f6cd472eea71b0dc100132b2fe55a213e4463d675742a4e80c4b519"
+    },
+    {
+      "source": "shopify",
+      "store": "shopify",
+      "group": "retention_piece_windows",
+      "synthetic_sha256": "1dfe7364aab4e159cb412fe4f884b7d02e5f3fca72adeecdf68f31be08ba108d"
+    },
+    {
+      "source": "shopify",
+      "store": "shopify",
+      "group": "retention_baseline_windows",
+      "synthetic_sha256": "6bf077331137306b98daedbffbdb406cb90a819bc76d4746bc87a51991e2e91e"
+    },
+    {
+      "source": "tgf",
+      "store": "combined",
+      "group": "retention_windows",
+      "synthetic_sha256": "2b1c34cca7cfa4463fc457bb7f69b4e6d76ea734b70ed7d2c94cba10fcd8e3f3"
+    },
+    {
+      "source": "tgf",
+      "store": "combined",
+      "group": "retention_piece_windows",
+      "synthetic_sha256": "6f7f715f13baa1ad96582d8579ab93d396b0de72b5971d8202f40c2eba06ea5d"
+    },
+    {
+      "source": "tgf",
+      "store": "combined",
+      "group": "retention_baseline_windows",
+      "synthetic_sha256": "c8f24bc606bdcd78550896ca29e8536492e1b77557bddf060238a05fa81311c2"
+    }
+  ]
+}

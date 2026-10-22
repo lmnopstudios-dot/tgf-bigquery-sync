@@ -1,6 +1,6 @@
 import {boundedEvidenceRead} from '../oracle/bounded-evidence-read.js';
 import {safeReadFailure} from '../oracle/read-failure.js';
-import {COHORT_BOUNDARIES} from '../oracle/cohort-execution.js';
+import {COHORT_BOUNDARIES,COHORT_COMBINED_BOUNDARIES} from '../oracle/cohort-execution.js';
 export const safeJobId=value=>/^[A-Za-z0-9_-]{1,200}$/.test(value||'')?value:null;
 const duration=(a,b)=>a!=null&&b!=null&&Number.isFinite(Number(a))&&Number.isFinite(Number(b))?Math.max(0,Number(b)-Number(a)):null;
 export function warehouseOutcome(m={}){
@@ -15,11 +15,12 @@ export function warehouseOutcome(m={}){
   job_timeout_ms:m.configuration?.jobTimeoutMs??null,
   statement_timeout_ms:m.configuration?.query?.scriptOptions?.statementTimeoutMs??null};
 }
+const knownBoundaries=[...new Set([...COHORT_BOUNDARIES,...COHORT_COMBINED_BOUNDARIES])];
 function statementStage(sql=''){
  const name=sql.match(/^\s*CREATE TEMP TABLE cohort_([a-z_]+) AS/i)?.[1];
- if([...COHORT_BOUNDARIES,'result'].includes(name))return name==='result'?'aggregation':name;
+ if([...knownBoundaries,'result'].includes(name))return name==='result'?'aggregation':name;
  const drop=sql.match(/^\s*DROP TABLE _SESSION.cohort_([a-z_]+)/i)?.[1];
- if(COHORT_BOUNDARIES.includes(drop))return 'cleanup_'+drop;
+ if(knownBoundaries.includes(drop))return 'cleanup_'+drop;
  if(/^\s*BEGIN TRANSACTION\s*;?$/i.test(sql))return 'transaction_setup';
  if(/^\s*COMMIT TRANSACTION\s*;?$/i.test(sql))return 'transaction_commit';
  if(/^\s*SELECT \* FROM cohort_result ORDER BY cohort_rank,window_days\s*;?$/i.test(sql))return 'result_select';

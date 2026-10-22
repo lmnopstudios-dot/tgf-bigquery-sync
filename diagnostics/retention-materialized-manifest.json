@@ -1,0 +1,39 @@
+{
+  "project": "gf-full-data",
+  "snapshot": "history-20261022-billing-v3",
+  "statement_names": [
+    "orders",
+    "ranked_orders",
+    "cr_routes",
+    "cr_collection_current",
+    "cr_resolved",
+    "classified_lines",
+    "retention_reporting_lines",
+    "line_classification_sets",
+    "entry_matches",
+    "retention_members"
+  ],
+  "components": [
+    {
+      "group": "retention_windows",
+      "script_sha256": "02f87a5745429985708396f22aa508c177caa8e922e01838853740bd79836c7a",
+      "maximum_bytes_per_statement": "1666666666",
+      "data_statements": 12,
+      "maximum_bytes_per_component": "20000000000"
+    },
+    {
+      "group": "retention_piece_windows",
+      "script_sha256": "5dc7da4a6255fb240909c3d30cd4add2ac6aedf99bdbf6b96d5bd3e27f3c46eb",
+      "maximum_bytes_per_statement": "1666666666",
+      "data_statements": 12,
+      "maximum_bytes_per_component": "20000000000"
+    },
+    {
+      "group": "retention_baseline_windows",
+      "script_sha256": "92d5dddd4d2cdbf0774859577e9f686e9ff594fb888b4e39da066ed2281cf941",
+      "maximum_bytes_per_statement": "1666666666",
+      "data_statements": 12,
+      "maximum_bytes_per_component": "20000000000"
+    }
+  ]
+}
