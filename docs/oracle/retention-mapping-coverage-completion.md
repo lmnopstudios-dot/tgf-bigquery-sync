@@ -106,13 +106,13 @@ import {safeReadFailure} from './oracle/read-failure.js';
 import {reconcileRetentionCatalogue} from './oracle/retention-catalogue.js';
 let stage='pinned_artifact';
 try {
- const revision='ec027a97addf021164c42672cba6cc2fdc6b37fb';
+ const revision='0af73bf2d2e294d13ea258940b13e5ae889f238c';
  const response=await fetch(`https://raw.githubusercontent.com/lmnopstudios-dot/tgf-bigquery-sync/${revision}/diagnostics/retention-mapping-coverage.json.gz`,{signal:AbortSignal.timeout(8000),redirect:'error'});
  assert.ok(response.ok,'Pinned artifact unavailable');
  const chunks=[];let size=0;
  for await(const chunk of response.body){size+=chunk.length;if(size>262144)throw Error('Compressed artifact bound');chunks.push(chunk);}
  const bytes=Buffer.concat(chunks);
- assert.equal(createHash('sha256').update(bytes).digest('hex'),'e8bde0cbf9c6d9e6db50393b6bf5b2aaec83ac1f4109af0040f7c1a166be57b2');
+ assert.equal(createHash('sha256').update(bytes).digest('hex'),'3b606816a4f31a1294bf2c28c8fc5085a292ec8a6924d88838b2b0dbc8a7ef22');
  const artifact=JSON.parse(gunzipSync(bytes,{maxOutputLength:4194304}));
  const {project,credentials}=loadBigQueryConfig();
  assert.equal(project,artifact.project);
