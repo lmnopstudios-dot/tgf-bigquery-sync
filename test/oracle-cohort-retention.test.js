@@ -24,7 +24,7 @@ test('journey SQL retains historical lookback, source identities, approved class
  assert.match(sql,/ranked_orders AS[\s\S]*entry_orders AS/);assert.match(sql,/source_platform,'\|',source_store/);
  assert.match(sql,/COALESCE\(l.source_app_id=@matrixify_app_id,FALSE\)/);
  assert.match(sql,/classification_links/);assert.match(sql,/JOIN cr_direct/);assert.doesNotMatch(sql,/fuzzy|suggested/);
- assert.match(sql,/UNNEST\(\[90,180\]\)/);assert.match(sql,/COUNTIF\(mature\)/);assert.match(sql,/PERCENTILE_CONT/);
+ assert.match(sql,/UNNEST\(\[90,180,360\]\)/);assert.match(sql,/COUNTIF\(mature\)/);assert.match(sql,/PERCENTILE_CONT/);
  assert.match(sql,/LEFT JOIN retention_next_orders d/);assert.match(sql,/cohort_rank<=DIV\(@cohort_limit/);
  let options;const r=await dryRunCohortRetention({project:'fixture',now:NOW,bigquery:{createQueryJob:async value=>{options=value;return [{metadata:{statistics:{totalBytesProcessed:'123'}}}];}}});
  assert.equal(r.verified,true);assert.equal(options.dryRun,true);assert.equal(options.jobTimeoutMs,30000);assert.equal(options.maximumBytesBilled,'20000000000');assert.equal(options.params.entry_channel,'Online');
@@ -60,7 +60,7 @@ test('piece evidence cannot satisfy collaboration aggregation or lose identity o
  const f=acceptanceFixture({retention:true});const r=await executeGovernedAgentAnalysis({message:production,baselineOverview:f.baseline,now:NOW});
  assert.equal(r.evidence.definition.group_by[0],'retention_product_windows');
  assert.ok(f.queries.every(q=>q.query.includes('source_store,collaboration_name,entry_product_ref,window_days')));
- assert.ok(f.queries.every(q=>q.params.cohort_limit===25));
+ assert.ok(f.queries.every(q=>q.params.cohort_limit===16));
  const bad=structuredClone(r);delete bad.evidence.rows[0].entry_product_ref;
  assert.throws(()=>assertEvidenceAgreement(r.analysis_context,bad.evidence),{code:'EVIDENCE_SCOPE_MISMATCH'});
  const grouping=structuredClone(r);grouping.evidence.definition.group_by=['retention_windows'];

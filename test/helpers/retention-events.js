@@ -31,7 +31,7 @@ export const retentionEvents=[
  event('shop','18','2025-03-02T12:00:00Z',[piece('b',['beta'])],{source_platform:'shopify',source_store:'shopify'})
 ];
 // Aggregate-only fixture adapter. Membership is calculated from events, not supplied rates.
-export function fixtureRetention(events,args,{pieces=false}={}){
+export function fixtureRetention(events,args,{pieces=false,baseline=false}={}){
  const date=t=>new Intl.DateTimeFormat('en-CA',{timeZone:args.time_zone||'UTC',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(t));
  const names=p=>p.names.filter(n=>!['collaboration','collaborations'].includes(n));
  const buckets=new Map(),sources=new Map();
@@ -47,20 +47,20 @@ export function fixtureRetention(events,args,{pieces=false}={}){
    const classified=first.pieces.filter(p=>names(p).length===1),isGeneric=first.pieces.some(p=>p.group==='collaboration'||p.names.includes('collaborations'));
    if(classified.length)named++;else if(isGeneric)generic++;else unknown++;
    const second=history.find(e=>e.timestamp>first.timestamp);
-   const memberships=new Map();for(const p of classified){const name=names(p)[0];memberships.set(name+(pieces?'/'+p.id:''),{name,p});}
-   for(const {name,p} of memberships.values())for(const window of [90,180]){
+   const memberships=new Map();if(baseline)memberships.set('sitewide',{name:'Sitewide',p:null});for(const p of baseline?[]:pieces?first.pieces.filter(p=>names(p).length===1||p.group==='collaboration'||p.names.some(n=>['collaboration','collaborations'].includes(n))):classified){const name=names(p).length===1?names(p)[0]:null;memberships.set(name+(pieces?'/'+p.id:''),{name,p});}
+   for(const {name,p} of memberships.values())for(const window of [90,180,360]){
     const key=[first.source_platform,first.source_store,name,pieces?p.id:'',window].join('/');
-    let b=buckets.get(key);if(!b){b={source_platform:first.source_platform,source_store:first.source_store,collaboration_name:name,...(pieces?{entry_product_ref:first.source_platform+':'+first.source_store+':'+p.id,entry_product_title:p.title}:{}),observation_coverage_status:args.coverage_status||'verified_continuous',verified_coverage_start:args.coverage_start||'2020-01-01',verified_coverage_end:args.coverage_end||args.observation_end,coverage_evidence:args.coverage_evidence||'fixture:hand-counted',observed_repeat_customers:0,window_days:window,cohort_customers:0,mature_customers:0,repeat_customers:0,same_collaboration:0,different_collaboration:0,core_range:0,unknown:0,days:[]};buckets.set(key,b);}
+    let b=buckets.get(key);if(!b){b={source_platform:first.source_platform,source_store:first.source_store,collaboration_name:name,...(pieces?{entry_product_ref:first.source_platform+':'+first.source_store+':'+p.id,entry_product_title:p.title}:{}),observation_coverage_status:args.coverage_status||'verified_continuous',verified_coverage_start:args.coverage_start||'2020-01-01',verified_coverage_end:args.coverage_end||args.observation_end,coverage_evidence:args.coverage_evidence||'fixture:hand-counted',observed_repeat_customers:0,window_days:window,cohort_customers:0,mature_customers:0,repeat_customers:0,same_collaboration:0,different_collaboration:0,core_range:0,unknown:0,days:[],second_order_products:[]};buckets.set(key,b);}
     b.cohort_customers++;
-    const returns=second&&(Date.parse(date(second.timestamp))-Date.parse(date(first.timestamp)))/86400000<=window;if(returns)b.observed_repeat_customers++;
+    const returns=second&&(Date.parse(date(second.timestamp))-Date.parse(date(first.timestamp)))/86400000<=window;if(returns){b.observed_repeat_customers++;for(const p of new Map(second.pieces.map(p=>[p.id,p])).values()){let product=b.second_order_products.find(x=>x.product_ref===second.source_platform+':'+second.source_store+':'+p.id);if(!product){product={product_ref:second.source_platform+':'+second.source_store+':'+p.id,product:p.title,observed_customers:0,mature_repeat_customers:0};b.second_order_products.push(product);}product.observed_customers++;if(observationWindow({entry:date(first.timestamp),days:window,requestedEnd:args.observation_end,coverage:{status:b.observation_coverage_status,start:b.verified_coverage_start,end:b.verified_coverage_end}}))product.mature_repeat_customers++;}}
     if(!observationWindow({entry:date(first.timestamp),days:window,requestedEnd:args.observation_end,coverage:{status:b.observation_coverage_status,start:b.verified_coverage_start,end:b.verified_coverage_end}}))continue;b.mature_customers++;
     if(!second||(Date.parse(date(second.timestamp))-Date.parse(date(first.timestamp)))/86400000>window)continue;
     b.repeat_customers++;b.days.push((Date.parse(second.timestamp)-Date.parse(first.timestamp))/86400000);
-    const kinds=new Set(second.pieces.map(p=>names(p).length===1?(names(p)[0]===name?'same_collaboration':'different_collaboration'):['core','core_range'].includes(p.group)?'core_range':'unknown'));
+    const kinds=new Set(second.pieces.map(p=>names(p).length===1?(name===null?'unknown':names(p)[0]===name?'same_collaboration':'different_collaboration'):['core','core_range'].includes(p.group)?'core_range':'unknown'));
     b[kinds.size===1?[...kinds][0]:'unknown']++;
    }
   }
   const first=all[0],ds=all.map(e=>date(e.timestamp)).sort();coverage.push({source_platform:first.source_platform,source_store:first.source_store,eligible_first_customers:eligible,named_customers:named,generic_only_customers:generic,unknown_customers:unknown,history_start:ds[0],history_end:ds.at(-1),identified_orders:all.filter(e=>e.customer).length,anonymous_orders:all.filter(e=>!e.customer).length,migrated_orders:all.filter(e=>e.migrated||e.cancelled).length,excluded_orders:all.filter(e=>e.refunded).length});
  }
- return [...buckets.values()].map(({days,...b})=>{days.sort((a,b)=>a-b);return {...b,coverage,median_days_to_second:days.length?(days[Math.floor((days.length-1)/2)]+days[Math.floor(days.length/2)])/2:null};});
+ return [...buckets.values()].map(({days,...b})=>{days.sort((a,b)=>a-b);return {...b,second_order_products:b.second_order_products.sort((a,b)=>b.observed_customers-a.observed_customers||a.product_ref.localeCompare(b.product_ref)).slice(0,10),coverage,median_days_to_second:days.length?(days[Math.floor((days.length-1)/2)]+days[Math.floor(days.length/2)])/2:null};});
 }

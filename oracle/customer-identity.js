@@ -41,8 +41,8 @@ export function identityMappingCte(project,identity) {
   )`;
   return `ci_mapping AS (
     SELECT source_store,source_customer_id,MIN(canonical_customer_ref) canonical_customer_ref
-    FROM ${fq(project,identity.dataset,'identity_links')} WHERE snapshot_id='${identity.snapshot}' AND REGEXP_CONTAINS(canonical_customer_ref,r'^c_[A-Fa-f0-9]{64}$')
-    GROUP BY source_store,source_customer_id HAVING COUNT(DISTINCT canonical_customer_ref)=1
+    FROM ${fq(project,identity.dataset,'identity_links')} AS links WHERE snapshot_id='${identity.snapshot}' AND REGEXP_CONTAINS(canonical_customer_ref,r'^c_[A-Fa-f0-9]{64}$')
+    GROUP BY source_store,source_customer_id HAVING COUNT(DISTINCT links.canonical_customer_ref)=1
   )`;
 }
 /** Relink only the customer reference, before any order sequencing or cohort dates.
@@ -62,9 +62,9 @@ export function applyCustomerIdentitySql(sql,project,identity,reference='custome
     const gate=/source_customer_id IS NOT NULL AND source_customer_id NOT IN \(''\s*,\s*'0'\) AND /;
     if(!gate.test(qualifying.body))throw Error('Missing shared customer eligibility gate');
     qualifying.body=qualifying.body.replace(gate,'');
-    qualifying.body=`SELECT q.* REPLACE(COALESCE(m.canonical_customer_ref,(SELECT canonical_customer_ref FROM ci_aliases WHERE local_ref=q.${reference}),IF(q.source_customer_id IS NOT NULL AND q.source_customer_id NOT IN ('','0'),q.${reference},NULL),CONCAT('c_',TO_HEX(SHA256(CONCAT('unlinked-order|',q.source_store,'|',q.${oid}))))) AS ${reference})
-      FROM (${qualifying.body}) q LEFT JOIN ci_mapping m ON m.source_store=q.source_store AND m.source_order_id=q.${oid}`;
-    const aliases=`ci_aliases AS (SELECT CONCAT('c_',TO_HEX(SHA256(CONCAT(IF(source_store='shopify','shopify','woo'),'|',source_store,'|',source_customer_id)))) local_ref,MIN(canonical_customer_ref) canonical_customer_ref FROM ci_mapping WHERE source_customer_id IS NOT NULL AND source_customer_id NOT IN ('','0') GROUP BY source_store,source_customer_id HAVING COUNT(DISTINCT canonical_customer_ref)=1)`;
+    qualifying.body=`SELECT q.* REPLACE(COALESCE(m.canonical_customer_ref,a.canonical_customer_ref,IF(q.source_customer_id IS NOT NULL AND q.source_customer_id NOT IN ('','0'),q.${reference},NULL),CONCAT('c_',TO_HEX(SHA256(CONCAT('unlinked-order|',q.source_store,'|',q.${oid}))))) AS ${reference})
+      FROM (${qualifying.body}) q LEFT JOIN ci_mapping m ON m.source_store=q.source_store AND m.source_order_id=q.${oid} LEFT JOIN ci_aliases a ON a.local_ref=q.${reference}`;
+    const aliases=`ci_aliases AS (SELECT CONCAT('c_',TO_HEX(SHA256(CONCAT(IF(source_store='shopify','shopify','woo'),'|',source_store,'|',source_customer_id)))) local_ref,MIN(canonical_customer_ref) canonical_customer_ref FROM ci_mapping WHERE source_customer_id IS NOT NULL AND source_customer_id NOT IN ('','0') GROUP BY source_store,source_customer_id HAVING COUNT(DISTINCT ci_mapping.canonical_customer_ref)=1)`;
     const result=reference==='customer_ref'?parsed.result.replaceAll('= @customer_ref','= COALESCE((SELECT canonical_customer_ref FROM ci_aliases WHERE local_ref=@customer_ref),@customer_ref)'):parsed.result;
     return `WITH ${identityMappingCte(project,identity)},${aliases},\n${parsed.relations.map(r=>`${r.name} AS (${r.body})`).join(',\n')}\n${result}`;
   }
@@ -105,8 +105,10 @@ export function identityAwareService(options,factory,coverageSql) {
   const config=identityConfiguration(options.env||process.env);
   return Object.fromEntries(Object.keys(base).map(method=>[method,async (...args)=>{
     if(!config){
-      const result=await base[method](...args);
-      return ['email_candidate_v1','email_candidate_v2'].includes((options.env||process.env).ORACLE_CUSTOMER_IDENTITY_MODE)?{...result,identity_evidence:{mode:'source_qualified_only',activation:'fallback',reason:'invalid_activation_configuration'}}:result;
+      const configured=['email_candidate_v1','email_candidate_v2'].includes((options.env||process.env).ORACLE_CUSTOMER_IDENTITY_MODE);
+      const identity_evidence={mode:'source_qualified_only',activation:'fallback',reason:'invalid_activation_configuration'};
+      try{const result=await base[method](...args);return configured?{...result,identity_evidence}:result;}
+      catch(error){if(configured)error.identity_evidence=identity_evidence;throw error;}
     }
     let coverage;
     const started=Date.now();
@@ -118,7 +120,7 @@ export function identityAwareService(options,factory,coverageSql) {
       try{return await work({deadlineAt,maximumMs:Math.min(5000,remainingMs()),
         ...(args[1]?.signal?{signal:args[1].signal}:{}),
         onQueryAllocated:job=>{allocated=job;args[1]?.onQueryAllocated?.(job);},
-        onProviderStage:event=>args[1]?.onProviderStage?.(event)});}
+        onProviderStage:event=>args[1]?.onProviderStage?.({...event,identity_stage:stage})});}
       catch(error){error.history_diagnostic={stage,job_id:allocated?.id||null,elapsed_ms:Math.round(performance.now()-began),...error.history_diagnostic};throw error;}
     };
     const execute=async(service,stage)=>observed(stage,async hooks=>{
@@ -154,14 +156,16 @@ export function identityAwareService(options,factory,coverageSql) {
       });
     } catch(error) {
       if(args[1]?.signal?.aborted||error.code==='REQUEST_CANCELLED'||error.code==='LEASE_NOT_OWNED')throw error;
-      const result=await execute(base,'fallback_query');
-      return {...result,identity_evidence:{mode:'source_qualified_only',activation:'fallback',reason:'snapshot_or_coverage_unavailable'}};
+      const identity_evidence={mode:'source_qualified_only',activation:'fallback',reason:'snapshot_or_coverage_unavailable'};
+      try{return {...await execute(base,'fallback_query'),identity_evidence};}
+      catch(failure){failure.identity_evidence=identity_evidence;throw failure;}
     }
     const remaining=deadlineAt-Date.now();
     if(remaining<=0)throw Object.assign(Error('Identity read deadline'),{code:'ORACLE_AGENT_DEADLINE',history_diagnostic:{stage:'identity_query',elapsed_ms:Date.now()-started}});
     const active=factory({...options,identity:config});
-    const result=await execute(active,'identity_query');
-    return {...result,identity_evidence:{mode:config.mode,snapshot:config.snapshot,activation:'active',coverage_scope:config.orderLinks?'snapshot original orders, all statuses; email-linked records include guests; unmatched anonymous orders remain separate records':'all qualifying source history; guests excluded',...(config.orderLinks?{identity_unit:'email-linked records; registered source IDs preserved; anonymous unmatched orders are isolated records',version:'order_email_v2'}:{}),sources:coverage,
-      limitation:'Email links are analytical candidates, not verified people. Missing and unmatched profiles retain source-local identity; first-ever and complete follow-up coverage remain unverified.'}};
+    const identity_evidence={mode:config.mode,configured_mode:config.orderLinks?'email_candidate_v2':'email_candidate_v1',snapshot:config.snapshot,activation:'active',coverage_scope:config.orderLinks?'snapshot original orders, all statuses; email-linked records include guests; unmatched anonymous orders remain separate records':'all qualifying source history; guests excluded',...(config.orderLinks?{identity_unit:'email-linked records; registered source IDs preserved; anonymous unmatched orders are isolated records',version:'order_email_v2'}:{}),sources:coverage,
+      limitation:'Email links are analytical candidates, not verified people. Missing and unmatched profiles retain source-local identity; first-ever and complete follow-up coverage remain unverified.'};
+    try{return {...await execute(active,'identity_query'),identity_evidence};}
+    catch(error){error.identity_evidence=identity_evidence;throw error;}
   }]));
 }
