@@ -1208,6 +1208,14 @@
         "strict named product identity and mature denominators with unknown attribution separate",
         "supplemental rejection preserves valid metrics; direct interactive durable and browser refresh without replay"
       ]
+    },
+    {
+      "file": "test/retention-sql-syntax.test.js",
+      "covers": [
+        "exact linked execution script hashes and reported production SQL positions at 05b6aef across nine outcomes",
+        "literal catalogue replacement and explicit STRUCT aliases survive identity wrapping and transaction decomposition",
+        "full linked validation artifact scope and unchanged identity/coverage safeguards"
+      ]
     }
   ]
 }
