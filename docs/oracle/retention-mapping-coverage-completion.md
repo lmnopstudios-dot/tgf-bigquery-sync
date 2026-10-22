@@ -94,7 +94,7 @@ Regressions execute the generated membership/aggregation SQL through a SQLite co
 
 The five existing-evidence reads and retained mapping-error discovery have completed. Their results remain preserved. The earlier seven-job command is superseded and removed here so it cannot accidentally repeat those reads.
 
-Use [the single hash-pinned two-diagnostic execution command](retention-diagnostic-errors-383.md#one-targeted-render-follow-up-command). It executes only the corrected complete mapping review and entry-age scripts, with independent results and unchanged per-script limits. It does not replay the successful report, certify coverage, approve relationships or change persistent business data. See that page for both confirmed retained errors and the complete decorrelation changes.
+Use [the single hash-pinned two-diagnostic execution command](retention-diagnostic-errors-383.md#one-targeted-render-follow-up-command). It executes only the corrected complete mapping review and entry-age scripts, with independent results and unchanged SQL, deadlines and per-statement limits. Only these two whole-script caps are corrected to the existing reviewed 5.5 GB mapping / 6 GB trace allocation. It does not replay the successful report, certify coverage, approve relationships or change persistent business data. See that page for both confirmed retained errors and the complete decorrelation changes.
 
 ## Validation status
 

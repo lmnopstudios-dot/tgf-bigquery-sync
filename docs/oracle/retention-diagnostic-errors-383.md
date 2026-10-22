@@ -17,6 +17,14 @@ The diagnostic's previously corrected active-group/name left join is preserved. 
 
 New regressions inspect both complete generated diagnostic shapes and their actual staged final CTAS. Local SQL fixtures compare old/new trace membership flags with duplicate lines/names, prior cross-platform entries, conflicting/missing classification and candidate-only products; mapping fixtures cover duplicate SKU pairs and route-consumption distinct counts. These SQLite compatibility executions and shape assertions **do not establish BigQuery compatibility**. The command below executes both complete corrected production diagnostic scripts against existing warehouse data; it does not stop at a dry-run DDL.
 
+## Diagnostic script budget correction
+
+The next live attempts reached explicit bytes-billed limits: mapping reported a requirement of **178,257,920 bytes**, trace **136,314,880 bytes**. Inspection found `maximumBytesBilled=500000000` on each entire script and `scriptOptions.statementByteBudget=500000000` per statement. The two diagnostic jobs were therefore capped at one statement's allowance for the whole script, despite the already reviewed multi-statement bounds.
+
+Only those two job caps change: mapping **5,500,000,000 bytes** for nine input CTAS + result CTAS + final SELECT; trace **6,000,000,000 bytes** for ten input CTAS + result CTAS + final SELECT. Each data statement remains capped at **500,000,000 bytes**. The reported failed-statement requirements fit under that unchanged cap; they are not measurements of total script cost. No cumulative usage is invented here. The shared audit allocator/defaults, other diagnostic callers and production report budget are unchanged.
+
+The regenerated artifact differs only in those two whole-job fields: SQL, parameters, script options, deadlines, portable runner and the five control queries compare identical. A regression checks the 11/12-statement allocation, the reported requirements, unchanged statement/time limits and unaffected shared/production allocators. Live execution remains pending the two-job command below.
+
 ## One targeted Render follow-up command
 
 Run from deployed `src`; no deployment is needed. One immutable artifact contains both corrected scripts. Exactly two independent diagnostic jobs are permitted, each retaining its own success or error. No ingestion-control reads, retained-error discovery, source collection or report replay occurs. Existing per-script limits remain 50 seconds warehouse, 55 seconds client, 15 seconds/statement and 500 MB/data statement. Mapping uses ten temporary input tables plus final result materialization; trace uses eleven plus final materialization. The command changes no production report limits.
@@ -30,7 +38,7 @@ import {BigQuery} from '@google-cloud/bigquery';
 import {loadBigQueryConfig} from './bigquery/client.js';
 import {boundedQuery} from './oracle/bounded-query.js';
 import {reconcileRetentionCatalogue} from './oracle/retention-catalogue.js';
-const revision='1981e23bc86b204337f9a85a652ce4cbaaadd0a4';
+const revision='1f90f178e2a44ee591edc17bbb262862a0957b57';
 const clean=v=>String(v??'').replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi,'[redacted]').slice(0,8000);
 let allocations=0;
 const emit=v=>console.log(JSON.stringify({report_replayed:false,persistent_business_writes:false,five_successful_reads_repeated:false,error_discovery_repeated:false,...v}));
@@ -38,7 +46,7 @@ try {
  const response=await fetch(`https://raw.githubusercontent.com/lmnopstudios-dot/tgf-bigquery-sync/${revision}/diagnostics/retention-mapping-coverage.json.gz`,{signal:AbortSignal.timeout(8000),redirect:'error'});
  assert.ok(response.ok,'Pinned artifact unavailable');
  const chunks=[];let size=0;for await(const chunk of response.body){size+=chunk.length;assert.ok(size<=262144,'Artifact bound');chunks.push(chunk);}
- const bytes=Buffer.concat(chunks);assert.equal(createHash('sha256').update(bytes).digest('hex'),'ce6dbdd78895f92f70fbd2377e98e6944b09413cf87f49f3cd86663ddbee10b6');
+ const bytes=Buffer.concat(chunks);assert.equal(createHash('sha256').update(bytes).digest('hex'),'7a03e54e919372e303b8e882c025cdb3c26fe81d3fdf68743c7650d1df2a1234');
  const artifact=JSON.parse(gunzipSync(bytes,{maxOutputLength:4194304}));
  const {project,credentials}=loadBigQueryConfig();assert.equal(project,'gf-full-data');assert.equal(artifact.project,project);
  assert.equal(process.env.ORACLE_CUSTOMER_IDENTITY_MODE,'email_candidate_v2');
@@ -49,12 +57,13 @@ try {
  const results=await Promise.allSettled(checks.map(async([check,key])=>{
   let query_id=null;
   try {
-   const settings=artifact[key];assert.equal(settings.maximumBytesBilled,'500000000');assert.equal(settings.jobTimeoutMs,50000);
+   const settings=artifact[key];assert.equal(settings.maximumBytesBilled,key==='mapping_settings'?'5500000000':'6000000000');
+   assert.equal(settings.scriptOptions.statementByteBudget,'500000000');assert.equal(settings.scriptOptions.statementTimeoutMs,'15000');assert.equal(settings.jobTimeoutMs,50000);
    for(const [name,type]of Object.entries(settings.types))if(type==='DATE'&&settings.params[name]!=null)settings.params[name]=BigQuery.date(settings.params[name]);
    const guarded={createQueryJob:async options=>{
     assert.ok(++allocations<=2,'Only two diagnostic queries allowed');assert.equal(options.query,artifact[key].query);
     assert.ok(!options.destination&&!options.dryRun);const result=await bq.createQueryJob(options);query_id=result[0].id;
-    emit({check,phase:'allocated',query_id,query_sha256:createHash('sha256').update(options.query).digest('hex')});return result;
+    emit({check,phase:'allocated',query_id,maximum_bytes_billed:options.maximumBytesBilled,statement_byte_budget:options.scriptOptions.statementByteBudget,query_sha256:createHash('sha256').update(options.query).digest('hex')});return result;
    }};
    const [rows]=await boundedQuery(guarded,settings,{maximumMs:55000});assert.equal(rows.length,1);const r=rows[0];
    if(key==='mapping_settings'){
@@ -80,4 +89,4 @@ Mapping execution returns raw governed/SKU evidence, required review actions and
 
 ## Validation status
 
-All 17 focused tests pass. All 835 required acceptance tests pass (21 central conversations and 60 provider/delivery suites); desktop/mobile browser gates pass, including durable and activated-identity refresh. The published corrected artifact was fetched back and its SHA-256 verified. Development Google access remains blocked by OAuth 403 `Domain forbidden`; no BigQuery compilation/execution pass is claimed. The two-job command is the remaining live compatibility/execution check, not a repeat of completed discovery.
+All 18 focused tests pass. The prior 835-test acceptance and desktop/mobile browser gates passed; the budget-only update is running those required gates again. Development Google access remains blocked by OAuth 403 `Domain forbidden`; no BigQuery compilation/execution pass is claimed. The two-job command is the remaining live compatibility/execution check, not a repeat of completed discovery.
