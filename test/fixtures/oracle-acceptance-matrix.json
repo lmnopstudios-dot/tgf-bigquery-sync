@@ -1236,6 +1236,10 @@
     {
       "file": "test/retention-materialization.test.js",
       "purpose": "Combined cohort materialization, table-reference dependency pruning, one transaction and fixed total budget; actual execution acceptance preserves independently successful results."
+    },
+    {
+      "file": "test/retention-component-deadlines.test.js",
+      "purpose": "Independent combined component scheduling under the same 45-second deadline, bounded concurrency, row quotas, retained successful components and identity provenance on deadline."
     }
   ]
 }

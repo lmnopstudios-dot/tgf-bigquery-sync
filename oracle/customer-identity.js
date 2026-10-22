@@ -165,6 +165,7 @@ export function identityAwareService(options,factory,coverageSql) {
     const active=factory({...options,identity:config});
     const identity_evidence={mode:config.mode,configured_mode:config.orderLinks?'email_candidate_v2':'email_candidate_v1',snapshot:config.snapshot,activation:'active',coverage_scope:config.orderLinks?'snapshot original orders, all statuses; email-linked records include guests; unmatched anonymous orders remain separate records':'all qualifying source history; guests excluded',...(config.orderLinks?{identity_unit:'email-linked records; registered source IDs preserved; anonymous unmatched orders are isolated records',version:'order_email_v2'}:{}),sources:coverage,
       limitation:'Email links are analytical candidates, not verified people. Missing and unmatched profiles retain source-local identity; first-ever and complete follow-up coverage remain unverified.'};
+    args[1]?.onProviderStage?.({stage:'identity_activated',identity_stage:'activation',identity_evidence});
     try{return {...await execute(active,'identity_query'),identity_evidence};}
     catch(error){error.identity_evidence=identity_evidence;throw error;}
   }]));

@@ -1,0 +1,55 @@
+{
+  "deployed_revision": "7d75e804b35461aabc70353ae085010ee3b146fc",
+  "evidence_source": "user-supplied Render acceptance output",
+  "collaboration": {
+    "job_id": "2996a9e5-e336-417e-a5cd-420e5e18e49e",
+    "parent_state": "DONE",
+    "elapsed_ms": 35705,
+    "successful_stages": 24,
+    "retention_rows": 54,
+    "catalogue_entries": 25,
+    "catalogue_complete": true
+  },
+  "item": {
+    "job_id": "1c9a874b-d108-4298-96ec-34c7845e1d9a",
+    "sampled_parent_state": "RUNNING",
+    "job_timeout_ms": "5984",
+    "statement_timeout_ms": "5989",
+    "terminal_cancellation_verified": false
+  },
+  "source_outcomes": [
+    {
+      "group": "retention_windows",
+      "state": "fulfilled",
+      "stage": "complete",
+      "query_id": "2996a9e5-e336-417e-a5cd-420e5e18e49e",
+      "population_read": "completed",
+      "identity": {
+        "activation": "active",
+        "mode": "email_candidate_v2",
+        "snapshot": "history-20261022-billing-v3"
+      }
+    },
+    {
+      "group": "retention_piece_windows",
+      "state": "rejected",
+      "stage": "population_query",
+      "code": "ORACLE_AGENT_DEADLINE",
+      "provider_reason": null,
+      "http_status": null,
+      "bigquery_reason": null,
+      "statement_location": null,
+      "query_id": "1c9a874b-d108-4298-96ec-34c7845e1d9a",
+      "population_read": "unavailable",
+      "identity": null
+    },
+    {
+      "group": "retention_baseline_windows",
+      "state": "not_attempted",
+      "stage": "request_deadline",
+      "identity": null
+    }
+  ],
+  "prior_compilation_passes_preserved": 11,
+  "prior_synthetic_passes_preserved": 12
+}
