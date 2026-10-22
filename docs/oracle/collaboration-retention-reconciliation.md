@@ -169,3 +169,12 @@ fixture providers do not certify BigQuery schema or production results.
 Final gate results are recorded in the PR. No collection, republication, repair,
 classification write, identity-setting change, IAM change, deployment or merge is
 part of this change.
+
+## Targeted unresolved-evidence handoff
+
+Use the [single bounded read-only Render command](retention-unresolved-render.md).
+It retrieves the retained Shopify baseline error, existing coverage/history records
+and the ten absent collections' current aggregate reconciliation evidence, with
+independent outcomes. It uses deployed dependencies without deployment or replay.
+The diagnostic has not been run against Render in this workspace; the prior access
+failure does not establish any production error or absence of evidence.
