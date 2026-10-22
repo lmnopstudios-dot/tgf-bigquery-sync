@@ -77,3 +77,7 @@ JS
 ```
 
 No production cause for the zero denominators is claimed until the corrected trace executes and its stage evidence is reviewed. Mapping discovery succeeding means its error was retrieved, not that the mapping calculation succeeded. Unsupported rates remain unavailable.
+
+## Local verification
+
+All 831 required acceptance tests pass (21 central conversations, 59 provider/delivery suites), and desktop/mobile browser gates pass with durable and activated-identity refresh. All 13 focused tests pass. The pinned artifact and metadata-reader source were fetched back from the published commit and their hashes verified; command syntax passes `node --check`. Mapping SQL/settings and all five successful control reads are unchanged. No BigQuery execution of the corrected trace is claimed from these local checks.
