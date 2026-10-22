@@ -73,9 +73,11 @@ of affected customers is established by the supplied evidence.
 The supplied run records show 206 succeeded finance windows with no internal gaps
 in the selected persisted union, from 2026-09-25T00:00:00Z through
 **2026-10-19T14:17:24.265Z**. Latest twelve attempts are failed and all start at
-2026-10-19T12:17:24.265Z (two-hour overlap). The latest known failed run is
-9a2b5457-8605-4801-bf24-464e78f2ddb2, ending 2026-10-22T14:17:35.465Z,
-with 183 fetched orders, five refunds and four pages. The frozen successful
+2026-10-19T12:17:24.265Z (two-hour overlap). The earlier 14:17 failed run
+9a2b5457-8605-4801-bf24-464e78f2ddb2 had 183 fetched orders, five refunds
+and four pages. The subsequent exact-error read also returned failed run
+ddb48fa7-cb5b-44c2-b6ba-536f5a73e7f5, ending 2026-10-22T16:17:34.054Z;
+that read did not select its order/refund/page counts. The frozen successful
 state belongs to run 69e90b1e-0df3-439d-94d4-cc3967098a5a.
 
 Nonzero persisted order/refund/page counts establish that those attempts reached
@@ -85,10 +87,55 @@ this supplied output because the prior diagnostic did not select `error`.
 Atomic source code guards promotion and state update together, but run status or
 timestamps alone do not prove what all other writers committed or quantify loss.
 
-One exact SELECT of existing error records was attempted here; OAuth token
-refresh returned **403, Domain forbidden**, before execution. No restart, source
-fetch, retry, recollection or reset followed. The smallest remaining error read
-is below. Do not rerun either previous diagnostic or the retained baseline query.
+The user has now successfully executed the exact error SELECT in Render. All
+six selected records contain **error = ""**, including the first two selected
+failures on October 19 and the latest four on October 22. The raw aggregate
+output is retained in
+[finance-empty-errors-20261022.json](../../test/fixtures/finance-empty-errors-20261022.json).
+This supersedes workspace OAuth denial as the blocker for **this record read**.
+The failure cause is still missing; empty error text does not mean no failure.
+
+### Verified error-detail loss and precise remaining blocker
+
+Both promote and run in shopify/finance-refresh.js persist only
+`String(error.message).slice(0,1000)`. The CLI prints only `e.message`.
+The installed BigQuery SDK creates PartialFailureError for insertAll row errors
+with details nested at `error.errors[i].errors[j]`. Its top-level message builder
+reads only each outer element's message, which that shape lacks.
+
+A local reproduction using the actual installed SDK constructor (synthetic row
+error, no API call) returned:
+
+```json
+{"synthetic":true,"name":"PartialFailureError","message":"","persisted_message":"","cli_message":"","nested_reason":"invalid","nested_message_present":true}
+```
+
+This verifies a **lossy error-recording mechanism**, not the production exception
+class, rejected column, reason or failed stage. Empty top-level messages can have
+other causes. Do not claim these failures were PartialFailureError, schema errors,
+streaming-buffer errors, permission errors or transaction rollbacks without the
+original details. No collector code is changed or run by this documentation update.
+
+**Precise missing evidence:** for the first selected failure, run
+d34d93ce-2da6-4e19-9241-9646197e022b, retain an existing structured exception or
+SDK insertAll row-error payload from **2026-10-19 16:17:30.459051–16:17:37.858506 UTC**,
+including stage/table and error reason/message, with row data/credentials excluded.
+An existing failed BigQuery staging/promotion job error in that exact interval
+could instead identify a SQL-stage failure. Its temporary table suffix is
+`d34d93ce_2da6_4e19_9241_9646197e022b`; the three stage prefixes are
+_order_locations_, _order_financials_ and _order_refunds_. A successful CTAS job
+or absence of a promotion job is only stage evidence, not the underlying insert
+error. Streaming insertAll failures are not query jobs.
+
+Inspect only already-retained logs/audit records for that run if available.
+A plain Render stderr line may also be empty because the CLI prints only message;
+the parent collector wrapper may record only an exit status. Do not promise those
+logs contain the lost payload. If no structured exception/row-error or failed job
+record was retained, the historical cause cannot be recovered from these six
+strings. Recording bounded, redacted nested error metadata with stage/table would
+improve future failures, but cannot reconstruct past ones and is not a reason to
+restart/recollect. No additional table-name search or identical error SELECT is
+useful. Keep recovery blocked on actual cause and an independently reviewed plan.
 
 The report's full London cutoff day ends at 2026-10-19T23:00:00Z. The last finance
 watermark is 8h42m35.735s before that half-open boundary. This identifies an
@@ -143,7 +190,11 @@ source follow-up (and evidenced handoff/retirement), so rates remain unavailable
 
 ## One targeted existing-error read (production access essential)
 
-Run once in the existing deployed Render repository. This uses existing SDK and
+**Completed successfully by the user: six failed records, all error strings
+empty. Do not rerun.** The command remains here as an audit record; the remaining
+missing evidence is described above.
+
+Original command: run once in the existing deployed Render repository. This uses existing SDK and
 configuration, selects only persisted finance failures for the frozen overlap
 window, and returns the first two plus latest four attempts (at most six rows).
 No collector, report replay, source API call, DDL/DML or state write. Fixed US
@@ -197,3 +248,9 @@ JS
   unknown-attribution disclosure, durable and activated-identity refresh.
 - Syntax and `git diff --check` pass. These gates use local fixtures; no corrected
   live report, collector recovery, transaction completeness or rate is certified.
+
+
+The blank-error follow-up changes documentation and commits supplied evidence only.
+The SDK error-shape reproduction ran locally with synthetic input and no API calls;
+JSON parsing and diff whitespace validation pass. Application/collector sources
+and the previously recorded 764-test/browser gate results are unchanged.
