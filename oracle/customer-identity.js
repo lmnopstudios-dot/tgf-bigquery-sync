@@ -3,12 +3,22 @@ import {boundedQuery} from './bounded-query.js';
 import {fq,SCOPE} from '../customer-identity/collect.js';
 import {HISTORY_SCOPE} from '../customer-identity/history-sql.js';
 
+// On-demand billing has a 10 MiB minimum per referenced table, even when
+// filtering to one tiny marker. Decimal 10,000,000 cannot cover that floor.
+// Snapshot reads reference one table. Coverage retains its existing 1 GB cap:
+// v2 also reads markers for integrity (two tables, at least 20 MiB total), while
+// v1 covers source history. Neither readiness timeout nor query scope changes.
+export const IDENTITY_READINESS_BYTES = Object.freeze({
+  snapshot: String(10 * 1024 * 1024),
+  coverage: SCOPE.bytes,
+});
+
 export function identityConfiguration(env=process.env) {
   if (!['email_candidate_v1','email_candidate_v2'].includes(env.ORACLE_CUSTOMER_IDENTITY_MODE)) return null;
   const dataset = env.ORACLE_CUSTOMER_IDENTITY_DATASET;
   const snapshot = env.ORACLE_CUSTOMER_IDENTITY_SNAPSHOT;
   if (!/^[A-Za-z0-9_]+$/.test(dataset||'') || !/^[A-Za-z0-9_-]{1,100}$/.test(snapshot||'')) return null;
-  return {dataset,snapshot,mode:'email_candidate_v1',...(env.ORACLE_CUSTOMER_IDENTITY_MODE==='email_candidate_v2'?{orderLinks:true}: {})};
+  return {dataset,snapshot,mode:env.ORACLE_CUSTOMER_IDENTITY_MODE,...(env.ORACLE_CUSTOMER_IDENTITY_MODE==='email_candidate_v2'?{orderLinks:true}: {})};
 }
 export function customerReferenceSql(identity) {
   return identity ? 'COALESCE((SELECT canonical_customer_ref FROM ci_aliases WHERE local_ref=@customer_ref),@customer_ref)' : '@customer_ref';
@@ -118,14 +128,14 @@ export function identityAwareService(options,factory,coverageSql) {
     try {
       const [snapshots]=await observed('snapshot_read',hooks=>boundedQuery(options.bigquery,{
         query:`SELECT state,start_date,end_date,mapping_count FROM ${fq(options.project,config.dataset,'identity_snapshots')} WHERE snapshot_id=@snapshot LIMIT 2`,
-        params:{snapshot:config.snapshot},maximumBytesBilled:'10000000',jobTimeoutMs:5000,
+        params:{snapshot:config.snapshot},maximumBytesBilled:IDENTITY_READINESS_BYTES.snapshot,jobTimeoutMs:5000,
       },hooks));
       const snapshot=snapshots[0];
       if (snapshots.length!==1 || snapshot.state!=='ready' || Number(snapshot.mapping_count)<1 ||
         (snapshot.start_date?.value||snapshot.start_date)!==(config.orderLinks?HISTORY_SCOPE.start:SCOPE.start) || (snapshot.end_date?.value||snapshot.end_date)!==SCOPE.end) throw Error('Snapshot not ready');
       const [counts]=await observed('identity_coverage',hooks=>boundedQuery(options.bigquery,{
         query:identityCoverageSql(coverageSql(options.project),options.project,config),
-        params:{matrixify_app_id:'gid://shopify/App/1758145'},maximumBytesBilled:SCOPE.bytes,jobTimeoutMs:5000,
+        params:{matrixify_app_id:'gid://shopify/App/1758145'},maximumBytesBilled:IDENTITY_READINESS_BYTES.coverage,jobTimeoutMs:5000,
       },hooks));
       if(counts.length!==3||new Set(counts.map(r=>r.source_store)).size!==3)throw Error('Incomplete identity coverage');
       if(config.orderLinks && counts.reduce((sum,row)=>sum+Number(row.qualifying_orders),0)!==Number(snapshot.mapping_count))throw Error('Identity count mismatch');

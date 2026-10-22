@@ -1126,6 +1126,16 @@
         "ancestor and dataset allow-policy inspection without user IAM attestations; incomplete inventory and role evidence cannot certify a destination",
         "restricted output privacy and actionable administrator read-permission requirements"
       ]
+    },
+    {
+      "id": "customer-history-readiness-billing",
+      "file": "test/customer-history-readiness.test.js",
+      "covers": [
+        "one-table 10 MiB marker billing floor, unchanged bounded coverage ceiling and five-second readiness waits",
+        "v1/v2 mode metadata versus orderLinks routing; unchanged integrity fallback",
+        "schema-checked aggregate audit, reserved alias regression and sanitized SQL error positions",
+        "actual-wrapper post-deployment readiness verification without fallback or identity analytics"
+      ]
     }
   ]
 }

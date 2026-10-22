@@ -16,6 +16,7 @@ for(const version of ['email_candidate_v1','email_candidate_v2'])for(const mode 
   assert.equal(result.evidence.coverage.identity,'email_candidate_v1');
   assert.deepEqual(result.evidence.coverage.customer_history,customerHistoryContract(true));
   assert.ok(result.evidence.coverage.identity_activation.every(s=>s.activation==='active'));
+  assert.ok(result.evidence.coverage.identity_activation.every(s=>s.mode===version));
   assert.match(result.answer,/email candidate snapshot/i);
   if(version==='email_candidate_v2'){assert.match(result.answer,/email-linked records/);assert.match(result.answer,/3 matched, 2 unmatched, 1 ambiguous, 2 unavailable/);assert.ok(f.wireQueries.some(q=>q.query.includes('identity_order_links')));}
   assert.doesNotMatch(result.answer,/customer linkage has not been verified/);
@@ -27,6 +28,7 @@ for(const version of ['email_candidate_v1','email_candidate_v2'])for(const mode 
   if(mode==='durable'){
     const calls=f.wireQueries.length,recovered=await h.get('/jobs/'+follow.job_id);
     assert.equal(recovered.evidence.coverage.identity_activation[0].snapshot,identityEnv.ORACLE_CUSTOMER_IDENTITY_SNAPSHOT);
+    assert.ok(recovered.evidence.coverage.identity_activation.every(s=>s.mode===version));
     assert.equal(f.wireQueries.length,calls);
   }
 });
