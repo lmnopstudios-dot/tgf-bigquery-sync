@@ -1,5 +1,10 @@
 # Confirmed generated SQL regression at 05b6aef
 
+The original two syntax fixes are merged in #374. Subsequent live validation
+found the separate catalogue ARRAY constructor error. See
+[the current ARRAY fix and complete validation command](retention-catalogue-array-validation.md).
+The command below is retained as historical validation evidence.
+
 Request 15118146-147f-480c-90f7-4b21d27182f8 executed as job
 44db728a-2f95-4651-9404-97a5aafc5e33, attempt 1, on
 05b6aef9a5d30f2878fb6f38cecf8bb212629641. The complete supplied retained
