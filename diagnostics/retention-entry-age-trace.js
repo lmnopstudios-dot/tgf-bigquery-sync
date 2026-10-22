@@ -5,10 +5,16 @@ import {retentionMappingReviewSql} from './retention-mapping-review.js';
 // through the current governed collection decisions, never through title tokens.
 export const ageTraceCollectionIds=['657969971527','658016338247'];
 export const ageTraceStages=['governed_product_history','sku_candidate_history_not_governed','eligible_sku_candidates_not_governed','consumed_named_history','eligible_named_purchases','excluded_import','excluded_cancelled','excluded_after_cutoff','excluded_status','excluded_total_or_refund','excluded_other','identity_matched','identity_unmatched','identity_ambiguous','identity_unavailable_or_absent','first_observed_named_purchase','earlier_entry_other_order','first_observed_before_scope','first_observed_in_scope_any_product','entry_collaboration_members','age_qualified_90','age_qualified_180','age_qualified_360','age_excluded_360','observed_repeat_360','age_qualified_repeat_360'];
-export function entryAgeTraceCtes(){return `trace_targets AS (
- SELECT id collection_id,c.classification_value collaboration_name,c.collection_title display_name
- FROM UNNEST(@trace_collection_ids) id LEFT JOIN cr_collection_current c ON c.collection_id=id AND c.classification_type='collaboration_name' AND c.status='active'
- AND EXISTS(SELECT 1 FROM cr_collection_current g WHERE g.collection_id=id AND g.classification_type='collection_group' AND g.classification_value='collaboration' AND g.status='active')
+export function entryAgeTraceCtes(){return `trace_collaboration_groups AS (
+ SELECT DISTINCT collection_id FROM cr_collection_current
+ WHERE classification_type='collection_group' AND classification_value='collaboration' AND status='active'
+ ), trace_governed_names AS (
+ SELECT c.collection_id,c.classification_value collaboration_name,c.collection_title display_name
+ FROM cr_collection_current c JOIN trace_collaboration_groups g USING(collection_id)
+ WHERE c.classification_type='collaboration_name' AND c.status='active'
+ ), trace_targets AS (
+ SELECT id collection_id,c.collaboration_name,c.display_name
+ FROM UNNEST(@trace_collection_ids) id LEFT JOIN trace_governed_names c ON c.collection_id=id
  ), trace_current_members AS (
  SELECT t.collection_id,CONCAT('shopify:shopify:',REGEXP_EXTRACT(CAST(pc.product_id AS STRING),r'^(?:gid://shopify/Product/)?([0-9]+)$')) source_ref
  FROM trace_targets t JOIN trace_product_collections pc ON CAST(pc.collection_id AS STRING)=t.collection_id

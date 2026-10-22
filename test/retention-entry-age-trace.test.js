@@ -51,3 +51,35 @@ test('actual trace event SQL separates candidate-only history, source eligibilit
  assert.ok(stages(0).includes('earlier_entry_other_order'));assert.ok(stages(0).includes('eligible_named_purchases'));
  assert.deepEqual(stages(1).sort(),['eligible_sku_candidates_not_governed','sku_candidate_history_not_governed']);assert.ok(stages(2).includes('excluded_import'));assert.ok(stages(3).includes('excluded_cancelled'));assert.ok(stages(4).includes('excluded_total_or_refund'));assert.ok(stages(5).includes('excluded_status'));
 });
+
+test('confirmed BigQuery EXISTS-in-join rejection: prefilter names with distinct governed groups and preserve missing targets',()=>{
+ const relations=cohortRelations('WITH '+entryAgeTraceCtes()+' SELECT * FROM trace_targets').relations;
+ const selection=relations.slice(0,relations.findIndex(r=>r.name==='trace_targets')+1).map(r=>`${r.name} AS (${r.body})`).join(',');
+ assert.doesNotMatch(selection,/\bON\b[^;]*\bEXISTS\s*\(/i,'EXISTS subquery is not supported inside join predicate');
+ const ids=ageTraceCollectionIds,records=[
+ [ids[0],'collaboration_name','mot_rhead','active','Motörhead'],
+ [ids[0],'collection_group','collaboration','active',null],
+ [ids[0],'collection_group','collaboration','active',null],
+ [ids[1],'collaboration_name','iron_maiden','active','Iron Maiden']
+ ];
+ const columns=['collection_id','classification_type','classification_value','status','collection_title'];
+ const source=rs=>'cr_collection_current AS ('+rs.map(r=>'SELECT '+r.map((v,i)=>literal(v)+' '+columns[i]).join(',')).join(' UNION ALL ')+')';
+ const subjects='(SELECT '+literal(ids[0])+' id UNION ALL SELECT '+literal(ids[1])+' id)';
+ const original=`SELECT id collection_id,c.classification_value collaboration_name,c.collection_title display_name FROM ${subjects} LEFT JOIN cr_collection_current c ON c.collection_id=id AND c.classification_type='collaboration_name' AND c.status='active' AND EXISTS(SELECT 1 FROM cr_collection_current g WHERE g.collection_id=id AND g.classification_type='collection_group' AND g.classification_value='collaboration' AND g.status='active') ORDER BY collection_id`;
+ for(const rs of [records,[...records,[ids[1],'collection_group','collaboration','active',null]],[...records,[ids[1],'collection_group','collaboration','inactive',null]]]){
+  const expected=run('WITH '+source(rs)+' '+original);
+  const actual=run('WITH '+source(rs)+','+selection.replace('UNNEST(@trace_collection_ids) id',subjects)+' SELECT * FROM trace_targets ORDER BY collection_id');
+  assert.deepEqual(actual,expected);assert.equal(actual.length,2,'duplicate group evidence must not multiply membership; missing names/groups retain a null target');
+ }
+});
+
+test('mapping discovery pages beyond the prior 21-row bound and selects only exact SQL, without queries',async()=>{
+ const {readRetainedMappingErrors}=await import('../diagnostics/retention-mapping-job-errors.js');
+ const calls=[],events=[],match={id:'mapping-execution',metadata:{jobReference:{location:'US'},configuration:{query:{query:'reviewed mapping'}},statistics:{creationTime:'1000001'}},getMetadata:async()=>[{status:{state:'DONE',errorResult:{reason:'invalidQuery',message:'actual mapping failure distinct from trace'}}}]};
+ const bq={job:()=>({getMetadata:async()=>[{statistics:{creationTime:'1000000'}}]}),getJobs:async options=>{calls.push(options);return options.pageToken?[[match],null,{}]:[Array.from({length:25},(_,i)=>({id:'unrelated-'+i,metadata:{configuration:{query:{query:'other SQL'}}}})),{pageToken:'second'},{nextPageToken:'second'}];}};
+ const r=await readRetainedMappingErrors({bigquery:bq,mappingSql:'reviewed mapping',onCheck:e=>events.push(e)});
+ assert.equal(calls.length,2);assert.equal(calls[1].pageToken,'second');assert.equal(r.inventory_truncated,false);assert.equal(r.status,'read_completed');assert.equal(r.errors[0].error_result.message,'actual mapping failure distinct from trace');assert.equal(r.queries_submitted,0);assert.ok(events.find(e=>e.check==='mapping_inventory_page'&&e.inventory_truncated));
+ // Keep an independently discovered match even if the next inventory page fails.
+ calls.length=0;bq.getJobs=async options=>{calls.push(options);if(options.pageToken)throw Error('later page unavailable');return [[match],{pageToken:'second'},{}];};
+ const partial=await readRetainedMappingErrors({bigquery:bq,mappingSql:'reviewed mapping'});assert.equal(partial.inventory_truncated,true);assert.equal(partial.errors[0].status,'read_completed');assert.equal(partial.status,'unresolved');
+});
