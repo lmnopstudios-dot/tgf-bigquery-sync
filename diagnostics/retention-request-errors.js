@@ -5,7 +5,10 @@ export const REQUEST='15118146-147f-480c-90f7-4b21d27182f8';
 const ident=v=>{if(!/^[A-Za-z0-9_-]+$/.test(v||''))throw Error('Invalid identifier');return v;};
 const token=v=>typeof v==='string'&&/^[A-Za-z0-9_.:/+-]{1,180}$/.test(v)?v:null;
 export const diagnosticMessage=v=>String(v||'').replace(/-----BEGIN PRIVATE KEY-----[\s\S]*?-----END PRIVATE KEY-----/g,'[redacted]').replace(/Bearer\s+\S+/gi,'Bearer [redacted]').replace(/(access_token|refresh_token|client_secret|private_key|authorization)(["'\s:=]+)[^,}\]\s]+/gi,'$1$2[redacted]').replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi,'[redacted email]').slice(0,800);
-export const TARGET_REVISION='9e1439f97111395d257b7ccc3cd65cc368fe5129';
+// Confirmed by the complete production inventory, not the current container.
+export const TARGET_REVISION='05b6aef9a5d30f2878fb6f38cecf8bb212629641';
+export const TARGET_JOB='44db728a-2f95-4651-9404-97a5aafc5e33';
+export const TARGET_ATTEMPT=1;
 const inventoryFields=`job_id,status,error_code,attempts,created_at,updated_at,
  JSON_VALUE(payload_json,'$.execution_revision') requested_revision,
  JSON_VALUE(lifecycle_json,'$.execution_revision') execution_revision,
@@ -13,7 +16,7 @@ const inventoryFields=`job_id,status,error_code,attempts,created_at,updated_at,
 export function requestErrorsSql(project,dataset='commerce',table='oracle_analysis_jobs_v1',details=false){
  const from=`\`${ident(project)}.${ident(dataset)}.${ident(table)}\``;
  return details
-  ? `SELECT ${inventoryFields},TO_JSON_STRING(result_json) retained_result FROM ${from} WHERE request_id=@request_id AND JSON_VALUE(lifecycle_json,'$.execution_revision')=@execution_revision ORDER BY created_at,job_id,attempts,updated_at LIMIT 5`
+  ? `SELECT ${inventoryFields},TO_JSON_STRING(result_json) retained_result FROM ${from} WHERE request_id=@request_id AND job_id=@job_id AND attempts=@attempt AND JSON_VALUE(lifecycle_json,'$.execution_revision')=@execution_revision ORDER BY created_at,job_id,attempts,updated_at LIMIT 5`
   : `SELECT ${inventoryFields},COUNT(*) OVER() matching_rows FROM ${from} WHERE request_id=@request_id ORDER BY created_at,job_id,attempts,updated_at LIMIT 101`;
 }
 const timestamp=v=>token(typeof v==='string'?v:v?.value);
@@ -35,7 +38,7 @@ export async function readRetainedRequestErrors({bigquery,project,dataset='comme
  let rows,location;
  try{const [m]=await bounded(()=>bigquery.dataset(dataset).getMetadata({maxRetries:0}));location=m.location;if(!location)throw Error('Dataset location unavailable');checks.push({check:'job_dataset_location',status:'read_completed',location:token(location)});}catch(e){checks.push({check:'job_dataset_location',...fail(e)});return output;}
  const select=async(details)=>{
-  const [r]=await bounded(ms=>bigquery.query({query:requestErrorsSql(project,dataset,table,details),params:{request_id:REQUEST,...(details?{execution_revision:TARGET_REVISION}:{})},types:{request_id:'STRING',...(details?{execution_revision:'STRING'}:{})},location,useLegacySql:false,jobTimeoutMs:ms,maximumBytesBilled:'1000000000',autoPaginate:true,maxResults:details?5:101,labels:{component:'retention_exact_errors'}}));
+  const [r]=await bounded(ms=>bigquery.query({query:requestErrorsSql(project,dataset,table,details),params:{request_id:REQUEST,...(details?{execution_revision:TARGET_REVISION,job_id:TARGET_JOB,attempt:TARGET_ATTEMPT}:{})},types:{request_id:'STRING',...(details?{execution_revision:'STRING',job_id:'STRING',attempt:'INT64'}:{})},location,useLegacySql:false,jobTimeoutMs:ms,maximumBytesBilled:'1000000000',autoPaginate:true,maxResults:details?5:101,labels:{component:'retention_exact_errors'}}));
   return r;
  };
  let inventory;
@@ -44,15 +47,15 @@ export async function readRetainedRequestErrors({bigquery,project,dataset='comme
   inventory={check:'retained_execution_inventory',status:'read_completed',matching_rows:total,inventory_truncated:total>100||all.length>100,records:all.slice(0,100).map(inventoryRow)};
   checks.push(inventory);onInventory({...output,checks:[...checks]});
  }catch(e){checks.push({check:'retained_execution_inventory',...fail(e)});return output;}
- const candidates=inventory.records.filter(r=>r.execution_revision===TARGET_REVISION);
+ const candidates=inventory.records.filter(r=>r.execution_revision===TARGET_REVISION&&r.job_id===TARGET_JOB&&r.attempts===TARGET_ATTEMPT);
  // Never choose latest, collapse matching rows, or infer execution from deployment.
  // Read every matching execution only when the complete inventory fits the bound.
  if(inventory.inventory_truncated||!candidates.length||candidates.length>4){
-  checks.push({check:'exact_retained_request',status:'not_read',target_execution_revision:TARGET_REVISION,reason:inventory.inventory_truncated?'inventory_incomplete':!candidates.length?'no_confirmed_execution_revision_match':'matching_execution_bound',matching_executions:candidates.length});return output;
+  checks.push({check:'exact_retained_request',status:'not_read',target_execution_revision:TARGET_REVISION,target_job_id:TARGET_JOB,target_attempt:TARGET_ATTEMPT,reason:inventory.inventory_truncated?'inventory_incomplete':!candidates.length?'no_confirmed_execution_revision_match':'matching_execution_bound',matching_executions:candidates.length});return output;
  }
  try{
   rows=await select(true);
-  checks.push({check:'exact_retained_request',status:rows.length?'read_completed':'not_found',target_execution_revision:TARGET_REVISION,multiple_matching_rows:rows.length>1,details_truncated:rows.length>4,records:rows.slice(0,4).map(r=>({...inventoryRow(r),...retainedRequestRow(r)}))});
+  checks.push({check:'exact_retained_request',status:rows.length?'read_completed':'not_found',target_execution_revision:TARGET_REVISION,target_job_id:TARGET_JOB,target_attempt:TARGET_ATTEMPT,multiple_matching_rows:rows.length>1,details_truncated:rows.length>4,records:rows.slice(0,4).map(r=>({...inventoryRow(r),...retainedRequestRow(r)}))});
   rows=rows.slice(0,4);
  }catch(e){checks.push({check:'exact_retained_request',...fail(e)});return output;}
  const ids=[...new Set(rows.flatMap(r=>retainedRequestRow(r).outcomes.map(o=>o.query_id)).filter(Boolean))];

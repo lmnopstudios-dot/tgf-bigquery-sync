@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {REQUEST,TARGET_REVISION,requestErrorsSql,retainedRequestRow,readRetainedRequestErrors,diagnosticMessage} from '../diagnostics/retention-request-errors.js';
+import {REQUEST,TARGET_JOB,TARGET_REVISION,requestErrorsSql,retainedRequestRow,readRetainedRequestErrors,diagnosticMessage} from '../diagnostics/retention-request-errors.js';
 import {retentionBigQueryFixture} from './helpers/retention-bigquery-sql-fixture.js';
 const outcomes=[['woo','ww'],['woo','usd'],['shopify','shopify']].flatMap(([source_platform,source_store])=>['retention_windows','retention_piece_windows','retention_baseline_windows'].map(group=>({source_platform,source_store,group,state:'rejected',stage:'population_query',query_id:source_store+'_'+group,code:'COHORT_RETRIEVAL_FAILED',bigquery_reason:'invalidQuery'})));
-const saved={job_id:'fixture-job',status:'completed',requested_revision:'requested',execution_revision:TARGET_REVISION,attempts:1,created_at:{value:'2026-10-22T12:00:00Z'},updated_at:{value:'2026-10-22T12:01:00Z'},matching_rows:1,retained_result:JSON.stringify(JSON.stringify({evidence:{source_outcomes:outcomes},answer:'private@example.org'}))};
+const saved={job_id:TARGET_JOB,status:'completed',requested_revision:'requested',execution_revision:TARGET_REVISION,attempts:1,created_at:{value:'2026-10-22T12:00:00Z'},updated_at:{value:'2026-10-22T12:01:00Z'},matching_rows:1,retained_result:JSON.stringify(JSON.stringify({evidence:{source_outcomes:outcomes},answer:'private@example.org'}))};
 function fixture(failId){const queries=[],gets=[];return {queries,gets,bigquery:{dataset:()=>({getMetadata:async()=>[{location:'US'}]}),query:async q=>{queries.push(q);return [[saved],{job:{id:'sdk-continuation'}},{}];},job:id=>({getMetadata:async()=>{gets.push(id);if(id===failId)throw Object.assign(Error('denied'),{code:403});return [{jobReference:{location:'US'},status:{state:'DONE',errorResult:{reason:'invalidQuery',message:'Unrecognized name: fixture_column at [22:17]'}},configuration:{query:{query:'private SQL'}}}];}})}};}
 test('exact request only; all nine source/components, revisions and validation detail are preserved',()=>{
  const sql=requestErrorsSql('p');assert.match(sql,/WHERE request_id=@request_id/);assert.match(sql,/LIMIT 101/);assert.doesNotMatch(sql,/owner_key|SELECT \*/);
@@ -28,7 +28,7 @@ test('generated BigQuery probes preserve every new suffix/projection and use no 
 
 test('inventory is emitted before details; every matching revision is retained without picking latest',async()=>{
  const f=fixture(),events=[];let n=0;
- f.bigquery.query=async q=>{n++;assert.equal(q.autoPaginate,true);if(n===1)return [[{...saved,matching_rows:3},{...saved,job_id:'other',execution_revision:'other',matching_rows:3},{...saved,job_id:'second',attempts:2,matching_rows:3}]];assert.equal(events.length,1);assert.equal(q.params.execution_revision,TARGET_REVISION);return [[saved,{...saved,job_id:'second',attempts:2}]];};
+ f.bigquery.query=async q=>{n++;assert.equal(q.autoPaginate,true);if(n===1)return [[{...saved,matching_rows:3},{...saved,job_id:'other',execution_revision:'other',matching_rows:3},{...saved,job_id:'second',attempts:2,matching_rows:3}]];assert.equal(events.length,1);assert.equal(q.params.execution_revision,TARGET_REVISION);assert.equal(q.params.job_id,TARGET_JOB);assert.equal(q.params.attempt,1);return [[saved,{...saved,job_id:'second',attempts:2}]];};
  const r=await readRetainedRequestErrors({...f,project:'p',onInventory:i=>events.push(i)});
  assert.equal(events[0].checks.at(-1).records.length,3);assert.equal(r.checks.find(c=>c.check==='exact_retained_request').records.length,2);
 });
@@ -41,4 +41,11 @@ test('detail failure preserves complete inventory and deployment is not used as 
  const r=await readRetainedRequestErrors({...f,project:'p'});assert.equal(r.checks[1].records.length,1);assert.equal(r.checks.at(-1).status,'unavailable');
  const g=fixture();g.bigquery.query=async()=>[[{...saved,execution_revision:null}]];
  const absent=await readRetainedRequestErrors({...g,project:'p',deployedRevision:TARGET_REVISION});assert.equal(absent.checks.at(-1).reason,'no_confirmed_execution_revision_match');assert.equal(g.gets.length,0);
+});
+
+test('confirmed historical execution is retrieved when the deployed revision is newer',async()=>{
+ const f=fixture();const r=await readRetainedRequestErrors({...f,project:'p',deployedRevision:'9e1439f97111395d257b7ccc3cd65cc368fe5129'});
+ assert.equal(r.current_deployed_revision,'9e1439f97111395d257b7ccc3cd65cc368fe5129');
+ const details=r.checks.find(c=>c.check==='exact_retained_request');assert.equal(details.status,'read_completed');assert.equal(details.target_job_id,TARGET_JOB);assert.equal(details.target_execution_revision,'05b6aef9a5d30f2878fb6f38cecf8bb212629641');assert.equal(f.gets.length,9);
+ assert.match(f.queries[1].query,/job_id=@job_id AND attempts=@attempt/);
 });
