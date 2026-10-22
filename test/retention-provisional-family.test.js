@@ -58,14 +58,14 @@ test('second-order family aggregation counts a customer once across multiple gov
  });
 
 import {retentionSectionProjection} from '../oracle/retention-sections.js';
-function rankedProjection(sql,extra){
+function rankedProjection(sql,extra,projection=retentionSectionProjection(false)){
  // SQLite lacks BigQuery SELECT * REPLACE. Expand its columns while executing
  // the factory's exact replacement expressions and selection/order predicates.
  const raw=execute(sql+' SELECT * FROM section_ranked',extra);
- const projection=retentionSectionProjection(false);
  const replacements=projection.match(/REPLACE\((.*)\) FROM section_ranked/)[1];
  const columns=Object.keys(raw[0]).filter(k=>!['provisional_rate_rank','rate_rank'].includes(k));
- return execute(sql+' SELECT '+columns.join(',')+','+replacements+' FROM section_ranked'+projection.split(' FROM section_ranked')[1].replace(/\) product_ranking_rows$/,''),extra);
+ const prefix=projection.split('* REPLACE')[0].replace('ARRAY(SELECT AS STRUCT ','');
+ return execute(sql+' SELECT '+prefix+columns.join(',')+','+replacements+' FROM section_ranked'+projection.split(' FROM section_ranked')[1].replace(/\) product_ranking_rows$/,''),extra);
 }
 test('retained ec078a04 five rejected rows: select by primary rank, preserve empty windows, omit unsupported rate ranks',()=>{
  const cases=[['10434354250055',360,1,458,1],['10434355888455',360,3,462,2],['10541784269127',360,1,488,3],['10685503897927',180,1,494,4],['10685503897927',360,1,494,4]];
@@ -85,4 +85,20 @@ for(const ranking_window of [90,180,360])test(`generated ranking SQL retains thr
  const rows=rankedProjection(sql,extra);assert.equal(rows.length,6);
  for(const r of rows){if(r.provisional_eligible_customers===0){assert.equal(r.provisional_repeat_rate,null);assert.equal(r.provisional_rate_rank,null);}assert.equal(r.rate_rank,null);}
  assert.equal(retentionRows(rows.map(r=>({...r,population_scope:'linked_tgf'}))).length,6);
+});
+
+import {combinedRetentionSql} from '../oracle/retention-population.js';
+test('combined item * REPLACE projection carries scope through actual SQL and strict result validation',()=>{
+ const projection=combinedRetentionSql(retentionSectionProjection(false),'fixture','retention_piece_windows');
+ assert.match(projection,/SELECT AS STRUCT 'linked_tgf' population_scope,\* REPLACE/);
+ const q=customerJourneySql('fixture','retention_piece_windows',null,null,identity,true);
+ assert.ok(q.includes(projection));
+ const sql="WITH section_ranked AS (SELECT 'tgf' source_platform,'combined' source_store,'shopify:shopify:1' entry_product_ref,NULL collaboration_name,90 window_days,1018 cohort_customers,0 mature_customers,0 repeat_customers,262 observed_repeat_customers,1018 provisional_eligible_customers,262 provisional_repeat_customers,262.0/1018 provisional_repeat_rate,1 count_rank,NULL rate_rank,101 provisional_rate_rank,'unverified' observation_coverage_status,NULL median_days_to_second)";
+ const unscoped=rankedProjection(sql,{});assert.throws(()=>retentionRows(unscoped),/Missing retention population/);
+ const scoped=rankedProjection(sql,{},projection);assert.equal(scoped[0].population_scope,'linked_tgf');assert.equal(retentionRows(scoped).length,1);
+ for(const bad of [{...scoped[0],population_scope:undefined},{...scoped[0],source_platform:'woo',source_store:'ww'}])assert.throws(()=>retentionRows([bad]),/Missing retention population/);
+ const baseline=combinedRetentionSql(retentionSectionProjection(true),'fixture','retention_baseline_windows');
+ assert.match(baseline,/SELECT AS STRUCT 'linked_tgf' population_scope,\* FROM section_totals/);
+ assert.ok(customerJourneySql('fixture','retention_baseline_windows',null,null,identity,true).includes(baseline));
+ for(const [source,store] of [['woo','ww'],['woo','usd'],['shopify','shopify']])assert.ok(customerJourneySql('fixture','retention_piece_windows',source,store,identity).includes(retentionSectionProjection(false)));
 });
