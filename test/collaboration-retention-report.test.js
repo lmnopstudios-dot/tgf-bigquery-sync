@@ -109,6 +109,7 @@ test('active v2 provider errors retain linkage provenance, exact locations and q
     return [{id:INCIDENT_JOBS[store],cancel:async()=>{},getMetadata:async()=>[{status:{state:'DONE'}}],getQueryResults:async()=>{throw Object.assign(Error('private SQL and customer email'),{code:400,errors:[{reason:'invalidQuery',message:'Aggregations of aggregations are not allowed at [22:359]'}]});}}];
   };
   const deps=createOracleProviderDependencies({bigquery:bq,project:'fixture',env:identityEnv});
+  deps.customerJourney.retentionPopulationScope='source_local'; // Historical source-separated incident contract.
   const context=transitionAnalysisContext(null,question,{now}).context;
   const result=await answerCohortRetention({context,provider:deps.customerJourney,requestId:'fixture-retention-request'});
   assert.equal(calls.filter(q=>q.query.includes('retention_members')).length,9);

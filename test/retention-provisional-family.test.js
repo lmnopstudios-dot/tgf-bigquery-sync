@@ -51,3 +51,8 @@ test('second-order family aggregation counts a customer once across multiple gov
  const {relations}=cohortRelations(customerJourneySql('fixture','retention_baseline_windows','woo','ww',identity));const counts=relations.find(r=>r.name==='retention_product_counts');const sql='WITH '+retentionFamilyCtes()+`, retention_product_counts AS (${counts.body}) SELECT * FROM retention_product_counts`;
  const rows=execute(sql,{governed,members:[['woo','ww','Sitewide',90,'customer',0,'woo','ww','return',14],['woo','ww','Sitewide',90,'customer',0,'woo','ww','return',14]],lines:[['woo','ww','return','woo:ww:1','Size 1','1'],['woo','ww','return','woo:ww:2','Size 2','2']]});assert.equal(rows.length,1);assert.equal(rows[0].product_ref,'family:shopify:shopify:10');assert.equal(rows[0].product,'Reviewed family');assert.equal(rows[0].family_status,'governed_family');assert.equal(rows[0].observed_customers,1);
 });
+
+ test('already approved Woo identity routes group with the Shopify parent without inventing a reporting family',()=>{
+ const rows=execute('WITH '+retentionFamilyCtes()+' SELECT reporting_product_ref,family_status FROM retention_reporting_lines ORDER BY source_product_ref',{governed:{identities:[['woo:ww:4','shopify:shopify:10']]},lines:[['woo','ww','entry','woo:ww:4','Archived Woo product','4'],['shopify','shopify','entry','shopify:shopify:10','Shopify product','10']]});
+ assert.deepEqual(rows.map(r=>r.reporting_product_ref),['shopify:shopify:10','shopify:shopify:10']);assert.equal(rows[1].family_status,'governed_product');
+ });

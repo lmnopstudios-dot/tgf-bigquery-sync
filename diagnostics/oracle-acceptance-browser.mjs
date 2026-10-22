@@ -206,5 +206,17 @@ try{
       await page.screenshot({path:output+'/collaboration-retention-'+width+'-'+partial+'.png',fullPage:true});await page.close();
     }}finally{fullServer.close();}
   }
+  // New linked population: verify the business table and recovered presentation.
+  const {question:combinedQuestion,migrationEvents}=await import('../test/helpers/retention-migration-fixture.js');
+  const combinedFixture=acceptanceFixture({retention_combined:true,retention_events:migrationEvents,observationCertificates:[],identityEnv:{ORACLE_CUSTOMER_IDENTITY_MODE:'email_candidate_v2',ORACLE_CUSTOMER_IDENTITY_DATASET:'customer_identity',ORACLE_CUSTOMER_IDENTITY_SNAPSHOT:'fixture-order-email-v2'},now:Date.parse('2026-10-22T12:00:00Z')});
+  const combinedServer=await acceptanceServer(combinedFixture,{durable:true,now:Date.parse('2026-10-22T12:00:00Z')});
+  try{for(const width of [1280,390]){
+    const page=await browser.newPage({viewport:{width,height:900}});
+    await page.goto(combinedServer.origin+'/oracle/');await page.locator('#password').fill('fixture');await page.locator('#login-form button').click();await page.locator('#app').waitFor({state:'visible'});
+    await page.locator('#message').fill(combinedQuestion);await page.locator('#send').click();await page.waitForFunction(()=>!document.querySelector('#send').disabled&&document.querySelector('.analytical-answer'));
+    const answer=page.locator('.analytical-answer').last(),main=await answer.innerText();assert.match(main,/One TGF journey/);assert.match(main,/1 \/ 3 \(33.3%\)/);assert.match(main,/not a fully deduplicated population/);assert.doesNotMatch(main,/Woo WW \/ alpha|Woo USD \/ alpha|Shopify \/ alpha/);
+    await openRetentionResults(page);assert.match(await answer.innerText(),/Entry-platform diagnostics/);
+    const reads=combinedFixture.wireQueries.length;await page.reload();await page.waitForFunction(()=>!document.querySelector('#send').disabled&&document.querySelector('.analytical-answer'));assert.equal(await page.locator('.analytical-answer').last().innerText(),main);assert.equal(combinedFixture.wireQueries.length,reads);await page.screenshot({path:output+'/combined-tgf-'+width+'.png',fullPage:true});await page.close();
+  }}finally{combinedServer.close();}
   console.log(JSON.stringify({status:'passed',conversations:matrix.conversations.length,viewports:['desktop','mobile'],durable_refresh:true,activated_identity_refresh:true,output}));
 }finally{await browser.close();h.close();}

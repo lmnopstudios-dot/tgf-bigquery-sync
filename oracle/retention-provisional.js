@@ -15,6 +15,7 @@ export function provisionalEvidence(row){
 }
 export function familyEvidence(row){
  if(row.entry_family_status==null)return {};
- if(!['governed_family','unmapped_item','ambiguous_family'].includes(row.entry_family_status)||!row.entry_product_ref||(row.entry_family_status==='governed_family')!==row.entry_product_ref.startsWith('family:'))throw Error('Invalid retention family');
+ if(!['governed_family','governed_product','unmapped_item','ambiguous_family'].includes(row.entry_family_status)||!row.entry_product_ref||(row.entry_family_status==='governed_family')!==row.entry_product_ref.startsWith('family:'))throw Error('Invalid retention family');
+ if(row.entry_family_status==='governed_product'&&!/^shopify:shopify:[0-9]+$/.test(row.entry_product_ref))throw Error('Invalid governed product identity');
  return {entry_family_status:row.entry_family_status};
 }

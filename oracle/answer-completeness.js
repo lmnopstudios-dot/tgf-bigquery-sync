@@ -1,3 +1,4 @@
+import {isRetentionPopulation} from './retention-population.js';
 import {provisionalEvidence,familyEvidence} from './retention-provisional.js';
 import {assertRetentionProductEvidence} from './retention-product-evidence.js';
 import {reconcileRetentionCatalogue} from './retention-catalogue.js';
@@ -63,27 +64,30 @@ export function answerCompleteness(context,result){
     const expectedChannel=context.channel==='online'?'Online':context.channel==='instore'?'In-store':null;
     if((evidence.definition?.cohort?.entry_channel||null)!==expectedChannel||(evidence.definition?.subsequent?.channel||null)!==expectedChannel)missing.push('population');
     const windows=context.retention_windows||(context.within_days?[context.within_days]:[90,180]);
+    if(evidence.population_scope==='linked_tgf'&&((evidence.rows?.length||evidence.baseline_rows?.length)&&(!['email_candidate_v1','email_candidate_v2'].includes(evidence.coverage?.identity)||evidence.definition?.cohort?.entry_source)))missing.push('linked_identity');
+    if(evidence.population_scope==='linked_tgf'){const active=(evidence.source_outcomes||[]).filter(o=>o.state==='fulfilled').map(o=>o.identity_evidence);if(active.some(i=>i?.activation!=='active'||typeof i.snapshot!=='string'||!i.snapshot)||new Set(active.map(i=>i?.mode+'|'+i?.snapshot)).size>1)missing.push('linked_identity');}
     const allRows=[...(evidence.rows||[]),...(evidence.baseline_rows||[]),...(evidence.baseline_period_rows||[]),...(evidence.product_ranking_rows||[])];
     if((evidence.baseline_period_rows||[]).length>450||(evidence.product_ranking_rows||[]).length>270)missing.push('supplemental_row_bound');
     if((evidence.baseline_rows||[]).length>9||(!context.retention_baseline&&(evidence.baseline_rows||[]).length))missing.push('baseline_scope');
-    if(context.retention_baseline&&!['ww','usd','shopify'].every(source_store=>evidence.source_outcomes?.some(o=>o.source_store===source_store&&o.group==='retention_baseline_windows')))missing.push('baseline_scope');
+    if(context.retention_baseline&&!(evidence.population_scope==='linked_tgf'?['combined']:['ww','usd','shopify']).every(source_store=>evidence.source_outcomes?.some(o=>o.source_store===source_store&&o.group==='retention_baseline_windows')))missing.push('baseline_scope');
     if(context.retention_baseline){for(const o of evidence.source_outcomes||[])if(o.group==='retention_baseline_windows'&&o.state==='fulfilled'&&!evidence.baseline_rows?.some(r=>r.source_platform===o.source_platform&&r.source_store===o.source_store)&&o.status!=='successful_empty')missing.push('baseline_outputs');}
     for(const total of evidence.baseline_rows||[]){const periods=(evidence.baseline_period_rows||[]).filter(r=>r.source_platform===total.source_platform&&r.source_store===total.source_store&&r.window_days===total.window_days);if(periods.length&&['cohort_customers','mature_customers','repeat_customers','observed_repeat_customers',...(total.provisional_eligible_customers!=null?['provisional_eligible_customers','provisional_repeat_customers']:[])].some(k=>periods.reduce((n,r)=>n+r[k],0)!==total[k]))missing.push('baseline_period_partition');}
     try{
       if(evidence.catalogue_reconciliation!=null){
         if(!Array.isArray(evidence.catalogue_reconciliation)||evidence.catalogue_reconciliation.length>3000)throw Error('catalogue bound');
-        for(const source_store of ['ww','usd','shopify']){
-          const source_platform=source_store==='shopify'?'shopify':'woo',entries=evidence.catalogue_reconciliation.filter(c=>c.source_store===source_store);
+        for(const source_store of (evidence.population_scope==='linked_tgf'?['combined']:['ww','usd','shopify'])){
+          const source_platform=source_store==='combined'?'tgf':source_store==='shopify'?'shopify':'woo',entries=evidence.catalogue_reconciliation.filter(c=>c.source_store===source_store);
           if(entries.some(c=>c.source_platform!==source_platform))throw Error('catalogue source');
           const checked=reconcileRetentionCatalogue(entries,evidence.rows||[],{source_platform,source_store});
           if(checked.some((c,i)=>c.status!==entries[i].status||c.eligible_customers!==entries[i].eligible_customers||JSON.stringify(c.governed_alias_collection_ids)!==JSON.stringify(entries[i].governed_alias_collection_ids)))throw Error('catalogue reconciliation');
         }
-        if(evidence.catalogue_reconciliation.some(c=>!['ww','usd','shopify'].includes(c.source_store)))throw Error('catalogue source');
+        if(evidence.catalogue_reconciliation.some(c=>!(evidence.population_scope==='linked_tgf'?['combined']:['ww','usd','shopify']).includes(c.source_store)))throw Error('catalogue source');
       }
     }catch{missing.push('catalogue_reconciliation');}
     const memberships=new Set();
     if((evidence.rows||[]).length>600)missing.push('row_bound');
     for(const r of allRows){
+      if((evidence.population_scope==='linked_tgf')!==(r.population_scope==='linked_tgf'))missing.push('population_scope');
       const key=JSON.stringify([(evidence.baseline_period_rows||[]).includes(r)?'baseline_period':(evidence.product_ranking_rows||[]).includes(r)?'product_ranking':(evidence.baseline_rows||[]).includes(r)?'baseline':'cohort',r.cohort_year??null,r.source_platform,r.source_store,r.collaboration_name,r.entry_product_ref||null,r.window_days]);
       if(memberships.has(key))missing.push('duplicate_cohort');memberships.add(key);
       if(['collaboration','collaborations'].includes(r.collaboration_name))missing.push('classification_granularity');
@@ -104,7 +108,7 @@ export function answerCompleteness(context,result){
       const comparable=evidence.baseline_rows?.find(b=>b.source_platform===r.source_platform&&b.source_store===r.source_store&&b.window_days===r.window_days);
       if(!baseline&&comparable&&r.cohort_customers>comparable.cohort_customers)missing.push('baseline_population');
       if(!baseline&&(product||r.entry_product_ref)&&(!r.entry_product_ref||typeof r.entry_product!=='string'))missing.push('product_identity');
-      if(!((r.source_platform==='woo'&&['ww','usd'].includes(r.source_store))||(r.source_platform==='shopify'&&r.source_store==='shopify'))||!r.entry_product_ref&&typeof r.collaboration_name!=='string')missing.push('identity');
+      if(!isRetentionPopulation(r)||!r.entry_product_ref&&typeof r.collaboration_name!=='string')missing.push('identity');
       if(r.repeat_customers>0&&(typeof r.median_days_to_second!=='number'||!Number.isFinite(r.median_days_to_second)||r.median_days_to_second<0||r.median_days_to_second>=r.window_days+2)||r.repeat_customers===0&&r.median_days_to_second!==null)missing.push('conditional_median');
       if(![90,180,360].includes(r.window_days)||![r.cohort_customers,r.mature_customers,r.repeat_customers].every(n=>Number.isInteger(n)&&n>=0)||r.repeat_customers>r.mature_customers||r.mature_customers>r.cohort_customers||r.repeat_rate!==(r.mature_customers?r.repeat_customers/r.mature_customers:null))missing.push('denominator');
     }
