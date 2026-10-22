@@ -15,9 +15,15 @@ cohorts on deployed revision a64543c1052e35e977a11c44e69ea7a8998396ef. Its one
 Shopify baseline rejection was the separately confirmed null supplemental product
 reference. This new all-source retrieval failure is a different symptom.
 
-Fetched main is 05b6aef (merge of #370). The failed request's actual execution /
-requested revision and its currently deployed container revision have **not** been
-retrieved; do not equate the current git checkout with an executed job revision.
+Fetched main is 05b6aef (merge of #370). The user confirmed dataset access in US and supplied deployed revision
+9e1439f97111395d257b7ccc3cd65cc368fe5129. The complete production inventory confirms exactly one job:
+44db728a-2f95-4651-9404-97a5aafc5e33, attempt 1, completed, requested and
+executed on 05b6aef9a5d30f2878fb6f38cecf8bb212629641. Created at
+2026-10-22T17:20:00.480Z, updated at 2026-10-22T17:20:21.288652000Z.
+The original diagnostic incorrectly used the current deployed revision as its
+selection target; this prevented the detail read despite a complete inventory.
+The corrected detail read explicitly pins the confirmed job, attempt and execution
+revision, independently of the newer deployed revision. Source errors remain unread.
 
 Compared with a64543c, #370 added a shared retention_product_coverage aggregate,
 changed second-product selection/title handling, added independent catalogue and
@@ -38,18 +44,34 @@ provider job metadata remain essential evidence. No fallback/replay is authorize
 ## Prepared diagnostic and tests
 
 The dependency-free diagnostics/retention-request-errors.js module reads only
-this request from the existing job table, projecting execution/request revisions
-and at most two retained records. It emits all nine independent source/components,
-state/stage, provider/warehouse reason, error category, SQL location, query/job ID,
-population-read state and validation reason/field/rule when those fields were
-retained. Missing fields remain null. It then GETs metadata for at most nine
-existing query IDs, with redacted provider error messages and SQL line/column.
-No getQueryResults, query copying, report tools, source SQL, queue mutation or
-recovery is called. A failed metadata GET preserves other outcomes and metadata.
+this request from the existing job table. It first emits an inventory of up to
+100 matching rows, their total count, job IDs, states, attempt counts, timestamps,
+and requested/execution revisions. SQL ordering is chronological with job ID,
+attempt and updated timestamp tie breakers; indistinguishable metadata rows are
+all retained, not assumed to be duplicates. A non-null SDK continuation object
+alone is not evidence of multiple executions. Automatic SDK pagination is enabled
+only for these SQL-LIMIT-bounded diagnostic SELECTs.
 
-Five local tests pass. Their saved rows/job metadata are **mocked fixtures**, not
-live provider verification. They check exact request scope, independent failures,
-redaction, revision/validation details and the SQL-probe construction.
+Only a complete inventory with one to four rows explicitly matching the confirmed
+job 44db728a-2f95-4651-9404-97a5aafc5e33, attempt 1 and execution
+revision 05b6aef9a5d30f2878fb6f38cecf8bb212629641 allows the second SELECT.
+It reads every matching row, not an arbitrary/latest job. Zero matches, incomplete
+inventory, or more than four matching rows leaves an explicit selection blocker
+alongside the inventory. No deployment-to-execution inference is applied. If the
+rows change between reads, the second read's five-row sentinel explicitly reports
+detail truncation; retrieved independent evidence remains visible.
+
+Details include all nine source/components per row: state/stage, provider reason,
+SQL location, query ID and validation rejection fields when retained. Then at most
+nine unique existing warehouse job IDs receive metadata GETs; further IDs are
+listed as not read. Failures preserve preceding inventory and independent results.
+No original SQL, report tools, queue mutation or recovery is executed.
+
+Nine local tests pass with mocked retained rows and metadata. They cover SDK
+continuation objects, multiple executions, inventory overflow, inventory-before-
+details emission, detail and metadata failure isolation, revision matching,
+redaction, validation details and SQL-probe construction. No live diagnostic or
+BigQuery compilation is claimed by those tests.
 
 The opt-in test/retention-generated-bigquery.test.js executes actual factory
 calculation CTEs and final catalogue/section projections as BigQuery SELECTs for
@@ -84,7 +106,7 @@ try {
     import('@google-cloud/bigquery'),import('./bigquery/client.js')
   ]);
   stage='pinned_diagnostic';
-  const revision='866865cc00793a3cec25ab5173067b91ce0f8676';
+  const revision='ecacaf5bb1565833f2cdcab393c04b2cadea1ee9';
   const response=await fetch(`https://raw.githubusercontent.com/lmnopstudios-dot/tgf-bigquery-sync/${revision}/diagnostics/retention-request-errors.js`,{
     signal:AbortSignal.timeout(8000),redirect:'error'
   });
@@ -92,14 +114,15 @@ try {
   const chunks=[];let bytes=0;
   for await(const chunk of response.body){bytes+=chunk.length;if(bytes>65536)throw Error('Source bound');chunks.push(chunk);}
   const source=Buffer.concat(chunks);
-  if(createHash('sha256').update(source).digest('hex')!=='e704d81a875a5948f132a9124df54c0494bbe8c3899eb8aea743eb17378f2e8d')throw Error('Source hash mismatch');
+  if(createHash('sha256').update(source).digest('hex')!=='00ec0eed0b098e78ea1d3a00524f395405973e00790ec9a96d484b2dbaed5bee')throw Error('Source hash mismatch');
   const {readRetainedRequestErrors}=await import('data:text/javascript;base64,'+source.toString('base64'));
   const {project,credentials}=loadBigQueryConfig();stage='exact_retained_reads';
   const result=await readRetainedRequestErrors({
     bigquery:new BigQuery({projectId:project,credentials,autoRetry:false,maxRetries:0}),project,
     dataset:process.env.ORACLE_JOB_DATASET||'commerce',
     table:process.env.ORACLE_JOB_TABLE||'oracle_analysis_jobs_v1',
-    deployedRevision:process.env.RENDER_GIT_COMMIT||null
+    deployedRevision:process.env.RENDER_GIT_COMMIT||null,
+    onInventory:inventory=>console.log(JSON.stringify({diagnostic_revision:revision,phase:'inventory',...inventory}))
   });
   console.log(JSON.stringify({diagnostic_revision:revision,...result}));
   process.exitCode=result.checks.some(c=>c.status!=='read_completed')?1:0;
@@ -111,13 +134,14 @@ try {
 JS
 ```
 
-Bounds: one SELECT for this request only (maximum 1 GB billed, two saved rows),
-one dataset metadata GET plus at most nine existing warehouse-job metadata GETs,
-35-second shared read budget and at most eight seconds per operation. The pinned
-module fetch is eight seconds/64 KiB. Process TERM at 55 seconds, kill after five.
-If more than one saved job matches, both are flagged as ambiguous; no job is chosen
-or replayed. Extra provider IDs beyond the metadata bound are explicit. A missing
-saved job, absent query ID, expired metadata or permission failure remains unknown.
+Bounds: two diagnostic SELECTs maximum (1 GB billed cap each; 101 inventory
+rows including sentinel, five detail rows including sentinel), one dataset GET
+and at most nine existing warehouse-job GETs. Inventory output is flushed before
+the detail read; final output retains the inventory too. The shared read budget
+is 35 seconds, eight seconds per operation. The immutable module fetch is eight
+seconds/64 KiB. Process TERM at 55 seconds, kill after five. The existing report
+job is never replayed. A bound is a partial-evidence condition, never a reason to
+discard already retrieved rows. Missing/expired metadata remains unknown.
 
 Next finite step: use the returned revision/stage/reason/location to reproduce the
 specific failed generated SQL fragment against BigQuery (synthetic or isolated
