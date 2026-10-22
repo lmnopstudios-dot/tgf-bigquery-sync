@@ -261,4 +261,14 @@ It distinguishes update-window completion, selected-ID repairs, full-bootstrap
 completeness, cross-table eligibility and retired-source lifecycle evidence.
 The exact-result check has now completed and confirmed the null product_ref.
 The shared boundary fix and separate finance investigation supersede that blocker.
-The previous broad diagnostic is complete and must not be rerun. PR remains draft.
+The previous broad diagnostic is complete and must not be rerun. Historical finance cause is closed unresolved; it does not block report review.
+
+
+## Final report review disposition
+
+Recommend merging the report source fixes after normal review/CI, independently
+of historical finance attribution. Rates remain unavailable until actual coverage
+is evidenced. See the [finite source-to-warehouse verification plan](retention-coverage-verification-plan.md)
+for exact inputs, a prepared SELECT, pass/fail criteria, required action and stopping
+points. No production verification, restart, collection, write, deployment or merge
+is performed by this PR.

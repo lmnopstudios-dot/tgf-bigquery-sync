@@ -1,6 +1,6 @@
 # Confirmed baseline bug, finance failures and completeness verification
 
-PR #370 remains draft. Frozen report scope, snapshot, governed collection, linked
+Report fixes are ready for review; see the [merge recommendation and finite coverage plan](retention-coverage-verification-plan.md). Frozen report scope, snapshot, governed collection, linked
 identity, migration exclusions and mature-window safeguards are preserved. These
 are three separate findings, not one cause.
 
@@ -135,7 +135,11 @@ record was retained, the historical cause cannot be recovered from these six
 strings. Recording bounded, redacted nested error metadata with stage/table would
 improve future failures, but cannot reconstruct past ones and is not a reason to
 restart/recollect. No additional table-name search or identical error SELECT is
-useful. Keep recovery blocked on actual cause and an independently reviewed plan.
+useful. The historical investigation is **closed: cause unresolved**. No existing
+structured exception or failed warehouse job error is accessible here. Reopen only
+if retained evidence is supplied; do not require historical attribution to merge
+#370 or verify present source completeness. Any future collector recovery needs
+its own reviewed plan. The logging fix is prepared independently from the report PR.
 
 The report's full London cutoff day ends at 2026-10-19T23:00:00Z. The last finance
 watermark is 8h42m35.735s before that half-open boundary. This identifies an

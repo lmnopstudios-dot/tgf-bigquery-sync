@@ -1,6 +1,6 @@
 # Retained baseline and transaction-pipeline investigation
 
-PR #370 remains **draft**. Scope remains 2022-10-19–2026-10-19 entry,
+Report fixes are ready for review; see the [merge recommendation and finite coverage plan](retention-coverage-verification-plan.md). Scope remains 2022-10-19–2026-10-19 entry,
 2026-10-19 observation cutoff, Europe/London, existing snapshot
 customer_identity/history-20261022-billing-v3. No report replay, collector,
 production write, classification change or certificate is authorized here.
