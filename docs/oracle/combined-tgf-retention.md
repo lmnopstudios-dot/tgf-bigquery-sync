@@ -34,8 +34,47 @@ Previously supplied successful #376 checks remain historical evidence for that a
 
 Keep this PR draft until the corrected SQL compiles in BigQuery, the retained Shopify rejection is explicit and addressed separately, and the concrete mapping inventory is available for review. Unknown follow-up coverage is a data-evidence limitation; SQL or validation failures are software issues and must stay visible.
 
+Local required gates passed: `npm run test:oracle:acceptance` (792 tests, zero failures; 21 central conversations and 55 regression suites) and `npm run test:oracle:browser` (desktop/mobile, combined TGF view and refresh). The focused combined suite subsequently passed all 11 tests, including independent component failure. These are fixture/browser checks, not live BigQuery validation.
+
 ## One bounded Render check
 
 The command below uses deployed dependencies, one immutable reviewed artifact, aggregate read-only SQL and existing-job result reads. Its independent phases preserve results if another fails. It produces the single consolidated mapping review list, not a sequence of broad diagnostic commands. Full SELECT planning has a diagnostic-only allowance of 180 seconds per shape, two at a time; a timeout is reported as unresolved complexity. No collection, report replay, governance writes, deployment or configuration change occurs.
 
-<!-- PINNED_COMMAND -->
+```bash
+timeout --signal=TERM --kill-after=5s 1020s node --input-type=module <<'JS'
+import {createHash} from 'node:crypto';
+import {gunzipSync} from 'node:zlib';
+import {BigQuery} from '@google-cloud/bigquery';
+import {loadBigQueryConfig} from './bigquery/client.js';
+const revision='8c152b08c07294694c84b80d397afbaa36f4885a';
+const expected='292ffc14b3e0636d4b18005a882b572fb19b97ac1fde2ac760d87b77e1a60324';
+const clean=e=>String(e?.message||e).replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi,'[redacted]').slice(0,700);
+const bound=async(fn,ms)=>{let timer;try{return await Promise.race([fn(),new Promise((_,reject)=>{timer=setTimeout(()=>reject(Error('Bounded diagnostic deadline')),ms);})]);}finally{clearTimeout(timer);}};
+const moduleOf=source=>import('data:text/javascript;base64,'+Buffer.from(source).toString('base64'));
+try{
+ const response=await fetch(`https://raw.githubusercontent.com/lmnopstudios-dot/tgf-bigquery-sync/${revision}/diagnostics/retention-combined-validation.json.gz`,{signal:AbortSignal.timeout(10000),redirect:'error'});
+ if(!response.ok)throw Error('Pinned validation artifact unavailable');
+ const chunks=[];let bytes=0;for await(const chunk of response.body){bytes+=chunk.length;if(bytes>1048576)throw Error('Compressed artifact bound');chunks.push(chunk);}
+ const packed=Buffer.concat(chunks);if(createHash('sha256').update(packed).digest('hex')!==expected)throw Error('Pinned artifact hash mismatch');
+ const artifact=JSON.parse(gunzipSync(packed,{maxOutputLength:8388608}));
+ const {project,credentials}=loadBigQueryConfig();
+ if(project!==artifact.project)throw Error('Project does not match reviewed SQL artifact');
+ if(process.env.ORACLE_CUSTOMER_IDENTITY_MODE!=='email_candidate_v2'||process.env.ORACLE_CUSTOMER_IDENTITY_DATASET!=='customer_identity'||process.env.ORACLE_CUSTOMER_IDENTITY_SNAPSHOT!==artifact.snapshot)throw Error('Configured identity differs from requested snapshot; settings were not changed');
+ const bigquery=new BigQuery({projectId:project,credentials,autoRetry:false,maxRetries:0});
+ const {retentionRows}=await moduleOf(artifact.validation_source);
+ const {readCurrentRankingFailure}=await moduleOf(artifact.retained_source);
+ const {mappingReviewList}=await moduleOf('export function mappingReviewList'+artifact.mapping_source);
+ const {validateCombinedRetention}=await moduleOf(artifact.runner_source);
+ console.log(JSON.stringify({diagnostic_revision:revision,read_only:true,report_replayed:false,production_limits_changed:false,production_population_executed:false,phase_order:['exact_retained_ranking','one_consolidated_mapping_list','synthetic_execution_and_full_select_planning']}));
+ try{console.log(JSON.stringify(await bound(()=>readCurrentRankingFailure({bigquery,project,dataset:process.env.ORACLE_JOB_DATASET||'commerce',validateRows:retentionRows}),60000)));}catch(e){console.log(JSON.stringify({check:'exact_retained_ranking',status:'unavailable',reason:clean(e)}));}
+ const combined=artifact.cases.find(c=>c.source==='tgf');
+ const params=structuredClone(combined.full_select.params),types=combined.full_select.types;
+ for(const[k,t]of Object.entries(types))if(t==='DATE'&&params[k]!=null)params[k]=BigQuery.date(params[k]?.value||params[k]);
+ try{
+  const [rows]=await bound(()=>bigquery.query({query:artifact.mapping_sql,params,types,location:'US',useLegacySql:false,jobTimeoutMs:60000,maximumBytesBilled:'2500000000',autoPaginate:false,maxResults:501}),65000);
+  console.log(JSON.stringify({check:'consolidated_woo_mapping_review',status:'read_completed',...mappingReviewList(rows)}));
+ }catch(e){console.log(JSON.stringify({check:'consolidated_woo_mapping_review',status:'unavailable',reason:clean(e)}));}
+ console.log(JSON.stringify(await validateCombinedRetention({bigquery,artifact,validateRows:retentionRows,dateValue:BigQuery.date,maximumMs:870000})));
+}catch(e){console.log(JSON.stringify({read_only:true,status:'blocked',reason:clean(e)}));process.exitCode=1;}
+JS
+```
