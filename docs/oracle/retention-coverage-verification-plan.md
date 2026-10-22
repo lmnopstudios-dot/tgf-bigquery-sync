@@ -124,8 +124,11 @@ ORDER BY i.order_id
 Counts greater than one are failures requiring review, not permission to choose
 a representative row. The two-row examples are diagnostic only; comparison must
 not accept a duplicate key. SQL absence is missing input, not zero source orders.
-The same three-table projection applies to Shopify bootstrap with source IDs and
-the manifest's full created-order bounds, rather than the narrow delta predicate.
+For Shopify bootstrap, use the same three-table projection but form candidate_ids
+from the complete ID universe of all three canonical tables plus the full source
+inventory, not a creation-date filter. This prevents corrupted/older warehouse
+timestamps or orphan customer rows from hiding warehouse-only keys. Account for
+imports explicitly; report first-observed history depends on lookback too.
 For each Woo partition export orders by order_id with row count and the actual
 report fields: order_created_at, customer_id, status, currency, total,
 total_refunds, order_updated_at and synced_at. Compare each store separately.
@@ -180,3 +183,8 @@ partition (or its declared disjoint chunks) → local discrepancy report → own
 review → either documented supported intervals or a precise list of still-missing
 facts. There is no automatic collector/retry/repair loop. Historical finance cause
 is not a dependency of any step.
+
+
+The independent, prepared [finance logging fix is draft #371](https://github.com/lmnopstudios-dot/tgf-bigquery-sync/pull/371).
+It captures future bounded diagnostics only and is not a dependency of this plan
+or a claim about the closed historical cause.
