@@ -11,7 +11,7 @@ test('review tests consumed source classifications, includes historical eligible
  assert.match(sql,/LOGICAL_OR\(EXISTS\(SELECT 1 FROM UNNEST\(l.classifications\)/);
  assert.match(sql,/WHERE NOT i.named_classification_consumed/);
  assert.doesNotMatch(sql,/AND \(l.family_status='ambiguous_family' OR NOT EXISTS/);
- assert.match(sql,/historical_eligible_orders/);assert.match(sql,/classification_conflicts/);assert.match(sql,/required_governance_action/);assert.match(sql,/JOIN targets t USING\(sku\)/);
+ assert.match(sql,/AND NOT \(\('product_group=core' IN UNNEST\(l.classifications\)/);assert.match(sql,/historical_eligible_orders/);assert.match(sql,/classification_conflicts/);assert.match(sql,/required_governance_action/);assert.match(sql,/JOIN targets t USING\(sku\)/);
  assert.doesNotMatch(sql,/LIKE.*title|published_at|is_archived|deleted_at/);
  const out=mappingReviewList([{source_product_id:'1',affected_customers:9,classification_conflicts:['collaboration_name'],candidates:[{product_ref:'shopify:shopify:2'},{product_ref:'shopify:shopify:3'}]}]);
  assert.equal(out.items[0].proposed_target,null);assert.equal(out.items[0].conflicts.length,2);assert.equal(out.governance_written,false);

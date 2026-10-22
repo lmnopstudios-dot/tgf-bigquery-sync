@@ -15,6 +15,7 @@ export function retentionMappingReviewSql(project){
  FROM retention_reporting_lines l JOIN qualifying_orders q USING(source_platform,source_store,order_ref)
  WHERE l.source_platform='woo' AND DATE(q.order_timestamp,@time_zone)<=@observation_end
  AND l.source_product_id IS NOT NULL AND l.source_product_id NOT IN ('','0','unknown')
+ AND NOT (('product_group=core' IN UNNEST(l.classifications) OR 'product_group=core_range' IN UNNEST(l.classifications)) AND 'classification_conflict=true' NOT IN UNNEST(l.classifications))
 
  GROUP BY l.source_product_ref,l.source_product_id,l.source_store
  ), skus AS (
