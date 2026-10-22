@@ -1136,6 +1136,16 @@
         "schema-checked aggregate audit, reserved alias regression and sanitized SQL error positions",
         "actual-wrapper post-deployment readiness verification without fallback or identity analytics"
       ]
+    },
+    {
+      "id": "collaboration-retention-20261022-linked-report",
+      "file": "test/collaboration-retention-report.test.js",
+      "covers": [
+        "production 22:359 aggregate-alias guard across source and grouping SQL routes",
+        "named collaborations and items, 90/180/360 windows, comparable sitewide baselines and second-order products",
+        "v2 activation on success and HTTP 400 failure, three transports, partial failures and owned recovery",
+        "US runtime job metadata location versus EU diagnostic default"
+      ]
     }
   ]
 }

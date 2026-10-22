@@ -70,7 +70,7 @@ test('calendar maturity, London cutoff, first-observed prior history, and unknow
   assert.equal(p.end_date,'2026-10-18');assert.equal(p.current_day_included,false);
  }
  const sql=customerJourneySql('fixture','retention_piece_windows','woo');
- assert.match(sql,/family_current/);assert.match(sql,/DATE\(em.entry_timestamp,@time_zone\)/);assert.match(sql,/window_days=@ranking_window/);assert.match(sql,/product_group=core_range/);assert.match(sql,/ELSE 'unknown' END/);assert.match(sql,/collaboration_name NOT IN \('collaboration','collaborations'\)/);assert.doesNotMatch(sql,/is_published|published_at|LOWER\(.*title.*LIKE/i);
+ assert.match(sql,/family_current/);assert.match(sql,/DATE\(em.entry_timestamp,@time_zone\)/);assert.match(sql,/window_days=@ranking_window/);assert.match(sql,/product_group=core_range/);assert.match(sql,/ELSE 'unknown' END/);assert.match(sql,/entry_product_ref IS NOT NULL/);assert.match(customerJourneySql('fixture','retention_windows','woo'),/collaboration_name NOT IN \('collaboration','collaborations'\)/);assert.doesNotMatch(sql,/is_published|published_at|LOWER\(.*title.*LIKE/i);
 });
 
 test('requested ranking window survives secondary measures and presentation-only followups',()=>{

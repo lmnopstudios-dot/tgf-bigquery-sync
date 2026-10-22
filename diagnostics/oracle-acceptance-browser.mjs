@@ -180,5 +180,27 @@ try{
     }
   }finally{activatedServer.close();}
   }
+  // Retained 2026-10-22 incident scope, including the components absent from the old report.
+  const collaborationQuestion=readFileSync(new URL('../test/fixtures/collaboration-retention-20261022.txt',import.meta.url),'utf8');
+  for(const partial of [false,true]){
+    const fullFixture=acceptanceFixture({retention_events:true,observationCertificates:[],now:Date.parse('2026-10-22T12:00:00Z'),identityEnv:{ORACLE_CUSTOMER_IDENTITY_MODE:'email_candidate_v2',ORACLE_CUSTOMER_IDENTITY_DATASET:'customer_identity',ORACLE_CUSTOMER_IDENTITY_SNAPSHOT:'fixture-order-email-v2'}});
+    if(partial)fullFixture.state.fail_retention_stores=['usd'];
+    const fullServer=await acceptanceServer(fullFixture,{durable:true,now:Date.parse('2026-10-22T12:00:00Z')});
+    try{for(const width of [1280,390]){
+      const page=await browser.newPage({viewport:{width,height:900}});
+      await page.goto(fullServer.origin+'/oracle/');await page.locator('#password').fill('fixture');await page.locator('#login-form button').click();await page.locator('#app').waitFor({state:'visible'});
+      await page.locator('#message').fill(collaborationQuestion);await page.locator('#send').click();
+      await page.waitForFunction(()=>!document.querySelector('#send').disabled&&document.querySelector('.analytical-answer'));
+      const answer=await page.locator('.analytical-answer').last().innerText();
+      assert.match(answer,/360-day rate/);assert.match(answer,/Comparable sitewide/);assert.match(answer,/Second-order products/);assert.match(answer,/email-linked records/);
+      assert.match(answer,/coverage is unverified/);assert.doesNotMatch(answer,/customer linkage has not been verified|highest observed repeat purchase rate|<details>|<summary>/);
+      if(partial)assert.match(answer,/Woo USD[\s\S]*Read failed/);
+      assert.equal(await page.locator('.analytical-answer').last().locator('details').count(),1);
+      const reads=fullFixture.wireQueries.length;
+      await page.reload();await page.waitForFunction(()=>!document.querySelector('#send').disabled&&document.querySelector('.analytical-answer'));
+      assert.equal(await page.locator('.analytical-answer').last().innerText(),answer);assert.equal(fullFixture.wireQueries.length,reads);
+      await page.screenshot({path:output+'/collaboration-retention-'+width+'-'+partial+'.png',fullPage:true});await page.close();
+    }}finally{fullServer.close();}
+  }
   console.log(JSON.stringify({status:'passed',conversations:matrix.conversations.length,viewports:['desktop','mobile'],durable_refresh:true,activated_identity_refresh:true,output}));
 }finally{await browser.close();h.close();}

@@ -13,7 +13,7 @@ for(const version of ['email_candidate_v1','email_candidate_v2'])for(const mode 
   const send=async(message,context)=>mode==='direct'?(await (await fetch(h.origin+'/agent',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({message,analysis_context:context})})).json()):h.submit(message);
   const result=await send(question);
   assert.equal(result.evidence.kind,'governed_cohort_retention');
-  assert.equal(result.evidence.coverage.identity,'email_candidate_v1');
+  assert.equal(result.evidence.coverage.identity,version);
   assert.deepEqual(result.evidence.coverage.customer_history,customerHistoryContract(true));
   assert.ok(result.evidence.coverage.identity_activation.every(s=>s.activation==='active'));
   assert.ok(result.evidence.coverage.identity_activation.every(s=>s.mode===version));
@@ -23,7 +23,7 @@ for(const version of ['email_candidate_v1','email_candidate_v2'])for(const mode 
   assert.ok(result.evidence.rows.every(r=>r.mature_customers===0&&r.repeat_customers===0&&r.repeat_rate===null));
   assert.equal(deliverOracleResult(structuredClone(result),result.analysis_context).delivery.status,'partial');
   const follow=await send('Show 180 days instead.',result.analysis_context);
-  assert.equal(follow.evidence.ranking_window,180);assert.equal(follow.evidence.coverage.identity,'email_candidate_v1');
+  assert.equal(follow.evidence.ranking_window,180);assert.equal(follow.evidence.coverage.identity,version);
   assert.ok(f.wireQueries.filter(q=>q.query.includes('retention_members')).every(q=>q.params.coverage_status==='unverified'));
   if(mode==='durable'){
     const calls=f.wireQueries.length,recovered=await h.get('/jobs/'+follow.job_id);

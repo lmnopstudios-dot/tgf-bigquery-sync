@@ -6,6 +6,7 @@ const stages=new Set(['authentication_client','authentication_token','classifica
 // Messages, unexpected tokens and field/value text never cross this boundary.
 export function bigQueryErrorCategory(message) {
   const text=String(message||'');
+  if(/Aggregations of aggregations are not allowed/i.test(text))return 'nested_aggregation';
   if(/Syntax error:/i.test(text))return 'sql_syntax';
   if(/Unrecognized name:|Name .* not found inside|Column .* not found/i.test(text))return 'schema_field_missing';
   if(/Query parameter .* not found|No value found for parameter/i.test(text))return 'parameter_missing';
@@ -22,7 +23,7 @@ export function safeReadFailure(error,stage) {
   const stored=error?.statement_location;
   const location=position?{line:Number(position[1]),column:Number(position[2])}:stored&&Number.isInteger(stored.line)&&Number.isInteger(stored.column)&&stored.line>0&&stored.line<=999999&&stored.column>0&&stored.column<=999999?{line:stored.line,column:stored.column}:null;
   const providerReasons=new Set(['ACCESS_DENIED','THROTTLED','INTERNAL_SERVER_ERROR','GRAPHQL_REJECTED','undefinedField','argumentNotAccepted','variableRequiresValidType','missingRequiredArguments','ENOTFOUND','ECONNREFUSED','ETIMEDOUT','UND_ERR_CONNECT_TIMEOUT','EAI_AGAIN','UND_ERR_ABORTED']);
-  const category=bigQueryErrorCategory(source?.message)||(['sql_syntax','schema_field_missing','parameter_missing','type_mismatch','dataset_location_mismatch'].includes(error?.error_category)?error.error_category:null);
+  const category=bigQueryErrorCategory(source?.message)||(['nested_aggregation','sql_syntax','schema_field_missing','parameter_missing','type_mismatch','dataset_location_mismatch'].includes(error?.error_category)?error.error_category:null);
   return {...(category?{error_category:category}:{}),provider_reason:providerReasons.has(error?.provider_reason||error?.reason||error?.code||error?.cause?.code)?error.provider_reason||error.reason||error.code||error.cause.code:null,...(Array.isArray(error?.graphql_locations)?{graphql_locations:error.graphql_locations.slice(0,3).filter(x=>Number.isInteger(x.line)&&Number.isInteger(x.column)&&x.line>0&&x.line<100000&&x.column>0&&x.column<100000).map(x=>({line:x.line,column:x.column}))}:{}),stage:stages.has(error?.stage)?error.stage:stages.has(stage)?stage:'population_query',code:codes.has(error?.code)?error.code:'ORDER_VALUE_RETRIEVAL_FAILED',http_status:status>=(stage==='published_prices'||error?.stage==='published_prices'?200:400)&&status<=599&&Number.isInteger(status)?status:null,bigquery_reason:reasons.has(source?.reason||error?.bigquery_reason)?source?.reason||error.bigquery_reason:null,statement_location:location};
 }
 export function readFailureError(error,stage) {
