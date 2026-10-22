@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import ExcelJS from 'exceljs';
 import { readFileSync, existsSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
+import {durableJsonWire} from '../test/helpers/durable-json-wire.js';
 import { acceptanceFixture, acceptanceServer } from '../test/helpers/oracle-acceptance.js';
 const {chromium}=await import(process.env.ORACLE_BROWSER_DRIVER||'playwright-core');
 const multipart=JSON.parse(readFileSync(new URL('../test/fixtures/oracle-multipart-questions.json',import.meta.url)));
@@ -185,7 +186,7 @@ try{
   for(const partial of [false,true]){
     const fullFixture=acceptanceFixture({retention_events:true,observationCertificates:[],now:Date.parse('2026-10-22T12:00:00Z'),identityEnv:{ORACLE_CUSTOMER_IDENTITY_MODE:'email_candidate_v2',ORACLE_CUSTOMER_IDENTITY_DATASET:'customer_identity',ORACLE_CUSTOMER_IDENTITY_SNAPSHOT:'fixture-order-email-v2'}});
     if(partial)fullFixture.state.fail_retention_stores=['usd'];
-    const fullServer=await acceptanceServer(fullFixture,{durable:true,now:Date.parse('2026-10-22T12:00:00Z')});
+    const fullServer=await acceptanceServer(fullFixture,{durable:true,now:Date.parse('2026-10-22T12:00:00Z'),jobStore:durableJsonWire().store});
     try{for(const width of [1280,390]){
       const page=await browser.newPage({viewport:{width,height:900}});
       await page.goto(fullServer.origin+'/oracle/');await page.locator('#password').fill('fixture');await page.locator('#login-form button').click();await page.locator('#app').waitFor({state:'visible'});
