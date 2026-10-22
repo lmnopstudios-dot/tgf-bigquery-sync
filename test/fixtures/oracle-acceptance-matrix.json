@@ -1146,6 +1146,15 @@
         "v2 activation on success and HTTP 400 failure, three transports, partial failures and owned recovery",
         "US runtime job metadata location versus EU diagnostic default"
       ]
+    },
+    {
+      "id": "durable-collaboration-stored-json",
+      "file": "test/oracle-durable-collaboration.test.js",
+      "covers": [
+        "full retained report through real HTTP enqueue, production durable serialization/hydration and claimed worker",
+        "linked identity, all windows, baseline, individual items, second products and independent partial results",
+        "authenticated polling, disconnect recovery and same-ID idempotency without provider replay; mocked warehouse transport"
+      ]
     }
   ]
 }

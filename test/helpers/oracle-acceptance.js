@@ -82,8 +82,8 @@ export function acceptanceFixture({fail_start=null,campaigns=false,country_conve
   })});
   return {baseline,calls,sql,queries,wireQueries,state,exportStore};
 }
-export async function acceptanceServer(f,{durable=false,now=NOW}={}){
-  const app=express(),jobs=createMemoryAnalysisJobStore();
+export async function acceptanceServer(f,{durable=false,now=NOW,jobStore=null}={}){
+  const app=express(),jobs=jobStore||createMemoryAnalysisJobStore();
   app.use('/oracle',express.static(new URL('../../public/oracle',import.meta.url).pathname));
   // Same shared direct entrypoint and result contract invoked by server /agent.
   app.post('/agent',express.json(),async(req,res,next)=>{try{

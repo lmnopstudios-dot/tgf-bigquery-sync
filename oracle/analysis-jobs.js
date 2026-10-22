@@ -119,7 +119,7 @@ export function createAnalysisJobWorker({store,run,pollMs=1000,leaseMs=9*60_000,
   let activeTick=null,shuttingDown=false;
   let timer=null,running=false,controller=null,stopped=true,failures=0,stage='claim';
   let context={};
-  const diagnostic=(error,failedStage=stage)=>{const bq=bigQueryErrorDiagnostic(error);return {...context,stage:safeStage(error?.failed_stage||error?.stage||failedStage),code:safeToken(error?.code),...(bq.reason!=='unknown'?{bigquery_reason:bq.reason}:{}),...(bq.location?{bigquery_location:bq.location}:{}),...(Number.isInteger(error?.status)?{status:error.status}:{})};};
+  const diagnostic=(error,failedStage=stage)=>{const bq=bigQueryErrorDiagnostic(error);return {...context,worker_id:safeToken(context.worker_id||workerId),execution_revision:safeToken(revision,'not_recorded'),stage:safeStage(error?.failed_stage||error?.stage||failedStage),code:safeToken(error?.code),...(bq.reason!=='unknown'?{bigquery_reason:bq.reason}:{}),...(bq.location?{bigquery_location:bq.location}:{}),...(Number.isInteger(error?.status)?{status:error.status}:{}),...(error?.code==='INVALID_ANALYSIS_CONTEXT'?{validation_field:safeToken(error.validation_field,'not_recorded'),validation_rule:safeToken(error.validation_rule,'not_recorded')}:{})};};
   const runTick=async()=>{
     if(running)return;
     running=true;context={worker_id:safeToken(workerId)};
@@ -159,7 +159,7 @@ export function createAnalysisJobWorker({store,run,pollMs=1000,leaseMs=9*60_000,
         try{
           stage='fail';
           // Keep successful evidence/artifact references even if checkpoint failed.
-          const written=await store.fail(job.job_id,code,{...result,failed_stage:failedStage,code},job);
+          const written=await store.fail(job.job_id,code,{...result,failed_stage:failedStage,code,...(code==='INVALID_ANALYSIS_CONTEXT'?{validation_field:safeToken(error.validation_field,'not_recorded'),validation_rule:safeToken(error.validation_rule,'not_recorded')}:{})},job);
           if(written===false)logger.error('Oracle job worker stage failed:',{...context,stage,code:'LEASE_NOT_OWNED'});
         }catch(failError){logger.error('Oracle job worker stage failed:',diagnostic(failError));throw failError;}
       }finally{clearTimeout(runtimeTimer);clearInterval(cancelPoll);clearInterval(heartbeat);activeController.signal.removeEventListener('abort',abortListener);controller=null;}
