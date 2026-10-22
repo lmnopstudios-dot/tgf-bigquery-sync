@@ -1,6 +1,6 @@
 # Retention mapping and transaction-coverage completion
 
-**Diagnostic follow-up:** the five existing-evidence reads succeeded. Mapping and entry-age SQL failed; their detailed errors are pending. Do not rerun the seven-check command below. Use the [bounded metadata-only error read](retention-diagnostic-errors-383.md#one-bounded-existing-job-error-read); corrected two-check revalidation is not yet available.
+**Diagnostic follow-up:** the five existing-evidence reads succeeded and remain preserved. The confirmed entry-age `EXISTS`-in-join error is fixed; the mapping error remains independent and requires paginated discovery. Do not rerun the seven-check command below. Use the [single targeted follow-up command](retention-diagnostic-errors-383.md#one-targeted-render-follow-up-command) for retained mapping errors and corrected entry-age execution only.
 
 ## Live report baseline: preserve it
 
