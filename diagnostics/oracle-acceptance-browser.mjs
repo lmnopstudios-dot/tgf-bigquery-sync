@@ -184,7 +184,7 @@ try{
   // Retained 2026-10-22 incident scope, including the components absent from the old report.
   const collaborationQuestion=readFileSync(new URL('../test/fixtures/collaboration-retention-20261022.txt',import.meta.url),'utf8');
   for(const partial of [false,true]){
-    const fullFixture=acceptanceFixture({retention_events:true,observationCertificates:[],now:Date.parse('2026-10-22T12:00:00Z'),identityEnv:{ORACLE_CUSTOMER_IDENTITY_MODE:'email_candidate_v2',ORACLE_CUSTOMER_IDENTITY_DATASET:'customer_identity',ORACLE_CUSTOMER_IDENTITY_SNAPSHOT:'fixture-order-email-v2'}});
+    const fullFixture=acceptanceFixture({retention_unidentified_bonus:true,retention_catalogue:[{collection_id:'1',display_name:'Motörhead',collaboration_name:'alpha',products:3,eligible_customers:4,historical_products:2},{collection_id:'2',display_name:'Ārdēo Studios',collaboration_name:'beta',products:2,eligible_customers:2,historical_products:1}],retention_events:true,observationCertificates:[],now:Date.parse('2026-10-22T12:00:00Z'),identityEnv:{ORACLE_CUSTOMER_IDENTITY_MODE:'email_candidate_v2',ORACLE_CUSTOMER_IDENTITY_DATASET:'customer_identity',ORACLE_CUSTOMER_IDENTITY_SNAPSHOT:'fixture-order-email-v2'}});
     if(partial)fullFixture.state.fail_retention_stores=['usd'];
     const fullServer=await acceptanceServer(fullFixture,{durable:true,now:Date.parse('2026-10-22T12:00:00Z'),jobStore:durableJsonWire().store});
     try{for(const width of [1280,390]){
@@ -193,7 +193,7 @@ try{
       await page.locator('#message').fill(collaborationQuestion);await page.locator('#send').click();
       await page.waitForFunction(()=>!document.querySelector('#send').disabled&&document.querySelector('.analytical-answer'));
       const answer=await page.locator('.analytical-answer').last().innerText();
-      assert.match(answer,/360-day rate/);assert.match(answer,/Comparable sitewide/);assert.match(answer,/Second-order products/);assert.match(answer,/email-linked records/);
+      assert.match(answer,/Unknown second-order product attribution/);assert.match(answer,/Comparable sitewide cohorts over time/);assert.match(answer,/Whole-range first-purchase product rankings/);assert.match(answer,/By observed repeat-customer count/);assert.match(answer,/Governed collection reconciliation/);assert.match(answer,/Motörhead/);assert.match(answer,/Ārdēo Studios/);assert.match(answer,/360-day rate/);assert.match(answer,/Comparable sitewide/);assert.match(answer,/Second-order products/);assert.match(answer,/email-linked records/);
       assert.match(answer,/coverage is unverified/);assert.doesNotMatch(answer,/customer linkage has not been verified|highest observed repeat purchase rate|<details>|<summary>/);
       if(partial)assert.match(answer,/Woo USD[\s\S]*Read failed/);
       assert.equal(await page.locator('.analytical-answer').last().locator('details').count(),1);
