@@ -1,3 +1,9 @@
+# Current completion/release status (2026-10-22)
+
+All required v2 checkpoints and corrected WW billing-v3 are operator-reported
+complete. Do not repeat any collector below. The publication/preview wrappers in
+this historical runbook are superseded by the [bounded release review plan](customer-history-coverage-release.md).
+
 # Woo → Shopify history execution package
 
 Implementation: `customer-identity/history.js`, `history-sql.js`, and the shared

@@ -1,5 +1,21 @@
 # History coverage planner failure, 2026-10-21
 
+## Current status, 2026-10-22
+
+The operator reports all required v2 rosters and order-evidence collectors complete,
+plus corrected WW Metorik order collection at history-20261021-billing-v3. Do not
+execute the historical collection commands below. The agreement check passed all
+five registered and five guest orders; 50 usable direct billing-field observations
+with order provenance were verified before the full corrected collection completed.
+This sample does not establish population coverage. Existing evidence and all
+completed checkpoints remain untouched.
+
+The later stopped script is distinct from the original planning-complexity failure.
+Its cause remains unresolved. See the [budget correction](customer-history-script-budgets.md#2026-10-22-targeted-statement-sizing-correction)
+for the exact timeline and limited 30s statement-sizing change; whole-script limits
+and linkage SQL are unchanged. The [release review plan](customer-history-coverage-release.md)
+supersedes historical pending-collector/publication instructions below.
+
 For the subsequent failed-parent runtime evidence, separate statement/script
 budgets and compatible Render verification timeout, see
 [history script execution budgets](customer-history-script-budgets.md).

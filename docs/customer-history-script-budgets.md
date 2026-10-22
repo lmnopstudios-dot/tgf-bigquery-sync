@@ -32,7 +32,7 @@ did not enforce a precise 20-second server stop in this observation. Child timeo
 fields near 24 hours are provider metadata, not the application's ownership budget.
 No SQL, customer values or provider messages from the attachment are retained here.
 
-## Budget calculation
+## Original #362 budget calculation (superseded statement sizing)
 
 `history-budgets.js` opts in only coverage and publication:
 
@@ -65,6 +65,44 @@ Both settings must be changed together: historyQuery's maximumMs bounds the clie
 wait, and boundedQuery clamps jobTimeoutMs to the remaining absolute client window.
 scriptOptions.statementTimeoutMs independently bounds each server statement.
 No global boundedQuery or ordinary historyQuery default is increased.
+
+## 2026-10-22 targeted statement-sizing correction
+
+The verified deployed script later produced a successful 13,272ms h_addresses
+statement, invalidating the original 3,611ms maximum used for sizing. The following
+h_usable child waited 12,314ms from creation to its recorded start, then reported
+identical start/end times and stopped/cancellation text. Parent execution was
+65,682ms with jobTimeoutMs=89,998 and statementTimeoutMs=10,000. Stored SQL matched
+deployed generation; line 35 is h_usable. Automatic rollback succeeded. These are
+operator-supplied production observations, not local verification. The 13 reported
+versus 14 listed children discrepancy remains. No explicit timeout reason or
+initiating cancellation provenance was established. The cancellation cause remains
+unresolved; neither total duration nor the line location proves a statement timeout.
+
+Set statementMs to 30,000 for coverage and publication only: twice the observed
+successful 13,272ms stage is 26,544ms, rounded to 30 seconds. This is bounded
+engineering headroom, not a measured percentile, precise provider enforcement
+promise, or a proven fix for the cancellation. The queue span motivates caution
+about tight statement limits; it is not added to another statement as measured
+execution. Coverage remains 90s, publication 210s plus its existing 20s same-job
+reconciliation, and preview operation ownership remains 110s. No whole-script,
+ordinary read, collection, billing or outer-shell limit increases.
+
+The original publication sizing argument (12 extra statements × 10s) is historical,
+not a new promise that every statement can consume 30s. The fixed aggregate ceiling
+still applies and may expire before all individual caps could be consumed. Keeping
+the shared graph cap consistent avoids a preview-only correction that publication
+cannot use. No SQL body or transaction ordering changes.
+
+A query rewrite is not supported by this evidence: the failure has no recorded
+execution span, plan evidence of a costly operator, or demonstrated relational
+bottleneck. Replacing NOT IN or altering joins merely because line 35 was stopped
+would add semantic risk without identifying the cancellation cause. No additional
+production diagnostic is required to review this limited sizing correction. A
+single subsequent authorized preview is the execution acceptance test; failure
+stops the workflow rather than triggering automatic reruns or further increases.
+
+See [the completed-collection release and business review plan](customer-history-coverage-release.md).
 
 ## Ownership, cancellation and publication
 
