@@ -1200,6 +1200,14 @@
         "two named transaction ingestion run/state reads, separate repair and incremental evidence",
         "expired retained result and missing run tables preserve independent findings without recollection"
       ]
+    },
+    {
+      "file": "test/retention-product-boundary.test.js",
+      "covers": [
+        "confirmed production null product_ref preserves 8897 baseline customers and 510/656/702 observed repeats",
+        "strict named product identity and mature denominators with unknown attribution separate",
+        "supplemental rejection preserves valid metrics; direct interactive durable and browser refresh without replay"
+      ]
     }
   ]
 }

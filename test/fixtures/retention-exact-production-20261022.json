@@ -1,0 +1,702 @@
+{
+  "diagnostic_revision": "b7ce8a2006e3aca4009a1f20ff9646695f9781d5",
+  "deployed_revision": "a64543c1052e35e977a11c44e69ea7a8998396ef",
+  "read_only": true,
+  "report_replayed": false,
+  "query_id": "6026f7a6-44c6-4449-9814-398b028296f1",
+  "historical_validator_revision": "a64543c1052e35e977a11c44e69ea7a8998396ef",
+  "bounds": {
+    "existing_result_gets": 1,
+    "metadata_gets": 2,
+    "select_jobs": 2,
+    "maximum_bytes_total": 200000000,
+    "deadline_ms": 40000
+  },
+  "checks": [
+    {
+      "check": "retained_baseline_result",
+      "status": "read_completed",
+      "warehouse_state": "DONE",
+      "warehouse_failed": false,
+      "validation": {
+        "state": "reproduced_rejection",
+        "code": "EVIDENCE_SCOPE_MISMATCH",
+        "stage": "retention_rows",
+        "predicate": "Invalid second-order products",
+        "predicate_inputs": [
+          {
+            "path": "results[0].source_platform",
+            "type": "string",
+            "length": 7,
+            "scope_value": "shopify"
+          },
+          {
+            "path": "results[0].source_store",
+            "type": "string",
+            "length": 7,
+            "scope_value": "shopify"
+          },
+          {
+            "path": "results[0].collaboration_name",
+            "type": "string",
+            "length": 8,
+            "scope_value": "Sitewide"
+          },
+          {
+            "path": "results[0].second_order_products",
+            "type": "array"
+          },
+          {
+            "path": "results[0].second_order_products.length",
+            "type": "number",
+            "number": 10
+          },
+          {
+            "path": "results[0].second_order_products.length",
+            "type": "number",
+            "number": 10
+          },
+          {
+            "path": "results[0].second_order_products[0]",
+            "type": "object"
+          },
+          {
+            "path": "results[0].second_order_products[0].product_ref",
+            "type": "null"
+          },
+          {
+            "path": "results[0].second_order_products[1]",
+            "type": "object"
+          },
+          {
+            "path": "results[0].second_order_products[1].product_ref",
+            "type": "string",
+            "length": 30
+          },
+          {
+            "path": "results[0].second_order_products[2]",
+            "type": "object"
+          },
+          {
+            "path": "results[0].second_order_products[2].product_ref",
+            "type": "string",
+            "length": 30
+          },
+          {
+            "path": "results[0].second_order_products[3]",
+            "type": "object"
+          },
+          {
+            "path": "results[0].second_order_products[3].product_ref",
+            "type": "string",
+            "length": 30
+          },
+          {
+            "path": "results[0].second_order_products[4]",
+            "type": "object"
+          },
+          {
+            "path": "results[0].second_order_products[4].product_ref",
+            "type": "string",
+            "length": 30
+          },
+          {
+            "path": "results[0].second_order_products[5]",
+            "type": "object"
+          },
+          {
+            "path": "results[0].second_order_products[5].product_ref",
+            "type": "string",
+            "length": 30
+          },
+          {
+            "path": "results[0].second_order_products[6]",
+            "type": "object"
+          },
+          {
+            "path": "results[0].second_order_products[6].product_ref",
+            "type": "string",
+            "length": 30
+          },
+          {
+            "path": "results[0].second_order_products[7]",
+            "type": "object"
+          },
+          {
+            "path": "results[0].second_order_products[7].product_ref",
+            "type": "string",
+            "length": 30
+          },
+          {
+            "path": "results[0].second_order_products[8]",
+            "type": "object"
+          },
+          {
+            "path": "results[0].second_order_products[8].product_ref",
+            "type": "string",
+            "length": 30
+          },
+          {
+            "path": "results[0].second_order_products[9]",
+            "type": "object"
+          },
+          {
+            "path": "results[0].second_order_products[9].product_ref",
+            "type": "string",
+            "length": 30
+          },
+          {
+            "path": "results[0].second_order_products.length",
+            "type": "number",
+            "number": 10
+          },
+          {
+            "path": "results[0].second_order_products.length",
+            "type": "number",
+            "number": 10
+          },
+          {
+            "path": "results[0].second_order_products[0]",
+            "type": "object"
+          },
+          {
+            "path": "results[0].second_order_products[0].product_ref",
+            "type": "null"
+          }
+        ],
+        "identity_inputs": [
+          {
+            "row": 0,
+            "source_platform": {
+              "type": "string",
+              "length": 7,
+              "scope_value": "shopify",
+              "value": "shopify"
+            },
+            "source_store": {
+              "type": "string",
+              "length": 7,
+              "scope_value": "shopify",
+              "value": "shopify"
+            },
+            "collaboration_name": {
+              "type": "string",
+              "length": 8,
+              "scope_value": "Sitewide",
+              "value": "Sitewide"
+            },
+            "entry_product_ref": {
+              "type": "undefined"
+            }
+          },
+          {
+            "row": 1,
+            "source_platform": {
+              "type": "string",
+              "length": 7,
+              "scope_value": "shopify",
+              "value": "shopify"
+            },
+            "source_store": {
+              "type": "string",
+              "length": 7,
+              "scope_value": "shopify",
+              "value": "shopify"
+            },
+            "collaboration_name": {
+              "type": "string",
+              "length": 8,
+              "scope_value": "Sitewide",
+              "value": "Sitewide"
+            },
+            "entry_product_ref": {
+              "type": "undefined"
+            }
+          },
+          {
+            "row": 2,
+            "source_platform": {
+              "type": "string",
+              "length": 7,
+              "scope_value": "shopify",
+              "value": "shopify"
+            },
+            "source_store": {
+              "type": "string",
+              "length": 7,
+              "scope_value": "shopify",
+              "value": "shopify"
+            },
+            "collaboration_name": {
+              "type": "string",
+              "length": 8,
+              "scope_value": "Sitewide",
+              "value": "Sitewide"
+            },
+            "entry_product_ref": {
+              "type": "undefined"
+            }
+          }
+        ],
+        "row_inputs": [
+          {
+            "row": 0,
+            "window_days": {
+              "type": "number",
+              "number": 90
+            },
+            "cohort_customers": {
+              "type": "number",
+              "number": 8897
+            },
+            "mature_customers": {
+              "type": "number",
+              "number": 0
+            },
+            "repeat_customers": {
+              "type": "number",
+              "number": 0
+            },
+            "observed_repeat_customers": {
+              "type": "number",
+              "number": 510
+            },
+            "median_days_to_second": {
+              "type": "null"
+            },
+            "same_collaboration": {
+              "type": "number",
+              "number": 0
+            },
+            "different_collaboration": {
+              "type": "number",
+              "number": 0
+            },
+            "core_range": {
+              "type": "number",
+              "number": 0
+            },
+            "unknown": {
+              "type": "number",
+              "number": 0
+            }
+          },
+          {
+            "row": 1,
+            "window_days": {
+              "type": "number",
+              "number": 180
+            },
+            "cohort_customers": {
+              "type": "number",
+              "number": 8897
+            },
+            "mature_customers": {
+              "type": "number",
+              "number": 0
+            },
+            "repeat_customers": {
+              "type": "number",
+              "number": 0
+            },
+            "observed_repeat_customers": {
+              "type": "number",
+              "number": 656
+            },
+            "median_days_to_second": {
+              "type": "null"
+            },
+            "same_collaboration": {
+              "type": "number",
+              "number": 0
+            },
+            "different_collaboration": {
+              "type": "number",
+              "number": 0
+            },
+            "core_range": {
+              "type": "number",
+              "number": 0
+            },
+            "unknown": {
+              "type": "number",
+              "number": 0
+            }
+          },
+          {
+            "row": 2,
+            "window_days": {
+              "type": "number",
+              "number": 360
+            },
+            "cohort_customers": {
+              "type": "number",
+              "number": 8897
+            },
+            "mature_customers": {
+              "type": "number",
+              "number": 0
+            },
+            "repeat_customers": {
+              "type": "number",
+              "number": 0
+            },
+            "observed_repeat_customers": {
+              "type": "number",
+              "number": 702
+            },
+            "median_days_to_second": {
+              "type": "null"
+            },
+            "same_collaboration": {
+              "type": "number",
+              "number": 0
+            },
+            "different_collaboration": {
+              "type": "number",
+              "number": 0
+            },
+            "core_range": {
+              "type": "number",
+              "number": 0
+            },
+            "unknown": {
+              "type": "number",
+              "number": 0
+            }
+          }
+        ],
+        "live_fix_verified": false
+      }
+    },
+    {
+      "check": "shopify_dataset_location",
+      "status": "read_completed",
+      "location": "US"
+    },
+    {
+      "check": "finance_transaction_ingestion_records",
+      "status": "read_completed",
+      "records": [
+        {
+          "succeeded_runs": 206,
+          "first_update_start": {
+            "value": "2026-09-25T00:00:00.000Z"
+          },
+          "last_update_end": {
+            "value": "2026-10-19T14:17:24.265Z"
+          },
+          "internal_update_gaps": 0,
+          "total_runs": 244,
+          "recent_runs": [
+            {
+              "run_id": "9a2b5457-8605-4801-bf24-464e78f2ddb2",
+              "mode": "scheduled",
+              "window_start": {
+                "value": "2026-10-19T12:17:24.265Z"
+              },
+              "window_end": {
+                "value": "2026-10-22T14:17:35.465Z"
+              },
+              "status": "failed",
+              "order_count": 183,
+              "refund_count": 5,
+              "page_count": 4,
+              "started_at": {
+                "value": "2026-10-22T14:17:36.187625000Z"
+              },
+              "finished_at": {
+                "value": "2026-10-22T14:17:46.799984000Z"
+              }
+            },
+            {
+              "run_id": "eb32e50e-5135-4bde-9668-e7f5c1d1be83",
+              "mode": "scheduled",
+              "window_start": {
+                "value": "2026-10-19T12:17:24.265Z"
+              },
+              "window_end": {
+                "value": "2026-10-22T12:17:27.744Z"
+              },
+              "status": "failed",
+              "order_count": 173,
+              "refund_count": 5,
+              "page_count": 4,
+              "started_at": {
+                "value": "2026-10-22T12:17:28.537806000Z"
+              },
+              "finished_at": {
+                "value": "2026-10-22T12:17:42.018550000Z"
+              }
+            },
+            {
+              "run_id": "23308014-45be-4f05-bb73-38073d05c921",
+              "mode": "scheduled",
+              "window_start": {
+                "value": "2026-10-19T12:17:24.265Z"
+              },
+              "window_end": {
+                "value": "2026-10-22T10:17:32.496Z"
+              },
+              "status": "failed",
+              "order_count": 163,
+              "refund_count": 5,
+              "page_count": 4,
+              "started_at": {
+                "value": "2026-10-22T10:17:33.178918000Z"
+              },
+              "finished_at": {
+                "value": "2026-10-22T10:17:42.495555000Z"
+              }
+            },
+            {
+              "run_id": "3c87e80f-65f0-4001-be72-7230b7cf1f0c",
+              "mode": "scheduled",
+              "window_start": {
+                "value": "2026-10-19T12:17:24.265Z"
+              },
+              "window_end": {
+                "value": "2026-10-22T08:17:26.902Z"
+              },
+              "status": "failed",
+              "order_count": 159,
+              "refund_count": 4,
+              "page_count": 4,
+              "started_at": {
+                "value": "2026-10-22T08:17:27.630421000Z"
+              },
+              "finished_at": {
+                "value": "2026-10-22T08:17:37.878180000Z"
+              }
+            },
+            {
+              "run_id": "4a711fc6-1a4f-42d5-b732-5a14bb1feb27",
+              "mode": "scheduled",
+              "window_start": {
+                "value": "2026-10-19T12:17:24.265Z"
+              },
+              "window_end": {
+                "value": "2026-10-22T06:17:32.200Z"
+              },
+              "status": "failed",
+              "order_count": 158,
+              "refund_count": 4,
+              "page_count": 4,
+              "started_at": {
+                "value": "2026-10-22T06:17:33.133365000Z"
+              },
+              "finished_at": {
+                "value": "2026-10-22T06:17:42.497514000Z"
+              }
+            },
+            {
+              "run_id": "22123562-c874-4217-a127-57c986f0e177",
+              "mode": "scheduled",
+              "window_start": {
+                "value": "2026-10-19T12:17:24.265Z"
+              },
+              "window_end": {
+                "value": "2026-10-22T04:17:32.904Z"
+              },
+              "status": "failed",
+              "order_count": 158,
+              "refund_count": 4,
+              "page_count": 4,
+              "started_at": {
+                "value": "2026-10-22T04:17:33.840557000Z"
+              },
+              "finished_at": {
+                "value": "2026-10-22T04:17:42.584525000Z"
+              }
+            },
+            {
+              "run_id": "935611bb-4386-48bb-bcff-9b6a342eb23f",
+              "mode": "scheduled",
+              "window_start": {
+                "value": "2026-10-19T12:17:24.265Z"
+              },
+              "window_end": {
+                "value": "2026-10-22T02:17:41.206Z"
+              },
+              "status": "failed",
+              "order_count": 157,
+              "refund_count": 4,
+              "page_count": 4,
+              "started_at": {
+                "value": "2026-10-22T02:17:41.764073000Z"
+              },
+              "finished_at": {
+                "value": "2026-10-22T02:17:51.127205000Z"
+              }
+            },
+            {
+              "run_id": "2ab53b7c-a152-4f6b-9f1f-43321a9a365a",
+              "mode": "scheduled",
+              "window_start": {
+                "value": "2026-10-19T12:17:24.265Z"
+              },
+              "window_end": {
+                "value": "2026-10-22T00:18:45.973Z"
+              },
+              "status": "failed",
+              "order_count": 156,
+              "refund_count": 4,
+              "page_count": 4,
+              "started_at": {
+                "value": "2026-10-22T00:18:46.733888000Z"
+              },
+              "finished_at": {
+                "value": "2026-10-22T00:18:56.000868000Z"
+              }
+            },
+            {
+              "run_id": "a71aef17-e266-4059-a339-f35610899c89",
+              "mode": "scheduled",
+              "window_start": {
+                "value": "2026-10-19T12:17:24.265Z"
+              },
+              "window_end": {
+                "value": "2026-10-21T22:17:24.692Z"
+              },
+              "status": "failed",
+              "order_count": 155,
+              "refund_count": 4,
+              "page_count": 4,
+              "started_at": {
+                "value": "2026-10-21T22:17:25.381071000Z"
+              },
+              "finished_at": {
+                "value": "2026-10-21T22:17:34.100454000Z"
+              }
+            },
+            {
+              "run_id": "825e3207-fddd-41e1-8c36-b86afb7bedec",
+              "mode": "scheduled",
+              "window_start": {
+                "value": "2026-10-19T12:17:24.265Z"
+              },
+              "window_end": {
+                "value": "2026-10-21T20:17:33.485Z"
+              },
+              "status": "failed",
+              "order_count": 154,
+              "refund_count": 4,
+              "page_count": 4,
+              "started_at": {
+                "value": "2026-10-21T20:17:34.545459000Z"
+              },
+              "finished_at": {
+                "value": "2026-10-21T20:17:43.813251000Z"
+              }
+            },
+            {
+              "run_id": "4de2c0c6-bdf6-4ac3-89c7-25c4f3b27f67",
+              "mode": "scheduled",
+              "window_start": {
+                "value": "2026-10-19T12:17:24.265Z"
+              },
+              "window_end": {
+                "value": "2026-10-21T18:17:36.498Z"
+              },
+              "status": "failed",
+              "order_count": 150,
+              "refund_count": 4,
+              "page_count": 3,
+              "started_at": {
+                "value": "2026-10-21T18:17:37.297227000Z"
+              },
+              "finished_at": {
+                "value": "2026-10-21T18:17:47.821748000Z"
+              }
+            },
+            {
+              "run_id": "ed3cc849-4925-41f3-89d0-e75bbbe36ba3",
+              "mode": "scheduled",
+              "window_start": {
+                "value": "2026-10-19T12:17:24.265Z"
+              },
+              "window_end": {
+                "value": "2026-10-21T16:17:28.839Z"
+              },
+              "status": "failed",
+              "order_count": 148,
+              "refund_count": 4,
+              "page_count": 3,
+              "started_at": {
+                "value": "2026-10-21T16:17:29.434061000Z"
+              },
+              "finished_at": {
+                "value": "2026-10-21T16:17:37.790854000Z"
+              }
+            }
+          ],
+          "update_gap_examples": [],
+          "current_state": [
+            {
+              "collector": "shopify_finance",
+              "successful_watermark": {
+                "value": "2026-10-19T14:17:24.265Z"
+              },
+              "run_id": "69e90b1e-0df3-439d-94d4-cc3967098a5a",
+              "updated_at": {
+                "value": "2026-10-19T14:17:31.800Z"
+              }
+            }
+          ],
+          "interpretation": "update-window/selected-ID evidence only; not a created-order coverage certificate"
+        }
+      ],
+      "certification": "not_inferred"
+    },
+    {
+      "check": "customer_transaction_ingestion_records",
+      "status": "read_completed",
+      "records": [
+        {
+          "succeeded_runs": 0,
+          "first_update_start": null,
+          "last_update_end": null,
+          "internal_update_gaps": 0,
+          "total_runs": 1,
+          "recent_runs": [
+            {
+              "run_id": "c6861adc-7885-440b-89fe-0cd1e1ff794a",
+              "mode": "repair",
+              "window_start": {
+                "value": "2026-09-01T00:00:00.000Z"
+              },
+              "window_end": {
+                "value": "2026-10-01T00:00:00.000Z"
+              },
+              "status": "succeeded",
+              "requested_count": 192,
+              "returned_count": 192,
+              "unresolved_count": 0,
+              "started_at": {
+                "value": "2026-10-04T18:48:28.363154000Z"
+              },
+              "finished_at": {
+                "value": "2026-10-04T18:48:35.887Z"
+              }
+            }
+          ],
+          "update_gap_examples": [],
+          "current_state": [
+            {
+              "collector": "shopify_customers",
+              "successful_watermark": {
+                "value": "2026-10-01T00:00:00.000Z"
+              },
+              "run_id": "c6861adc-7885-440b-89fe-0cd1e1ff794a",
+              "updated_at": {
+                "value": "2026-10-04T18:48:35.887Z"
+              }
+            }
+          ],
+          "interpretation": "update-window/selected-ID evidence only; not a created-order coverage certificate"
+        }
+      ],
+      "certification": "not_inferred"
+    }
+  ]
+}

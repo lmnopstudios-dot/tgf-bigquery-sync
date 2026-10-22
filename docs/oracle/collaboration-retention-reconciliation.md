@@ -189,12 +189,14 @@ missing titles. No customer, cohort denominator or observed repeat is removed.
 Invalid supplemental period/ranking evidence is isolated from validated parent
 baseline/items and from other sources; strict denominator/source checks remain.
 
-The supplied diagnostic contains the validation outcome and query metadata, **not
-the rejected aggregate rows or exact predicate**. One exact retained-results GET
-was denied by workspace credentials (HTTP 403); no query was rerun. The source
-fixes above are verified locally; the original offending field and corrected live
-baseline are not independently verified. Missing second-product identity is a
-reproduced code defect, not a claimed diagnosis of that unseen row.
+The subsequent successful exact-result diagnostic now confirms the rejected field:
+**results[0].second_order_products[0].product_ref = null**. The shared boundary
+keeps unidentified attribution separate from valid baseline metrics and strictly
+rejects malformed identities in named detail. The exact regression preserves
+8,897 baseline customers and 510/656/702 observed repeats; mature rates remain
+unverified. See [confirmed baseline, finance failures and completeness verification](retention-confirmed-baseline-and-finance.md)
+for supplied evidence and the separate production-error access blocker. No report
+was replayed. Corrected live execution has not been claimed.
 
 The existing named/item, whole-range sitewide and second-order product calculations
 remain present. Their source/window/identity/eligibility contracts and independent
@@ -228,9 +230,11 @@ Desktop/mobile browser coverage additionally checks reviewed labels and catalogu
 reconciliation after refresh without provider replay. Local SQL adaptation and
 fixture providers do not certify BigQuery schema or production results.
 
-Required local gates: acceptance **753 passed**, zero failed/cancelled/skipped;
+Required local gates: acceptance **764 passed**, zero failed/cancelled/skipped;
 browser **passed**, 21 conversations at desktop/mobile widths with durable and
-activated-identity refresh. Final focused SQL/report/coverage checks: 41 passed.
+activated-identity refresh. Earlier focused SQL/report/coverage checks: 41 passed. The confirmed-null boundary
+adds five regressions; see the latest confirmed-baseline findings for sequential
+acceptance invocation and unrelated concurrent timing failures.
 These gates do not establish corrected production counts or coverage.
 
 No collection, republication, repair,
@@ -255,6 +259,6 @@ canonical transaction writers and names finance_refresh_runs/state and
 customer_refresh_runs/state, which the earlier candidate inventory did not inspect.
 It distinguishes update-window completion, selected-ID repairs, full-bootstrap
 completeness, cross-table eligibility and retired-source lifecycle evidence.
-The original rejected field remains blocked on the retained result; a single
-strict incident-validator check retrieves that existing result without replay.
+The exact-result check has now completed and confirmed the null product_ref.
+The shared boundary fix and separate finance investigation supersede that blocker.
 The previous broad diagnostic is complete and must not be rerun. PR remains draft.

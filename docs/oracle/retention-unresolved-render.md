@@ -106,7 +106,7 @@ Eleven SELECTs and six metadata GETs completed; the frozen snapshot was preserve
 | Area | Verified evidence/fix | Remaining limitation |
 |---|---|---|
 | Ten absent collections | Source-specific routes/history/matches retrieved; report distinguishes unknown eligibility from observed zero matches | No historical transactions are inferred from missing history/routes |
-| Shopify baseline | Retained query 6026f7a6-44c6-4449-9814-398b028296f1 is DONE without BigQuery failure; application evidence validation rejected it. Explicit sitewide filters, product detail gaps and partial validation isolation are tested | Rejected aggregate rows/exact predicate not supplied; corrected live baseline unverified |
+| Shopify baseline | Retained query 6026f7a6-44c6-4449-9814-398b028296f1 is DONE without BigQuery failure; application evidence validation rejected it. Explicit sitewide filters, product detail gaps and partial validation isolation are tested | Subsequent exact check confirmed null product_ref; see confirmed-baseline findings. Corrected live execution remains unverified |
 | Coverage | Bounded inventory completed; eight adapter progress records and ready identity snapshot found; supplied certificates are consumed correctly in fixtures | No inspected record certifies continuous original transactions; suitable evidence elsewhere remains possible |
 | Requested sections | Calendar-year baselines, whole-range product rankings, individual pieces and second-order products verified locally | No new production report calculation or saved-job replay |
 | Diagnostic | Successful supplied production output retained as aggregate fixture | Bounds limit what absence conclusions can be drawn |

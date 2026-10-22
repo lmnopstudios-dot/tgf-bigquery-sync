@@ -5,40 +5,16 @@ PR #370 remains **draft**. Scope remains 2022-10-19–2026-10-19 entry,
 customer_identity/history-20261022-billing-v3. No report replay, collector,
 production write, classification change or certificate is authorized here.
 
-## Exact baseline rejection: essential evidence still inaccessible
+## Exact baseline rejection: now confirmed
 
-The supplied diagnostic establishes that retained query
-6026f7a6-44c6-4449-9814-398b028296f1 completed successfully (DONE, failure null),
-and the application rejected its result at evidence_validation with
-EVIDENCE_SCOPE_MISMATCH. It does **not** contain the three rejected baseline
-rows or original validation message. The prior exact result GET was denied
-HTTP 403 in this workspace. Repeating that access attempt supplies no new fact.
-An exact rejected field cannot be honestly identified from metadata alone.
-
-The incident deployed revision was a64543c1052e35e977a11c44e69ea7a8998396ef.
-Its provider projection (`oracle/customer-journey.js`) serializes BigQuery values,
-retains rows with window_days, and aliases entry_product_title only when a product
-reference is present. The component then calls retentionRows; validates sitewide
-identity, source/store, grouping and row bounds; calls retentionCoverage; and
-validates the coverage source. Multiple distinct predicates become the same saved
-EVIDENCE_SCOPE_MISMATCH code. The code alone does not distinguish them.
-
-[The exact-evidence diagnostic](../../diagnostics/oracle-retention-exact-evidence.js)
-contains **verbatim incident-revision** retentionRows and retentionCoverage
-functions, protected by a source checksum regression. It reproduces validation
-only against the retained result, in memory. It reports the rejecting predicate,
-ordered field paths/types/nulls read before rejection, public identity fields and
-aggregate numeric inputs. Compound predicates remain compound: the last property
-read is not automatically labelled the cause. Product titles, customer data,
-credentials and raw provider errors are not printed. Synthetic tests reproduce
-rejection at second_order_products[0].product=null and product_ref=null; these
-establish possible defects, **not** the production offending field.
-
-**Precise blocker:** retrieve the existing query result (at most three baseline
-rows plus coverage), not a new calculation. If the result expired or is inaccessible,
-stop; obtain the already-retained original aggregate payload/validation log from
-its owner if one exists. Do not regenerate the population, relax validation, or
-claim the previously speculative product-detail fix resolves this original row.
+The user supplied the successful exact-result check. The historical validator
+rejected **results[0].second_order_products[0].product_ref = null**, with
+`Invalid second-order products`. Query 6026f7a6-44c6-4449-9814-398b028296f1
+completed successfully. This previously inaccessible field is no longer an
+unresolved investigation. The supplied evidence, shared boundary fix, exact
+regression and separate finance/completeness findings are in
+[the confirmed-baseline investigation](retention-confirmed-baseline-and-finance.md).
+The in-memory historical validator is retained unchanged for auditability.
 
 ## Actual transaction ingestion paths
 
@@ -114,6 +90,10 @@ bootstrap, cross-table and retired-source evidence gaps.
 
 ## One indispensable Render check
 
+**Completed: the user supplied successful output. Do not rerun this command.**
+The remaining targeted read is only the stored finance errors in the
+[confirmed findings](retention-confirmed-baseline-and-finance.md).
+
 The single pinned command below performs one GET of the **existing** baseline
 result, two metadata GETs and two bounded SELECT jobs against the exact Shopify
 run/state pairs. No INFORMATION_SCHEMA discovery, source/API collection, job
@@ -169,5 +149,5 @@ failure/expired-result handling, and distinct scheduled/repair update windows.
 Required acceptance gate: **759 passed**, zero failed/cancelled/skipped (21 central
 conversations, 51 suites). Browser gate: **passed**, desktop/mobile and durable /
 activated-identity refresh. Syntax and diff whitespace checks pass. These are
-local checks; the targeted Render command has not been executed from this
-workspace and the exact production offending field remains unverified.
+local checks; the user supplied successful production output and confirmed the exact null
+product_ref. Corrected live execution and follow-up certification remain separate.
