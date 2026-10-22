@@ -247,3 +247,14 @@ as [retention-production-20261022.json](../../test/fixtures/retention-production
 including diagnostic/deployed revisions, scope, bounds, retained query status,
 source-specific reconciliation and ingestion records. It contains no customer-level
 records. The snapshot/collection are preserved; no saved job was replayed.
+
+## Follow-up investigation: exact predicate and transaction pipeline
+
+The [pipeline investigation](retention-pipeline-investigation.md) traces actual
+canonical transaction writers and names finance_refresh_runs/state and
+customer_refresh_runs/state, which the earlier candidate inventory did not inspect.
+It distinguishes update-window completion, selected-ID repairs, full-bootstrap
+completeness, cross-table eligibility and retired-source lifecycle evidence.
+The original rejected field remains blocked on the retained result; a single
+strict incident-validator check retrieves that existing result without replay.
+The previous broad diagnostic is complete and must not be rerun. PR remains draft.
