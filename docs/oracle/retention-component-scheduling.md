@@ -1,3 +1,5 @@
+> Production scheduling acceptance passed at `2a1e0d1`: all three scripts and 72 stages completed. A separate ranking-projection defect was isolated; see [the targeted ranking follow-up](retention-ranking-window-fix.md). Its changed item manifest supersedes this historical command.
+
 # Combined retention deadline scheduling
 
 The user-supplied live acceptance at deployed revision `7d75e804b35461aabc70353ae085010ee3b146fc` establishes a successful combined collaboration execution. Job `2996a9e5-e336-417e-a5cd-420e5e18e49e` completed in 35,705 ms; all 24 script stages, including final SELECT, succeeded. Native validation retained 54 collaboration window rows and reconciliation for all 25 governed catalogue entries. `catalogue_complete` was true. These are verified production results, preserved in `test/fixtures/retention-7d75e80-deadline.json`.

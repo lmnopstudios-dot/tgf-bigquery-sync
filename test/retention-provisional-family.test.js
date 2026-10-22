@@ -56,3 +56,33 @@ test('second-order family aggregation counts a customer once across multiple gov
  const rows=execute('WITH '+retentionFamilyCtes()+' SELECT reporting_product_ref,family_status FROM retention_reporting_lines ORDER BY source_product_ref',{governed:{identities:[['woo:ww:4','shopify:shopify:10']]},lines:[['woo','ww','entry','woo:ww:4','Archived Woo product','4'],['shopify','shopify','entry','shopify:shopify:10','Shopify product','10']]});
  assert.deepEqual(rows.map(r=>r.reporting_product_ref),['shopify:shopify:10','shopify:shopify:10']);assert.equal(rows[1].family_status,'governed_product');
  });
+
+import {retentionSectionProjection} from '../oracle/retention-sections.js';
+function rankedProjection(sql,extra){
+ // SQLite lacks BigQuery SELECT * REPLACE. Expand its columns while executing
+ // the factory's exact replacement expressions and selection/order predicates.
+ const raw=execute(sql+' SELECT * FROM section_ranked',extra);
+ const projection=retentionSectionProjection(false);
+ const replacements=projection.match(/REPLACE\((.*)\) FROM section_ranked/)[1];
+ const columns=Object.keys(raw[0]).filter(k=>!['provisional_rate_rank','rate_rank'].includes(k));
+ return execute(sql+' SELECT '+columns.join(',')+','+replacements+' FROM section_ranked'+projection.split(' FROM section_ranked')[1].replace(/\) product_ranking_rows$/,''),extra);
+}
+test('retained ec078a04 five rejected rows: select by primary rank, preserve empty windows, omit unsupported rate ranks',()=>{
+ const cases=[['10434354250055',360,1,458,1],['10434355888455',360,3,462,2],['10541784269127',360,1,488,3],['10685503897927',180,1,494,4],['10685503897927',360,1,494,4]];
+ const raw=cases.map(([id,window_days,cohort_customers,count_rank,provisional_rate_rank])=>({population_scope:'linked_tgf',source_platform:'tgf',source_store:'combined',entry_product_ref:'shopify:shopify:'+id,collaboration_name:null,window_days,cohort_customers,mature_customers:0,repeat_customers:0,observed_repeat_customers:1,provisional_eligible_customers:0,provisional_repeat_customers:0,provisional_repeat_rate:null,count_rank,rate_rank:null,provisional_rate_rank,observation_coverage_status:'unverified',median_days_to_second:null}));
+ for(const r of raw)assert.throws(()=>retentionRows([r]),/Invalid provisional ranking/);
+ const literal=v=>v===null?'NULL':typeof v==='number'?String(v):"'"+v.replaceAll("'","''")+"'";
+ const sql='WITH section_ranked AS ('+raw.map(r=>'SELECT '+Object.entries(r).map(([k,v])=>literal(v)+' '+k).join(',')).join(' UNION ALL ')+')';
+ const corrected=rankedProjection(sql,{});
+ assert.equal(corrected.length,5);assert.deepEqual(corrected.map(r=>r.entry_product_ref),raw.map(r=>r.entry_product_ref));
+ for(let i=0;i<raw.length;i++){assert.deepEqual(corrected[i],{...raw[i],provisional_rate_rank:null});}
+ assert.equal(retentionRows(corrected).length,5);
+});
+for(const ranking_window of [90,180,360])test(`generated ranking SQL retains three comparison windows, strict empty denominators; ranking=${ranking_window}`,()=>{
+ const {relations}=cohortRelations(customerJourneySql('fixture','retention_piece_windows',null,null,identity,true));
+ const sql='WITH '+relations.filter(r=>['section_entries','section_members','section_medians','section_totals','section_scores','section_ranked'].includes(r.name)).map(r=>`${r.name} AS (${r.body})`).join(',');
+ const extra={params:{coverage_start:null,coverage_end:null,observation_end:'2026-10-19',coverage_status:'unverified',coverage_evidence:null,ranking_window},entries:[['recent','tgf','combined','a','2026-06-01T12:00:00Z'],['older','tgf','combined','b','2025-01-01T12:00:00Z']],lines:[['tgf','combined','a','shopify:shopify:1','Recent','1'],['tgf','combined','b','shopify:shopify:2','Older','2']],returns:[['recent','2026-06-02T12:00:00Z'],['older','2025-01-02T12:00:00Z']]};
+ const rows=rankedProjection(sql,extra);assert.equal(rows.length,6);
+ for(const r of rows){if(r.provisional_eligible_customers===0){assert.equal(r.provisional_repeat_rate,null);assert.equal(r.provisional_rate_rank,null);}assert.equal(r.rate_rank,null);}
+ assert.equal(retentionRows(rows.map(r=>({...r,population_scope:'linked_tgf'}))).length,6);
+});

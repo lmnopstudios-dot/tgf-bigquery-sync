@@ -31,6 +31,9 @@ export function retentionSectionSql(baseline){
   )`}`;
 }
 
+// Select products using the requested ranking window, retaining all three
+// comparison rows. A rate rank cannot attribute a rate to a row with no eligible
+// denominator; mask it only after product selection. Keep the result schema.
 export const retentionSectionProjection=baseline=>baseline
   ?'ARRAY(SELECT AS STRUCT * FROM section_totals ORDER BY cohort_year,window_days LIMIT 150) baseline_period_rows'
-  :'ARRAY(SELECT AS STRUCT * FROM section_ranked WHERE count_rank<=10 OR rate_rank<=10 OR provisional_rate_rank<=10 ORDER BY count_rank,window_days LIMIT 90) product_ranking_rows';
+  :'ARRAY(SELECT AS STRUCT * REPLACE(IF(provisional_repeat_rate IS NULL,NULL,provisional_rate_rank) AS provisional_rate_rank,IF(mature_customers=0,NULL,rate_rank) AS rate_rank) FROM section_ranked WHERE count_rank<=10 OR rate_rank<=10 OR provisional_rate_rank<=10 ORDER BY count_rank,window_days LIMIT 90) product_ranking_rows';

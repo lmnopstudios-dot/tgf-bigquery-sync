@@ -87,9 +87,9 @@ import {readFileSync} from 'node:fs';
 import {createHash} from 'node:crypto';
 import {combinedValidationArtifact} from '../diagnostics/build-retention-combined-validation.js';
 import {validateRetentionSyntaxFollowup} from '../diagnostics/validate-retention-syntax-followup.js';
-test('all eleven previously successful full SELECTs remain byte-for-byte unchanged',async()=>{
+test('eight unaffected full SELECTs preserve prior compilation hashes; three changed piece SELECTs need revalidation',async()=>{
  const prior=JSON.parse(readFileSync(new URL('./fixtures/retention-377-successful-compilation.json',import.meta.url))),now=await combinedValidationArtifact();assert.equal(prior.checks.length,11);
- for(const c of prior.checks){const q=now.cases.find(x=>x.source===c.source&&x.store===c.store&&x.group===c.group);assert.equal(createHash('sha256').update(q.full_select.query).digest('hex'),c.full_select_sha256);}
+ for(const c of prior.checks){const q=now.cases.find(x=>x.source===c.source&&x.store===c.store&&x.group===c.group);assert[c.group==='retention_piece_windows'?'notEqual':'equal'](createHash('sha256').update(q.full_select.query).digest('hex'),c.full_select_sha256);}
 });
 test('follow-up validator plans only the failed combined SELECT and preserves independent synthetic results (mocked transport)',async()=>{
  const artifact=await combinedValidationArtifact();let plans=0,executions=0;
