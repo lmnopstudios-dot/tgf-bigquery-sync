@@ -21,4 +21,4 @@ export async function retentionValidationCases(){
  }
  return cases;
 }
-if(process.argv[1]===new URL(import.meta.url).pathname){const cases=await retentionValidationCases();writeFileSync(new URL('./retention-sql-validation.json.gz',import.meta.url),gzipSync(JSON.stringify({base_revision:'bb7427d434416e3307fc752eb9e651889a333ff3',project:'gf-full-data',snapshot:'history-20261022-billing-v3',cases}),{mtime:0}));console.log('Built nine full linked SELECT/script and synthetic execution cases');}
+if(process.argv[1]===new URL(import.meta.url).pathname){const cases=await retentionValidationCases();writeFileSync(new URL('./retention-sql-validation.json.gz',import.meta.url),gzipSync(JSON.stringify({base_revision:'0e1e6c00cda26183ab8bab581be74a7255cff4ae',project:'gf-full-data',snapshot:'history-20261022-billing-v3',cases}),{mtime:0}));console.log('Built nine full linked SELECT/script and synthetic execution cases');}

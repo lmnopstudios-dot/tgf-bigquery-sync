@@ -48,7 +48,7 @@ test('retention semantics survive dates, channel, export and operation switches 
 for(const mode of ['direct','interactive','durable'])test(`retention uses production factory and ${mode} transport, recovered results require complete evidence`,async t=>{
  const f=acceptanceFixture({retention:true}),h=await acceptanceServer(f,{durable:mode==='durable'});t.after(h.close);
  const r=mode==='direct'?await (await fetch(h.origin+'/agent',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({message:question})})).json():await h.submit(question);
- assert.equal(r.evidence.kind,'governed_cohort_retention');assert.equal(r.partial,true);assert.match(r.answer,/75\.00%/);assert.match(r.answer,/Show details/);assert.match(r.answer,/first-ever purchases are not established/);
+ assert.equal(r.evidence.kind,'governed_cohort_retention');assert.equal(r.partial,true);assert.match(r.answer,/75\.00%/);assert.match(r.answer,/Full results, verified-coverage rates/);assert.match(r.answer,/first-ever purchases are not established/);
  assert.equal(f.calls.length,3);assert.equal(f.calls[0].provider,'retention');assert.equal(f.queries[0].params.first_order_semantic,'first_observed_ever');assert.equal(f.queries[0].params.subsequent_channel,'Online');
  const raw=JSON.parse(JSON.stringify(r));assert.equal(deliverOracleResult(raw,r.analysis_context).delivery.status,'partial');
  raw.evidence.rows[0].repeat_rate=.99;assert.throws(()=>assertEvidenceAgreement(r.analysis_context,raw.evidence),e=>e.code==='EVIDENCE_SCOPE_MISMATCH');

@@ -1,3 +1,5 @@
+import {provisionalEligibleSql,provisionalTotalsSql} from './retention-provisional.js';
+import {retentionFamilyCtes} from './retention-families.js';
 import {retentionSectionSql,retentionSectionProjection} from './retention-sections.js';
 import {retentionCatalogueSql} from './retention-catalogue.js';
 import {applyCustomerIdentitySql,identityAwareService} from './customer-identity.js';
@@ -97,7 +99,7 @@ export function aggregateJourneyEvents(events,{start_date,end_date,cohort_entry_
 function retentionWindowResultSql(product=false,nested=false,baseline=false){
   const keys='source_platform,source_store,collaboration_name'+(product?',entry_product_ref':'');
   const eligible=product?"entry_product_ref IS NOT NULL":"collaboration_name IS NOT NULL AND collaboration_name NOT IN ('collaboration','collaborations')";
-  const members=baseline?`SELECT governed_customer_ref,source_platform,source_store,'Sitewide' collaboration_name,order_timestamp entry_timestamp FROM entry_orders`:`SELECT governed_customer_ref,${keys},entry_timestamp${product?',MIN(entry_product_title) entry_product_title':''} FROM entry_matches WHERE ${eligible} GROUP BY governed_customer_ref,${keys},entry_timestamp`;
+  const members=baseline?`SELECT governed_customer_ref,source_platform,source_store,'Sitewide' collaboration_name,order_timestamp entry_timestamp FROM entry_orders`:`SELECT governed_customer_ref,${keys},entry_timestamp${product?',MIN(entry_product_title) entry_product_title,MIN(entry_family_status) entry_family_status':''} FROM entry_matches WHERE ${eligible} GROUP BY governed_customer_ref,${keys},entry_timestamp`;
   // Retention only needs the next qualifying order for each entry customer.
   // Selecting it before joining named membership avoids a second expansion of
   // entry_matches (and its governed classification resolver) through cohort.
@@ -108,7 +110,7 @@ function retentionWindowResultSql(product=false,nested=false,baseline=false){
       AND (@subsequent_source IS NULL OR r.source_platform=@subsequent_source) AND (@subsequent_channel IS NULL OR r.channel=@subsequent_channel)
     QUALIFY ROW_NUMBER() OVER(PARTITION BY governed_customer_ref ORDER BY r.order_timestamp,r.source_platform,r.source_store,r.order_ref)=1
   ), retention_members AS (
-    SELECT em.*,d.source_platform second_source_platform,d.source_store second_source_store,d.order_ref second_order_ref,window_days,COALESCE(DATE(em.entry_timestamp,@time_zone)>=@coverage_start AND DATE_ADD(DATE(em.entry_timestamp,@time_zone),INTERVAL window_days DAY)<=LEAST(@observation_end,@coverage_end),FALSE) mature,
+    SELECT em.*,d.source_platform second_source_platform,d.source_store second_source_store,d.order_ref second_order_ref,window_days,${provisionalEligibleSql('em')} provisional_eligible,COALESCE(DATE(em.entry_timestamp,@time_zone)>=@coverage_start AND DATE_ADD(DATE(em.entry_timestamp,@time_zone),INTERVAL window_days DAY)<=LEAST(@observation_end,@coverage_end),FALSE) mature,
       IF(DATE_DIFF(DATE(d.order_timestamp,@time_zone),DATE(em.entry_timestamp,@time_zone),DAY)<=window_days,TIMESTAMP_DIFF(d.order_timestamp,em.entry_timestamp,SECOND)/86400.0,NULL) days_to_second,
       CASE WHEN d.order_ref IS NULL THEN NULL
         WHEN sc.unknown_lines=0 AND sc.core_lines=0 AND ARRAY_LENGTH(sc.names)=1 AND em.collaboration_name IN UNNEST(sc.names) THEN 'same_collaboration'
@@ -121,20 +123,20 @@ function retentionWindowResultSql(product=false,nested=false,baseline=false){
   ), retention_with_medians AS (
     SELECT *,PERCENTILE_CONT(IF(mature,days_to_second,NULL),0.5) OVER(PARTITION BY ${keys},window_days) median_days_to_second FROM retention_members
   ), retention_totals AS (SELECT ${keys},window_days,COUNT(*) cohort_customers,COUNTIF(mature) mature_customers,
-    COUNTIF(days_to_second IS NOT NULL) observed_repeat_customers,@coverage_status observation_coverage_status,@coverage_evidence coverage_evidence,@coverage_start verified_coverage_start,@coverage_end verified_coverage_end,
-    COUNTIF(mature AND days_to_second IS NOT NULL) repeat_customers,ANY_VALUE(median_days_to_second) median_days_to_second${product?',MIN(entry_product_title) entry_product_title':''},
+    COUNTIF(days_to_second IS NOT NULL) observed_repeat_customers,${provisionalTotalsSql},@coverage_status observation_coverage_status,@coverage_evidence coverage_evidence,@coverage_start verified_coverage_start,@coverage_end verified_coverage_end,
+    COUNTIF(mature AND days_to_second IS NOT NULL) repeat_customers,ANY_VALUE(median_days_to_second) median_days_to_second${product?',MIN(entry_product_title) entry_product_title,MIN(entry_family_status) entry_family_status':''},
     COUNTIF(mature AND days_to_second IS NOT NULL AND second_purchase_classification='same_collaboration') same_collaboration,
     COUNTIF(mature AND days_to_second IS NOT NULL AND second_purchase_classification='different_collaboration') different_collaboration,
     COUNTIF(mature AND days_to_second IS NOT NULL AND second_purchase_classification='core_range') core_range,
     COUNTIF(mature AND days_to_second IS NOT NULL AND second_purchase_classification='unknown') unknown
     FROM retention_with_medians GROUP BY ${keys},window_days
   ), retention_product_counts AS (
-    SELECT ${keys.split(',').map(k=>'m.'+k).join(',')},m.window_days,l.source_product_ref product_ref,MIN(COALESCE(NULLIF(TRIM(l.product_title),''),'Product title unavailable')) product,
+    SELECT ${keys.split(',').map(k=>'m.'+k).join(',')},m.window_days,l.reporting_product_ref product_ref,MIN(l.reporting_product_title) product,MIN(l.family_status) family_status,
       COUNT(DISTINCT m.governed_customer_ref) observed_customers,
       COUNT(DISTINCT IF(m.mature,m.governed_customer_ref,NULL)) mature_repeat_customers
-    FROM retention_members m JOIN classified_lines l
+    FROM retention_members m JOIN retention_reporting_lines l
       ON l.source_platform=m.second_source_platform AND l.source_store=m.second_source_store AND l.order_ref=m.second_order_ref
-    WHERE m.days_to_second IS NOT NULL AND l.source_product_ref IS NOT NULL AND l.source_product_id NOT IN ('','0','unknown') GROUP BY ${keys.split(',').map(k=>'m.'+k).join(',')},m.window_days,l.source_product_ref
+    WHERE m.days_to_second IS NOT NULL AND l.source_product_ref IS NOT NULL AND l.source_product_id NOT IN ('','0','unknown') GROUP BY ${keys.split(',').map(k=>'m.'+k).join(',')},m.window_days,l.reporting_product_ref
   ), retention_product_coverage AS (
     SELECT ${keys.split(',').map(k=>'m.'+k).join(',')},m.window_days,
       COUNT(DISTINCT IF(l.order_ref IS NULL,m.governed_customer_ref,NULL)) missing_line_customers,
@@ -143,7 +145,7 @@ function retentionWindowResultSql(product=false,nested=false,baseline=false){
     FROM retention_members m LEFT JOIN classified_lines l ON l.source_platform=m.second_source_platform AND l.source_store=m.second_source_store AND l.order_ref=m.second_order_ref
     WHERE m.days_to_second IS NOT NULL GROUP BY ${keys.split(',').map(k=>'m.'+k).join(',')},m.window_days
   ), retention_product_arrays AS (
-    SELECT ${keys},window_days,ARRAY_AGG(STRUCT(product_ref,product,observed_customers,mature_repeat_customers)
+    SELECT ${keys},window_days,ARRAY_AGG(STRUCT(product_ref,product,family_status,observed_customers,mature_repeat_customers)
       ORDER BY observed_customers DESC,product_ref LIMIT 10) second_order_products
     FROM retention_product_counts GROUP BY ${keys},window_days
   ), retention_scored AS (SELECT *,MAX(IF(window_days=@ranking_window,repeat_customers,NULL)) OVER(PARTITION BY ${keys}) rank_customers,MAX(IF(window_days=@ranking_window,SAFE_DIVIDE(repeat_customers,mature_customers),NULL)) OVER(PARTITION BY ${keys}) rank_rate FROM retention_totals)${nested?`, retention_fair AS (SELECT *,DENSE_RANK() OVER(PARTITION BY source_platform,source_store,collaboration_name ORDER BY IF(@retention_sort='returning_customers_desc',rank_customers,NULL) DESC,rank_rate DESC,entry_product_ref) piece_rank FROM retention_scored)`:''}, retention_ranked AS (SELECT *,DENSE_RANK() OVER(PARTITION BY source_platform,source_store ORDER BY
@@ -187,6 +189,7 @@ export function customerJourneySql(project,groupBy='downstream_product',source=n
   classified_values AS (SELECT l.*,ARRAY_AGG(DISTINCT CONCAT(c.classification_type,'=',classification_value) IGNORE NULLS) classifications
     FROM source_lines l LEFT JOIN classifications c ON c.subject_ref=l.source_product_ref LEFT JOIN UNNEST(c.classification_values) classification_value GROUP BY ALL),
   classified_lines AS (SELECT l.* REPLACE(ARRAY_CONCAT(l.classifications,IF(cf.subject_ref IS NOT NULL,['classification_conflict=true'],ARRAY<STRING>[])) AS classifications) FROM classified_values l LEFT JOIN (SELECT DISTINCT subject_ref FROM cr_conflicts) cf ON cf.subject_ref=l.source_product_ref),
+  ${retentionFamilyCtes()},
   line_classification_sets AS (SELECT l.*,${collaborationStateSql()} collaboration_state,
     ARRAY(SELECT REPLACE(x,'collaboration_name=','') FROM UNNEST(l.classifications) x WHERE STARTS_WITH(x,'collaboration_name=') AND x NOT IN ('collaboration_name=collaboration','collaboration_name=collaborations')) names,
     ('product_group=core' IN UNNEST(l.classifications) OR 'product_group=core_range' IN UNNEST(l.classifications)) is_core FROM classified_lines l),
@@ -197,8 +200,8 @@ export function customerJourneySql(project,groupBy='downstream_product',source=n
   order_classification_sets AS (SELECT * REPLACE(ARRAY(SELECT DISTINCT n FROM UNNEST(names) n) AS names) FROM raw_order_classification_sets),
   ranked_orders AS (SELECT *,ROW_NUMBER() OVER(PARTITION BY governed_customer_ref ORDER BY order_timestamp,source_platform,source_store,order_ref) order_sequence FROM qualifying_orders),
   entry_orders AS (SELECT * FROM ranked_orders WHERE order_sequence=1 AND DATE(order_timestamp,@time_zone) BETWEEN @cohort_entry_start AND @cohort_entry_end AND (@entry_source IS NULL OR source_platform=@entry_source) AND (@entry_channel IS NULL OR channel=@entry_channel)),
-  entry_matches AS (SELECT DISTINCT e.governed_customer_ref,e.source_platform,e.source_store,e.order_ref entry_order_ref,e.order_timestamp entry_timestamp,EXTRACT(YEAR FROM e.order_timestamp) cohort_year,l.source_product_ref entry_product_ref,l.product_title entry_product_title,collaboration_name
-    FROM entry_orders e JOIN classified_lines l USING(source_platform,source_store,order_ref) LEFT JOIN UNNEST(ARRAY(SELECT REPLACE(x,'collaboration_name=','') FROM UNNEST(l.classifications) x WHERE STARTS_WITH(x,'collaboration_name=') AND x NOT IN ('collaboration_name=collaboration','collaboration_name=collaborations') AND 'classification_conflict=true' NOT IN UNNEST(l.classifications) AND (SELECT COUNT(*) FROM UNNEST(l.classifications) n WHERE STARTS_WITH(n,'collaboration_name=') AND n NOT IN ('collaboration_name=collaboration','collaboration_name=collaborations'))=1)) collaboration_name ON TRUE
+  entry_matches AS (SELECT DISTINCT e.governed_customer_ref,e.source_platform,e.source_store,e.order_ref entry_order_ref,e.order_timestamp entry_timestamp,EXTRACT(YEAR FROM e.order_timestamp) cohort_year,${groupBy.startsWith('retention_')?'l.reporting_product_ref entry_product_ref,l.reporting_product_title entry_product_title,l.family_status entry_family_status':'l.source_product_ref entry_product_ref,l.product_title entry_product_title'} ,collaboration_name
+    FROM entry_orders e JOIN ${groupBy.startsWith('retention_')?'retention_reporting_lines':'classified_lines'} l USING(source_platform,source_store,order_ref) LEFT JOIN UNNEST(ARRAY(SELECT REPLACE(x,'collaboration_name=','') FROM UNNEST(l.classifications) x WHERE STARTS_WITH(x,'collaboration_name=') AND x NOT IN ('collaboration_name=collaboration','collaboration_name=collaborations') AND 'classification_conflict=true' NOT IN UNNEST(l.classifications) AND (SELECT COUNT(*) FROM UNNEST(l.classifications) n WHERE STARTS_WITH(n,'collaboration_name=') AND n NOT IN ('collaboration_name=collaboration','collaboration_name=collaborations'))=1)) collaboration_name ON TRUE
     WHERE (@entry_product_ref IS NULL OR l.source_product_ref=@entry_product_ref) AND (@entry_classification IS NULL OR CONCAT('product_group=',@entry_classification) IN UNNEST(l.classifications) OR CONCAT('product_category=',@entry_classification) IN UNNEST(l.classifications) OR CONCAT('product_type=',@entry_classification) IN UNNEST(l.classifications) OR (@entry_classification='collaboration' AND EXISTS(SELECT 1 FROM UNNEST(l.classifications) x WHERE STARTS_WITH(x,'collaboration_name='))))),
   entry_stage_coverage AS (SELECT e.source_platform,e.source_store,COALESCE(l.collaboration_state,'order_lines_absent') collaboration_state,COUNT(l.order_ref) product_lines,COUNT(DISTINCT e.governed_customer_ref) customers FROM entry_orders e LEFT JOIN line_classification_sets l USING(source_platform,source_store,order_ref) GROUP BY 1,2,3),
   entry_stage_arrays AS (SELECT source_platform,source_store,ARRAY_AGG(STRUCT(collaboration_state,product_lines,customers) ORDER BY collaboration_state) classification_stages FROM entry_stage_coverage GROUP BY 1,2),
