@@ -1246,6 +1246,10 @@
     {
       "file": "test/retention-mapping-coverage.test.js",
       "purpose": "Approved source-route consumption audit, consolidated historical mapping review, independent catalogue and component limits, portable read-only existing ingestion evidence with partial failures."
+    },
+    {
+      "file": "test/retention-entry-age-trace.test.js",
+      "purpose": "Mot\u00f6rhead and Iron Maiden zero 360-day provisional denominators: actual SQL old Woo entries, London boundary, observed returns with zero age eligibility, global first-entry sequencing and trace loss categories."
     }
   ]
 }

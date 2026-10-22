@@ -31,7 +31,7 @@ function envelope(){return {review_rows:[{source_product_ref:'woo:ww:17',source_
 test('one failed ingestion read preserves consolidated review and every governed collection; missing evidence stays unknown (mock)',async()=>{
  const artifact=mappingCoverageArtifact('fixture');let reads=0;
  const result=await readMappingCoverageEvidence({project:'fixture',artifact,bigquery:{query:async q=>{reads++;if(q.query.includes('finance_refresh_runs'))throw Error('fixture unavailable');if(q.query.startsWith('BEGIN'))return [[envelope()]];return [[{matching_records:0}]];}}});
- assert.equal(reads,6);assert.equal(result.checks.length,6);
+ assert.equal(reads,7);assert.equal(result.checks.length,7);
  const review=result.checks.find(c=>c.check==='consolidated_mapping_review');assert.equal(review.status,'read_completed');assert.equal(review.items[0].proposed_target,'shopify:shopify:9');assert.equal(review.catalogue.length,75);assert.ok(review.catalogue.every(c=>c.eligible_customers===null));assert.equal(result.coverage_certified,false);assert.equal(result.report_replayed,false);
 });
 test('independent main limits identify item truncation without implying missing collaborations, ranking or catalogue',()=>{

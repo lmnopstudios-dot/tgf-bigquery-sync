@@ -1,3 +1,4 @@
+import {entryAgeTraceSettings} from './retention-entry-age-trace.js';
 import {retentionMappingReviewSql,mappingReviewList} from './retention-mapping-review.js';
 import {retentionCatalogueSql,reconcileRetentionCatalogue} from '../oracle/retention-catalogue.js';
 import {cohortRelations,auditExecutionOptions} from '../oracle/cohort-execution.js';
@@ -28,7 +29,7 @@ export function ingestionEvidenceQueries(project){
   {check:'retention_input_metadata',query:stores.map(([s,store])=>{const d=s==='woo'?(store==='ww'?'metorik_uk':'metorik_us'):'shopify_data';return `SELECT '${store}' source_store,table_id,row_count,TIMESTAMP_MILLIS(last_modified_time) last_modified FROM ${table(project,d,'__TABLES__')} WHERE table_id IN ('orders','order_line_items','order_locations','order_financials','order_customers')`;}).join(' UNION ALL ')}
  ];
 }
-export function mappingCoverageArtifact(project){return {project,scope,ingestion_queries:ingestionEvidenceQueries(project),mapping_settings:{...auditExecutionOptions(mappingAuditSql(project),boundaries,50000),location:'US',useLegacySql:false,params:{cohort_entry_start:'2022-10-19',cohort_entry_end:'2026-10-19',observation_end:'2026-10-19',time_zone:'Europe/London',entry_source:null,entry_channel:null,entry_product_ref:null,entry_classification:'collaboration',retention_source_store:null,first_order_semantic:'first_observed_ever',matrixify_app_id:'gid://shopify/App/1758145'},types:{cohort_entry_start:'DATE',cohort_entry_end:'DATE',observation_end:'DATE',entry_source:'STRING',entry_channel:'STRING',entry_product_ref:'STRING',retention_source_store:'STRING'}}};}
+export function mappingCoverageArtifact(project){return {project,scope,trace_settings:entryAgeTraceSettings(project),ingestion_queries:ingestionEvidenceQueries(project),mapping_settings:{...auditExecutionOptions(mappingAuditSql(project),boundaries,50000),location:'US',useLegacySql:false,params:{cohort_entry_start:'2022-10-19',cohort_entry_end:'2026-10-19',observation_end:'2026-10-19',time_zone:'Europe/London',entry_source:null,entry_channel:null,entry_product_ref:null,entry_classification:'collaboration',retention_source_store:null,first_order_semantic:'first_observed_ever',matrixify_app_id:'gid://shopify/App/1758145'},types:{cohort_entry_start:'DATE',cohort_entry_end:'DATE',observation_end:'DATE',entry_source:'STRING',entry_channel:'STRING',entry_product_ref:'STRING',retention_source_store:'STRING'}}};}
 export async function readMappingCoverageEvidence({bigquery,project,artifact,onCheck=()=>{}}){
  if(!artifact||artifact.project!==project||JSON.stringify(artifact.scope)!==JSON.stringify(scope)||artifact.ingestion_queries.length!==5)throw Error('Invalid reviewed evidence artifact');
  const checks=[];
@@ -57,6 +58,12 @@ export async function readMappingCoverageEvidence({bigquery,project,artifact,onC
    for(const c of catalogue)if(c.status==='truncated')c.status='eligible_matches_present';
    record({check:'consolidated_mapping_review',status:'read_completed',...mappingReviewList(data.review_rows),catalogue,route_consumption:data.route_consumption,scope,classification_written:false,coverage_certified:false});
   }catch(e){record({check:'consolidated_mapping_review',status:'unavailable',...safeReadFailure(e,'diagnostic')});}
+ })());
+ reads.push((async()=>{
+  try{const [rows]=await boundedQuery(bigquery,artifact.trace_settings,{maximumMs:55000});
+   if(rows.length!==1||!Array.isArray(rows[0].stage_counts))throw Error('Entry-age trace unavailable');
+   const r=rows[0];record({check:'collaboration_entry_age_trace',status:'read_completed',targets:r.targets,stage_counts:r.stage_counts,product_routes:(r.product_routes||[]).slice(0,200),product_routes_truncated:(r.product_routes||[]).length>200||Number(r.product_routes?.[0]?.total_product_rows)>200,coverage_certified:false,sku_candidates_are_not_membership:true});
+  }catch(e){record({check:'collaboration_entry_age_trace',status:'unavailable',...safeReadFailure(e,'diagnostic')});}
  })());
  await Promise.allSettled(reads);
  return {read_only_business_data:true,temporary_tables_only:true,report_replayed:false,governance_written:false,coverage_certified:false,scope,checks};

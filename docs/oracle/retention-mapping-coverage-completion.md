@@ -74,11 +74,25 @@ Continue the existing [coverage verification contract](retention-coverage-verifi
 
 A pass establishes matching existence and eligibility state only for that declared inventory/interval/snapshot semantics. An update delta pass cannot establish the earlier bootstrap. Complete bootstrap plus evidenced maintenance, cutoff state and lifecycle evidence may support proposed source intervals for owner review. The current linked coverage consumer requires the common certified interval across all three sources; an evidenced migration handoff union must not be silently treated as that intersection. No certificate or configuration is written by this work. Provisional rates stay available regardless of this unresolved evidence.
 
+## Motörhead and Iron Maiden: zero 360-day denominator investigation
+
+The supplied successful report has 51 Motörhead and 17 Iron Maiden entry customers. Each has three observed repeats within 360 days, but zero provisional age-qualified entries. This means the reported 360-day rate is unavailable; it does **not** mean zero returns. Product-range age cannot establish the age of first-observed eligible customer entries. The zero denominator is not yet verified as correct, and the Woo mapping gaps are not yet proven to cause it.
+
+The consolidated command below now includes an independent `collaboration_entry_age_trace` for governed collection IDs 657969971527 and 658016338247. These are diagnostic subjects, not a replacement cohort catalogue. It reuses the actual linked-history, approved-route, resolved-classification, eligibility, global first-entry and retention-member SQL. No business calculation is changed speculatively.
+
+For each collection and combined/WW/USD/Shopify view, the trace returns order counts, eligible analytical customer counts, earliest/latest purchase dates and earliest/latest linked first-entry dates at each stage: governed product history; actual consumed named classification; eligible purchases; import/cancellation/status/full-refund/cutoff exclusions; matched/unmatched/ambiguous identity; first purchase versus an earlier purchase of another range; first entry before the requested range; actual cohort membership; age-qualified 90/180/360 entries; and observed versus age-qualified 360-day repeats. The inclusive last entry date for 360-day eligibility is **2025-10-24**, using London calendar dates.
+
+Stages overlap and must not be added. Raw-history customer counts describe only records with an eligible linked order; source-local registered profiles are separate and do not invent guest identities. At cohort-member stages, “orders” identifies deduplicated customer entries. Unavailable governed target evidence produces unknown counts rather than fabricated zeros. A separate product-route inventory includes archived historical lines, approved route details and separately labelled exact persisted-SKU candidates. Candidate-only history never becomes governed collaboration membership. The product inventory is bounded at 200 with a sentinel and explicit truncation; the stage grid is independent of that limit.
+
+Interpretation: older governed history absent from consumed classifications points to attribution; consumed eligible old purchases with earlier other-product entries can correctly be excluded from first-purchase cohorts; first entries before scope are correctly outside scope. Actual cohort entries on or before 2025-10-24 with a zero age-qualified count would establish a calculation defect. No such production conclusion is claimed before the trace executes. Missing historical warehouse lines also cannot establish that a collaboration was not sold.
+
+Regressions execute the generated membership/aggregation SQL through a SQLite compatibility harness for **both** collaborations: old Woo entry followed by Shopify return, duplicate entry lines, recent entries with observed returns and no aged denominator, London date boundary, and global first-entry assignment before source/date filters. Additional trace-stage fixtures distinguish unapproved SKU candidates, earlier other-range entries and exclusion reasons. These are local SQL executions, not BigQuery compilation or production evidence. The report SQL and successful live acceptance remain unchanged.
+
 ## One consolidated bounded Render check
 
 The command below is pinned to this source/artifact, uses deployed dependencies, and can run without deploying the PR. It reads the exact current report once, known ingestion records and table metadata, and one transaction-derived mapping audit. Mapping uses ten temporary tables in an owned read-only business-data transaction (nine cached inputs plus aggregate); no persistent table, state or governance writes. It never calculates/replays the report. Independent checks emit as they finish.
 
-Bounds: five SELECT jobs, 100 MB billed each and 10-second warehouse/12-second client limits; one mapping script, 50-second warehouse/55-second client limit, 15 seconds per statement, 500 MB per data statement (11 statements, at most 5.5 GB), 501 review products, 1000-entry catalogue validation per source. Five control reads include exact request inventory (four executions plus sentinel), finance/customer run rows (500 plus sentinel), collector rows (100 plus sentinel), and exact table metadata. These diagnostic bounds do not change production report limits. The command does not query source APIs, perform deployment, or certify coverage.
+Bounds: five SELECT jobs, 100 MB billed each and 10-second warehouse/12-second client limits; two independent scripts (mapping and entry-age trace), each with a 50-second warehouse/55-second client limit, 15 seconds per statement, 500 MB per data statement (mapping: 11 statements/5.5 GB; entry-age trace: 12 statements/6 GB), 501 review products, 1000-entry catalogue validation per source. Five control reads include exact request inventory (four executions plus sentinel), finance/customer run rows (500 plus sentinel), collector rows (100 plus sentinel), and exact table metadata. These diagnostic bounds do not change production report limits. The command does not query source APIs, perform deployment, or certify coverage.
 
 ```bash
 timeout --signal=TERM --kill-after=5s 75s node --input-type=module <<'JS'
@@ -108,16 +122,17 @@ try {
  assert.equal(process.env.ORACLE_JOB_DATASET||'commerce','commerce');
  const {evidenceReader}=await import('data:text/javascript;base64,'+Buffer.from(artifact.runner_source).toString('base64'));
  const read=evidenceReader({boundedQuery,safeReadFailure,reconcileRetentionCatalogue});
- for(const [key,type]of Object.entries(artifact.mapping_settings.types))if(type==='DATE'&&artifact.mapping_settings.params[key]!=null)artifact.mapping_settings.params[key]=BigQuery.date(artifact.mapping_settings.params[key]);
+ for(const settings of [artifact.mapping_settings,artifact.trace_settings])for(const [key,type]of Object.entries(settings.types))if(type==='DATE'&&settings.params[key]!=null)settings.params[key]=BigQuery.date(settings.params[key]);
  const native=new BigQuery({projectId:project,credentials,location:'US',autoRetry:false,maxRetries:0});
  let allocations=0;
  const bigquery={createQueryJob:async settings=>{
-  assert.ok(++allocations<=6,'Warehouse allocation bound');
+  assert.ok(++allocations<=7,'Warehouse allocation bound');
   const match=artifact.ingestion_queries.find(q=>q.query===settings.query);
   const mapping=settings.query===artifact.mapping_settings.query;
-  assert.ok(match||mapping,'Unexpected warehouse query');
+  const trace=settings.query===artifact.trace_settings.query;
+  assert.ok(match||mapping||trace,'Unexpected warehouse query');
   assert.ok(!settings.destination&&!settings.dryRun,'Unexpected persistent destination or dry run');
-  const check=match?.check||'consolidated_mapping_review';
+  const check=match?.check||(trace?'collaboration_entry_age_trace':'consolidated_mapping_review');
   try{
    const result=await native.createQueryJob(settings);
    console.log(JSON.stringify({phase:'existing_evidence_job',check,job_id:result[0].id,query_sha256:createHash('sha256').update(settings.query).digest('hex')}));
