@@ -96,3 +96,9 @@ test('follow-up validator plans only the failed combined SELECT and preserves in
  const result=await validateRetentionSyntaxFollowup({artifact,dateValue:v=>v,validateRows:rows=>rows,onCheck:()=>{},bigquery:{createQueryJob:async q=>{plans++;assert.equal(q.query,artifact.cases[9].full_select.query);assert.equal(q.dryRun,true);throw Error('Planning fixture failure');},query:async q=>{const c=artifact.cases[executions++];assert.equal(q.query,c.synthetic.query);return [[90,180,360].map(window_days=>({source_platform:c.source,source_store:c.store,window_days,provisional_repeat_customers:1,provisional_eligible_customers:1,provisional_repeat_rate:1,mature_customers:0,repeat_customers:0}))];}}});
  assert.equal(plans,1);assert.equal(executions,12);assert.equal(result.checks[0].status,'unresolved');assert.equal(result.checks.filter(c=>c.status==='executed_and_validated').length,12);assert.equal(result.other_full_selects_resubmitted,0);assert.equal(result.report_replayed,false);
 });
+
+import {gunzipSync} from 'node:zlib';
+import {syntaxFollowupArtifact} from '../diagnostics/build-retention-syntax-followup.js';
+test('targeted revalidation artifact matches current generated SQL and validator source',async()=>{
+ const committed=JSON.parse(gunzipSync(readFileSync(new URL('../diagnostics/retention-syntax-followup.json.gz',import.meta.url))));assert.deepEqual(committed,JSON.parse(JSON.stringify(await syntaxFollowupArtifact())));
+});
