@@ -1,3 +1,5 @@
+> Superseded acceptance command: the retained execution confirmed the rank projection ran, but combined supplemental scope was omitted. See [the scope follow-up and targeted command](retention-supplement-scope.md). Preserve the three successful source fixtures and all 24 successful native stages.
+
 # Whole-range ranking window validation
 
 ## Verified production evidence
