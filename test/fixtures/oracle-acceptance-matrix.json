@@ -1191,6 +1191,15 @@
         "partial evidence preservation and redacted diagnostics",
         "in-memory Render diagnostic loading"
       ]
+    },
+    {
+      "file": "test/retention-exact-evidence.test.js",
+      "covers": [
+        "incident-revision validators reproduce retained result in memory without warehouse replay",
+        "exact field access traces and strict source/denominator rejection",
+        "two named transaction ingestion run/state reads, separate repair and incremental evidence",
+        "expired retained result and missing run tables preserve independent findings without recollection"
+      ]
     }
   ]
 }
