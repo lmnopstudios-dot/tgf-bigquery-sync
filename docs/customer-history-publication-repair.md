@@ -1,5 +1,15 @@
 # Customer history publication: investigation and guarded repair
 
+> Updated evidence: the operator has now supplied exact production aggregates:
+> 2 markers, 116930 link rows, 58465 distinct keys, all 58465 duplicate keys
+> identical, zero conflicts/invalid keys; distinct WW/USD/Shopify totals are
+> 39176/4322/14967. Historical job evidence is unavailable; overlap remains
+> unproven. Use [the exact review-only repair](customer-history-exact-repair.md)
+> and its single self-contained Render command. The earlier unverified-count
+> discussion and generic parameter template below are historical preparation,
+> superseded by that concrete procedure. The agent has not queried production
+> or executed any repair, backup, guard migration, deployment or activation.
+
 Prepared from GitHub-confirmed main `e6ff7a498c8edfcd7c2fd16a57aab7f2b49e50a3`.
 No production queries or mutations were executed in this investigation. There is
 no Render connector or verified BigQuery access in this environment. The shell
