@@ -1116,6 +1116,16 @@
         "actual reader integrity SQL rejects identical/conflicting links, duplicate markers, invalid references and count mismatches",
         "shared readiness/fallback deadline and sanitized actual-stage job diagnostics"
       ]
+    },
+    {
+      "id": "customer-history-prerequisite-preflight",
+      "file": "test/customer-history-prerequisites.test.js",
+      "covers": [
+        "independent guard, project-wide active-job and restricted-backup inspection using SELECT and policy reads only",
+        "unknown versus absent resources; invalid singleton/schema; actual job visibility with aggregate counts",
+        "ancestor and dataset allow-policy inspection without user IAM attestations; incomplete inventory and role evidence cannot certify a destination",
+        "restricted output privacy and actionable administrator read-permission requirements"
+      ]
     }
   ]
 }
