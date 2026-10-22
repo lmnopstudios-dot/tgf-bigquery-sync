@@ -1,3 +1,5 @@
+> Current status: #382 merged/deployed and passed live acceptance at `c22df6162b9e1abdd29c8e628cdaab045496961b`; report `279fea44-4f76-4723-9936-a0f39d916a8e` returns all requested software sections. The #370 merge discussion below is historical. Continue the [current mapping/coverage completion and single bounded evidence read](retention-mapping-coverage-completion.md), preserving its live successes. Coverage certification remains unresolved; this plan does not authorize collection or certificate writes.
+
 # Review decision and finite retention coverage verification
 
 ## Report fix disposition

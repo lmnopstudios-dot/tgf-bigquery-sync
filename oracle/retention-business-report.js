@@ -1,3 +1,4 @@
+import {retentionLimitSummary} from './retention-limits.js';
 const safe=v=>String(v??'Unknown').replaceAll('|','\\|').replaceAll('<','&lt;').replaceAll('>','&gt;');
 const source=r=>r.source_platform==='tgf'?'TGF':r.source_platform==='woo'?(r.source_store==='ww'?'Woo WW':'Woo USD'):'Shopify';
 const key=r=>[r.source_platform,r.source_store,r.collaboration_name,r.entry_product_ref,r.cohort_year].join('|');
@@ -35,7 +36,7 @@ export function retentionBusinessReport(e,{normalize,full}){
  const failures=(e.source_outcomes||[]).filter(o=>o.state!=='fulfilled');
  if(failures.length)lines.push(`Calculation availability: ${failures.map(o=>`${source(o)} / ${o.group}: ${o.state} (${o.stage||'stage unavailable'})`).join('; ')}. Successful components are retained; software failures are separate from coverage uncertainty.`);
  if((e.section_outcomes||[]).some(o=>o.state==='rejected'))lines.push('Some supplemental sections failed validation; independent successful results are retained. See full results.');
- if(e.truncated)lines.push('A row bound was reached; this comparison is bounded. Reconciliation and full retained results remain available below.');
+ if(e.truncated)lines.push(retentionLimitSummary(e));
  if(e.request_id)lines.push(`Request reference: ${safe(e.request_id)}.`);
  // The client supports sibling details, not nested details. Keep the complete
  // existing report/diagnostics accessible inside one expandable section.

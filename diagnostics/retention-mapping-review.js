@@ -5,16 +5,17 @@ import {cohortRelations} from '../oracle/cohort-execution.js';
 export function retentionMappingReviewSql(project){
  const identity={dataset:'customer_identity',snapshot:'history-20261022-billing-v3',orderLinks:true};
  const {relations}=cohortRelations(customerJourneySql(project,'retention_windows',null,null,identity));
- const end=relations.findIndex(r=>r.name==='retention_reporting_lines');
+ const end=relations.findIndex(r=>r.name==='entry_matches');
  return 'WITH '+relations.slice(0,end+1).map(r=>`${r.name} AS (${r.body})`).join(',\n')+`, impacts AS (
  SELECT l.source_product_ref,l.source_product_id,MIN(l.product_title) woo_title,l.source_store,
- COUNT(DISTINCT q.order_ref) affected_orders,COUNT(DISTINCT q.governed_customer_ref) affected_customers,
+ COUNT(DISTINCT IF(DATE(q.order_timestamp,@time_zone)>=@cohort_entry_start,q.order_ref,NULL)) affected_orders,COUNT(DISTINCT IF(DATE(q.order_timestamp,@time_zone)>=@cohort_entry_start,q.governed_customer_ref,NULL)) affected_customers,
+ COUNT(DISTINCT q.order_ref) historical_eligible_orders,
+ LOGICAL_OR(EXISTS(SELECT 1 FROM UNNEST(l.classifications) c WHERE STARTS_WITH(c,'collaboration_name=') AND c NOT IN ('collaboration_name=collaboration','collaboration_name=collaborations')) AND 'classification_conflict=true' NOT IN UNNEST(l.classifications)) named_classification_consumed,
  ARRAY_AGG(DISTINCT l.family_status) routing_states
  FROM retention_reporting_lines l JOIN qualifying_orders q USING(source_platform,source_store,order_ref)
- WHERE l.source_platform='woo' AND DATE(q.order_timestamp,@time_zone) BETWEEN @cohort_entry_start AND @observation_end
+ WHERE l.source_platform='woo' AND DATE(q.order_timestamp,@time_zone)<=@observation_end
  AND l.source_product_id IS NOT NULL AND l.source_product_id NOT IN ('','0','unknown')
- AND (l.family_status='ambiguous_family' OR NOT EXISTS(SELECT 1 FROM cr_routes r JOIN cr_resolved c ON c.subject_ref=r.classification_ref
- WHERE r.source_ref=l.source_product_ref AND c.classification_type='collaboration_name' AND c.classification_value NOT IN ('collaboration','collaborations')))
+
  GROUP BY l.source_product_ref,l.source_product_id,l.source_store
  ), skus AS (
  SELECT CONCAT('woo:ww:',CAST(product_id AS STRING)) source_ref,NULLIF(UPPER(TRIM(sku)),'') sku FROM \`${project}.metorik_uk.order_line_items\`
@@ -24,17 +25,19 @@ export function retentionMappingReviewSql(project){
  COALESCE(title,name) title,NULLIF(UPPER(TRIM(sku)),'') sku FROM \`${project}.shopify_data.order_line_items\`
  ), review AS (
  SELECT i.*,ARRAY(SELECT AS STRUCT r.classification_ref target_ref,r.mapping_type FROM cr_routes r WHERE r.source_ref=i.source_product_ref ORDER BY target_ref,mapping_type LIMIT 20) approved_routes,ARRAY(SELECT DISTINCT c.classification_type FROM cr_conflicts c WHERE c.subject_ref=i.source_product_ref) classification_conflicts,ARRAY(SELECT AS STRUCT t.product_ref,MIN(t.title) title,ARRAY_AGG(DISTINCT s.sku) exact_skus,
- ARRAY(SELECT DISTINCT c.classification_value FROM cr_resolved c WHERE c.subject_ref=t.product_ref AND c.classification_type='collaboration_name') governed_collaborations
- FROM skus s JOIN targets t USING(sku) WHERE s.source_ref=i.source_product_ref AND s.sku IS NOT NULL AND t.product_ref IS NOT NULL GROUP BY t.product_ref ORDER BY t.product_ref LIMIT 11) candidates
- FROM impacts i
+ ARRAY(SELECT DISTINCT c.classification_value FROM cr_resolved c WHERE c.subject_ref=t.product_ref AND c.classification_type='collaboration_name') governed_collaborations,ARRAY(SELECT DISTINCT f.classification_ref FROM cr_family f WHERE f.classification_ref=t.product_ref) existing_reporting_families
+ FROM skus s JOIN targets t USING(sku) WHERE s.source_ref=i.source_product_ref AND s.sku IS NOT NULL AND t.product_ref IS NOT NULL AND EXISTS(SELECT 1 FROM cr_resolved c WHERE c.subject_ref=t.product_ref AND c.classification_type='collaboration_name' AND c.classification_value NOT IN ('collaboration','collaborations')) GROUP BY t.product_ref ORDER BY t.product_ref LIMIT 11) candidates
+ FROM impacts i WHERE NOT i.named_classification_consumed OR 'ambiguous_family' IN UNNEST(i.routing_states) OR (i.named_classification_consumed AND 'unmapped_item' IN UNNEST(i.routing_states))
  ) SELECT *,COUNT(*) OVER() total_review_products,
- IF(ARRAY_LENGTH(candidates)=1,'exact_sku_candidate_requires_graph_preview',IF(ARRAY_LENGTH(candidates)>1,'conflicting_exact_sku_candidates','no_supported_target_missing_mapping_or_history')) review_status
+ IF(named_classification_consumed,'named_classification_consumed_product_route_missing',IF(ARRAY_LENGTH(candidates)=1,'exact_sku_candidate_requires_graph_preview',IF(ARRAY_LENGTH(candidates)>1,'conflicting_exact_sku_candidates','no_supported_target_missing_mapping_or_history'))) review_status,
+ IF(ARRAY_LENGTH(approved_routes)>0,'inspect_existing_route_or_classification_conflict',IF(ARRAY_LENGTH(candidates)=1,'preview_identity_or_reporting_family_then_review',IF(ARRAY_LENGTH(candidates)>1,'resolve_conflicting_candidates_in_product_mapping','retain_unattributed_request_product_key_evidence'))) required_governance_action
  FROM review ORDER BY affected_customers DESC,affected_orders DESC,source_product_ref LIMIT 501`;
 }
 export function mappingReviewList(rows){
  return {read_only:true,governance_written:false,ranked_by:'affected eligible analytical customer records',truncated:rows.length>500||Number(rows[0]?.total_review_products)>500,
  items:rows.slice(0,500).map(r=>({...r,proposed_target:r.candidates?.length===1?r.candidates[0].product_ref:null,
- supporting_evidence:r.candidates?.length?'Exact persisted source SKU; corroboration and existing Product Mapping/Product Families graph preview still required.':'No supported target found in this bounded SKU evidence. No title-derived relationship proposed.',
- conflicts:r.candidates?.length>1?['Multiple Shopify parents share persisted SKU evidence']:[],
+ supporting_evidence:r.candidates?.length?'Case/whitespace-normalized persisted SKU; corroboration and existing Product Mapping/Product Families graph preview still required.':'No supported target found in this bounded SKU evidence. No title-derived relationship proposed.',
+ conflicts:[...(r.classification_conflicts||[]),...(r.candidates?.length>1?['Multiple Shopify parents share persisted SKU evidence']:[]),...(r.candidates?.length===1&&(r.approved_routes||[]).some(x=>x.target_ref!==r.candidates[0].product_ref)?['Existing approved target differs from SKU candidate; inspect identity versus reporting-family relationship in graph preview']:[])],
+ required_governance_action:r.required_governance_action||'inspect_existing_route_or_request_missing_product_key_evidence',
  limitation:'Missing route does not establish that the collaboration was not sold. Counts overlap across products; archived products remain eligible. Use existing review workflow before any new decision.'}))};
 }
