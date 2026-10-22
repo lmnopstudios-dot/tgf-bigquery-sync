@@ -80,3 +80,56 @@ The command below is pinned to this source/artifact, uses deployed dependencies,
 
 Bounds: five SELECT jobs, 100 MB billed each and 10-second warehouse/12-second client limits; one mapping script, 50-second warehouse/55-second client limit, 15 seconds per statement, 500 MB per data statement (11 statements, at most 5.5 GB), 501 review products, 1000-entry catalogue validation per source. Five control reads include exact request inventory (four executions plus sentinel), finance/customer run rows (500 plus sentinel), collector rows (100 plus sentinel), and exact table metadata. These diagnostic bounds do not change production report limits. The command does not query source APIs, perform deployment, or certify coverage.
 
+```bash
+timeout --signal=TERM --kill-after=5s 75s node --input-type=module <<'JS'
+import assert from 'node:assert/strict';
+import {createHash} from 'node:crypto';
+import {gunzipSync} from 'node:zlib';
+import {BigQuery} from '@google-cloud/bigquery';
+import {loadBigQueryConfig} from './bigquery/client.js';
+import {boundedQuery} from './oracle/bounded-query.js';
+import {safeReadFailure} from './oracle/read-failure.js';
+import {reconcileRetentionCatalogue} from './oracle/retention-catalogue.js';
+let stage='pinned_artifact';
+try {
+ const revision='7b90b45fca590612cb96507c9b0d2c73abad77f4';
+ const response=await fetch(`https://raw.githubusercontent.com/lmnopstudios-dot/tgf-bigquery-sync/${revision}/diagnostics/retention-mapping-coverage.json.gz`,{signal:AbortSignal.timeout(8000),redirect:'error'});
+ assert.ok(response.ok,'Pinned artifact unavailable');
+ const chunks=[];let size=0;
+ for await(const chunk of response.body){size+=chunk.length;if(size>262144)throw Error('Compressed artifact bound');chunks.push(chunk);}
+ const bytes=Buffer.concat(chunks);
+ assert.equal(createHash('sha256').update(bytes).digest('hex'),'e5fcf101a1d601fef88e433ae48d1bde8d27a4af479622ec76bb416e614d60ff');
+ const artifact=JSON.parse(gunzipSync(bytes,{maxOutputLength:4194304}));
+ const {project,credentials}=loadBigQueryConfig();
+ assert.equal(project,artifact.project);
+ assert.equal(process.env.ORACLE_CUSTOMER_IDENTITY_MODE,'email_candidate_v2');
+ assert.equal(process.env.ORACLE_CUSTOMER_IDENTITY_DATASET,'customer_identity');
+ assert.equal(process.env.ORACLE_CUSTOMER_IDENTITY_SNAPSHOT,'history-20261022-billing-v3');
+ assert.equal(process.env.ORACLE_JOB_DATASET||'commerce','commerce');
+ const {evidenceReader}=await import('data:text/javascript;base64,'+Buffer.from(artifact.runner_source).toString('base64'));
+ const read=evidenceReader({boundedQuery,safeReadFailure,reconcileRetentionCatalogue});
+ for(const [key,type]of Object.entries(artifact.mapping_settings.types))if(type==='DATE'&&artifact.mapping_settings.params[key]!=null)artifact.mapping_settings.params[key]=BigQuery.date(artifact.mapping_settings.params[key]);
+ const native=new BigQuery({projectId:project,credentials,location:'US',autoRetry:false,maxRetries:0});
+ let allocations=0;
+ const bigquery={createQueryJob:async settings=>{
+  assert.ok(++allocations<=6,'Warehouse allocation bound');
+  const match=artifact.ingestion_queries.find(q=>q.query===settings.query);
+  const mapping=settings.query===artifact.mapping_settings.query;
+  assert.ok(match||mapping,'Unexpected warehouse query');
+  assert.ok(!settings.destination&&!settings.dryRun,'Unexpected persistent destination or dry run');
+  const check=match?.check||'consolidated_mapping_review';
+  try{
+   const result=await native.createQueryJob(settings);
+   console.log(JSON.stringify({phase:'existing_evidence_job',check,job_id:result[0].id,query_sha256:createHash('sha256').update(settings.query).digest('hex')}));
+   return result;
+  }catch(e){console.log(JSON.stringify({phase:'query_submission_failed',check,...safeReadFailure(e,'diagnostic')}));throw e;}
+ }};
+ stage='consolidated_existing_evidence';
+ const result=await read({bigquery,project,artifact,onCheck:check=>console.log(JSON.stringify(check))});
+ console.log(JSON.stringify({phase:'consolidated_evidence_complete',deployed_revision:process.env.RENDER_GIT_COMMIT||null,artifact_revision:revision,scope:result.scope,checks:result.checks.map(c=>({check:c.check,status:c.status})),warehouse_jobs:allocations,report_replayed:false,governance_written:false,coverage_certified:false}));
+ if(result.checks.some(c=>c.status!=='read_completed'))process.exitCode=1;
+}catch(e){
+ console.log(JSON.stringify({status:'unavailable',diagnostic_stage:stage,...safeReadFailure(e,'diagnostic'),report_replayed:false,governance_written:false,coverage_certified:false}));process.exitCode=1;
+}
+JS
+```
