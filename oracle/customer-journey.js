@@ -129,12 +129,19 @@ function retentionWindowResultSql(product=false,nested=false,baseline=false){
     COUNTIF(mature AND days_to_second IS NOT NULL AND second_purchase_classification='unknown') unknown
     FROM retention_with_medians GROUP BY ${keys},window_days
   ), retention_product_counts AS (
-    SELECT ${keys.split(',').map(k=>'m.'+k).join(',')},m.window_days,l.source_product_ref product_ref,MIN(l.product_title) product,
+    SELECT ${keys.split(',').map(k=>'m.'+k).join(',')},m.window_days,l.source_product_ref product_ref,MIN(COALESCE(NULLIF(TRIM(l.product_title),''),'Product title unavailable')) product,
       COUNT(DISTINCT m.governed_customer_ref) observed_customers,
       COUNT(DISTINCT IF(m.mature,m.governed_customer_ref,NULL)) mature_repeat_customers
     FROM retention_members m JOIN classified_lines l
       ON l.source_platform=m.second_source_platform AND l.source_store=m.second_source_store AND l.order_ref=m.second_order_ref
-    WHERE m.days_to_second IS NOT NULL GROUP BY ${keys.split(',').map(k=>'m.'+k).join(',')},m.window_days,l.source_product_ref
+    WHERE m.days_to_second IS NOT NULL AND l.source_product_ref IS NOT NULL AND l.source_product_id NOT IN ('','0','unknown') GROUP BY ${keys.split(',').map(k=>'m.'+k).join(',')},m.window_days,l.source_product_ref
+  ), retention_product_coverage AS (
+    SELECT ${keys.split(',').map(k=>'m.'+k).join(',')},m.window_days,
+      COUNT(DISTINCT IF(l.order_ref IS NULL,m.governed_customer_ref,NULL)) missing_line_customers,
+      COUNT(DISTINCT IF(l.order_ref IS NOT NULL AND (l.source_product_ref IS NULL OR l.source_product_id IS NULL OR l.source_product_id IN ('','0','unknown')),m.governed_customer_ref,NULL)) unidentified_product_customers,
+      COUNT(DISTINCT IF(l.order_ref IS NOT NULL AND (l.product_title IS NULL OR TRIM(l.product_title)=''),m.governed_customer_ref,NULL)) untitled_product_customers
+    FROM retention_members m LEFT JOIN classified_lines l ON l.source_platform=m.second_source_platform AND l.source_store=m.second_source_store AND l.order_ref=m.second_order_ref
+    WHERE m.days_to_second IS NOT NULL GROUP BY ${keys.split(',').map(k=>'m.'+k).join(',')},m.window_days
   ), retention_product_arrays AS (
     SELECT ${keys},window_days,ARRAY_AGG(STRUCT(product_ref,product,observed_customers,mature_repeat_customers)
       ORDER BY observed_customers DESC,product_ref LIMIT 10) second_order_products
@@ -142,7 +149,8 @@ function retentionWindowResultSql(product=false,nested=false,baseline=false){
   ), retention_scored AS (SELECT *,MAX(IF(window_days=@ranking_window,repeat_customers,NULL)) OVER(PARTITION BY ${keys}) rank_customers,MAX(IF(window_days=@ranking_window,SAFE_DIVIDE(repeat_customers,mature_customers),NULL)) OVER(PARTITION BY ${keys}) rank_rate FROM retention_totals)${nested?`, retention_fair AS (SELECT *,DENSE_RANK() OVER(PARTITION BY source_platform,source_store,collaboration_name ORDER BY IF(@retention_sort='returning_customers_desc',rank_customers,NULL) DESC,rank_rate DESC,entry_product_ref) piece_rank FROM retention_scored)`:''}, retention_ranked AS (SELECT *,DENSE_RANK() OVER(PARTITION BY source_platform,source_store ORDER BY
       ${nested?'piece_rank,IF(collaboration_name IS NULL,1,0),collaboration_name,':''}IF(@retention_sort='returning_customers_desc',rank_customers,NULL) DESC,
       rank_rate DESC,${keys}) cohort_rank,COUNT(*) OVER(PARTITION BY source_platform,source_store)>3*DIV(@cohort_limit,@retention_store_count) truncated FROM ${nested?'retention_fair':'retention_scored'})
-  SELECT r.*,IFNULL(p.second_order_products,[]) second_order_products,c.coverage FROM (SELECT * FROM retention_ranked WHERE cohort_rank<=DIV(@cohort_limit,@retention_store_count) ORDER BY cohort_rank,window_days LIMIT @limit) r LEFT JOIN retention_product_arrays p ON ${keys.split(',').map(k=>`r.${k} IS NOT DISTINCT FROM p.${k}`).join(' AND ')} AND r.window_days=p.window_days
+  SELECT r.*,IFNULL(p.second_order_products,[]) second_order_products,STRUCT(COALESCE(pc.missing_line_customers,0) missing_line_customers,COALESCE(pc.unidentified_product_customers,0) unidentified_product_customers,COALESCE(pc.untitled_product_customers,0) untitled_product_customers) second_order_product_coverage,c.coverage FROM (SELECT * FROM retention_ranked WHERE cohort_rank<=DIV(@cohort_limit,@retention_store_count) ORDER BY cohort_rank,window_days LIMIT @limit) r LEFT JOIN retention_product_arrays p ON ${keys.split(',').map(k=>`r.${k} IS NOT DISTINCT FROM p.${k}`).join(' AND ')} AND r.window_days=p.window_days
+  LEFT JOIN retention_product_coverage pc ON ${keys.split(',').map(k=>`r.${k} IS NOT DISTINCT FROM pc.${k}`).join(' AND ')} AND r.window_days=pc.window_days
   FULL OUTER JOIN (SELECT ARRAY_AGG(STRUCT(source_platform,source_store,eligible_first_customers,named_customers,generic_only_customers,core_only_customers,unknown_customers,conflicting_customers,history_start,history_end,identified_orders,anonymous_orders,migrated_orders,cancelled_orders,excluded_orders,st.classification_stages AS classification_stages)) coverage FROM retention_coverage LEFT JOIN entry_stage_arrays st USING(source_platform,source_store)) c ON TRUE`;
 }
 

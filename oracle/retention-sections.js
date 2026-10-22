@@ -1,7 +1,7 @@
 // Supplemental aggregates share the same entry orders, linked sequencing, next
 // eligible order and coverage parameters as the main retention projection.
 export function retentionSectionSql(baseline){
-  const identity=baseline?"'Sitewide' collaboration_name,EXTRACT(YEAR FROM DATE(e.order_timestamp,@time_zone)) cohort_year":'l.source_product_ref entry_product_ref,MIN(l.product_title) entry_product_title';
+  const identity=baseline?"'Sitewide' collaboration_name,EXTRACT(YEAR FROM DATE(e.order_timestamp,@time_zone)) cohort_year":"l.source_product_ref entry_product_ref,MIN(COALESCE(NULLIF(TRIM(l.product_title),''),'Product title unavailable')) entry_product_title";
   const keys='source_platform,source_store,'+(baseline?'collaboration_name,cohort_year':'entry_product_ref');
   const membership=baseline?'':`JOIN classified_lines l USING(source_platform,source_store,order_ref)`;
   return `, section_entries AS (

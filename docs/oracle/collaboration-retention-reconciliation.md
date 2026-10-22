@@ -46,14 +46,30 @@ values (`emily_malice`, `tgf_x_emily_malice`). The supplied catalogue establishe
 alias decision joining them. Neither spelling similarity nor product identity
 mapping merges collection classifications.
 
-The absent entries cannot be individually certified as zero eligible customers,
-unmapped history, or truncated from the rendered table. The SQL fix returns all
-current collection entries outside the ranking limit, with eligible first-customer
-and historically classified-product counts. A positive eligible count with no
-returned summary establishes truncation; zero products uses the catalogue count.
-Zero eligible customers with positive historical classification evidence is reported
-separately. No historical classification evidence is flagged as missing evidence:
-it does not prove historical transactions existed or a classification is wrong.
+The successful supplied production diagnostic now resolves the ten absences by
+source. All thirty observed eligible counts are zero **in that bounded read**;
+missing mappings/history do not establish zero eligible customers.
+
+| Collection | Shopify evidence | Woo WW / Woo USD evidence |
+|---|---|---|
+| Sammi | 14 historical named products; no observed eligible first-purchase matches | 2 / 1 historical named products; no observed eligible first-purchase matches |
+| TGF x Cut Rate | Historical named products; no observed eligible matches | No governed historical source routes; eligibility unknown |
+| Royal Enfield | Historical named products; no observed eligible matches | No governed historical source routes; eligibility unknown |
+| Slayer | Historical named products; no observed eligible matches | No governed historical source routes; eligibility unknown |
+| Ozzy Osbourne | Historical named products; no observed eligible matches | No governed historical source routes; eligibility unknown |
+| TGF X 4Q | Current members/routes, no historical routed/named products; cause unverified | No governed historical source routes; eligibility unknown |
+| Mooneyes | Current members/routes, no historical routed/named products; cause unverified | No governed historical source routes; eligibility unknown |
+| DicE | Current members/routes, no historical routed/named products; cause unverified | No governed historical source routes; eligibility unknown |
+| Dark Arts Coffee | Current members/routes, no historical routed/named products; cause unverified | No governed historical source routes; eligibility unknown |
+| P&CO | Current members/routes, no historical routed/named products; cause unverified | No governed historical source routes; eligibility unknown |
+
+None of these ten has a positive eligible count establishing truncation. The
+independent quota defect below is verified in source, but is not the demonstrated
+cause of these ten absences. The dynamic report now returns route/member/history
+counts outside item and ranking limits, keeps observed matches separate, and
+renders eligibility as unknown where mapping/history evidence is missing.
+Historical classification conflicts/absence and missing catalogue membership have
+separate statuses. No classifications or routes are inferred or written.
 
 ## Verified source defects and focused changes
 
@@ -115,24 +131,70 @@ requires the entire calendar window within that interval and the frozen cutoff.
 Missing certificates, timezone mismatch or disjoint intervals leave rates unavailable.
 No deployment setting or certificate is written by this change.
 
-The exact unresolved fact is which intervals have independently verified continuous
-eligible **original transaction** coverage for Woo WW, Woo USD and Shopify, including
-channel scope, gaps and retirement boundaries, with evidence references. Migration
-handoff coverage outside a common certified interval also needs independent proof;
-this fix conservatively does not synthesize it. Prior-history completeness remains
-a separate uncertainty. No supplied evidence certifies those intervals. It is not
-possible here to determine whether an inaccessible retained ingestion attestation
-contains them.
+The exact missing fact is independently evidenced continuous completeness of
+eligible **original transactions** for each source/store/channel over the proposed
+follow-up intervals, including gaps and retirement/handoff boundaries. To establish
+it, retained transaction-ingestion evidence must identify:
+
+- Source, store, channels, extraction filters, interval and Europe/London calendar
+  boundaries, with immutable run/manifest references.
+- Exhausted pagination/cursors and reconciled source-to-warehouse order keys/counts
+  for that interval, including late arrivals and any outages/backfills.
+- Cancellation/refund state completeness through the cutoff, original order dates
+  and migration/import exclusions, consistent with report eligibility.
+- Evidenced source retirement and migration handoff continuity, where relevant;
+  last activity and public launch dates do not certify an absence of transactions.
+
+Existing transaction ETL manifests, source reconciliations and lifecycle records
+could supply these facts if retained. The **bounded search** inspected five datasets
+(commerce, customer_identity, metorik_uk, metorik_us, shopify_data) for coverage/history
+candidates; its inventory was not truncated. It found history_progress and
+identity_snapshots, with eight complete adapter progress records and the existing
+ready snapshot (58,465 mappings; technical range 1900-01-01–2026-10-19).
+history_progress contains job/source/adapter/revision/cursor/complete/updated_at;
+it can supply run lineage and adapter completion, not source transaction
+reconciliation or certified continuous intervals. An identity roster derived from
+warehouse orders cannot establish upstream ingestion completeness. A ready email
+snapshot and its technical dates certify neither transaction follow-up nor first-ever
+history. No inspected record supplies the missing certification. This bounded
+result does **not** establish that no suitable evidence exists elsewhere.
+
+**Blocker:** 90/180/360-day mature denominators and rates remain unverified until
+those source-specific transaction facts are supplied and validated. Observed
+repeat counts remain usable separately; unavailable rates are not zero retention.
+Prior-history completeness is an independent uncertainty. No certificate, setting,
+collection or snapshot is changed by this PR.
 
 ## Shopify failure and remaining requested sections
 
-An exact bounded SELECT of the supplied saved job and request was attempted using
-existing credentials. It failed before warehouse execution at token acquisition:
-HTTP 403, `Could not refresh access token: Domain forbidden`. No saved result,
-population SQL, query metadata or original provider error was retrieved. This is an
-access failure in this environment, **not** the retained Shopify baseline failure.
-The pasted report confirms that component failed but omits its retained error and
-query ID. No speculative SQL repair or replay is presented as its resolution.
+The supplied successful read-only production diagnostic retrieved the retained
+outcome for request cda4261c-436a-4c99-89fc-36216381d87b, job
+326dd52c-f3b4-4ade-a86e-0b53e58eb7a5. Query
+**6026f7a6-44c6-4449-9814-398b028296f1 completed in BigQuery** (DONE,
+failure null). The application rejected its evidence at evidence_validation with
+EVIDENCE_SCOPE_MISMATCH. This was not a warehouse/SQL execution failure.
+
+Sitewide calls now explicitly clear collaboration/product entry filters while
+preserving identity, source, dates, channels, eligibility and coverage safeguards.
+Completed reads retain query ID and activated identity evidence even if validation
+rejects a component; bounded machine validation reasons distinguish source,
+grouping, baseline and denominator contracts. Rendering distinguishes completed
+warehouse reads with rejected evidence from retrieval failures.
+
+A demonstrable shared SQL defect allowed missing second-order product IDs or titles
+to invalidate an otherwise usable retention aggregate. Detail arrays now include
+only known IDs, provide an explicit unavailable-title label for known products,
+and separately count repeat customers with absent lines, unidentified products or
+missing titles. No customer, cohort denominator or observed repeat is removed.
+Invalid supplemental period/ranking evidence is isolated from validated parent
+baseline/items and from other sources; strict denominator/source checks remain.
+
+The supplied diagnostic contains the validation outcome and query metadata, **not
+the rejected aggregate rows or exact predicate**. One exact retained-results GET
+was denied by workspace credentials (HTTP 403); no query was rerun. The source
+fixes above are verified locally; the original offending field and corrected live
+baseline are not independently verified. Missing second-product identity is a
+reproduced code defect, not a claimed diagnosis of that unseen row.
 
 The existing named/item, whole-range sitewide and second-order product calculations
 remain present. Their source/window/identity/eligibility contracts and independent
@@ -148,9 +210,9 @@ the main report, within the existing transactional read and budgets. No addition
 provider query is made. Calendar periods are independently bounded at 150 rows per
 source; ranking unions at 60 rows per source. The period counts reconcile to the
 whole-range baseline. These source sections pass fixture and local SQL calculation
-tests; no new production counts are claimed. The actual Shopify baseline failure,
-exact live catalogue reconciliation and live transaction coverage evidence remain
-open requirements before the business report is complete.
+tests; no new production counts are claimed. Production scope validation and live transaction coverage certification remain
+open before the business report can be considered complete. The supplied
+source-specific reconciliation is recorded above; no live counts are recomputed.
 
 ## Verification
 
@@ -166,15 +228,22 @@ Desktop/mobile browser coverage additionally checks reviewed labels and catalogu
 reconciliation after refresh without provider replay. Local SQL adaptation and
 fixture providers do not certify BigQuery schema or production results.
 
-Final gate results are recorded in the PR. No collection, republication, repair,
+Required local gates: acceptance **753 passed**, zero failed/cancelled/skipped;
+browser **passed**, 21 conversations at desktop/mobile widths with durable and
+activated-identity refresh. Final focused SQL/report/coverage checks: 41 passed.
+These gates do not establish corrected production counts or coverage.
+
+No collection, republication, repair,
 classification write, identity-setting change, IAM change, deployment or merge is
 part of this change.
 
 ## Targeted unresolved-evidence handoff
 
-Use the [single bounded read-only Render command](retention-unresolved-render.md).
-It retrieves the retained Shopify baseline error, existing coverage/history records
-and the ten absent collections' current aggregate reconciliation evidence, with
-independent outcomes. It uses deployed dependencies without deployment or replay.
-The diagnostic has not been run against Render in this workspace; the prior access
-failure does not establish any production error or absence of evidence.
+The [single bounded read-only Render command](retention-unresolved-render.md) is
+retained in the PR for auditability; **do not rerun it for these supplied results**.
+The user supplied its successful output: eleven SELECTs and six metadata GETs,
+with independent checks preserved. The normalized aggregate evidence is committed
+as [retention-production-20261022.json](../../test/fixtures/retention-production-20261022.json),
+including diagnostic/deployed revisions, scope, bounds, retained query status,
+source-specific reconciliation and ingestion records. It contains no customer-level
+records. The snapshot/collection are preserved; no saved job was replayed.

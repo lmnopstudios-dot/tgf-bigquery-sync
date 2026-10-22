@@ -1,0 +1,715 @@
+{
+  "diagnostic_revision": "4f808fcbf4af858b4218078a01e4439eeb50207b",
+  "deployed_revision": "a64543c1052e35e977a11c44e69ea7a8998396ef",
+  "read_only": true,
+  "report_replayed": false,
+  "request_id": "cda4261c-436a-4c99-89fc-36216381d87b",
+  "job_id": "326dd52c-f3b4-4ade-a86e-0b53e58eb7a5",
+  "scope": {
+    "entry_start": "2022-10-19",
+    "entry_end": "2026-10-19",
+    "observation_end": "2026-10-19",
+    "time_zone": "Europe/London",
+    "snapshot": "customer_identity/history-20261022-billing-v3"
+  },
+  "bounds": {
+    "deadline_ms": 45000,
+    "queries": 11,
+    "maximum_queries": 15,
+    "metadata_gets": 6,
+    "maximum_billed_bytes_total": "9653433600",
+    "maximum_metadata_gets": 7,
+    "maximum_query_ms": 10000
+  },
+  "checks": [
+    {
+      "check": "coverage_inventory/metorik_us",
+      "status": "read_completed",
+      "dataset": "metorik_us",
+      "truncated": false,
+      "tables": []
+    },
+    {
+      "check": "coverage_inventory/commerce",
+      "status": "read_completed",
+      "dataset": "commerce",
+      "truncated": false,
+      "tables": []
+    },
+    {
+      "check": "coverage_inventory/shopify_data",
+      "status": "read_completed",
+      "dataset": "shopify_data",
+      "truncated": false,
+      "tables": []
+    },
+    {
+      "check": "coverage_inventory/customer_identity",
+      "status": "read_completed",
+      "dataset": "customer_identity",
+      "truncated": false,
+      "tables": [
+        {
+          "table": "history_progress",
+          "columns": [
+            "job_key",
+            "source",
+            "adapter",
+            "revision",
+            "cursor",
+            "complete",
+            "updated_at"
+          ]
+        },
+        {
+          "table": "identity_snapshots",
+          "columns": [
+            "snapshot_id",
+            "state",
+            "start_date",
+            "end_date",
+            "mapping_count",
+            "created_at"
+          ]
+        }
+      ]
+    },
+    {
+      "check": "retained_shopify_baseline",
+      "status": "read_completed",
+      "job_status": "completed",
+      "scope": {
+        "entry_start": "2022-10-19",
+        "entry_end": "2026-10-19",
+        "observation_end": "2026-10-19"
+      },
+      "baseline_outcomes": [
+        {
+          "state": "rejected",
+          "stage": "evidence_validation",
+          "query_id": "6026f7a6-44c6-4449-9814-398b028296f1",
+          "code": "EVIDENCE_SCOPE_MISMATCH",
+          "bigquery_reason": null,
+          "error_category": null,
+          "http_status": null,
+          "statement_location": null
+        }
+      ],
+      "displayed_names": [
+        "death_spray",
+        "dr_martens",
+        "elfin",
+        "emily_malice",
+        "end",
+        "ghost",
+        "good_charlotte",
+        "harley_davidson",
+        "iron_maiden",
+        "judas_priest",
+        "mot_rhead",
+        "rd_o_studios",
+        "rolling_stones"
+      ],
+      "stored_followup": [
+        {
+          "source_store": "shopify",
+          "status": "unverified",
+          "start_date": null,
+          "end_date": null,
+          "evidence": null
+        },
+        {
+          "source_store": "usd",
+          "status": "unverified",
+          "start_date": null,
+          "end_date": null,
+          "evidence": null
+        },
+        {
+          "source_store": "ww",
+          "status": "unverified",
+          "start_date": null,
+          "end_date": null,
+          "evidence": null
+        }
+      ],
+      "provider_metadata": {
+        "state": "DONE",
+        "failure": null
+      }
+    },
+    {
+      "check": "coverage_inventory/metorik_uk",
+      "status": "read_completed",
+      "dataset": "metorik_uk",
+      "truncated": false,
+      "tables": []
+    },
+    {
+      "check": "coverage_records/customer_identity/identity_snapshots",
+      "status": "read_completed",
+      "dataset": "customer_identity",
+      "table": "identity_snapshots",
+      "truncated": false,
+      "records": [
+        {
+          "snapshot_id": "history-20261022-billing-v3",
+          "state": "ready",
+          "start_date": "1900-01-01",
+          "end_date": "2026-10-19",
+          "mapping_count": 58465
+        }
+      ],
+      "certification": "not_inferred_from_record_presence"
+    },
+    {
+      "check": "coverage_records/customer_identity/history_progress",
+      "status": "read_completed",
+      "dataset": "customer_identity",
+      "table": "history_progress",
+      "truncated": false,
+      "records": [
+        {
+          "source": "usd",
+          "adapter": "metorik_orders",
+          "revision": "history-20261020-v2",
+          "complete": true,
+          "updated_at": "2026-10-21T20:30:32.035Z"
+        },
+        {
+          "source": "ww",
+          "adapter": "metorik_orders",
+          "revision": "history-20261020-v2",
+          "complete": true,
+          "updated_at": "2026-10-21T12:10:38.431Z"
+        },
+        {
+          "source": "ww",
+          "adapter": "retained",
+          "revision": "history-20261020-v2",
+          "complete": true,
+          "updated_at": "2026-10-20T22:39:16.496Z"
+        },
+        {
+          "source": "ww",
+          "adapter": "roster",
+          "revision": "history-20261020-v2",
+          "complete": true,
+          "updated_at": "2026-10-20T21:00:48.324Z"
+        },
+        {
+          "source": "usd",
+          "adapter": "roster",
+          "revision": "history-20261020-v2",
+          "complete": true,
+          "updated_at": "2026-10-20T18:24:30.408Z"
+        },
+        {
+          "source": "shopify",
+          "adapter": "roster",
+          "revision": "history-20261020-v2",
+          "complete": true,
+          "updated_at": "2026-10-20T19:14:56.098Z"
+        },
+        {
+          "source": "shopify",
+          "adapter": "shopify",
+          "revision": "history-20261020-v2",
+          "complete": true,
+          "updated_at": "2026-10-21T22:15:27.581Z"
+        },
+        {
+          "source": "ww",
+          "adapter": "metorik_orders",
+          "revision": "history-20261021-billing-v3",
+          "complete": true,
+          "updated_at": "2026-10-21T19:31:17.960Z"
+        }
+      ],
+      "certification": "not_inferred_from_record_presence"
+    },
+    {
+      "check": "absent_collections/shopify",
+      "status": "read_completed",
+      "source_platform": "shopify",
+      "source_store": "shopify",
+      "results": [
+        {
+          "collection_id": "657939759431",
+          "display_name": "TGF x Cut Rate",
+          "collaboration_name": "tgf_x_cut_rate",
+          "products": 1,
+          "eligible_customers": 0,
+          "historical_named_products": 1,
+          "persisted_members": 1,
+          "source_routes": 1,
+          "historical_routed_products": 1,
+          "unclassified_products": 0,
+          "conflicting_products": 0,
+          "reason": "no_eligible_first_purchase_customers_in_current_read",
+          "retained_name_displayed": false
+        },
+        {
+          "collection_id": "657939923271",
+          "display_name": "TGF X 4Q",
+          "collaboration_name": "tgf_x_4q",
+          "products": 1,
+          "eligible_customers": 0,
+          "historical_named_products": 0,
+          "persisted_members": 1,
+          "source_routes": 1,
+          "historical_routed_products": 0,
+          "unclassified_products": 0,
+          "conflicting_products": 0,
+          "reason": "historical_product_evidence_missing_cause_unverified",
+          "retained_name_displayed": false
+        },
+        {
+          "collection_id": "657944510791",
+          "display_name": "Sammi",
+          "collaboration_name": "sammi",
+          "products": 21,
+          "eligible_customers": 0,
+          "historical_named_products": 14,
+          "persisted_members": 21,
+          "source_routes": 21,
+          "historical_routed_products": 14,
+          "unclassified_products": 0,
+          "conflicting_products": 0,
+          "reason": "no_eligible_first_purchase_customers_in_current_read",
+          "retained_name_displayed": false
+        },
+        {
+          "collection_id": "657966924103",
+          "display_name": "Royal Enfield",
+          "collaboration_name": "royal_enfield",
+          "products": 1,
+          "eligible_customers": 0,
+          "historical_named_products": 1,
+          "persisted_members": 1,
+          "source_routes": 1,
+          "historical_routed_products": 1,
+          "unclassified_products": 0,
+          "conflicting_products": 0,
+          "reason": "no_eligible_first_purchase_customers_in_current_read",
+          "retained_name_displayed": false
+        },
+        {
+          "collection_id": "658005721415",
+          "display_name": "Mooneyes",
+          "collaboration_name": "mooneyes",
+          "products": 1,
+          "eligible_customers": 0,
+          "historical_named_products": 0,
+          "persisted_members": 1,
+          "source_routes": 1,
+          "historical_routed_products": 0,
+          "unclassified_products": 0,
+          "conflicting_products": 0,
+          "reason": "historical_product_evidence_missing_cause_unverified",
+          "retained_name_displayed": false
+        },
+        {
+          "collection_id": "658346246471",
+          "display_name": "DicE",
+          "collaboration_name": "dice",
+          "products": 1,
+          "eligible_customers": 0,
+          "historical_named_products": 0,
+          "persisted_members": 1,
+          "source_routes": 1,
+          "historical_routed_products": 0,
+          "unclassified_products": 0,
+          "conflicting_products": 0,
+          "reason": "historical_product_evidence_missing_cause_unverified",
+          "retained_name_displayed": false
+        },
+        {
+          "collection_id": "658349228359",
+          "display_name": "Slayer",
+          "collaboration_name": "slayer",
+          "products": 1,
+          "eligible_customers": 0,
+          "historical_named_products": 1,
+          "persisted_members": 1,
+          "source_routes": 1,
+          "historical_routed_products": 1,
+          "unclassified_products": 0,
+          "conflicting_products": 0,
+          "reason": "no_eligible_first_purchase_customers_in_current_read",
+          "retained_name_displayed": false
+        },
+        {
+          "collection_id": "658364334407",
+          "display_name": "Dark Arts Coffee",
+          "collaboration_name": "dark_arts_coffee",
+          "products": 4,
+          "eligible_customers": 0,
+          "historical_named_products": 0,
+          "persisted_members": 4,
+          "source_routes": 4,
+          "historical_routed_products": 0,
+          "unclassified_products": 0,
+          "conflicting_products": 0,
+          "reason": "historical_product_evidence_missing_cause_unverified",
+          "retained_name_displayed": false
+        },
+        {
+          "collection_id": "659656573255",
+          "display_name": "Ozzy Osbourne",
+          "collaboration_name": "ozzy_osbourne",
+          "products": 2,
+          "eligible_customers": 0,
+          "historical_named_products": 2,
+          "persisted_members": 2,
+          "source_routes": 2,
+          "historical_routed_products": 2,
+          "unclassified_products": 0,
+          "conflicting_products": 0,
+          "reason": "no_eligible_first_purchase_customers_in_current_read",
+          "retained_name_displayed": false
+        },
+        {
+          "collection_id": "690153193799",
+          "display_name": "P&CO",
+          "collaboration_name": "p_co",
+          "products": 8,
+          "eligible_customers": 0,
+          "historical_named_products": 0,
+          "persisted_members": 8,
+          "source_routes": 8,
+          "historical_routed_products": 0,
+          "unclassified_products": 0,
+          "conflicting_products": 0,
+          "reason": "historical_product_evidence_missing_cause_unverified",
+          "retained_name_displayed": false
+        }
+      ],
+      "unresolved_collection_ids": [],
+      "as_of": "current governed warehouse read; not purchase-time classifications or certified reconstruction of the retained report",
+      "truncation": "Positive eligible counts support omission/truncation investigation; they do not prove the historical omission cause if source or governance evidence changed."
+    },
+    {
+      "check": "absent_collections/usd",
+      "status": "read_completed",
+      "source_platform": "woo",
+      "source_store": "usd",
+      "results": [
+        {
+          "collection_id": "657939759431",
+          "display_name": "TGF x Cut Rate",
+          "collaboration_name": "tgf_x_cut_rate",
+          "products": 1,
+          "eligible_customers": 0,
+          "historical_named_products": 0,
+          "persisted_members": 1,
+          "source_routes": 0,
+          "historical_routed_products": 0,
+          "unclassified_products": 0,
+          "conflicting_products": 0,
+          "reason": "governed_source_product_mapping_missing",
+          "retained_name_displayed": false
+        },
+        {
+          "collection_id": "657939923271",
+          "display_name": "TGF X 4Q",
+          "collaboration_name": "tgf_x_4q",
+          "products": 1,
+          "eligible_customers": 0,
+          "historical_named_products": 0,
+          "persisted_members": 1,
+          "source_routes": 0,
+          "historical_routed_products": 0,
+          "unclassified_products": 0,
+          "conflicting_products": 0,
+          "reason": "governed_source_product_mapping_missing",
+          "retained_name_displayed": false
+        },
+        {
+          "collection_id": "657944510791",
+          "display_name": "Sammi",
+          "collaboration_name": "sammi",
+          "products": 21,
+          "eligible_customers": 0,
+          "historical_named_products": 1,
+          "persisted_members": 21,
+          "source_routes": 1,
+          "historical_routed_products": 1,
+          "unclassified_products": 0,
+          "conflicting_products": 0,
+          "reason": "no_eligible_first_purchase_customers_in_current_read",
+          "retained_name_displayed": false
+        },
+        {
+          "collection_id": "657966924103",
+          "display_name": "Royal Enfield",
+          "collaboration_name": "royal_enfield",
+          "products": 1,
+          "eligible_customers": 0,
+          "historical_named_products": 0,
+          "persisted_members": 1,
+          "source_routes": 0,
+          "historical_routed_products": 0,
+          "unclassified_products": 0,
+          "conflicting_products": 0,
+          "reason": "governed_source_product_mapping_missing",
+          "retained_name_displayed": false
+        },
+        {
+          "collection_id": "658005721415",
+          "display_name": "Mooneyes",
+          "collaboration_name": "mooneyes",
+          "products": 1,
+          "eligible_customers": 0,
+          "historical_named_products": 0,
+          "persisted_members": 1,
+          "source_routes": 0,
+          "historical_routed_products": 0,
+          "unclassified_products": 0,
+          "conflicting_products": 0,
+          "reason": "governed_source_product_mapping_missing",
+          "retained_name_displayed": false
+        },
+        {
+          "collection_id": "658346246471",
+          "display_name": "DicE",
+          "collaboration_name": "dice",
+          "products": 1,
+          "eligible_customers": 0,
+          "historical_named_products": 0,
+          "persisted_members": 1,
+          "source_routes": 0,
+          "historical_routed_products": 0,
+          "unclassified_products": 0,
+          "conflicting_products": 0,
+          "reason": "governed_source_product_mapping_missing",
+          "retained_name_displayed": false
+        },
+        {
+          "collection_id": "658349228359",
+          "display_name": "Slayer",
+          "collaboration_name": "slayer",
+          "products": 1,
+          "eligible_customers": 0,
+          "historical_named_products": 0,
+          "persisted_members": 1,
+          "source_routes": 0,
+          "historical_routed_products": 0,
+          "unclassified_products": 0,
+          "conflicting_products": 0,
+          "reason": "governed_source_product_mapping_missing",
+          "retained_name_displayed": false
+        },
+        {
+          "collection_id": "658364334407",
+          "display_name": "Dark Arts Coffee",
+          "collaboration_name": "dark_arts_coffee",
+          "products": 4,
+          "eligible_customers": 0,
+          "historical_named_products": 0,
+          "persisted_members": 4,
+          "source_routes": 0,
+          "historical_routed_products": 0,
+          "unclassified_products": 0,
+          "conflicting_products": 0,
+          "reason": "governed_source_product_mapping_missing",
+          "retained_name_displayed": false
+        },
+        {
+          "collection_id": "659656573255",
+          "display_name": "Ozzy Osbourne",
+          "collaboration_name": "ozzy_osbourne",
+          "products": 2,
+          "eligible_customers": 0,
+          "historical_named_products": 0,
+          "persisted_members": 2,
+          "source_routes": 0,
+          "historical_routed_products": 0,
+          "unclassified_products": 0,
+          "conflicting_products": 0,
+          "reason": "governed_source_product_mapping_missing",
+          "retained_name_displayed": false
+        },
+        {
+          "collection_id": "690153193799",
+          "display_name": "P&CO",
+          "collaboration_name": "p_co",
+          "products": 8,
+          "eligible_customers": 0,
+          "historical_named_products": 0,
+          "persisted_members": 8,
+          "source_routes": 0,
+          "historical_routed_products": 0,
+          "unclassified_products": 0,
+          "conflicting_products": 0,
+          "reason": "governed_source_product_mapping_missing",
+          "retained_name_displayed": false
+        }
+      ],
+      "unresolved_collection_ids": [],
+      "as_of": "current governed warehouse read; not purchase-time classifications or certified reconstruction of the retained report",
+      "truncation": "Positive eligible counts support omission/truncation investigation; they do not prove the historical omission cause if source or governance evidence changed."
+    },
+    {
+      "check": "absent_collections/ww",
+      "status": "read_completed",
+      "source_platform": "woo",
+      "source_store": "ww",
+      "results": [
+        {
+          "collection_id": "657939759431",
+          "display_name": "TGF x Cut Rate",
+          "collaboration_name": "tgf_x_cut_rate",
+          "products": 1,
+          "eligible_customers": 0,
+          "historical_named_products": 0,
+          "persisted_members": 1,
+          "source_routes": 0,
+          "historical_routed_products": 0,
+          "unclassified_products": 0,
+          "conflicting_products": 0,
+          "reason": "governed_source_product_mapping_missing",
+          "retained_name_displayed": false
+        },
+        {
+          "collection_id": "657939923271",
+          "display_name": "TGF X 4Q",
+          "collaboration_name": "tgf_x_4q",
+          "products": 1,
+          "eligible_customers": 0,
+          "historical_named_products": 0,
+          "persisted_members": 1,
+          "source_routes": 0,
+          "historical_routed_products": 0,
+          "unclassified_products": 0,
+          "conflicting_products": 0,
+          "reason": "governed_source_product_mapping_missing",
+          "retained_name_displayed": false
+        },
+        {
+          "collection_id": "657944510791",
+          "display_name": "Sammi",
+          "collaboration_name": "sammi",
+          "products": 21,
+          "eligible_customers": 0,
+          "historical_named_products": 2,
+          "persisted_members": 21,
+          "source_routes": 2,
+          "historical_routed_products": 2,
+          "unclassified_products": 0,
+          "conflicting_products": 0,
+          "reason": "no_eligible_first_purchase_customers_in_current_read",
+          "retained_name_displayed": false
+        },
+        {
+          "collection_id": "657966924103",
+          "display_name": "Royal Enfield",
+          "collaboration_name": "royal_enfield",
+          "products": 1,
+          "eligible_customers": 0,
+          "historical_named_products": 0,
+          "persisted_members": 1,
+          "source_routes": 0,
+          "historical_routed_products": 0,
+          "unclassified_products": 0,
+          "conflicting_products": 0,
+          "reason": "governed_source_product_mapping_missing",
+          "retained_name_displayed": false
+        },
+        {
+          "collection_id": "658005721415",
+          "display_name": "Mooneyes",
+          "collaboration_name": "mooneyes",
+          "products": 1,
+          "eligible_customers": 0,
+          "historical_named_products": 0,
+          "persisted_members": 1,
+          "source_routes": 0,
+          "historical_routed_products": 0,
+          "unclassified_products": 0,
+          "conflicting_products": 0,
+          "reason": "governed_source_product_mapping_missing",
+          "retained_name_displayed": false
+        },
+        {
+          "collection_id": "658346246471",
+          "display_name": "DicE",
+          "collaboration_name": "dice",
+          "products": 1,
+          "eligible_customers": 0,
+          "historical_named_products": 0,
+          "persisted_members": 1,
+          "source_routes": 0,
+          "historical_routed_products": 0,
+          "unclassified_products": 0,
+          "conflicting_products": 0,
+          "reason": "governed_source_product_mapping_missing",
+          "retained_name_displayed": false
+        },
+        {
+          "collection_id": "658349228359",
+          "display_name": "Slayer",
+          "collaboration_name": "slayer",
+          "products": 1,
+          "eligible_customers": 0,
+          "historical_named_products": 0,
+          "persisted_members": 1,
+          "source_routes": 0,
+          "historical_routed_products": 0,
+          "unclassified_products": 0,
+          "conflicting_products": 0,
+          "reason": "governed_source_product_mapping_missing",
+          "retained_name_displayed": false
+        },
+        {
+          "collection_id": "658364334407",
+          "display_name": "Dark Arts Coffee",
+          "collaboration_name": "dark_arts_coffee",
+          "products": 4,
+          "eligible_customers": 0,
+          "historical_named_products": 0,
+          "persisted_members": 4,
+          "source_routes": 0,
+          "historical_routed_products": 0,
+          "unclassified_products": 0,
+          "conflicting_products": 0,
+          "reason": "governed_source_product_mapping_missing",
+          "retained_name_displayed": false
+        },
+        {
+          "collection_id": "659656573255",
+          "display_name": "Ozzy Osbourne",
+          "collaboration_name": "ozzy_osbourne",
+          "products": 2,
+          "eligible_customers": 0,
+          "historical_named_products": 0,
+          "persisted_members": 2,
+          "source_routes": 0,
+          "historical_routed_products": 0,
+          "unclassified_products": 0,
+          "conflicting_products": 0,
+          "reason": "governed_source_product_mapping_missing",
+          "retained_name_displayed": false
+        },
+        {
+          "collection_id": "690153193799",
+          "display_name": "P&CO",
+          "collaboration_name": "p_co",
+          "products": 8,
+          "eligible_customers": 0,
+          "historical_named_products": 0,
+          "persisted_members": 8,
+          "source_routes": 0,
+          "historical_routed_products": 0,
+          "unclassified_products": 0,
+          "conflicting_products": 0,
+          "reason": "governed_source_product_mapping_missing",
+          "retained_name_displayed": false
+        }
+      ],
+      "unresolved_collection_ids": [],
+      "as_of": "current governed warehouse read; not purchase-time classifications or certified reconstruction of the retained report",
+      "truncation": "Positive eligible counts support omission/truncation investigation; they do not prove the historical omission cause if source or governance evidence changed."
+    }
+  ]
+}

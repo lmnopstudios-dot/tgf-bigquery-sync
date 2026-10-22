@@ -74,7 +74,7 @@ export function answerCompleteness(context,result){
           const source_platform=source_store==='shopify'?'shopify':'woo',entries=evidence.catalogue_reconciliation.filter(c=>c.source_store===source_store);
           if(entries.some(c=>c.source_platform!==source_platform))throw Error('catalogue source');
           const checked=reconcileRetentionCatalogue(entries,evidence.rows||[],{source_platform,source_store});
-          if(checked.some((c,i)=>c.status!==entries[i].status||JSON.stringify(c.governed_alias_collection_ids)!==JSON.stringify(entries[i].governed_alias_collection_ids)))throw Error('catalogue reconciliation');
+          if(checked.some((c,i)=>c.status!==entries[i].status||c.eligible_customers!==entries[i].eligible_customers||JSON.stringify(c.governed_alias_collection_ids)!==JSON.stringify(entries[i].governed_alias_collection_ids)))throw Error('catalogue reconciliation');
         }
         if(evidence.catalogue_reconciliation.some(c=>!['ww','usd','shopify'].includes(c.source_store)))throw Error('catalogue source');
       }
@@ -90,6 +90,7 @@ export function answerCompleteness(context,result){
       if(r.observation_coverage_status==='unverified'&&(r.mature_customers!==0||r.repeat_customers!==0||r.repeat_rate!==null))missing.push('observation_coverage');
       if(r.observation_coverage_status!=null&&(!Number.isInteger(r.observed_repeat_customers)||r.observed_repeat_customers<r.repeat_customers||r.observed_repeat_customers>r.cohort_customers))missing.push('observed_returns');
       if(r.second_order_products!=null&&(!Array.isArray(r.second_order_products)||r.second_order_products.length>10||new Set(r.second_order_products.map(p=>p.product_ref)).size!==r.second_order_products.length||r.second_order_products.some(p=>typeof p.product_ref!=='string'||!p.product_ref||typeof p.product!=='string'||![p.observed_customers,p.mature_repeat_customers].every(n=>Number.isSafeInteger(n)&&n>=0)||p.observed_customers>r.observed_repeat_customers||p.mature_repeat_customers>r.repeat_customers||p.mature_repeat_customers>p.observed_customers)))missing.push('second_order_products');
+      if(r.second_order_product_coverage!=null&&['missing_line_customers','unidentified_product_customers','untitled_product_customers'].some(k=>!Number.isSafeInteger(r.second_order_product_coverage[k])||r.second_order_product_coverage[k]<0||r.second_order_product_coverage[k]>r.observed_repeat_customers))missing.push('second_order_product_coverage');
       const buckets=['same_collaboration','different_collaboration','core_range','unknown'];
       if(buckets.some(k=>r[k]!=null)&&(!buckets.every(k=>Number.isInteger(r[k])&&r[k]>=0)||buckets.reduce((n,k)=>n+r[k],0)!==r.repeat_customers))missing.push('second_purchase_classification');
       const period=(evidence.baseline_period_rows||[]).includes(r),ranking=(evidence.product_ranking_rows||[]).includes(r);

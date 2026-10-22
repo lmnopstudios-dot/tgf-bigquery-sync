@@ -158,3 +158,60 @@ test('retained mixed unmatched diagnostics remain honest without reconstructing 
  const answer=retentionMarkdown({rows:[],periods:[{start_date:'2022-10-19',end_date:'2026-10-19'}],observation_end:'2026-10-19',coverage:{classification:[{...scope,classification_stages:[{collaboration_state:'product_identity_unmatched',product_lines:219,customers:949}]}]}});
  assert.match(answer,/Missing product identifiers or first-order line evidence \(legacy combined diagnostic\): 219 grouped order-product rows \/ 949 customers/);
 });
+
+const production=JSON.parse(readFileSync(new URL('./fixtures/retention-production-20261022.json',import.meta.url)));
+test('supplied production evidence separates successful BigQuery from rejected application scope',()=>{
+ const baseline=production.checks.find(c=>c.check==='retained_shopify_baseline');
+ assert.equal(baseline.provider_metadata.state,'DONE');assert.equal(baseline.provider_metadata.failure,null);
+ assert.deepEqual(baseline.baseline_outcomes.map(o=>[o.stage,o.code,o.query_id]),[['evidence_validation','EVIDENCE_SCOPE_MISMATCH','6026f7a6-44c6-4449-9814-398b028296f1']]);
+ assert.ok(baseline.stored_followup.every(c=>c.status==='unverified'&&c.evidence===null));
+ const progress=production.checks.find(c=>c.table==='history_progress');assert.equal(progress.records.length,8);assert.ok(progress.records.every(r=>r.complete));
+ assert.equal(progress.certification,'not_inferred_from_record_presence');
+ assert.equal(linkedObservationCoverage([]).status,'unverified');
+});
+test('all ten production absences reconcile separately by source without zeroing missing history',()=>{
+ for(const check of production.checks.filter(c=>c.check.startsWith('absent_collections/'))){
+  const rows=reconcileRetentionCatalogue(check.results,[],check);assert.equal(rows.length,10);
+  for(const r of rows){
+   assert.equal(r.observed_eligible_customers,0);assert.notEqual(r.status,'truncated');
+   if(r.historical_products>0){assert.equal(r.status,'no_eligible_first_purchase_customers');assert.equal(r.eligible_customers,0);}
+   else{assert.equal(r.eligible_customers,null);assert.equal(r.eligibility_status,'unknown');assert.equal(r.status,check.source_store==='shopify'?'historical_product_evidence_missing_cause_unverified':'governed_source_product_mapping_missing');}
+  }
+  assert.equal(rows.filter(r=>r.eligible_customers===0).length,check.source_store==='shopify'?5:1);
+ }
+});
+for(const fault of ['none','wrong_source','wrong_denominator','bad_supplement'])test(`sitewide validation retains independent results and read provenance: ${fault}`,async()=>{
+ const question=readFileSync(new URL('./fixtures/collaboration-retention-20261022.txt',import.meta.url),'utf8');
+ const context=transitionAnalysisContext(null,question,{now:Date.parse('2026-10-22T12:00:00Z')}).context;
+ const r=await answerCohortRetention({context,provider:{analyzeCustomerJourney:async(d,o)=>{
+  const group=d.group_by[0],baseline=group==='retention_baseline_windows',shopify=o.sourceStore==='shopify';
+  if(baseline){assert.equal(d.cohort.entry_product_classification,null);assert.equal(d.cohort.entry_product_ref,null);}
+  const local={source_platform:d.cohort.entry_source,source_store:o.sourceStore};
+  o.onProviderStage({stage:'query_response',query_id:shopify&&baseline?'6026f7a6-44c6-4449-9814-398b028296f1':'fixture-query'});
+  const results=[90,180,360].map(days=>row(baseline?'Sitewide':'named_1',days,{...local,...(group==='retention_piece_windows'?{entry_product_ref:'known',entry_product:'Known'}:{})}));
+  if(shopify&&baseline&&fault==='wrong_source')results[0].source_store='ww';
+  if(shopify&&baseline&&fault==='wrong_denominator')results[0].mature_customers=2;
+  return {results,identity_evidence:{activation:'active',mode:'email_candidate_v2',snapshot_id:'history-20261022-billing-v3'},...(baseline?{baseline_period_rows:results.map(p=>({...p,cohort_year:fault==='bad_supplement'&&shopify?1900:2023}))}:{})};
+ }}});
+ const outcome=r.evidence.source_outcomes.find(o=>o.source_store==='shopify'&&o.group==='retention_baseline_windows');
+ assert.equal(outcome.population_read,'completed');assert.equal(outcome.query_id,'6026f7a6-44c6-4449-9814-398b028296f1');
+ assert.equal(outcome.identity_evidence.mode,'email_candidate_v2');
+ assert.equal(outcome.state,['wrong_source','wrong_denominator'].includes(fault)?'rejected':'fulfilled');
+ assert.ok(r.evidence.rows.some(p=>p.source_store==='shopify'));assert.ok(r.evidence.baseline_rows.some(p=>p.source_store==='ww'));
+ if(outcome.state==='rejected'){assert.equal(outcome.stage,'evidence_validation');assert.equal(outcome.code,'EVIDENCE_SCOPE_MISMATCH');assert.match(r.answer,/warehouse read completed; evidence validation rejected/i);assert.doesNotMatch(r.answer,/Shopify calculation: read failed/);}
+ if(fault==='bad_supplement'){assert.ok(r.evidence.baseline_rows.some(p=>p.source_store==='shopify'));assert.ok(r.evidence.section_outcomes.some(o=>o.source_store==='shopify'&&o.state==='rejected'));assert.match(r.answer,/independently validated report sections are retained/);}
+});
+test('second-order detail excludes unknown IDs while exposing missing line, identity and title evidence',()=>{
+ const relations=cohortRelations(customerJourneySql('fixture','retention_baseline_windows','shopify','shopify')).relations;
+ const sql='WITH '+relations.filter(r=>['retention_product_counts','retention_product_coverage'].includes(r.name)).map(r=>`${r.name} AS (${r.body})`).join(',')+' SELECT * FROM retention_product_coverage';
+ const run=spawnSync('python3',['-c',`import sqlite3,json,sys
+c=sqlite3.connect(':memory:');c.row_factory=sqlite3.Row;c.create_function('IF',3,lambda a,b,d:b if a else d)
+c.executescript("CREATE TABLE retention_members(source_platform,source_store,collaboration_name,window_days,governed_customer_ref,mature,second_source_platform,second_source_store,second_order_ref,days_to_second);CREATE TABLE classified_lines(source_platform,source_store,order_ref,source_product_ref,source_product_id,product_title);")
+for i in range(3):c.execute('INSERT INTO retention_members VALUES(?,?,?,?,?,?,?,?,?,?)',('shopify','shopify','Sitewide',90,str(i),0,'shopify','shopify',str(i),10))
+c.execute('INSERT INTO classified_lines VALUES(?,?,?,?,?,?)',('shopify','shopify','1',None,None,'Unidentified'))
+c.execute('INSERT INTO classified_lines VALUES(?,?,?,?,?,?)',('shopify','shopify','2','shopify:shopify:2','2',None))
+sql=sys.stdin.read();print(json.dumps({'coverage':[dict(r) for r in c.execute(sql)],'products':[dict(r) for r in c.execute(sql.replace('SELECT * FROM retention_product_coverage','SELECT * FROM retention_product_counts'))]}))`],{input:sql,encoding:'utf8'});
+ assert.equal(run.status,0,run.stderr);const result=JSON.parse(run.stdout);
+ assert.equal(result.coverage[0].missing_line_customers,1);assert.equal(result.coverage[0].unidentified_product_customers,1);assert.equal(result.coverage[0].untitled_product_customers,1);
+ assert.equal(result.products.length,1);assert.equal(result.products[0].product,'Product title unavailable');assert.equal(result.products[0].observed_customers,1);assert.equal(result.products[0].mature_repeat_customers,0);
+});

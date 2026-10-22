@@ -96,15 +96,20 @@ checks failed. Retain the whole JSON object. Metadata/API failures never become
 zero customers, absent tables or proof of missing coverage. The timeout process
 may terminate a stalled client after JSON has already been printed.
 
-## Verified fixes versus evidence still required
+## Supplied production result (22 October 2026)
 
-| Area | Verified in source/local tests | Remains unresolved until this command returns evidence |
+This command has now run successfully in production; do not rerun it for the
+supplied evidence. The normalized output and detailed interpretation are in
+[the reconciliation findings](collaboration-retention-reconciliation.md).
+Eleven SELECTs and six metadata GETs completed; the frozen snapshot was preserved.
+
+| Area | Verified evidence/fix | Remaining limitation |
 |---|---|---|
-| Missing collections/items | Independent row quotas; single-store Woo divisor; fair first-item selection; dynamic governed catalogue; reviewed labels | Exact live reasons for the ten absent collection IDs |
-| Shopify baseline | Existing component stays isolated and successful results survive failures | Original retained error/category/position and its owning failure; no root-cause fix is claimed |
-| Coverage consumption | Linked path validates/consumes the common interval instead of discarding supplied certificates | Whether existing records actually certify continuous original transactions, channel scope, gaps and retirement boundaries |
-| Requested sections | Calendar-year baselines, whole-range product rankings and existing second-order products verified with fixtures/local SQL | Live BigQuery schema, execution and recovered business-report completeness |
-| Diagnostic | Exact filters, read-only SQL, query/row/deadline limits, redaction and failure isolation tested | Actual Render access and production output |
+| Ten absent collections | Source-specific routes/history/matches retrieved; report distinguishes unknown eligibility from observed zero matches | No historical transactions are inferred from missing history/routes |
+| Shopify baseline | Retained query 6026f7a6-44c6-4449-9814-398b028296f1 is DONE without BigQuery failure; application evidence validation rejected it. Explicit sitewide filters, product detail gaps and partial validation isolation are tested | Rejected aggregate rows/exact predicate not supplied; corrected live baseline unverified |
+| Coverage | Bounded inventory completed; eight adapter progress records and ready identity snapshot found; supplied certificates are consumed correctly in fixtures | No inspected record certifies continuous original transactions; suitable evidence elsewhere remains possible |
+| Requested sections | Calendar-year baselines, whole-range product rankings, individual pieces and second-order products verified locally | No new production report calculation or saved-job replay |
+| Diagnostic | Successful supplied production output retained as aggregate fixture | Bounds limit what absence conclusions can be drawn |
 
 Positive eligible counts now, coupled with absence of that governed name in the
 retained report, support the truncation investigation; they do not prove historical
