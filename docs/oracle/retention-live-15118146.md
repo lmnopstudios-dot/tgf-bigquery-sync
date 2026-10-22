@@ -1,5 +1,10 @@
 # Post-#370 live failure: exact request evidence
 
+This is the earlier evidence-retrieval investigation. The retained errors are now
+available and the exact SQL generation failures are reproduced. See
+[the confirmed syntax fix and bounded BigQuery validation](retention-sql-syntax-15118146.md).
+No more retained-error diagnostics are needed for this request.
+
 Request: **15118146-147f-480c-90f7-4b21d27182f8**. The supplied live result is
 retained at test/fixtures/retention-live-failed-15118146.txt. It shows successful
 activated email_candidate_v2 readiness/coverage for the existing
