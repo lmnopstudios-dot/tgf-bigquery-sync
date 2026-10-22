@@ -1,3 +1,4 @@
+import {retentionFamilyCtes} from '../../oracle/retention-families.js';
 import {customerJourneySql} from '../../oracle/customer-journey.js';
 import {cohortRelations} from '../../oracle/cohort-execution.js';
 // Actual factory suffix and final projection, not a SQLite translation or mocked
@@ -9,11 +10,14 @@ export function retentionBigQueryFixture(group,platform,store){
  const inputs=`fixture_collections AS (SELECT 1 collection_id,'Reviewed fixture' title,1 product_count),
  fixture_product_collections AS (SELECT 1 collection_id,1 product_id),
  cr_collection_current AS (SELECT '1' collection_id,'Reviewed fixture' collection_title,'collection_group' classification_type,'collaboration' classification_value,'active' status UNION ALL SELECT '1','Reviewed fixture','collaboration_name','alpha','active'),
- cr_routes AS (SELECT '${platform}:${store}:1' source_ref,'shopify:shopify:1' classification_ref),
+ cr_routes AS (SELECT '${platform}:${store}:1' source_ref,'shopify:shopify:1' classification_ref,'approved_reporting_family' mapping_type),
+ cr_family AS (SELECT '${platform}:${store}:1' source_ref,'shopify:shopify:1' classification_ref),
+ cr_family_current AS (SELECT 'shopify:shopify:1' shopify_parent_ref,'Reviewed fixture family' shopify_parent_title,'active' status),
  entry_orders AS (SELECT 'c_fixture' governed_customer_ref,${source},'entry' order_ref,TIMESTAMP('2024-01-01T12:00:00Z') order_timestamp,'Online' channel,1 order_sequence),
  ranked_orders AS (SELECT * FROM entry_orders UNION ALL SELECT 'c_fixture',${platform==='woo'?"'woo'":"'shopify'"},'${store}','return',TIMESTAMP('2024-01-15T12:00:00Z'),'Online',2),
- entry_matches AS (SELECT 'c_fixture' governed_customer_ref,${source},'alpha' collaboration_name,TIMESTAMP('2024-01-01T12:00:00Z') entry_timestamp,'${platform}:${store}:1' entry_product_ref,'Entry item' entry_product_title),
+ entry_matches AS (SELECT 'c_fixture' governed_customer_ref,${source},'alpha' collaboration_name,TIMESTAMP('2024-01-01T12:00:00Z') entry_timestamp,'family:shopify:shopify:1' entry_product_ref,'Reviewed fixture family' entry_product_title,'governed_family' entry_family_status),
  classified_lines AS (SELECT ${source},'entry' order_ref,'1' source_product_id,'${platform}:${store}:1' source_product_ref,'Entry item' product_title UNION ALL SELECT '${platform}','${store}','return',CAST(NULL AS STRING),CAST(NULL AS STRING),'Unknown item'),
+ ${retentionFamilyCtes()},
  line_classification_sets AS (SELECT *,IF(order_ref='entry','named','product_identity_unmatched') collaboration_state,IF(order_ref='entry',['alpha'],ARRAY<STRING>[]) names FROM classified_lines),
  order_classification_sets AS (SELECT ${source},'return' order_ref,1 unknown_lines,0 core_lines,1 product_lines,ARRAY<STRING>[] names),
  retention_coverage AS (SELECT ${source},1 eligible_first_customers,1 named_customers,0 generic_only_customers,0 core_only_customers,0 unknown_customers,0 conflicting_customers,DATE '2021-01-01' history_start,DATE '2026-10-19' history_end,2 identified_orders,0 anonymous_orders,0 migrated_orders,0 cancelled_orders,0 excluded_orders),

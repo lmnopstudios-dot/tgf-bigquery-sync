@@ -1219,6 +1219,15 @@
         "diagnostic full SELECT planning budgets are 60 seconds without changing production limits; synthetic verified/unverified coverage checks are distinct",
         "complete live acceptance request retains all report sections and exact dates"
       ]
+    },
+    {
+      "file": "test/retention-provisional-family.test.js",
+      "covers": [
+        "calendar-age provisional eligibility and window-qualified numerator, London midnight boundaries, empty denominators and legacy retained evidence",
+        "actual governed reporting-family SQL and customer deduplication with unmapped/ambiguous items preserved",
+        "identical provisional calculation across all nine linked query shapes; verified coverage and identity safeguards unchanged",
+        "concise business summary with full evidence accessible and provisional/verified rates distinct"
+      ]
     }
   ]
 }

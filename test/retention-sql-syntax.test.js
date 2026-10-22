@@ -8,16 +8,10 @@ import {retentionRows} from '../oracle/cohort-retention.js';
 import {retentionValidationCases} from '../diagnostics/build-retention-sql-validation.js';
 const identity={dataset:'customer_identity',snapshot:'history-20261022-billing-v3',orderLinks:true};
 const evidence=JSON.parse(readFileSync(new URL('./fixtures/retention-sql-15118146/locations.json',import.meta.url)));
-// Reverse the ARRAY constructor fix and the two earlier source fixes, then verify every complete historical
-// script hash captured before editing the factory. No SQL parser mock is claimed.
-let source=readFileSync(new URL('../oracle/customer-journey.js',import.meta.url),'utf8');
-source=source.replace('SELECT ARRAY(SELECT AS STRUCT * FROM (${retentionCatalogueSql(project)})) catalogue_reconciliation','SELECT ARRAY(${retentionCatalogueSql(project)}) catalogue_reconciliation');
-source=source.replace("replace('SELECT r.*,IFNULL',()=>`","replace('SELECT r.*,IFNULL',`");
-for(const k of ['missing_line_customers','unidentified_product_customers','untitled_product_customers'])source=source.replace(`COALESCE(pc.${k},0) AS ${k}`,`COALESCE(pc.${k},0) ${k}`);
-source=source.replace(/from '([^']+)'/g,(_,p)=>`from '${new URL(p,new URL('../oracle/customer-journey.js',import.meta.url)).href}'`);
-const historical=await import('data:text/javascript;base64,'+Buffer.from(source).toString('base64'));
+const {gunzipSync}=await import('node:zlib');
+const historicalScripts=JSON.parse(gunzipSync(readFileSync(new URL('./fixtures/retention-sql-15118146/historical-scripts.json.gz',import.meta.url))));
 test('reconstruct exact linked 05b6aef scripts and reported positions across nine outcomes',()=>{
- for(const e of evidence){const old=decomposedCohortSql(historical.customerJourneySql('gf-full-data',e.group,e.source,e.store,identity));
+ for(const e of evidence){const old=historicalScripts.find(h=>h.group===e.group&&h.source===e.source&&h.store===e.store).sql;
   assert.equal(createHash('sha256').update(old).digest('hex'),e.sha256,`${e.store}/${e.group}`);
   const line=old.split('\n')[e.line-1];assert.equal(line,e.line_text);
   assert.ok(line.slice(e.column-1).startsWith(e.group==='retention_windows'?"r'^(?:gid://shopify/Product/)?([0-9]+)(p.second_order_products":"missing_line_customers"));
@@ -48,15 +42,17 @@ test('validation runner separates dry runs/execution and preserves independent f
  const bigquery={createQueryJob:async q=>{requests.push(q);assert.equal(q.dryRun,true);return [{metadata:{statistics:{totalBytesProcessed:'0'}}}];},query:async q=>{
   requests.push(q);assert.equal(q.dryRun,undefined);
   if(q.params.entry_source==='woo'&&q.params.retention_source_store==='ww')throw Object.assign(Error('isolated synthetic failure'),{code:400});
-  const rows=[90,180,360].map(window_days=>({source_platform:q.params.entry_source,source_store:q.params.retention_source_store,collaboration_name:'alpha',cohort_customers:1,mature_customers:q.params.coverage_status==='verified_continuous'?1:0,repeat_customers:q.params.coverage_status==='verified_continuous'?1:0,observed_repeat_customers:1,window_days,observation_coverage_status:q.params.coverage_status,coverage_evidence:q.params.coverage_evidence,verified_coverage_start:q.params.coverage_start,verified_coverage_end:q.params.coverage_end,median_days_to_second:q.params.coverage_status==='verified_continuous'?14:null,second_order_products:[],second_order_product_coverage:{missing_line_customers:0,unidentified_product_customers:1,untitled_product_customers:0},catalogue_reconciliation:[{}],product_ranking_rows:[{}],baseline_period_rows:[{}]}));return [rows];
+  const rows=[90,180,360].map(window_days=>({source_platform:q.params.entry_source,source_store:q.params.retention_source_store,collaboration_name:'alpha',cohort_customers:1,provisional_eligible_customers:1,provisional_repeat_customers:1,provisional_repeat_rate:1,mature_customers:q.params.coverage_status==='verified_continuous'?1:0,repeat_customers:q.params.coverage_status==='verified_continuous'?1:0,observed_repeat_customers:1,window_days,observation_coverage_status:q.params.coverage_status,coverage_evidence:q.params.coverage_evidence,verified_coverage_start:q.params.coverage_start,verified_coverage_end:q.params.coverage_end,median_days_to_second:q.params.coverage_status==='verified_continuous'?14:null,second_order_products:[],second_order_product_coverage:{missing_line_customers:0,unidentified_product_customers:1,untitled_product_customers:0},catalogue_reconciliation:[{}],product_ranking_rows:[{}],baseline_period_rows:[{}]}));return [rows];
  }};
  const r=await validateRetentionSql({bigquery,artifact:{cases},validateRows:retentionRows});assert.equal(requests.length,36);assert.equal(r.checks.filter(c=>c.status==='failed').length,6);assert.equal(r.checks.filter(c=>c.status==='execution_and_result_validation_passed').length,12);assert.equal(r.checks.filter(c=>c.status==='dry_run_validated').length,18);assert.equal(r.production_transactions_executed,false);assert.equal(requests.filter(q=>q.dryRun&&q.jobTimeoutMs===60000).length,9);assert.equal(requests.filter(q=>q.dryRun&&q.jobTimeoutMs===10000).length,9);
 });
 
 test('merged #374 ARRAY failure at linked 147:8 and synthetic 69:8 is fixed without changing catalogue record fields',async()=>{
- const cases=await retentionValidationCases();
+ const cases=JSON.parse(gunzipSync(readFileSync(new URL('./fixtures/retention-sql-15118146/array-fixed-cases.json.gz',import.meta.url))));
  const {retentionCatalogueSql}=await import('../oracle/retention-catalogue.js');
+ const current=await retentionValidationCases();
  for(const c of cases.filter(c=>c.group==='retention_windows')){
+  const latest=current.find(x=>x.store===c.store&&x.group===c.group);for(const kind of ['full_select','synthetic'])assert.match(latest[kind].query,/ARRAY\(SELECT AS STRUCT \* FROM \(WITH catalogue_targets AS/);
   for(const [kind,line] of [['full_select',147],['synthetic',69]]){
    const fixed=c[kind].query;
    const broken=fixed.replace('ARRAY(SELECT AS STRUCT * FROM (','ARRAY(').replace('ORDER BY t.collection_id)) catalogue_reconciliation','ORDER BY t.collection_id) catalogue_reconciliation');

@@ -61,8 +61,8 @@ for(const mode of ['direct','interactive','durable'])test(`unverified coverage a
  assert.equal(r.evidence.source_outcomes.find(s=>s.source_store==='usd').state,'rejected');
  assert.ok(r.evidence.rows.some(r=>r.source_store==='ww'));assert.ok(r.evidence.rows.some(r=>r.source_store==='shopify'));
  assert.ok(r.evidence.rows.every(r=>r.mature_customers===0&&r.repeat_rate===null&&r.observation_coverage_status==='unverified'));
- assert.ok(r.evidence.rows.some(r=>r.observed_repeat_customers>0));
- assert.match(r.answer,/coverage is unverified/);assert.match(r.answer,/observed \(coverage unverified\)/);assert.doesNotMatch(r.answer,/highest observed repeat purchase rate|\d+\.\d+%/);
+ assert.ok(r.evidence.rows.some(r=>r.observed_repeat_customers>0));assert.ok(r.evidence.rows.some(r=>r.provisional_repeat_rate!=null));assert.match(r.answer,/provisional observed repeat rates/);
+ assert.match(r.answer,/coverage is unverified/);assert.match(r.answer,/observed \(coverage unverified\)/);assert.doesNotMatch(r.answer,/highest observed repeat purchase rate/);
  assert.equal(deliverOracleResult(structuredClone(r),r.analysis_context).delivery.status,'partial');
  const stale=structuredClone(r);delete stale.evidence.rows[0].observation_coverage_status;
  assert.equal(deliverOracleResult(stale,r.analysis_context).delivery.code,'ANSWER_INCOMPLETE');

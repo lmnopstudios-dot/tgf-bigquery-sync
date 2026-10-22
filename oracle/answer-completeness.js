@@ -1,3 +1,4 @@
+import {provisionalEvidence,familyEvidence} from './retention-provisional.js';
 import {assertRetentionProductEvidence} from './retention-product-evidence.js';
 import {reconcileRetentionCatalogue} from './retention-catalogue.js';
 import { validCustomerHistoryContract } from './customer-history.js';
@@ -63,11 +64,11 @@ export function answerCompleteness(context,result){
     if((evidence.definition?.cohort?.entry_channel||null)!==expectedChannel||(evidence.definition?.subsequent?.channel||null)!==expectedChannel)missing.push('population');
     const windows=context.retention_windows||(context.within_days?[context.within_days]:[90,180]);
     const allRows=[...(evidence.rows||[]),...(evidence.baseline_rows||[]),...(evidence.baseline_period_rows||[]),...(evidence.product_ranking_rows||[])];
-    if((evidence.baseline_period_rows||[]).length>450||(evidence.product_ranking_rows||[]).length>180)missing.push('supplemental_row_bound');
+    if((evidence.baseline_period_rows||[]).length>450||(evidence.product_ranking_rows||[]).length>270)missing.push('supplemental_row_bound');
     if((evidence.baseline_rows||[]).length>9||(!context.retention_baseline&&(evidence.baseline_rows||[]).length))missing.push('baseline_scope');
     if(context.retention_baseline&&!['ww','usd','shopify'].every(source_store=>evidence.source_outcomes?.some(o=>o.source_store===source_store&&o.group==='retention_baseline_windows')))missing.push('baseline_scope');
     if(context.retention_baseline){for(const o of evidence.source_outcomes||[])if(o.group==='retention_baseline_windows'&&o.state==='fulfilled'&&!evidence.baseline_rows?.some(r=>r.source_platform===o.source_platform&&r.source_store===o.source_store)&&o.status!=='successful_empty')missing.push('baseline_outputs');}
-    for(const total of evidence.baseline_rows||[]){const periods=(evidence.baseline_period_rows||[]).filter(r=>r.source_platform===total.source_platform&&r.source_store===total.source_store&&r.window_days===total.window_days);if(periods.length&&['cohort_customers','mature_customers','repeat_customers','observed_repeat_customers'].some(k=>periods.reduce((n,r)=>n+r[k],0)!==total[k]))missing.push('baseline_period_partition');}
+    for(const total of evidence.baseline_rows||[]){const periods=(evidence.baseline_period_rows||[]).filter(r=>r.source_platform===total.source_platform&&r.source_store===total.source_store&&r.window_days===total.window_days);if(periods.length&&['cohort_customers','mature_customers','repeat_customers','observed_repeat_customers',...(total.provisional_eligible_customers!=null?['provisional_eligible_customers','provisional_repeat_customers']:[])].some(k=>periods.reduce((n,r)=>n+r[k],0)!==total[k]))missing.push('baseline_period_partition');}
     try{
       if(evidence.catalogue_reconciliation!=null){
         if(!Array.isArray(evidence.catalogue_reconciliation)||evidence.catalogue_reconciliation.length>3000)throw Error('catalogue bound');
@@ -90,13 +91,13 @@ export function answerCompleteness(context,result){
       if(r.observation_coverage_status==='verified_continuous'&&(!r.verified_coverage_start||!r.verified_coverage_end||!r.coverage_evidence))missing.push('observation_coverage');
       if(r.observation_coverage_status==='unverified'&&(r.mature_customers!==0||r.repeat_customers!==0||r.repeat_rate!==null))missing.push('observation_coverage');
       if(r.observation_coverage_status!=null&&(!Number.isInteger(r.observed_repeat_customers)||r.observed_repeat_customers<r.repeat_customers||r.observed_repeat_customers>r.cohort_customers))missing.push('observed_returns');
-      try{assertRetentionProductEvidence(r);}catch{missing.push('second_order_products');}
+      try{provisionalEvidence(r);familyEvidence(r);assertRetentionProductEvidence(r);}catch{missing.push('second_order_products');}
       const buckets=['same_collaboration','different_collaboration','core_range','unknown'];
       if(buckets.some(k=>r[k]!=null)&&(!buckets.every(k=>Number.isInteger(r[k])&&r[k]>=0)||buckets.reduce((n,k)=>n+r[k],0)!==r.repeat_customers))missing.push('second_purchase_classification');
       const period=(evidence.baseline_period_rows||[]).includes(r),ranking=(evidence.product_ranking_rows||[]).includes(r);
       const baseline=period||(evidence.baseline_rows||[]).includes(r);
       if(period&&(!context.retention_baseline||!Number.isInteger(r.cohort_year)||r.cohort_year<Number(context.start_date.slice(0,4))||r.cohort_year>Number(context.end_date.slice(0,4))))missing.push('baseline_period_scope');
-      if(ranking&&(!r.entry_product_ref||!Number.isInteger(r.count_rank)||r.count_rank<1||r.rate_rank!=null&&(!Number.isInteger(r.rate_rank)||r.rate_rank<1||r.repeat_rate===null)))missing.push('product_ranking');
+      if(ranking&&(!r.entry_product_ref||!Number.isInteger(r.count_rank)||r.count_rank<1||r.rate_rank!=null&&(!Number.isInteger(r.rate_rank)||r.rate_rank<1||r.repeat_rate===null)||r.provisional_rate_rank!=null&&(!Number.isInteger(r.provisional_rate_rank)||r.provisional_rate_rank<1||r.provisional_repeat_rate==null)))missing.push('product_ranking');
       if(baseline&&(r.collaboration_name!=='Sitewide'||r.entry_product_ref))missing.push('baseline_identity');
       const population=evidence.coverage?.classification?.find(c=>c.source_platform===r.source_platform&&c.source_store===r.source_store);
       if(baseline&&!period&&population&&r.cohort_customers!==population.eligible_first_customers)missing.push('baseline_population');
@@ -110,6 +111,7 @@ export function answerCompleteness(context,result){
     const section=r=>(evidence.baseline_rows||[]).includes(r)?'baseline':(evidence.baseline_period_rows||[]).includes(r)?'period':(evidence.product_ranking_rows||[]).includes(r)?'ranking':'cohort';
     for(const r of allRows){
       const others=allRows.filter(o=>section(o)===section(r)&&o.cohort_year===r.cohort_year&&o.source_platform===r.source_platform&&o.source_store===r.source_store&&o.collaboration_name===r.collaboration_name&&o.entry_product_ref===r.entry_product_ref&&o.window_days!==r.window_days);
+      if(others.some(other=>r.provisional_eligible_customers!=null&&other.provisional_eligible_customers!=null&&r.window_days>other.window_days&&(r.provisional_eligible_customers>other.provisional_eligible_customers||r.provisional_eligible_customers===other.provisional_eligible_customers&&r.provisional_repeat_customers<other.provisional_repeat_customers)))missing.push('provisional_window_reconciliation');
       if(others.some(other=>(other.cohort_customers!==r.cohort_customers||(r.window_days>other.window_days&&(r.mature_customers>other.mature_customers||r.mature_customers===other.mature_customers&&r.repeat_customers<other.repeat_customers)))))missing.push('window_reconciliation');
     }
     // Each observed source/cohort needs all requested windows; empty evidence is

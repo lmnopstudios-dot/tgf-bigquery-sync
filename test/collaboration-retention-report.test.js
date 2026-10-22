@@ -74,9 +74,10 @@ for(const mode of ['direct','interactive','durable'])for(const partial of [false
   assert.ok(r.evidence.rows.some(x=>x.second_order_products.length));
   assert.ok(r.evidence.coverage.identity_activation.every(x=>x.activation==='active'&&x.configured_mode==='email_candidate_v2'&&x.snapshot===identityEnv.ORACLE_CUSTOMER_IDENTITY_SNAPSHOT));
   assert.match(r.answer,/360-day rate/);assert.match(r.answer,/Comparable sitewide/);assert.match(r.answer,/Second-order products/);assert.match(r.answer,/\(360 days\)/);
-  assert.match(r.answer,/email-linked records/);assert.doesNotMatch(r.answer,/customer linkage has not been verified|\d+\.\d+%/);
+  assert.match(r.answer,/email-linked records/);assert.ok([...r.evidence.rows,...r.evidence.baseline_rows].every(row=>row.repeat_rate===null));assert.ok(r.evidence.rows.some(row=>row.provisional_repeat_rate!=null));assert.doesNotMatch(r.answer,/customer linkage has not been verified/);
   if(partial){assert.ok(r.evidence.source_outcomes.filter(x=>x.source_store==='usd').every(x=>x.state==='rejected'));assert.ok(!r.evidence.rows.some(x=>x.source_store==='usd'));}
   assert.equal(deliverOracleResult(structuredClone(r),r.analysis_context).delivery.status,'partial');
+  const provisionalCorrupt=structuredClone(r);provisionalCorrupt.evidence.rows[0].provisional_repeat_rate=1.1;assert.equal(deliverOracleResult(provisionalCorrupt,r.analysis_context).delivery.code,'ANSWER_INCOMPLETE');
   const corrupt=structuredClone(r);corrupt.evidence.baseline_rows[0].repeat_rate=.5;
   assert.equal(deliverOracleResult(corrupt,r.analysis_context).delivery.code,'ANSWER_INCOMPLETE');
   const missingWindow=structuredClone(r);missingWindow.evidence.rows=missingWindow.evidence.rows.filter(x=>x.window_days!==360);

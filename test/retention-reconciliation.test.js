@@ -206,7 +206,7 @@ test('second-order detail excludes unknown IDs while exposing missing line, iden
  const sql='WITH '+relations.filter(r=>['retention_product_counts','retention_product_coverage'].includes(r.name)).map(r=>`${r.name} AS (${r.body})`).join(',')+' SELECT * FROM retention_product_coverage';
  const run=spawnSync('python3',['-c',`import sqlite3,json,sys
 c=sqlite3.connect(':memory:');c.row_factory=sqlite3.Row;c.create_function('IF',3,lambda a,b,d:b if a else d)
-c.executescript("CREATE TABLE retention_members(source_platform,source_store,collaboration_name,window_days,governed_customer_ref,mature,second_source_platform,second_source_store,second_order_ref,days_to_second);CREATE TABLE classified_lines(source_platform,source_store,order_ref,source_product_ref,source_product_id,product_title);")
+c.executescript("CREATE TABLE retention_members(source_platform,source_store,collaboration_name,window_days,governed_customer_ref,mature,second_source_platform,second_source_store,second_order_ref,days_to_second);CREATE TABLE classified_lines(source_platform,source_store,order_ref,source_product_ref,source_product_id,product_title);CREATE VIEW retention_reporting_lines AS SELECT *,source_product_ref reporting_product_ref,COALESCE(NULLIF(TRIM(product_title),''),'Product title unavailable') reporting_product_title,'unmapped_item' family_status FROM classified_lines;")
 for i in range(3):c.execute('INSERT INTO retention_members VALUES(?,?,?,?,?,?,?,?,?,?)',('shopify','shopify','Sitewide',90,str(i),0,'shopify','shopify',str(i),10))
 c.execute('INSERT INTO classified_lines VALUES(?,?,?,?,?,?)',('shopify','shopify','1',None,None,'Unidentified'))
 c.execute('INSERT INTO classified_lines VALUES(?,?,?,?,?,?)',('shopify','shopify','2','shopify:shopify:2','2',None))

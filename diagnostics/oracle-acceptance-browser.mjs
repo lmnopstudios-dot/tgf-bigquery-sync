@@ -1,3 +1,4 @@
+async function openRetentionResults(page){const details=page.locator('.analytical-answer').last().locator('details');if(await details.count()&&(await details.getAttribute('open'))===null)await details.locator('summary').click();}
 // Native composer and visible delivery, backed by real Oracle composition.
 import assert from 'node:assert/strict';
 import ExcelJS from 'exceljs';
@@ -23,7 +24,8 @@ try{
         await page.locator('#message').fill(turn.question);await page.locator('#send').click();
         await page.waitForFunction(()=>!document.querySelector('#send').disabled);
         assert.equal(await page.locator('.analytical-answer').count(),count+1);
-        const answer=await page.locator('.analytical-answer').last().innerText();assert.ok(answer.trim());
+        let answer=await page.locator('.analytical-answer').last().innerText();assert.ok(answer.trim());
+        if(['retention','retention-incident'].includes(turn.check)){assert.match(answer,/provisional observed repeat rates/i);await openRetentionResults(page);answer=await page.locator('.analytical-answer').last().innerText();}
         if(turn.outcome==='clarification')assert.match(answer,/start and end dates/i);
         else assert.doesNotMatch(answer,/What date range/);
         if(turn.check==='named-events'){
@@ -37,12 +39,12 @@ try{
         if(turn.check==='visitor-monthly'){if(turn.grain==='month'){assert.match(answer,/Month/);assert.match(answer,/completed-checkout sessions/);}if(turn.groups.includes('rest_of_world'))assert.match(answer,/unknown\/blank\/ZZ/);}
         if(turn.check==='retention-incident'){
           assert.match(answer,/Beta has the highest observed repeat purchase rate at 90 days/);assert.match(answer,/Pieces within Alpha/);assert.match(answer,/33.33%/);assert.equal(f.calls.length,offset+6);
-          const last=page.locator('.analytical-answer').last();assert.equal(await last.locator('details').count(),1);assert.equal(await last.locator('summary').innerText(),'Show details');
+          const last=page.locator('.analytical-answer').last();assert.equal(await last.locator('details').count(),1);assert.match(await last.locator('summary').innerText(),/Full results/);
           assert.doesNotMatch(answer,/<details>|<summary>|woo:ww:|UTC order dates/);
-          await last.locator('summary').click();assert.match(await last.innerText(),/8 eligible identified first-observed/);assert.match(await last.innerText(),/1 generic-only/);
-          const count=f.calls.length;await page.reload();await page.waitForFunction(()=>!document.querySelector('#send').disabled&&document.querySelector('.analytical-answer'));assert.match(await page.locator('.analytical-answer').last().innerText(),/Pieces within Alpha/);assert.equal(f.calls.length,count);
+          await openRetentionResults(page);assert.match(await last.innerText(),/8 eligible identified first-observed/);assert.match(await last.innerText(),/1 generic-only/);
+          const count=f.calls.length;await page.reload();await page.waitForFunction(()=>!document.querySelector('#send').disabled&&document.querySelector('.analytical-answer'));await openRetentionResults(page);assert.match(await page.locator('.analytical-answer').last().innerText(),/Pieces within Alpha/);assert.equal(f.calls.length,count);
           await page.locator('#message').fill('Export that to Excel and show a chart.');await page.locator('#send').click();await page.waitForFunction(()=>!document.querySelector('#send').disabled);
-          const optional=page.locator('.analytical-answer').last();assert.match(await optional.innerText(),/supported table is retained/);assert.match(await optional.innerText(),/33.33%/);assert.match(await optional.innerText(),/XLSX: unsupported/);assert.match(await optional.innerText(),/CHART: unsupported/);assert.equal(f.calls.length,count);
+          await openRetentionResults(page);const optional=page.locator('.analytical-answer').last();assert.match(await optional.innerText(),/supported table is retained/);assert.match(await optional.innerText(),/33.33%/);assert.match(await optional.innerText(),/XLSX: unsupported/);assert.match(await optional.innerText(),/CHART: unsupported/);assert.equal(f.calls.length,count);
         }
         if(turn.check==='retention'){assert.match(answer,/75\.00%/);assert.match(answer,/50\.00%/);assert.match(answer,/Mature 90-day customers/i);assert.equal(f.calls.length,offset+(turn.provider_count||1));}
         if(turn.check==='campaigns-available'){
@@ -69,13 +71,13 @@ try{
     const incidentQuestion=readFileSync(new URL('../test/fixtures/oracle-cohort-provider-question.txt',import.meta.url),'utf8').trim(),incidentOffset=f.calls.length;
     await page.locator('#message').fill(incidentQuestion);await page.locator('#send').click();
     await page.waitForFunction(()=>!document.querySelector('#send').disabled);
-    const incidentAnswer=page.locator('.analytical-answer').last();
+    await openRetentionResults(page);const incidentAnswer=page.locator('.analytical-answer').last();
     assert.match(await incidentAnswer.innerText(),/Beta has the highest observed repeat purchase rate at 90/);
     assert.match(await incidentAnswer.innerText(),/33.33%/);assert.match(await incidentAnswer.innerText(),/Small/);
     assert.equal(await incidentAnswer.locator('details').count(),1);assert.equal(f.calls.length,incidentOffset+3);
     assert.ok(f.calls.slice(incidentOffset).every(c=>c.args.observation_end==='2026-10-13'&&c.args.entry_channel===null));
     const incidentCount=f.calls.length;await page.reload();await page.waitForFunction(()=>!document.querySelector('#send').disabled&&document.querySelector('.analytical-answer'));
-    assert.match(await page.locator('.analytical-answer').last().innerText(),/33.33%/);assert.equal(f.calls.length,incidentCount);
+    await openRetentionResults(page);assert.match(await page.locator('.analytical-answer').last().innerText(),/33.33%/);assert.equal(f.calls.length,incidentCount);
     f.state.retention_events=false;
     await page.locator('#new-question').click();
     for(const [kind,question] of Object.entries(multipart)){
@@ -154,9 +156,9 @@ try{
       const page=await browser.newPage({viewport:{width,height:900}});
       await page.goto(uncertainServer.origin+'/oracle/');await page.locator('#password').fill('fixture');await page.locator('#login-form button').click();await page.locator('#app').waitFor({state:'visible'});
       await page.locator('#message').fill(RETENTION_ANSWER_QUESTION);await page.locator('#send').click();await page.waitForFunction(()=>!document.querySelector('#send').disabled&&document.querySelector('.analytical-answer'));
-      const last=page.locator('.analytical-answer').last(),answer=await last.innerText();
-      assert.match(answer,/coverage is unverified/);assert.match(answer,/observed \(coverage unverified\)/);assert.doesNotMatch(answer,/highest observed repeat purchase rate|\d+\.\d+%|<details>|<summary>/);
-      assert.equal(await last.locator('details').count(),1);assert.equal(await last.locator('table').count(),2);
+      const last=page.locator('.analytical-answer').last();assert.match(await last.innerText(),/provisional observed repeat rates/i);assert.match(await last.innerText(),/uncertain prior history and follow-up/);await openRetentionResults(page);const answer=await last.innerText();
+      assert.match(answer,/coverage is unverified/);assert.match(answer,/observed \(coverage unverified\)/);assert.doesNotMatch(answer,/highest observed repeat purchase rate|<details>|<summary>/);
+      assert.equal(await last.locator('details').count(),1);assert.ok(await last.locator('table').count()>=2);
       const count=uncertainFixture.calls.length;await page.reload();await page.waitForFunction(()=>!document.querySelector('#send').disabled&&document.querySelector('.analytical-answer'));
       assert.match(await page.locator('.analytical-answer').last().innerText(),/coverage is unverified/);assert.equal(uncertainFixture.calls.length,count);await page.close();
     }
@@ -173,7 +175,7 @@ try{
       const answer=await page.locator('.analytical-answer').last().innerText();
       assert.match(answer,/email candidate snapshot/i);assert.match(answer,/coverage is unverified/);
       assert.doesNotMatch(answer,/customer linkage has not been verified/);
-      if(identityMode==='email_candidate_v2'){assert.match(answer,/email-linked records/);assert.match(answer,/3 matched, 2 unmatched, 1 ambiguous, 2 unavailable/);}
+      if(identityMode==='email_candidate_v2'){await openRetentionResults(page);const detail=await page.locator('.analytical-answer').last().innerText();assert.match(detail,/email-linked records/);assert.match(detail,/3 matched, 2 unmatched, 1 ambiguous, 2 unavailable/);}
       const reads=activatedFixture.wireQueries.length;
       await page.reload();await page.waitForFunction(()=>!document.querySelector('#send').disabled&&document.querySelector('.analytical-answer'));
       assert.match(await page.locator('.analytical-answer').last().innerText(),/email candidate snapshot/i);
@@ -192,14 +194,15 @@ try{
       await page.goto(fullServer.origin+'/oracle/');await page.locator('#password').fill('fixture');await page.locator('#login-form button').click();await page.locator('#app').waitFor({state:'visible'});
       await page.locator('#message').fill(collaborationQuestion);await page.locator('#send').click();
       await page.waitForFunction(()=>!document.querySelector('#send').disabled&&document.querySelector('.analytical-answer'));
+      const main=await page.locator('.analytical-answer').last().innerText();assert.match(main,/provisional observed repeat rates/i);assert.ok(main.indexOf('Collaboration comparison')<main.indexOf('product rankings'));assert.ok(main.indexOf('product rankings')<main.indexOf('Second-order products'));assert.doesNotMatch(main,/Governed collection reconciliation/);await openRetentionResults(page);
       const answer=await page.locator('.analytical-answer').last().innerText();
-      assert.match(answer,/Unknown second-order product attribution/);assert.match(answer,/Comparable sitewide cohorts over time/);assert.match(answer,/Whole-range first-purchase product rankings/);assert.match(answer,/By observed repeat-customer count/);assert.match(answer,/Governed collection reconciliation/);assert.match(answer,/Motörhead/);assert.match(answer,/Ārdēo Studios/);assert.match(answer,/360-day rate/);assert.match(answer,/Comparable sitewide/);assert.match(answer,/Second-order products/);assert.match(answer,/email-linked records/);
+      assert.match(answer,/Unknown second-order product attribution/);assert.match(answer,/Comparable sitewide cohorts over time/);assert.match(answer,/Whole-range first-purchase product rankings/);assert.match(answer,/By provisional age-qualified repeat-customer count/);assert.match(answer,/Governed collection reconciliation/);assert.match(answer,/Motörhead/);assert.match(answer,/Ārdēo Studios/);assert.match(answer,/360-day rate/);assert.match(answer,/Comparable sitewide/);assert.match(answer,/Second-order products/);assert.match(answer,/email-linked records/);
       assert.match(answer,/coverage is unverified/);assert.doesNotMatch(answer,/customer linkage has not been verified|highest observed repeat purchase rate|<details>|<summary>/);
       if(partial)assert.match(answer,/Woo USD[\s\S]*Read failed/);
       assert.equal(await page.locator('.analytical-answer').last().locator('details').count(),1);
       const reads=fullFixture.wireQueries.length;
       await page.reload();await page.waitForFunction(()=>!document.querySelector('#send').disabled&&document.querySelector('.analytical-answer'));
-      assert.equal(await page.locator('.analytical-answer').last().innerText(),answer);assert.equal(fullFixture.wireQueries.length,reads);
+      assert.equal(await page.locator('.analytical-answer').last().innerText(),main);await openRetentionResults(page);assert.equal(await page.locator('.analytical-answer').last().innerText(),answer);assert.equal(fullFixture.wireQueries.length,reads);
       await page.screenshot({path:output+'/collaboration-retention-'+width+'-'+partial+'.png',fullPage:true});await page.close();
     }}finally{fullServer.close();}
   }

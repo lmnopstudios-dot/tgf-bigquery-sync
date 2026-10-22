@@ -27,7 +27,7 @@ function verify(r,f){
  assert.equal(coverage.history_start,'2022-01-01');assert.equal(coverage.anonymous_orders,1);
  assert.match(r.answer,/Beta\*\* has the highest observed repeat purchase rate at 90 days: \*\*100.00%/);
  assert.match(r.answer,/Pieces within Alpha/);assert.match(r.answer,/33.33%/);assert.match(r.answer,/first-ever purchases are not established/);
- assert.match(r.answer,/<details>\n<summary>Show details<\/summary>/);assert.doesNotMatch(r.answer,/woo\/ww|woo:ww:|UTC order dates|collaborations\*\*/);
+ assert.match(r.answer,/<details>\n<summary>Full results, verified-coverage rates, reconciliation and caveats<\/summary>/);assert.doesNotMatch(r.answer,/woo\/ww|woo:ww:|UTC order dates|collaborations\*\*/);
  assert.equal(deliverOracleResult(structuredClone(r),r.analysis_context).delivery.status,'partial');
 }
 for(const mode of ['direct','interactive','durable'])for(const unrelated of [false,true])test(`unchanged incident ${mode}, unrelated context ${unrelated}: membership, coverage, ranking and recovery`,async t=>{
