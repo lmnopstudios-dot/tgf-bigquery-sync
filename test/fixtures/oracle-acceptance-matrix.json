@@ -1102,7 +1102,7 @@
       "id": "customer-history-script-budgets",
       "file": "test/customer-history-script-budgets.test.js",
       "covers": [
-        "31,321ms coverage script fits explicit statement and whole-script budgets; ordinary evidence limits remain unchanged",
+        "31,321ms script and 13,272ms successful stage fit revised statement headroom; whole-script and ordinary evidence limits remain unchanged",
         "publication remains atomic with separately bounded same-job reconciliation, no replay and sanitized unknown outcomes",
         "absolute caller deadlines, aborts, late allocation and late result fencing"
       ]

@@ -1,5 +1,20 @@
 # Metorik billing-email correction and agreement check
 
+## Operator update, 2026-10-22
+
+The live sample passed for five registered and five guest orders: exact original
+ID, UTC creation timestamp, currency and usable normalized billing-email agreement.
+All ten display order numbers differed; that cause remains unresolved. This direct
+order evidence requires no customer-profile linkage and does not establish
+population-wide coverage. A subsequent aggregate verified 50 usable persisted
+billing_address_email observations with order provenance. The operator now reports
+WW history-20261021-billing-v3 complete and every required v2 collection complete.
+Do not rerun the historical diagnostic or collection proposal below. Publication
+continues to use v2 completion assertions while consuming additive observations
+across revisions; see the [release plan](customer-history-coverage-release.md).
+
+The sections below retain the original pre-collection proposal and evidence state.
+
 The documented Metorik order email path is `billing_address_email`:
 [official order contract](https://metorik.dev/#orders). The old five-path extractor
 omitted it. The supplied Render sample verified usable native and Metorik order

@@ -8,6 +8,26 @@ const args={project:'fixture',dataset:'customer_identity',snapshot:'fixture_snap
 const pending=()=>new Promise(()=>{});
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
 
+test('observed stage variation fits statement headroom without extending either script',async t=>{
+  t.mock.timers.enable({apis:['Date'],now:1000000});
+  for(const [operation,maximum] of [[previewHistory,90000],[publishHistory,210000]]){
+    let calls=0;
+    await operation({...args,bigquery:{createQueryJob:async q=>{
+      if(calls++===0){
+        assert.equal(q.jobTimeoutMs,maximum);
+        assert.equal(q.scriptOptions.statementTimeoutMs,30000);
+        // Successful h_addresses took 13,272ms. h_usable's separate
+        // 12,314ms creation-to-start span is not proof of a timeout.
+        assert.ok(q.scriptOptions.statementTimeoutMs>2*13272);
+      }
+      return [{id:'stage-variation',getQueryResults:async()=>{
+        t.mock.timers.tick(calls===1?65682:1);
+        return [[],null,{jobComplete:true,totalRows:'0'}];
+      }}];
+    }}});
+  }
+});
+
 test('coverage owns a 31,321ms script, then retains the ordinary evidence limit',async t=>{
   t.mock.timers.enable({apis:['Date'],now:1000000});
   const settings=[];
@@ -20,7 +40,7 @@ test('coverage owns a 31,321ms script, then retains the ordinary evidence limit'
   }}});
   assert.equal(result.read_only,true);assert.equal(settings.length,2);
   assert.equal(settings[0].jobTimeoutMs,90000);
-  assert.deepEqual(settings[0].scriptOptions,{statementTimeoutMs:10000});
+  assert.deepEqual(settings[0].scriptOptions,{statementTimeoutMs:30000});
   assert.equal(settings[1].jobTimeoutMs,20000);assert.equal(settings[1].scriptOptions,undefined);
   assert.ok(settings.every(q=>q.maximumBytesBilled==='1000000000'));
 });
@@ -30,7 +50,7 @@ test('publication has an explicit script budget and retains one atomic transacti
   let calls=0;
   await publishHistory({...args,bigquery:{createQueryJob:async q=>{
     calls++;assert.equal(q.jobTimeoutMs,210000);
-    assert.deepEqual(q.scriptOptions,{statementTimeoutMs:10000});
+    assert.deepEqual(q.scriptOptions,{statementTimeoutMs:30000});
     assert.equal((q.query.match(/BEGIN TRANSACTION/g)||[]).length,1);
     assert.equal((q.query.match(/COMMIT TRANSACTION/g)||[]).length,1);
     assert.equal((q.query.match(/ASSERT /g)||[]).length,10);
@@ -123,7 +143,7 @@ test('real SDK serializes the statement cap inside query config and whole-script
   await previewHistory({...args,bigquery});
   await publishHistory({...args,bigquery});
   for(const [index,maximum] of [[0,90000],[2,210000]]){
-    assert.equal(Number(seen[index].query.scriptOptions.statementTimeoutMs),10000);
+    assert.equal(Number(seen[index].query.scriptOptions.statementTimeoutMs),30000);
     assert.ok(Number(seen[index].jobTimeoutMs)>maximum-1000&&Number(seen[index].jobTimeoutMs)<=maximum);
     assert.equal(seen[index].query.jobTimeoutMs,undefined);
   }
