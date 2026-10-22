@@ -80,4 +80,4 @@ Mapping execution returns raw governed/SKU evidence, required review actions and
 
 ## Validation status
 
-All 17 focused tests pass. The required full acceptance gate is running; desktop/mobile browser validation is running. Development Google access remains blocked by OAuth 403 `Domain forbidden`; no BigQuery compilation/execution pass is claimed. The two-job command is the remaining live compatibility/execution check, not a repeat of completed discovery.
+All 17 focused tests pass. All 835 required acceptance tests pass (21 central conversations and 60 provider/delivery suites); desktop/mobile browser gates pass, including durable and activated-identity refresh. The published corrected artifact was fetched back and its SHA-256 verified. Development Google access remains blocked by OAuth 403 `Domain forbidden`; no BigQuery compilation/execution pass is claimed. The two-job command is the remaining live compatibility/execution check, not a repeat of completed discovery.
