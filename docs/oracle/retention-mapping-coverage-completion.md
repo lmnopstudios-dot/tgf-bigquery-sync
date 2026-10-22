@@ -18,7 +18,7 @@ SKU evidence is case/whitespace normalized and is only a review candidate, not p
 
 Use `/oracle/product-mappings`: locate the concrete Woo reference, select the proposed Shopify parent, inspect evidence and graph preview, and review the identity versus reporting-family relationship. Preview conflict diagnostics and existing rejection/supersession history remain mandatory. The diagnostic does not invoke service setup/write methods or approve relationships. After a user approves new decisions through the existing workflow, the same source lines and current route resolver can be checked read-only against the same frozen customer snapshot; no order recollection or identity rebuild is needed. A future report execution is a separate user action.
 
-**Production mapping rows are pending the one check below.** The supplied report contains no concrete Woo candidate IDs/SKUs or affected counts, and development Google OAuth has repeatedly failed with 403. This PR prepares the review list and its tests; it does not fabricate a populated list or claim the production mapping audit passed. The output is capped at 500 products plus a sentinel/total count. Truncation is explicit; the independent catalogue inventory remains complete even if the review queue exceeds its bound.
+**Production mapping rows are pending the one check below.** The supplied report contains no concrete Woo candidate IDs/SKUs or affected counts, and development Google OAuth has repeatedly failed with 403. This PR prepares the review list and its tests; it does not fabricate a populated list or claim the production mapping audit passed. The output is capped at 500 products plus a sentinel/total count. Truncation is explicit; the independent catalogue inventory remains complete even if the review queue exceeds its bound. Each product includes at most 11 SKU candidates and 20 approved-route references; an array at either cap may omit further references, so the existing graph preview must inspect the full relationship history.
 
 ## All 24 named entries in the supplied successful report
 
@@ -133,3 +133,7 @@ try {
 }
 JS
 ```
+
+## Validation status
+
+All 823 tests pass in the required Oracle acceptance gate (21 central conversations and 58 provider/delivery suites). Desktop/mobile browser gates pass, including durable and activated-identity refresh. The new diagnostic tests use mocked warehouse I/O and SQL structure checks; they are not live BigQuery execution or a populated production mapping list. All twelve business-report full SELECT settings and synthetic query shapes remain identical to current main; existing live acceptance is preserved. The consolidated diagnostic execution and concrete source-inventory comparison remain pending.
