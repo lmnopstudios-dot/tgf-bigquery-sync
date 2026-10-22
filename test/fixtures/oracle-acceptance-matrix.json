@@ -1175,6 +1175,18 @@
         "linked coverage certificate consumption",
         "missing first-order lines diagnostic"
       ]
+    },
+    {
+      "file": "test/retention-unresolved-diagnostic.test.js",
+      "covers": [
+        "exact retained Shopify baseline lookup and metadata-only provider error read",
+        "bounded independent existing coverage inventories and records",
+        "ten absent collection aggregate reconciliation using deployed linked SQL",
+        "SELECT-only no replay no source writes",
+        "shared deadline billing and row bounds",
+        "partial evidence preservation and redacted diagnostics",
+        "in-memory Render diagnostic loading"
+      ]
     }
   ]
 }
