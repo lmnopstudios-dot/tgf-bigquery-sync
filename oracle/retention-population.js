@@ -12,6 +12,7 @@ export function combinedRetentionSql(sql,project,group){
  const breakdown=`ARRAY(SELECT AS STRUCT entry_source_platform source_platform,entry_source_store source_store,collaboration_name,${group==='retention_piece_windows'?'entry_product_ref,':''}window_days,COUNT(*) cohort_customers,COUNTIF(provisional_eligible) provisional_eligible_customers,COUNTIF(provisional_eligible AND days_to_second IS NOT NULL) provisional_repeat_customers FROM retention_members GROUP BY entry_source_platform,entry_source_store,collaboration_name,${group==='retention_piece_windows'?'entry_product_ref,':''}window_days ORDER BY source_platform,source_store,collaboration_name,window_days LIMIT 300) entry_platform_rows,`;
  return sql.replace('SELECT em.*,d.source_platform',"SELECT em.* REPLACE('tgf' AS source_platform,'combined' AS source_store),em.source_platform entry_source_platform,em.source_store entry_source_store,d.source_platform")
   .replace('SELECT e.governed_customer_ref,e.source_platform,e.source_store,e.order_timestamp entry_timestamp,',"SELECT e.governed_customer_ref,'tgf' source_platform,'combined' source_store,e.order_timestamp entry_timestamp,")
-  .replace('r.*,IFNULL',catalogue+breakdown+"'linked_tgf' population_scope,r.*,IFNULL")
+  // SQL contains $' regex anchors: a replacement string expands them as JS tokens.
+  .replace('r.*,IFNULL',()=>catalogue+breakdown+"'linked_tgf' population_scope,r.*,IFNULL")
   .replaceAll('ARRAY(SELECT AS STRUCT * FROM section_',"ARRAY(SELECT AS STRUCT 'linked_tgf' population_scope,* FROM section_");
 }

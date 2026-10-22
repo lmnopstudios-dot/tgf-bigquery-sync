@@ -4,6 +4,7 @@ import {customerJourneySql,createCustomerJourneyService} from '../oracle/custome
 import {cohortRelations} from '../oracle/cohort-execution.js';
 import {retentionRows,retentionMarkdown} from '../oracle/cohort-retention.js';
 import {retentionBigQueryFixture} from './helpers/retention-bigquery-sql-fixture.js';
+import {retentionCatalogueSql} from '../oracle/retention-catalogue.js';
 import {retentionMappingReviewSql,mappingReviewList} from '../diagnostics/retention-mapping-review.js';
 const identity={dataset:'customer_identity',snapshot:'history-20261022-billing-v3',orderLinks:true};
 for(const group of ['retention_windows','retention_piece_windows','retention_baseline_windows'])test(`combined ${group} sequences linked Woo entry before Shopify return, then aggregates customer membership`,()=>{
@@ -65,4 +66,39 @@ test('combined named-component failure preserves independently successful item a
  const f=acceptanceFixture({retention_events:migrationEvents,retention_combined:true,observationCertificates:[],identityEnv:{ORACLE_CUSTOMER_IDENTITY_MODE:'email_candidate_v2',ORACLE_CUSTOMER_IDENTITY_DATASET:'customer_identity',ORACLE_CUSTOMER_IDENTITY_SNAPSHOT:'fixture-order-email-v2'},now:Date.parse('2026-10-22T12:00:00Z')});
  f.state.fail_retention_groups=['ww/named'];const h=await acceptanceServer(f,{now:Date.parse('2026-10-22T12:00:00Z')});t.after(h.close);const r=await h.submit(question);
  assert.equal(r.evidence.source_outcomes.filter(o=>o.state==='rejected').length,1);assert.ok(r.evidence.rows.some(r=>r.entry_product_ref));assert.ok(r.evidence.baseline_rows.length);assert.match(r.answer,/Successful components are retained/);assert.equal(deliverOracleResult(structuredClone(r),r.analysis_context).delivery.status,'partial');
+});
+
+test('combined catalogue insertion preserves raw regex end anchors literally, including source-specific copies',()=>{
+ const q=customerJourneySql('gf-full-data','retention_windows',null,null,identity,true);
+ assert.equal((q.match(/r'\^\(\?:gid:\/\/shopify\/Product\/\)\?\(\[0-9\]\+\)\$'/g)||[]).length>=4,true);
+ assert.doesNotMatch(q,/\(\[0-9\]\+\)\(p\.second_order_products/);
+ const {result}=cohortRelations(q);assert.match(result,/catalogue_source_reconciliation/);assert.match(result,/catalogue_reconciliation/);
+ for(const [source,store] of [['woo','ww'],['woo','usd'],['shopify','shopify']]){assert.ok(q.includes(`SELECT AS STRUCT '${source}' source_platform,'${store}' source_store,c.*`));assert.ok(q.includes(retentionCatalogueSql('gf-full-data',source,store)));}
+});
+test('all synthetic query shapes use a typed empty identity relation with FROM, never WHERE without FROM',()=>{
+ for(const [platform,store,combined] of [['woo','ww',false],['woo','usd',false],['shopify','shopify',false],['woo','ww',true]])for(const group of ['retention_windows','retention_piece_windows','retention_baseline_windows']){
+  const q=retentionBigQueryFixture(group,platform,store,combined).query;
+  assert.match(q,/cr_identity AS \(SELECT CAST\(NULL AS STRING\) source_ref,CAST\(NULL AS STRING\) classification_ref FROM UNNEST\(ARRAY<INT64>\[\]\)\)/);
+  assert.doesNotMatch(q,/classification_ref WHERE FALSE/);
+ }
+});
+
+import {readFileSync} from 'node:fs';
+import {createHash} from 'node:crypto';
+import {combinedValidationArtifact} from '../diagnostics/build-retention-combined-validation.js';
+import {validateRetentionSyntaxFollowup} from '../diagnostics/validate-retention-syntax-followup.js';
+test('all eleven previously successful full SELECTs remain byte-for-byte unchanged',async()=>{
+ const prior=JSON.parse(readFileSync(new URL('./fixtures/retention-377-successful-compilation.json',import.meta.url))),now=await combinedValidationArtifact();assert.equal(prior.checks.length,11);
+ for(const c of prior.checks){const q=now.cases.find(x=>x.source===c.source&&x.store===c.store&&x.group===c.group);assert.equal(createHash('sha256').update(q.full_select.query).digest('hex'),c.full_select_sha256);}
+});
+test('follow-up validator plans only the failed combined SELECT and preserves independent synthetic results (mocked transport)',async()=>{
+ const artifact=await combinedValidationArtifact();let plans=0,executions=0;
+ const result=await validateRetentionSyntaxFollowup({artifact,dateValue:v=>v,validateRows:rows=>rows,onCheck:()=>{},bigquery:{createQueryJob:async q=>{plans++;assert.equal(q.query,artifact.cases[9].full_select.query);assert.equal(q.dryRun,true);throw Error('Planning fixture failure');},query:async q=>{const c=artifact.cases[executions++];assert.equal(q.query,c.synthetic.query);return [[90,180,360].map(window_days=>({source_platform:c.source,source_store:c.store,window_days,provisional_repeat_customers:1,provisional_eligible_customers:1,provisional_repeat_rate:1,mature_customers:0,repeat_customers:0}))];}}});
+ assert.equal(plans,1);assert.equal(executions,12);assert.equal(result.checks[0].status,'unresolved');assert.equal(result.checks.filter(c=>c.status==='executed_and_validated').length,12);assert.equal(result.other_full_selects_resubmitted,0);assert.equal(result.report_replayed,false);
+});
+
+import {gunzipSync} from 'node:zlib';
+import {syntaxFollowupArtifact} from '../diagnostics/build-retention-syntax-followup.js';
+test('targeted revalidation artifact matches current generated SQL and validator source',async()=>{
+ const committed=JSON.parse(gunzipSync(readFileSync(new URL('../diagnostics/retention-syntax-followup.json.gz',import.meta.url))));assert.deepEqual(committed,JSON.parse(JSON.stringify(await syntaxFollowupArtifact())));
 });
