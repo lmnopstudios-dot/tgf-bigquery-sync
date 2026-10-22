@@ -16,8 +16,14 @@ Shopify baseline rejection was the separately confirmed null supplemental produc
 reference. This new all-source retrieval failure is a different symptom.
 
 Fetched main is 05b6aef (merge of #370). The user confirmed dataset access in US and supplied deployed revision
-9e1439f97111395d257b7ccc3cd65cc368fe5129. Retained execution/request revisions
-remain unverified; deployment alone does not establish an execution revision.
+9e1439f97111395d257b7ccc3cd65cc368fe5129. The complete production inventory confirms exactly one job:
+44db728a-2f95-4651-9404-97a5aafc5e33, attempt 1, completed, requested and
+executed on 05b6aef9a5d30f2878fb6f38cecf8bb212629641. Created at
+2026-10-22T17:20:00.480Z, updated at 2026-10-22T17:20:21.288652000Z.
+The original diagnostic incorrectly used the current deployed revision as its
+selection target; this prevented the detail read despite a complete inventory.
+The corrected detail read explicitly pins the confirmed job, attempt and execution
+revision, independently of the newer deployed revision. Source errors remain unread.
 
 Compared with a64543c, #370 added a shared retention_product_coverage aggregate,
 changed second-product selection/title handling, added independent catalogue and
@@ -46,8 +52,9 @@ all retained, not assumed to be duplicates. A non-null SDK continuation object
 alone is not evidence of multiple executions. Automatic SDK pagination is enabled
 only for these SQL-LIMIT-bounded diagnostic SELECTs.
 
-Only a complete inventory with one to four rows explicitly matching execution
-revision 9e1439f97111395d257b7ccc3cd65cc368fe5129 allows the second SELECT.
+Only a complete inventory with one to four rows explicitly matching the confirmed
+job 44db728a-2f95-4651-9404-97a5aafc5e33, attempt 1 and execution
+revision 05b6aef9a5d30f2878fb6f38cecf8bb212629641 allows the second SELECT.
 It reads every matching row, not an arbitrary/latest job. Zero matches, incomplete
 inventory, or more than four matching rows leaves an explicit selection blocker
 alongside the inventory. No deployment-to-execution inference is applied. If the
@@ -60,7 +67,7 @@ nine unique existing warehouse job IDs receive metadata GETs; further IDs are
 listed as not read. Failures preserve preceding inventory and independent results.
 No original SQL, report tools, queue mutation or recovery is executed.
 
-Eight local tests pass with mocked retained rows and metadata. They cover SDK
+Nine local tests pass with mocked retained rows and metadata. They cover SDK
 continuation objects, multiple executions, inventory overflow, inventory-before-
 details emission, detail and metadata failure isolation, revision matching,
 redaction, validation details and SQL-probe construction. No live diagnostic or
@@ -99,7 +106,7 @@ try {
     import('@google-cloud/bigquery'),import('./bigquery/client.js')
   ]);
   stage='pinned_diagnostic';
-  const revision='b38a6c7dc582ee7ae4a4ce7795ff481b63372935';
+  const revision='ecacaf5bb1565833f2cdcab393c04b2cadea1ee9';
   const response=await fetch(`https://raw.githubusercontent.com/lmnopstudios-dot/tgf-bigquery-sync/${revision}/diagnostics/retention-request-errors.js`,{
     signal:AbortSignal.timeout(8000),redirect:'error'
   });
@@ -107,7 +114,7 @@ try {
   const chunks=[];let bytes=0;
   for await(const chunk of response.body){bytes+=chunk.length;if(bytes>65536)throw Error('Source bound');chunks.push(chunk);}
   const source=Buffer.concat(chunks);
-  if(createHash('sha256').update(source).digest('hex')!=='bc519a9c0d166d55e788f0b1fe9202f29c26b2e3ac7139dbf5f37b5595b4d754')throw Error('Source hash mismatch');
+  if(createHash('sha256').update(source).digest('hex')!=='00ec0eed0b098e78ea1d3a00524f395405973e00790ec9a96d484b2dbaed5bee')throw Error('Source hash mismatch');
   const {readRetainedRequestErrors}=await import('data:text/javascript;base64,'+source.toString('base64'));
   const {project,credentials}=loadBigQueryConfig();stage='exact_retained_reads';
   const result=await readRetainedRequestErrors({
