@@ -10,7 +10,7 @@ Scope remains combined TGF; entry 2022-10-19 through 2026-10-19, cutoff 2026-10-
 
 The existing shared classification reader consumes active approved identities, reporting-family memberships and identity-then-family routes before first-order attribution. Grouping consumes approved Shopify parent identity when an unambiguous reporting family is absent. No confirmed bypass in those supported routes has been supplied. Existing archived-line and approved-route regressions remain in place. The new production audit compares resolved source names to the actual classified historical lines and reports `resolved_classification_not_consumed`; a nonzero result needs investigation, never automatic governance approval.
 
-The promised review diagnostic had a separate flaw: it treated absence of a route to a named target as absence of consumed attribution, ignoring an already-governed direct Woo classification. It now inspects the classifications actually consumed on each Woo source line. Directly named but unmapped products still enter review for the missing product/family route, labelled `named_classification_consumed_product_route_missing`; they are not falsely labelled missing collaboration classification. Ambiguous family routes and unresolved classifications remain visible. Approved routes are displayed and never submitted for reapproval.
+The promised review diagnostic had a separate flaw: it treated absence of a route to a named target as absence of consumed attribution, ignoring an already-governed direct Woo classification. It now inspects the classifications actually consumed on each Woo source line. Directly named but unmapped products still enter review for the missing product/family route, labelled `named_classification_consumed_product_route_missing`; they are not falsely labelled missing collaboration classification. Ambiguous family routes and unresolved classifications remain visible. Explicitly governed core products without a classification conflict are excluded; unclassified products are not assumed core. Approved routes are displayed and never submitted for reapproval.
 
 One consolidated review list is ranked by affected eligible analytical customer records, then orders, across WW and USD. Each entry contains Woo store/ID/title, historical eligible-order count, entry-range affected order/customer counts, current approved routes, classification conflicts, proposed Shopify parent (only one supported candidate), exact normalized SKU evidence, the target's governed collaboration names/existing family references and required governance action. Historical order lines include archived products without live/publication filters. Counts describe purchasing records for the product, not the marginal change in first-purchase retention cohorts; counts overlap across products.
 
@@ -92,13 +92,13 @@ import {safeReadFailure} from './oracle/read-failure.js';
 import {reconcileRetentionCatalogue} from './oracle/retention-catalogue.js';
 let stage='pinned_artifact';
 try {
- const revision='7b90b45fca590612cb96507c9b0d2c73abad77f4';
+ const revision='ec027a97addf021164c42672cba6cc2fdc6b37fb';
  const response=await fetch(`https://raw.githubusercontent.com/lmnopstudios-dot/tgf-bigquery-sync/${revision}/diagnostics/retention-mapping-coverage.json.gz`,{signal:AbortSignal.timeout(8000),redirect:'error'});
  assert.ok(response.ok,'Pinned artifact unavailable');
  const chunks=[];let size=0;
  for await(const chunk of response.body){size+=chunk.length;if(size>262144)throw Error('Compressed artifact bound');chunks.push(chunk);}
  const bytes=Buffer.concat(chunks);
- assert.equal(createHash('sha256').update(bytes).digest('hex'),'e5fcf101a1d601fef88e433ae48d1bde8d27a4af479622ec76bb416e614d60ff');
+ assert.equal(createHash('sha256').update(bytes).digest('hex'),'e8bde0cbf9c6d9e6db50393b6bf5b2aaec83ac1f4109af0040f7c1a166be57b2');
  const artifact=JSON.parse(gunzipSync(bytes,{maxOutputLength:4194304}));
  const {project,credentials}=loadBigQueryConfig();
  assert.equal(project,artifact.project);
@@ -136,4 +136,4 @@ JS
 
 ## Validation status
 
-All 823 tests pass in the required Oracle acceptance gate (21 central conversations and 58 provider/delivery suites). Desktop/mobile browser gates pass, including durable and activated-identity refresh. The new diagnostic tests use mocked warehouse I/O and SQL structure checks; they are not live BigQuery execution or a populated production mapping list. All twelve business-report full SELECT settings and synthetic query shapes remain identical to current main; existing live acceptance is preserved. The consolidated diagnostic execution and concrete source-inventory comparison remain pending.
+The required Oracle acceptance gate passed all 823 tests before the final diagnostic-only core exclusion; its focused tests pass and the complete gate is being repeated. Desktop/mobile browser gates already pass for the unchanged report changes. The acceptance gate contains 21 central conversations and 58 provider/delivery suites; browser coverage includes durable and activated-identity refresh. The new diagnostic tests use mocked warehouse I/O and SQL structure checks; they are not live BigQuery execution or a populated production mapping list. All twelve business-report full SELECT settings and synthetic query shapes remain identical to current main; existing live acceptance is preserved. The consolidated diagnostic execution and concrete source-inventory comparison remain pending.
