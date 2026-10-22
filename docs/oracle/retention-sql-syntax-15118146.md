@@ -68,8 +68,10 @@ execution, live transaction execution or live report success is claimed locally.
 The BigQuery test remains opt-in/skipped in ordinary offline gates.
 
 Browser acceptance passed 21 conversations at desktop/mobile, including durable
-refresh and activated identity refresh. Full local acceptance status is recorded
-in the PR after completion. Offline gates do not establish BigQuery validity.
+refresh and activated identity refresh. Full local acceptance passed **769 tests,
+zero failures/cancellations/skips** (21 central conversations and 53 regression
+suites). The five new tests are included in the required matrix. Offline gates do
+not establish BigQuery validity.
 Keep the PR draft pending the returned validation checks.
 
 ## One bounded Render validation command
