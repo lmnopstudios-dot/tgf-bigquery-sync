@@ -1,3 +1,5 @@
+const isOutcome=action=>['no_equivalent','needs_investigation'].includes(action);
+const actionLabels={family:'reporting-family assignments',identity:'identity mappings',no_equivalent:'“No current Shopify equivalent” decisions',needs_investigation:'“Needs investigation” decisions'};
 const isWoo=ref=>/^woo:(ww|usd):[^:]+$/.test(String(ref||''));
 const isParent=ref=>/^shopify:shopify:(?:gid:\/\/shopify\/Product\/)?\d+$/.test(String(ref||''));
 const currentTarget=item=>item.active_family_assignment?.shopify_parent_ref||[item.active_identity_mapping?.left_ref,item.active_identity_mapping?.right_ref].find(isParent)||null;
@@ -5,12 +7,13 @@ const assigned=item=>['active_identity','active_reporting_family'].includes(item
 const editable=item=>!assigned(item)&&item.resolution_status!=='no_equivalent';
 const saved=row=>['saved','already_applied'].includes(row.result?.status);
 export function prepareWooBatch(rows,action){
- if(!['family','identity'].includes(action)||!rows.length||rows.length>8)throw Error('Select 1–8 Woo products and a relationship.');
+ if(!Object.hasOwn(actionLabels,action)||!rows.length||rows.length>8)throw Error('Select 1–8 Woo products and an action.');
  const refs=new Set();
  return rows.map(row=>{
   const ref=row.item.historical_product.source_product_ref;
   if(!isWoo(ref)||refs.has(ref)||!editable(row.item))throw Error('Only distinct, unassigned Woo products may be saved here.');
   refs.add(ref);
+  if(isOutcome(action))return {request_id:crypto.randomUUID(),action,source_ref:ref,shopify_parent_ref:null,note:null};
   if(!isParent(row.target?.source_product_ref)||row.preview?.selected_product?.source_product_ref!==row.target.source_product_ref||row.preview?.[action+'_preview']?.allowed!==true)throw Error('Each selected product needs an allowed preview for this relationship.');
   // The existing bulk API revalidates each row against current governance after
   // earlier rows commit. Do not carry a global-state token that those commits stale.
@@ -28,13 +31,13 @@ export function createWooAssignmentPanel({api,root=document,storage=localStorage
   for(const row of rows){
    const locked=busy||!!pending||!editable(row.item)||saved(row);
    if(row.checkbox)row.checkbox.disabled=locked;
-   if(row.select)row.select.disabled=locked;
-   if(row.find)row.find.disabled=locked;
+   if(row.select)row.select.disabled=locked||isOutcome(action());
+   if(row.find)row.find.disabled=locked||isOutcome(action());
   }
   const selectPage=$('woo-products').querySelector('.woo-select-page input');if(selectPage)selectPage.disabled=busy||!!pending;
   const n=selected().length;$('woo-selection-count').textContent=n+' selected';
-  $('woo-save').disabled=busy||!!pending||previewing>0||!n||n>8||selected().some(r=>r.preview?.[action()+'_preview']?.allowed!==true);
-  $('woo-shared-target').disabled=busy||!!pending||!n||n>8;
+  $('woo-save').disabled=busy||!!pending||!n||n>8||(!isOutcome(action())&&(previewing>0||selected().some(r=>r.preview?.[action()+'_preview']?.allowed!==true)));
+  $('woo-shared-target').disabled=busy||!!pending||!n||n>8||isOutcome(action());
   $('woo-action').disabled=busy||!!pending;
   for(const id of ['woo-load','woo-store','woo-status','woo-search'])$(id).disabled=busy;
   $('woo-recover').hidden=!pending;
@@ -44,12 +47,13 @@ export function createWooAssignmentPanel({api,root=document,storage=localStorage
   if(row.result)return `${row.result.status.replaceAll('_',' ')}${row.result.error?': '+row.result.error:''}`;
   if(assigned(row.item))return row.item.resolution_status==='active_reporting_family'?'Saved reporting family':'Saved identity approval';
   if(row.item.resolution_status==='no_equivalent')return 'Saved: no equivalent — preserved';
+  if(isOutcome(action()))return action()==='no_equivalent'?'No Shopify target required — record no current equivalent':'No Shopify target required — flag for investigation';
   if(row.loading)return 'Checking current graph and family rules…';
   if(row.error)return row.error;
   if(row.preview){const p=row.preview[action()+'_preview'];return p?.allowed?'Ready for review':`Blocked: ${p?.reason||'current rules reject this relationship'}`;}
   return row.item.automatic_shopify_match?'Automatic Shopify match — review and save to approve':row.item.historical_product.mapping_status==='resolved'?'Title/SKU suggestion only — not a saved approval':'Choose a Shopify target';
  }
- function paintStatus(row){row.status.textContent=statusFor(row);row.status.className='woo-row-status '+(row.preview?.[action()+'_preview']?.allowed?'allowed':row.error||row.result?.error?'blocked':'');controls();}
+ function paintStatus(row){row.status.textContent=statusFor(row);row.status.className='woo-row-status '+(row.result?.error||(!isOutcome(action())&&row.error)?'blocked':isOutcome(action())||row.preview?.[action()+'_preview']?.allowed?'allowed':'');controls();}
  async function preview(row){
   const target=row.target?.source_product_ref,stamp=++row.revision;
   row.preview=null;row.error=null;
@@ -63,14 +67,14 @@ export function createWooAssignmentPanel({api,root=document,storage=localStorage
   finally{previewing--;if(stamp===row.revision){row.loading=false;paintStatus(row);}controls();}
  }
  function chooseTarget(row,target){
-  if(busy||pending||!editable(row.item)||saved(row))return;
+  if(busy||pending||isOutcome(action())||!editable(row.item)||saved(row))return;
   row.target=target;row.result=null;
   if(![...row.select.options].some(o=>o.value===target.source_product_ref))row.select.add(new Option(target.title+' · '+target.source_product_ref,target.source_product_ref));
   row.select.value=target.source_product_ref;
   row.targets.set(target.source_product_ref,target);preview(row);
  }
  function openSearch(chosen){
-  if(!chosen.length||busy||pending)return;searchRows=chosen;
+  if(!chosen.length||busy||pending||isOutcome(action()))return;searchRows=chosen;
   $('woo-target-context').textContent=`Apply one Shopify product to ${chosen.length} selected Woo row${chosen.length===1?'':'s'}. This chooses targets only; nothing is saved yet.`;
   $('woo-target-query').value=chosen.length===1?chosen[0].item.historical_product.title||'':'';
   $('woo-target-results').replaceChildren();dialog.showModal();$('woo-target-query').focus();
@@ -139,8 +143,8 @@ export function createWooAssignmentPanel({api,root=document,storage=localStorage
  $('woo-recover').onclick=recover;
  $('woo-save').onclick=async()=>{
   let decisions;try{decisions=prepareWooBatch(selected(),action());}catch(e){$('woo-batch-status').textContent=e.message;return;}
-  const details=selected().map(r=>`${r.item.historical_product.source_product_ref} → ${r.target.title} (${r.target.source_product_ref})`).join('\n');
-  if(!confirm(`Save ${decisions.length} ${action()==='family'?'reporting-family assignments':'identity mappings'}?\n\n${details}\n\nEvery row is revalidated independently. Other rows are retained if one is blocked.`))return;
+  const details=selected().map(r=>isOutcome(action())?`${r.item.historical_product.source_product_ref} · ${r.item.historical_product.title||'Untitled product'}`:`${r.item.historical_product.source_product_ref} → ${r.target.title} (${r.target.source_product_ref})`).join('\n');
+  if(!confirm(`Save ${decisions.length} ${actionLabels[action()]}?\n\n${details}\n\nEvery row is revalidated independently. Other rows are retained if one is blocked.`))return;
   busy=true;savePending({operation_id:crypto.randomUUID(),decisions});render();
   try{applyResults(await api('/product-mappings/bulk-review',{method:'POST',body:JSON.stringify(pending)}));}catch(e){$('woo-batch-status').textContent='Save response interrupted. Checking the same batch; no automatic resubmission. '+e.message;await recover();}finally{busy=false;controls();}
  };

@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 export async function verifyWooAssignmentPanel({browser,origin,output}){
  for(const width of [1280,390]){
-  const page=await browser.newPage({viewport:{width,height:900}}),writes=[],errors=[];
-  page.on('pageerror',e=>errors.push(e.message));page.on('dialog',async d=>{assert.match(d.message(),/Save 2 reporting-family assignments/);assert.match(d.message(),/woo:ww:11737/);assert.match(d.message(),/woo:usd:106660/);await d.accept();});
+  const page=await browser.newPage({viewport:{width,height:900}}),writes=[],errors=[],noEquivalent=new Set();
+  page.on('pageerror',e=>errors.push(e.message));page.on('dialog',async d=>{if(d.message().includes('No current Shopify equivalent')){assert.match(d.message(),/Save 1/);assert.doesNotMatch(d.message(),/shopify:shopify:/);}else{assert.match(d.message(),/Save 2 reporting-family assignments/);assert.match(d.message(),/woo:ww:11737/);}assert.match(d.message(),/woo:usd:106660/);await d.accept();});
   const product=(ref,title)=>{const [source_platform,source_store,source_product_id]=ref.split(':');return{source_platform,source_store,source_product_id,source_product_ref:ref,title,mapping_status:'resolved',line_items:12};};
   const target=product('shopify:shopify:10434361590087',"Iron Maiden 'Powerslave Eddie' Ring");
   const products=[product('woo:ww:11737','Powerslave Eddie — old WW listing'),product('woo:usd:106660','Powerslave Eddie — old USD listing'),product('square:square:never','Not a Woo product')];
@@ -11,14 +11,18 @@ export async function verifyWooAssignmentPanel({browser,origin,output}){
    const req=route.request(),url=new URL(req.url());
    if(req.method()==='POST'){
     assert.equal(url.pathname,'/api/oracle/product-mappings/bulk-review');const body=req.postDataJSON();writes.push(body);
+    if(body.decisions[0].action==='no_equivalent'){
+     assert.equal(body.decisions.length,1);assert.equal(body.decisions[0].source_ref,'woo:usd:106660');assert.equal(body.decisions[0].shopify_parent_ref,null);noEquivalent.add(body.decisions[0].source_ref);
+     return route.fulfill({status:201,json:{operation_id:body.operation_id,status:'complete',succeeded:1,blocked:0,failed:0,pending:0,results:[{index:0,source_ref:body.decisions[0].source_ref,status:'saved'}]}});
+    }
     assert.equal(body.decisions.length,2);assert.deepEqual(body.decisions.map(x=>x.source_ref),['woo:ww:11737','woo:usd:106660']);assert.ok(body.decisions.every(x=>x.action==='family'&&x.shopify_parent_ref===target.source_product_ref));
     return route.fulfill({status:207,json:{operation_id:body.operation_id,status:'complete',succeeded:1,blocked:1,failed:0,pending:0,results:body.decisions.map((x,index)=>({index,source_ref:x.source_ref,status:index?'blocked':'saved',...(index?{error:'Current family changed; inspect history'}:{})}))}});
    }
    if(url.pathname.includes('/bulk-review/')){pendingReads++;return route.fulfill({json:{operation_id:url.pathname.split('/').at(-1),status:'complete',succeeded:1,blocked:0,failed:0,pending:0,results:[{index:0,source_ref:'woo:ww:11737',status:'already_applied'}]}});}
    if(url.pathname.endsWith('/search')){assert.equal(url.searchParams.get('sources'),'shopify');return route.fulfill({json:{items:[target,product('square:square:wrong','Wrong source'),product('shopify:shopify:gid://shopify/ProductVariant/1','Wrong variant')]}});}
    if(url.pathname.endsWith('/choice-preview')){assert.ok(['woo:ww:11737','woo:usd:106660'].includes(url.searchParams.get('source_ref')));return route.fulfill({json:{selected_product:target,family_preview:{allowed:true},identity_preview:{allowed:false,reason:'Identity conflict — family may remain distinct'}}});}
-   const woo=url.searchParams.get('view')==='woo_assignment';if(woo)assert.ok(['unassigned','automatic_matches'].includes(url.searchParams.get('assignment_status')));
-   const items=woo?products.map((p,i)=>({historical_product:p,resolution_status:'needs_review',shopify_suggestions:[],candidate:{candidate_id:'a'.repeat(24)},...(url.searchParams.get('assignment_status')==='automatic_matches'?{automatic_shopify_match:{source_product_ref:target.source_product_ref,mapping_method:'exact_unique_sku'}}:{})})):[];
+   const woo=url.searchParams.get('view')==='woo_assignment';if(woo)assert.ok(['unassigned','automatic_matches','no_equivalent'].includes(url.searchParams.get('assignment_status')));
+   const items=woo?products.filter(p=>url.searchParams.get('assignment_status')==='no_equivalent'?noEquivalent.has(p.source_product_ref):!noEquivalent.has(p.source_product_ref)).map((p,i)=>({historical_product:p,resolution_status:noEquivalent.has(p.source_product_ref)?'no_equivalent':'needs_review',shopify_suggestions:[],candidate:{candidate_id:'a'.repeat(24)},...(url.searchParams.get('assignment_status')==='automatic_matches'?{automatic_shopify_match:{source_product_ref:target.source_product_ref,mapping_method:'exact_unique_sku'}}:{})})):[];
    return route.fulfill({json:{items,summary:'Fixture mapping queue',coverage:{by_source:{}},pagination:{page:1,total_pages:1,total_items:items.length,page_size:25}}});
   });
   await page.goto(origin+'/oracle/');await page.locator('#password').fill('fixture');await page.locator('#login-form button').click();await page.locator('#app').waitFor({state:'visible'});
@@ -28,6 +32,8 @@ export async function verifyWooAssignmentPanel({browser,origin,output}){
   await page.locator('#woo-status').selectOption('automatic_matches');await page.waitForFunction(()=>document.querySelector('#woo-products').textContent.includes('Automatic Shopify match — review and save to approve'));
   await page.locator('#woo-status').selectOption('unassigned');await page.waitForFunction(()=>document.querySelector('#woo-products').textContent.includes('Title/SKU suggestion only'));
   await page.getByLabel('Select unassigned products on this page').check();assert.equal(await page.locator('#woo-selection-count').innerText(),'2 selected');
+  await page.locator('#woo-action').selectOption('needs_investigation');assert.ok(await page.locator('#woo-save').isEnabled());assert.ok(await page.locator('#woo-shared-target').isDisabled());
+  await page.locator('#woo-action').selectOption('family');assert.ok(await page.locator('#woo-save').isDisabled());
   await page.locator('#woo-shared-target').click();await page.locator('#woo-target-query').fill('Powerslave');await page.locator('#woo-target-form button[type="submit"]').click();await page.locator('#woo-target-results button').first().waitFor();assert.equal(await page.locator('#woo-target-results button').count(),1);await page.locator('#woo-target-results button').first().click();
   await page.waitForFunction(()=>!document.querySelector('#woo-save').disabled);
   await page.locator('#woo-action').selectOption('identity');assert.ok(await page.locator('#woo-save').isDisabled());assert.match(await page.locator('#woo-products').innerText(),/Identity conflict/);
@@ -38,9 +44,16 @@ export async function verifyWooAssignmentPanel({browser,origin,output}){
   assert.ok(await page.getByLabel('Shopify target for woo:usd:106660',{exact:true}).isEnabled());
   await page.screenshot({path:output+'/woo-bulk-assignment-'+width+'.png',fullPage:true});
   assert.ok(await page.locator('#woo-products').evaluate(n=>n.scrollWidth<=n.clientWidth+1),'Woo product cards fit narrow viewports');
+  await page.getByLabel('Select woo:usd:106660',{exact:true}).check();await page.locator('#woo-action').selectOption('no_equivalent');
+  assert.ok(await page.locator('#woo-save').isEnabled());assert.ok(await page.getByLabel('Shopify target for woo:usd:106660',{exact:true}).isDisabled());
+  await page.screenshot({path:output+'/woo-no-equivalent-'+width+'.png',fullPage:true});
+  await page.locator('#woo-save').click();await page.waitForFunction(()=>document.querySelectorAll('.woo-assignment-row').length===0);assert.equal(writes.length,2);
+  await page.locator('#woo-status').selectOption('no_equivalent');await page.waitForFunction(()=>document.querySelector('#woo-products').textContent.includes('Saved: no equivalent'));
+  assert.ok(await page.getByLabel('Select woo:usd:106660',{exact:true}).isDisabled());
+  await page.locator('#woo-status').selectOption('unassigned');await page.waitForFunction(()=>!document.querySelector('.woo-assignment-row[data-source-ref="woo:usd:106660"]'));
   // Recovery reads the same operation after browser refresh; it never posts again.
   await page.evaluate(()=>localStorage.setItem('oracle-woo-assignment-batch-v1',JSON.stringify({operation_id:'fixture-pending',decisions:[{source_ref:'woo:ww:11737',request_id:'stable',action:'family',shopify_parent_ref:'shopify:shopify:10434361590087'}]})));
   await page.reload();await page.locator('#app').waitFor({state:'visible'});await page.locator('[data-view="product-mappings"]').click();await page.locator('#woo-assignment-tab').click();await page.waitForFunction(()=>document.querySelector('#woo-batch-status').textContent.includes('already applied'));
-  assert.equal(pendingReads,1);assert.equal(writes.length,1);assert.deepEqual(errors,[]);await page.close();
+  assert.equal(pendingReads,1);assert.equal(writes.length,2);assert.deepEqual(errors,[]);await page.close();
  }
 }
