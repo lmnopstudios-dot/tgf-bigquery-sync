@@ -42,7 +42,7 @@ test('pinned narrow artifact is reproducible and its deployed-query builder pres
  const m=await import('data:text/javascript;base64,'+Buffer.from(a.query_builder_source).toString('base64'));
  assert.equal(m.uiRouteReconciliationSql('fixture',{reader:classificationReaderCtes('fixture'),normalizeRef:classificationRefSql,raw:false}),uiRouteReconciliationSql('fixture',{raw:false}));
  assert.doesNotMatch(a.candidate_query,/\borders\b|retention_members|LIMIT 501\) review_rows|\b(?:CREATE|INSERT|UPDATE|MERGE|DELETE)\b/);
- assert.match(a.candidate_query,/scope_variations/);assert.match(a.candidate_query,/order_line_items/);assert.doesNotMatch(a.candidate_query,/order_id|customer_id|quantity/);assert.match(a.candidate_query,/supersedes_decision_id IN/);
+ assert.match(a.candidate_query,/scope_variations/);assert.match(a.candidate_query,/order_line_items/);assert.doesNotMatch(a.candidate_query,/order_id|customer_id|quantity/);assert.match(a.candidate_query,/resolved_decision_id=m.supersedes_decision_id/);
 });
 
 test('UI current-state resolution reads actual BigQuery TIMESTAMP wrappers before decision-ID tie breaking',async()=>{
@@ -59,4 +59,20 @@ test('a deployed UI resolver failure preserves successfully read SQL evidence an
  const {readUiRouteReconciliation}=await import('../diagnostics/read-retention-ui-routes.js');
  const out=await readUiRouteReconciliation({project:'fixture',candidateQuery:'SELECT 1',deployedQuery:'SELECT 2',resolveMappingDecisions:()=>{throw Error('UI evaluation failed')},resolveFamilyDecisions,bigquery:{createQueryJob:async()=>[{id:'fixture',getQueryResults:async()=>[[{kind:'identity_history',record:'{}',available_records:1}]]}]}});
  assert.equal(out.checks[0].status,'read_completed');assert.equal(out.checks[0].groups.identity_history.records.length,1);assert.equal(out.checks[0].ui_evaluation_complete,false);assert.equal(out.checks[1].status,'read_completed');
+});
+
+test('both diagnostic paths use distinct key joins without table IN/EXISTS correlations',async()=>{
+ const {uiRouteReconciliationSql}=await import('../diagnostics/retention-ui-route-reconciliation.js');
+ for(const raw of [true,false]){
+  const q=uiRouteReconciliationSql('fixture',{raw});
+  assert.doesNotMatch(q,/\b(?:IN|EXISTS)\s*\(\s*SELECT\b/i);
+  assert.match(q,/scope_ids AS \(SELECT DISTINCT/);assert.match(q,/scope_relationship_keys AS \(SELECT DISTINCT/);
+  assert.match(q,/LEFT JOIN scope_refs l ON l.ref=m.left_ref LEFT JOIN scope_refs r ON r.ref=m.right_ref/);
+ }
+});
+test('allocated job IDs and structured SQL failure positions survive submission failure independently',async()=>{
+ const {readUiRouteReconciliation}=await import('../diagnostics/read-retention-ui-routes.js');let n=0;const ids=[],allocated=[];
+ const r=await readUiRouteReconciliation({project:'fixture',candidateQuery:'SELECT 1',deployedQuery:'SELECT 2',resolveMappingDecisions,resolveFamilyDecisions,jobIdFactory:()=>String(++n),onAllocated:event=>allocated.push(event.allocated_job_id),bigquery:{createQueryJob:async q=>{ids.push(q.jobId);assert.equal(allocated.at(-1),q.jobId);throw Object.assign(Error('Correlated subqueries at [145:2]'),{code:400,errors:[{reason:'invalidQuery',location:'query',message:'Correlated subqueries at [145:2]'}]});}}});
+ assert.equal(r.checks.length,2);assert.deepEqual(r.checks.map(c=>c.job_id),ids);assert.notEqual(ids[0],ids[1]);assert.deepEqual(allocated,ids);
+ for(const c of r.checks){assert.deepEqual(c.statement_location,{line:145,column:2});assert.equal(c.provider_reason,'invalidQuery');assert.equal(c.errors[0].location,'query');assert.equal(c.job_returned,false);}
 });

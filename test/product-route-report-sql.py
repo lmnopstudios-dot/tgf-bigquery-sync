@@ -53,6 +53,31 @@ for store in ['metorik_uk','metorik_us']:
  for table in ['product_variations','order_line_items']:
   c.execute('CREATE TABLE fixture.'+store+'.'+table+'(product_id VARCHAR,variation_id VARCHAR,name VARCHAR,sku VARCHAR)')
 audit=subprocess.check_output(['node','--input-type=module','-e',"import {uiRouteReconciliationSql} from './diagnostics/retention-ui-route-reconciliation.js';console.log(uiRouteReconciliationSql('fixture'));"],text=True)
+# Legacy OR/IN selections must remain equivalent after explicit keyed joins.
+# Repeated key evidence must not multiply history rows; physical history rows
+# themselves remain visible, including out-of-scope superseding markers.
+c.execute("INSERT INTO fixture.commerce.product_mapping_decisions VALUES ('cross','cross','cross-rel',NULL,'woo:ww:11737','woo:usd:106660','approved','2024-01-01',NULL),('cross','cross','cross-rel',NULL,'woo:ww:11737','woo:usd:106660','approved','2024-01-01',NULL),('cross-end','cross-end','outside-rel',NULL,'woo:ww:888888','shopify:shopify:888888','revoked','2026-02-01','cross'),('wrong-store','wrong-store',NULL,NULL,'woo:usd:11737','shopify:shopify:888889','approved','2024-01-01',NULL)")
+c.execute("INSERT INTO fixture.commerce.product_family_decisions VALUES ('f-end','f-end',NULL,'woo:ww:888888','shopify:shopify:888888','Other','revoked','2026-02-01','f1')")
+for table in ['product_variations','order_line_items']:
+ c.execute("INSERT INTO fixture.metorik_uk."+table+" VALUES ('11737','999999','Fixture size','FIXTURE')")
 audit_rows=c.execute(sqlglot.transpile(audit,read='bigquery',write='duckdb')[0]).fetchall()
 assert audit_rows and any(r[0]=='identity_history' for r in audit_rows)
-print('Exact narrow persisted-decision/current-route diagnostic also executed on translated local fixtures.')
+prefix=audit[:audit.index('audit_0 AS')].rstrip().rstrip(',')
+identity_scope="SPLIT(left_ref,':')[SAFE_OFFSET(2)] IN (SELECT id FROM scope_ids) OR SPLIT(right_ref,':')[SAFE_OFFSET(2)] IN (SELECT id FROM scope_ids)"
+family_scope="SPLIT(source_ref,':')[SAFE_OFFSET(2)] IN (SELECT id FROM scope_ids)"
+reference={
+ 'identity_history':"SELECT TO_JSON_STRING(m) FROM cr_map_history m WHERE resolved_relationship_id IN (SELECT resolved_relationship_id FROM cr_map_history WHERE "+identity_scope+") OR supersedes_decision_id IN (SELECT resolved_decision_id FROM cr_map_history WHERE "+identity_scope+")",
+ 'family_history':"SELECT TO_JSON_STRING(f) FROM cr_family_history f WHERE "+family_scope+" OR supersedes_decision_id IN (SELECT resolved_decision_id FROM cr_family_history WHERE "+family_scope+")",
+ 'current_identity':"SELECT TO_JSON_STRING(m) FROM cr_map_current m WHERE left_ref IN (SELECT ref FROM scope_refs) OR right_ref IN (SELECT ref FROM scope_refs)"
+}
+for kind,selection in reference.items():
+ expected=c.execute(sqlglot.transpile(prefix+' '+selection,read='bigquery',write='duckdb')[0]).fetchall()
+ actual=[r[1] for r in audit_rows if r[0]==kind]
+ assert sorted(actual)==sorted(r[0] for r in expected),(kind,actual,expected)
+identity_records=[json.loads(r[1]) for r in audit_rows if r[0]=='identity_history']
+assert sum(r['decision_id']=='cross' for r in identity_records)==2
+assert any(r['decision_id']=='cross-end' for r in identity_records)
+assert any(r['decision_id']=='wrong-store' for r in identity_records)
+assert not any(json.loads(r[1])['decision_id']=='wrong-store' for r in audit_rows if r[0]=='current_identity')
+assert any(json.loads(r[1])['decision_id']=='f-end' for r in audit_rows if r[0]=='family_history')
+print('Exact diagnostic joins execute on translated local fixtures and match legacy selection multisets, including duplicate keys, both scoped endpoints, namespaces and out-of-scope superseders. This is NOT BigQuery validation.')
