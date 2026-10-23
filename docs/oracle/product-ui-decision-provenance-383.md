@@ -1,3 +1,5 @@
+> Update: the supplied production read passed destination, positive-control and parser checks. The 24 Woo references have no persisted decisions; related Square decisions remain separate. See [Woo review and saved-receipt findings](woo-review-and-source-receipts-383.md). Do not rerun the warehouse command below to inspect receipts already saved locally.
+
 # Product Mapping UI provenance: current finding remains unverified
 
 The successful supplied diagnostic is evidence that **both SELECTs compile and complete**, not that the supplied products lack UI approvals. Candidate job `oracle_ui_routes_da143f25-c64c-4841-8cd1-8706345c59e6` returned only 40 `variation_keys` records; deployed job `oracle_ui_routes_4e9314d8-46bd-4a7a-bbeb-d5915c464031` returned no groups. Both were within bounds. All 24 displayed empty rows were projections of these results, not 24 independent UI history reads.

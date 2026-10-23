@@ -28,3 +28,18 @@ else {assert.equal(r.finding,'still_unverified');if(scenario==='parser_mismatch'
 fs.rmSync(dir,{recursive:true,force:true});
 }
 });
+
+test('saved receipt extraction keeps Square endpoints and history without queries or private reviewer fields',async()=>{
+const {runInNewContext}=await import('node:vm');
+const source=fs.readFileSync(new URL('../diagnostics/read-saved-ui-operation-receipts.js',import.meta.url),'utf8').replace("import {readFileSync,statSync} from 'node:fs';",'');
+const checks=['operation','outcome','identity','family'].map(kind=>({check:'ui_persisted_'+kind,status:'read_completed',job_id:kind,rows:[{kind:'inventory',record:'{"matching_records":2}'},...['submitted','saved'].map(status=>({kind:'record',record:JSON.stringify({source_ref:'square:square:control',status,decision_event_id:'event',reviewed_by:'private-reviewer',note:'private-note'})}))]}));
+let output;
+runInNewContext(source,{readFileSync:()=>JSON.stringify({checks}),statSync:()=>({size:1000}),console:{log:x=>output=JSON.parse(x)}});
+assert.equal(output.queries_submitted,0);assert.equal(output.checks.length,4);
+assert.deepEqual(output.checks[0].records.map(r=>r.status),['submitted','saved']);
+assert.ok(output.checks.every(c=>c.records.every(r=>r.source_ref==='square:square:control')));
+assert.ok(!JSON.stringify(output).includes('private-'));
+assert.throws(()=>runInNewContext(source,{statSync:()=>({size:16777217})}),/bound/);
+const doc=fs.readFileSync(new URL('../docs/oracle/woo-review-and-source-receipts-383.md',import.meta.url),'utf8');
+assert.ok(doc.includes(fs.readFileSync(new URL('../diagnostics/read-saved-ui-operation-receipts.js',import.meta.url),'utf8').trim()));
+});
