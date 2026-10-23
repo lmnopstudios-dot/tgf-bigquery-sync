@@ -1,3 +1,4 @@
+import {retentionLimitEvidence,retentionLimitSummary} from './retention-limits.js';
 import {isRetentionPopulation} from './retention-population.js';
 import {retentionBusinessReport} from './retention-business-report.js';
 import {provisionalEvidence,familyEvidence} from './retention-provisional.js';
@@ -122,6 +123,7 @@ function retentionFullMarkdown(e){
     lines.push('**Governed collection reconciliation**', '| Source | Reviewed collection | Governed name | Eligible first-purchase matches | Status |', '|---|---|---|---|---|', ...e.catalogue_reconciliation.map(c=>`| ${sourceLabel(c)} | ${safe(c.display_name)} | ${safe(c.collaboration_name||'Unavailable')} | ${c.eligible_customers==null?'Unknown (missing evidence)':c.eligible_customers+' observed'} | ${safe(c.status.replaceAll('_',' '))}${c.governed_alias_collection_ids?.length?'; governed alias collections: '+c.governed_alias_collection_ids.map(safe).join(', '):''} |`));
   }
   for(const o of e.section_outcomes||[])if(o.state==='rejected')lines.push(`${sourceLabel(o)} ${o.component==='baseline_period_rows'?'calendar-period baseline':'whole-range product ranking'} evidence failed validation; independently validated report sections are retained.`);
+  if(e.source_outcomes?.some(o=>o.returned_rows!=null)){lines.push('**Section row limits**',...retentionLimitEvidence(e).map(x=>`${x.section}: ${x.returned}/${x.limit} rows; ${x.status.replaceAll('_',' ')}${x.cohort_windows_at_bound?'; '+x.cohort_windows_at_bound+' cohort/window highlights at the cap (additional products not determined)':''}.`));}
   if(e.component_limitations?.length)lines.push(e.component_limitations.join(' '));
   lines.push('<details>\n<summary>Show details</summary>\n\n'+[
     `Cohort entry: ${e.periods[0].start_date} to ${e.periods[0].end_date}; observation ends ${e.observation_end} (${e.definition?.time_zone||'UTC'} calendar dates).`,
@@ -139,7 +141,7 @@ function retentionFullMarkdown(e){
     'Source-history availability, current classification availability and customer-linkage coverage are separate limitations. Absent periods are missing evidence, never zero activity. Cohorts with fewer than 30 mature customers are small samples; no minimum-size eligibility exclusion or statistical significance claim is applied. No causal claim is applied.',
     ...(e.coverage?.failed_sources?.length?[`Source evidence unavailable: ${e.coverage.failed_sources.join(', ')}. ${rows.length?'Supported results are retained; ':''}missing sources are not zero.`]:[]),
     ...(e.source_outcomes||[]).map(o=>`${sourceLabel(o)} calculation: ${o.state==='fulfilled'?'read completed':o.state==='not_attempted'?'not attempted before deadline':o.population_read==='completed'||o.stage==='evidence_validation'?'warehouse read completed; evidence validation rejected this component':'read failed'}${o.http_status?` (HTTP ${o.http_status})`:''}. ${o.identity_evidence?` Identity: ${safe(o.identity_evidence.activation)} (${safe(o.identity_evidence.mode)})${o.identity_evidence.snapshot?'; snapshot '+safe(o.identity_evidence.snapshot):''}${o.identity_evidence.reason?'; '+safe(o.identity_evidence.reason):''}.`:''} Detailed diagnostics are retained with the evidence.`),
-    ...(e.truncated?['The requested-rate ranking is bounded. A row bound was reached; additional collaborations or pieces may be absent.']:[])
+    ...(e.truncated?[retentionLimitSummary(e)]:[])
   ].join('\n\n')+'\n\n</details>');return lines.join('\n\n');
 }
 export function retentionCoverage(rows=[]){
@@ -214,7 +216,7 @@ export async function answerCohortRetention({context,provider,...options}){
           target.push(...section);section_outcomes.push({source_platform:outcome.source_platform,source_store:outcome.source_store,component:key,state:'fulfilled',query_id});
         }catch{section_outcomes.push({source_platform:outcome.source_platform,source_store:outcome.source_store,component:key,state:'rejected',stage:'evidence_validation',population_read:'completed',code:'EVIDENCE_SCOPE_MISMATCH',query_id});}
       }
-      source_outcomes.push({...outcome,...(part.identity_evidence?{identity_evidence:part.identity_evidence}:{}),population_read:'completed',state:'fulfilled',status:validated.length?(validated.some(r=>r.observation_coverage_status==='unverified')?'coverage_unverified':'classified_cohorts'):coverage.some(c=>c.eligible_first_customers>0)?'unclassified_population':'successful_empty',stage:'complete',query_id,timings});
+      source_outcomes.push({...outcome,...(part.identity_evidence?{identity_evidence:part.identity_evidence}:{}),population_read:'completed',state:'fulfilled',returned_rows:validated.length,row_limit:componentLimit(group),truncated:Boolean(part.truncated),status:validated.length?(validated.some(r=>r.observation_coverage_status==='unverified')?'coverage_unverified':'classified_cohorts'):coverage.some(c=>c.eligible_first_customers>0)?'unclassified_population':'successful_empty',stage:'complete',query_id,timings});
       if(group==='retention_baseline_windows')baseline_rows.push(...validated);else results.push(...validated);if(!classification.length)classification.push(...coverage);
       truncated ||= Boolean(part.truncated);
     }catch(error){if(error.code==='LEASE_NOT_OWNED'||error.code==='REQUEST_CANCELLED'||options.signal?.aborted)throw error;const failure=safeReadFailure(error,stage);
