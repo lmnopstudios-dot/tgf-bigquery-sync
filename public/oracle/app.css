@@ -33,3 +33,5 @@ main{height:100%;min-height:0;min-width:0}.view{height:100%;min-height:0;min-wid
 @media(max-width:700px){.woo-panel-intro{padding:0 1rem}.woo-assignment-toolbar{margin:1rem;position:static}.woo-assignment-row{grid-template-columns:minmax(0,1fr)}#woo-summary,#woo-pagination,#woo-batch-status,#woo-products{margin-left:1rem;margin-right:1rem}.woo-assignment-toolbar button{width:100%}}
 
 .woo-assignment-toolbar label{min-width:0;max-width:100%}#woo-action{max-width:100%}
+
+#historical-classification-panel .filters label{display:grid;gap:.3rem}#historical-products .historical-product{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.5fr);gap:1rem}#historical-products label{display:flex;gap:.7rem;align-items:flex-start}#historical-products strong,#historical-products small{display:block;overflow-wrap:anywhere}#historical-products small{color:var(--muted);margin-top:.4rem}#historical-products p{margin:.3rem 0}#historical-status{white-space:pre-wrap;overflow-wrap:anywhere}#historical-collaboration{max-width:100%}@media(max-width:700px){#historical-products .historical-product{grid-template-columns:minmax(0,1fr)}}

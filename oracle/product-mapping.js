@@ -358,6 +358,7 @@ SELECT * EXCEPT(exact_sku,local_title_count,title_sources,local_sku_count,sku_so
   const validateApproval=async(candidate,edges,catalogue=null)=>atGovernanceStage('graph_safety','product_mapping_graph_validation',async()=>{const products=catalogue||await loadProducts();return assertProductGraphExtensionIntegrity({products,explicitEdges:edges,deterministicEdges:deterministicMappingEdges(products),candidate});});
   return {
     setup, decisions, familyDecisions, reviewOutcomes,
+    readGovernanceOperation:operationEvents, appendGovernanceOperation:appendOperationEvents, readProductInventory:loadProducts,
     async inspectCurrentGraph(history=null){
       const products=await loadProducts(),resolvedHistory=history||await decisions();
       return inspectProductGraph({products,explicitEdges:activeEdges(resolvedHistory),deterministicEdges:deterministicMappingEdges(products)});

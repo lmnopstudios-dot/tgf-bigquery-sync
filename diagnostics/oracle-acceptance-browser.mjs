@@ -1,3 +1,4 @@
+import {verifyHistoricalCollaborationPanel} from '../test/helpers/historical-collaboration-browser.js';
 import {verifyWooAssignmentPanel} from '../test/helpers/woo-assignment-browser.js';
 async function openRetentionResults(page){const details=page.locator('.analytical-answer').last().locator('details');if(await details.count()&&(await details.getAttribute('open'))===null)await details.locator('summary').click();}
 // Native composer and visible delivery, backed by real Oracle composition.
@@ -239,5 +240,6 @@ try{
     assert.equal(writes.length,0);await page.close();
   }
   await verifyWooAssignmentPanel({browser,origin:h.origin,output});
+  await verifyHistoricalCollaborationPanel({browser,origin:h.origin,output});
   console.log(JSON.stringify({status:'passed',conversations:matrix.conversations.length,viewports:['desktop','mobile'],durable_refresh:true,activated_identity_refresh:true,output}));
 }finally{await browser.close();h.close();}
