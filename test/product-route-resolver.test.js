@@ -76,3 +76,22 @@ test('allocated job IDs and structured SQL failure positions survive submission 
  assert.equal(r.checks.length,2);assert.deepEqual(r.checks.map(c=>c.job_id),ids);assert.notEqual(ids[0],ids[1]);assert.deepEqual(allocated,ids);
  for(const c of r.checks){assert.deepEqual(c.statement_location,{line:145,column:2});assert.equal(c.provider_reason,'invalidQuery');assert.equal(c.errors[0].location,'query');assert.equal(c.job_returned,false);}
 });
+test('documented command archives previous errors and saves allocated IDs/SQL before mocked submission',async()=>{
+ const fs=await import('node:fs'),os=await import('node:os'),path=await import('node:path');
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'oracle-ui-command-')),file=path.join(dir,'evidence.json');
+ fs.writeFileSync(file,JSON.stringify({checks:[{job_id:'previous-retained-id'}]}));
+ try{
+  const doc=fs.readFileSync(new URL('../docs/oracle/retention-ui-route-reconciliation-383.md',import.meta.url),'utf8');
+  let code=doc.split("<<'JS'\n")[1].split('\nJS\n')[0];
+  code=code.replace("const file='/tmp/oracle-ui-product-routes-383.json';",`const file=${JSON.stringify(file)};`)
+   .replace("import {loadBigQueryConfig} from './bigquery/client.js';","const loadBigQueryConfig=()=>({project:'fixture',credentials:{}});")
+   .replace("import {BigQuery} from '@google-cloud/bigquery';",`class BigQuery {static timestamp=value=>({value});calls=0;async createQueryJob(q){const saved=JSON.parse(readFileSync(file));if(saved.allocated_queries.length!==++this.calls)throw Error('Allocation was not saved before submission');if(this.calls===1)throw Object.assign(Error('Correlated subqueries at [145:2]'),{code:400,errors:[{reason:'invalidQuery',location:'query',message:'Correlated subqueries at [145:2]'}]});return [{id:q.jobId,getQueryResults:async()=>[[{kind:'routes',available_records:1,record:JSON.stringify({source_ref:'woo:ww:11737',classification_ref:'shopify:shopify:fixture'})}]]}];}}`);
+  const bytes=fs.readFileSync(new URL('../diagnostics/retention-ui-route-reconciliation.json.gz',import.meta.url));
+  code=`import {readFileSync} from 'node:fs';globalThis.fetch=async()=>({ok:true,body:[Buffer.from('${bytes.toString('base64')}','base64')]});\n`+code;
+  const run=spawnSync(process.execPath,['--input-type=module'],{input:code,encoding:'utf8'});assert.equal(run.status,1,run.stderr);
+  const out=JSON.parse(fs.readFileSync(file));assert.equal(JSON.parse(fs.readFileSync(out.previous_evidence_file)).checks[0].job_id,'previous-retained-id');
+  assert.equal(out.allocated_queries.length,2);assert.equal(out.checks[0].job_id,out.allocated_queries[0].allocated_job_id);assert.deepEqual(out.checks[0].statement_location,{line:145,column:2});assert.equal(out.checks[1].status,'read_completed');
+  assert.match(out.queries.persisted_and_candidate_routes.query,/scope_relationship_keys/);assert.equal(out.queries.deployed_routes.sha256.length,64);
+  const row=out.reconciliation.find(r=>r.source_ref==='woo:ww:11737');assert.equal(row.corrected_routes,null);assert.equal(row.ui_current_identity,null);assert.equal(row.deployed_routes.length,1);
+ }finally{fs.rmSync(dir,{recursive:true,force:true});}
+});
