@@ -1,5 +1,3 @@
-> Live acceptance passed after merge/deployment: revision `c22df6162b9e1abdd29c8e628cdaab045496961b`, query `f7c52395-3269-4a44-af7d-7f78c1ebb395`, 99 main rows, 60 ranking rows, combined synthetic executed/validated, `acceptance_passed=true`. Successful report `279fea44-4f76-4723-9936-a0f39d916a8e` returns all requested sections. See [remaining mapping/coverage work](retention-mapping-coverage-completion.md); do not rerun this historical acceptance check.
-
 # Combined supplemental population scope
 
 ## Confirmed evidence

@@ -16,21 +16,21 @@
   "components": [
     {
       "group": "retention_windows",
-      "script_sha256": "e5c19f166fd696fbd7931597345db0e6b24d93bc38cf99bdfb455044961efb39",
+      "script_sha256": "02f87a5745429985708396f22aa508c177caa8e922e01838853740bd79836c7a",
       "maximum_bytes_per_statement": "1666666666",
       "data_statements": 12,
       "maximum_bytes_per_component": "20000000000"
     },
     {
       "group": "retention_piece_windows",
-      "script_sha256": "82314b2da7c246d0199447ef757adaefd7b148604112ef1200fcb9039a91b5d7",
+      "script_sha256": "3da91d643c9c5f4c4ee58e88896e0a593b3adec873b35eaf754c273a3241e466",
       "maximum_bytes_per_statement": "1666666666",
       "data_statements": 12,
       "maximum_bytes_per_component": "20000000000"
     },
     {
       "group": "retention_baseline_windows",
-      "script_sha256": "cb6562d3f55cd5411e1110ec84f7f2c30176736fef1f07b1cd55b506e029eb4e",
+      "script_sha256": "92d5dddd4d2cdbf0774859577e9f686e9ff594fb888b4e39da066ed2281cf941",
       "maximum_bytes_per_statement": "1666666666",
       "data_statements": 12,
       "maximum_bytes_per_component": "20000000000"

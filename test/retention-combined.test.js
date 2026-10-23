@@ -34,7 +34,7 @@ test('combined requests fail closed without activated identity rather than silen
  await assert.rejects(service.analyzeCustomerJourney({cohort_entry_start:'2022-10-19',cohort_entry_end:'2026-10-19',observation_end:'2026-10-19',group_by:['retention_windows']},{combined:true}),/activated linked identity/);assert.equal(reads,0);
 });
 test('mapping review includes eligible historical Woo sales, never infers title links or asserts not sold',()=>{
- const sql=retentionMappingReviewSql('fixture');assert.match(sql,/JOIN qualifying_orders/);assert.match(sql,/COUNT\(DISTINCT IF\(DATE\(q.order_timestamp,@time_zone\)>=@cohort_entry_start,q.governed_customer_ref,NULL\)\) affected_customers/);assert.match(sql,/ORDER BY affected_customers DESC/);assert.doesNotMatch(sql,/published_at|status='active'.*products|LIKE.*title/i);assert.match(sql,/JOIN targets t USING\(sku\)/);
+ const sql=retentionMappingReviewSql('fixture');assert.match(sql,/JOIN qualifying_orders/);assert.match(sql,/COUNT\(DISTINCT q.governed_customer_ref\) affected_customers/);assert.match(sql,/ORDER BY affected_customers DESC/);assert.doesNotMatch(sql,/published_at|status='active'.*products|LIKE.*title/i);assert.match(sql,/JOIN targets t USING\(sku\)/);
  const out=mappingReviewList([{source_product_id:'17',woo_title:'Archived item',affected_customers:5,candidates:[{product_ref:'shopify:shopify:9'}]}]);assert.equal(out.items[0].proposed_target,'shopify:shopify:9');assert.equal(out.governance_written,false);assert.match(out.items[0].limitation,/does not establish.*not sold/);
 });
 
@@ -87,9 +87,9 @@ import {readFileSync} from 'node:fs';
 import {createHash} from 'node:crypto';
 import {combinedValidationArtifact} from '../diagnostics/build-retention-combined-validation.js';
 import {validateRetentionSyntaxFollowup} from '../diagnostics/validate-retention-syntax-followup.js';
-test('historical eleven compilation passes remain recorded; shared UI resolver changes require fresh validation for every full SELECT',async()=>{
+test('eight unaffected full SELECTs preserve prior compilation hashes; three changed piece SELECTs need revalidation',async()=>{
  const prior=JSON.parse(readFileSync(new URL('./fixtures/retention-377-successful-compilation.json',import.meta.url))),now=await combinedValidationArtifact();assert.equal(prior.checks.length,11);
- for(const c of prior.checks){const q=now.cases.find(x=>x.source===c.source&&x.store===c.store&&x.group===c.group);assert.notEqual(createHash('sha256').update(q.full_select.query).digest('hex'),c.full_select_sha256);}
+ for(const c of prior.checks){const q=now.cases.find(x=>x.source===c.source&&x.store===c.store&&x.group===c.group);assert[c.group==='retention_piece_windows'?'notEqual':'equal'](createHash('sha256').update(q.full_select.query).digest('hex'),c.full_select_sha256);}
 });
 test('follow-up validator plans only the failed combined SELECT and preserves independent synthetic results (mocked transport)',async()=>{
  const artifact=await combinedValidationArtifact();let plans=0,executions=0;

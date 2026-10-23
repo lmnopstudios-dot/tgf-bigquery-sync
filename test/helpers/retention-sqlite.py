@@ -1,8 +1,6 @@
 # Executes factory-owned retention calculation relations against synthetic inputs.
 # Dialect adaptation is local verification, not a BigQuery schema/dry-run proof.
 import json, sqlite3, sys
-from datetime import datetime
-from zoneinfo import ZoneInfo
 p=json.load(sys.stdin)
 c=sqlite3.connect(':memory:')
 c.row_factory=sqlite3.Row
@@ -18,7 +16,6 @@ for row in p.get('lines',[]): c.execute('INSERT INTO classified_lines VALUES(?,?
 for row in p['members']: c.execute('INSERT INTO entry_matches VALUES(?,?,?,?,?,?,?,?)',row+['unmapped_item'])
 for row in p['returns']: c.execute('INSERT INTO retention_next_orders VALUES(?,?,?,?,?)',row)
 for row in p['classes']: c.execute('INSERT INTO order_classification_sets VALUES(?,?,?,?,?,?,?)',row)
-c.create_function('LD',1,lambda x:None if x is None else datetime.fromisoformat(x.replace('Z','+00:00')).astimezone(ZoneInfo('Europe/London')).date().isoformat())
 c.create_function('IF',3,lambda a,b,d: b if a else d)
 c.create_function('SAFE_DIVIDE',2,lambda a,b:None if not b else a/b)
 c.execute("CREATE VIEW retention_reporting_lines AS SELECT *,source_product_ref reporting_product_ref,COALESCE(NULLIF(TRIM(product_title),''),'Product title unavailable') reporting_product_title,'unmapped_item' family_status FROM classified_lines")

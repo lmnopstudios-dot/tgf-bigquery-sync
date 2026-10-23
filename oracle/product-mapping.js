@@ -116,12 +116,9 @@ export function deterministicMappingEdges(products) {
   return edges;
 }
 
-// BigQuery TIMESTAMP values arrive as {value: ISO}; String(wrapper) loses time.
-const decisionTime=value=>value instanceof Date?value.toISOString():String(value?.value??value??'');
-
 /** The sole in-process current-state resolver. Supersession links win over timestamps. */
 export function resolveMappingDecisions(history = []) {
-  const ordered=[...history].sort((a,b)=>decisionTime(a.reviewed_at).localeCompare(decisionTime(b.reviewed_at))||String(a.decision_id||a.event_id||'').localeCompare(String(b.decision_id||b.event_id||'')));
+  const ordered=[...history].sort((a,b)=>String(a.reviewed_at||'').localeCompare(String(b.reviewed_at||''))||String(a.decision_id||a.event_id||'').localeCompare(String(b.decision_id||b.event_id||'')));
   const byId=new Map(ordered.map(d=>[d.decision_id||d.event_id,d]));
   const superseded=new Set(ordered.map(d=>d.supersedes_decision_id).filter(Boolean));
   const currentByRelationship=new Map();
@@ -136,7 +133,7 @@ export function resolveMappingDecisions(history = []) {
 
 /** Family membership is deliberately not a canonical identity edge. */
 export function resolveFamilyDecisions(history = []) {
-  const ordered=[...history].sort((a,b)=>decisionTime(a.reviewed_at).localeCompare(decisionTime(b.reviewed_at))||String(a.decision_id||a.event_id||'').localeCompare(String(b.decision_id||b.event_id||'')));
+  const ordered=[...history].sort((a,b)=>String(a.reviewed_at||'').localeCompare(String(b.reviewed_at||''))||String(a.decision_id||a.event_id||'').localeCompare(String(b.decision_id||b.event_id||'')));
   const byId=new Map(ordered.map(d=>[d.decision_id||d.event_id,d])),superseded=new Set(ordered.map(d=>d.supersedes_decision_id).filter(Boolean)),currentBySource=new Map();
   for(const row of ordered){const id=row.decision_id||row.event_id;if(!superseded.has(id))currentBySource.set(row.source_ref,row);}
   const current=[...currentBySource.values()];
@@ -207,11 +204,9 @@ export function sanitizeReviewerNote(note) {
   return String(note).normalize('NFKC').replace(/[\u0000-\u001f\u007f]/g,' ').replace(/\s+/g,' ').trim().slice(0,MAX_REVIEW_NOTE_LENGTH);
 }
 
-/** Shared BigQuery form of the UI resolver. Legacy rows derive the same
- * sorted-endpoint SHA-256 key as relationshipId; candidate IDs are not
- * relationship identifiers. The separator is one NUL byte, not a title key. */
+/** Shared BigQuery form of the governed resolver used by reports and validators. */
 export function governedDecisionCtes(project, prefix='governed') {
-  return `${prefix}_history AS (SELECT *,COALESCE(decision_id,event_id) resolved_decision_id,COALESCE(NULLIF(relationship_id,''),SUBSTR(LOWER(TO_HEX(SHA256(CONCAT(CAST(LEAST(left_ref,right_ref) AS BYTES),CODE_POINTS_TO_BYTES([0]),CAST(GREATEST(left_ref,right_ref) AS BYTES))))),1,24)) resolved_relationship_id FROM \`${project}.${PRODUCT_MAPPING_DATASET}.${PRODUCT_MAPPING_TABLE}\`), ${prefix}_superseded AS (SELECT supersedes_decision_id decision_id FROM ${prefix}_history WHERE supersedes_decision_id IS NOT NULL), ${prefix}_ranked AS (SELECT h.*,ROW_NUMBER() OVER(PARTITION BY resolved_relationship_id ORDER BY reviewed_at DESC,resolved_decision_id DESC) relationship_rank FROM ${prefix}_history h LEFT JOIN ${prefix}_superseded s ON s.decision_id=h.resolved_decision_id WHERE s.decision_id IS NULL), ${prefix}_current AS (SELECT * FROM ${prefix}_ranked WHERE relationship_rank=1), ${prefix}_active AS (SELECT * FROM ${prefix}_current WHERE status='approved')`;
+  return `${prefix}_history AS (SELECT *,COALESCE(decision_id,event_id) resolved_decision_id,COALESCE(relationship_id,candidate_id) resolved_relationship_id FROM \`${project}.${PRODUCT_MAPPING_DATASET}.${PRODUCT_MAPPING_TABLE}\`), ${prefix}_superseded AS (SELECT supersedes_decision_id decision_id FROM ${prefix}_history WHERE supersedes_decision_id IS NOT NULL), ${prefix}_ranked AS (SELECT h.*,ROW_NUMBER() OVER(PARTITION BY resolved_relationship_id ORDER BY reviewed_at DESC,resolved_decision_id DESC) relationship_rank FROM ${prefix}_history h LEFT JOIN ${prefix}_superseded s ON s.decision_id=h.resolved_decision_id WHERE s.decision_id IS NULL), ${prefix}_current AS (SELECT * FROM ${prefix}_ranked WHERE relationship_rank=1), ${prefix}_active AS (SELECT * FROM ${prefix}_current WHERE status='approved')`;
 }
 
 export function searchProducts(products, { query='', sources=[], excludeRef=null, limit=50, decisions=[] } = {}) {

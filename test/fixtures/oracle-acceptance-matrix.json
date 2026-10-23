@@ -1244,28 +1244,12 @@
       "purpose": "Independent combined component scheduling under the same 45-second deadline, bounded concurrency, row quotas, retained successful components and identity provenance on deadline."
     },
     {
-      "file": "test/retention-mapping-coverage.test.js",
-      "purpose": "Approved source-route consumption audit, consolidated historical mapping review, independent catalogue and component limits, portable read-only existing ingestion evidence with partial failures."
+      "file": "test/mapping-presentation.test.js",
+      "purpose": "Actual source labels and explicit heuristic versus persisted identity status; read/write payloads unchanged."
     },
     {
-      "file": "test/retention-entry-age-trace.test.js",
-      "purpose": "Motörhead and Iron Maiden zero 360-day provisional denominators: actual SQL old Woo entries, London boundary, observed returns with zero age eligibility, global first-entry sequencing and trace loss categories."
-    },
-    {
-      "file": "test/retention-diagnostic-correlation.test.js",
-      "purpose": "Confirmed #383 BigQuery correlated-subquery failures: complete generated diagnostic join/aggregate shape, membership equivalence and count deduplication; local fixtures do not certify BigQuery compatibility."
-    },
-    {
-      "file": "test/retention-woo-collaboration-discovery.test.js",
-      "purpose": "Historical Woo collaboration discovery independent of the top-500 queue; Iron Maiden archived/RTS/size candidates, recorded vs eligible sales, title-only non-identity and governance conflicts."
-    },
-    {
-      "file": "test/product-route-resolver.test.js",
-      "purpose": "Persisted UI identity/family current-decision parity, legacy missing relationship/membership IDs, all eight Iron Maiden WW/USD products, Motörhead, revocation and actual generated report resolver consumption. SQLite is local verification only."
-    },
-    {
-      "file": "test/product-ui-provenance-command.test.js",
-      "purpose": "Actual server/UI project binding versus credential-project fallback, persisted positive control and exact-key consumption; missing control and retained-parser mismatch remain unverified. Mocked documented command, not live BigQuery."
+      "file": "test/retention-limits.test.js",
+      "purpose": "Independent section bounds and honest truncation disclosure; cohort calculations and SQL unchanged."
     }
   ]
 }
