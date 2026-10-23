@@ -2,14 +2,14 @@
 
 Open **Product Mapping → Woo → Shopify · Bulk assign** after deployment.
 
-1. Choose WW + USD or one store. Search a title, SKU or Woo product ID.
+1. Choose WW + USD or one store. The default **Unlinked products only** excludes saved assignments and unique automatic Shopify matches. Search a title, SKU or Woo product ID.
 2. Select up to eight historical product rows. Source store and full Woo reference remain visible.
 3. Choose a Shopify target on each row. Use **Choose Shopify target for selected** when several listings belong under the same Shopify product, such as its WW/USD versions or old size listings. For different products, choose separate targets per row.
 4. Keep **Reporting family** for grouping distinct historical listings under a current Shopify parent. **Same product identity** is a separate, explicit choice with its own graph validation.
 5. Review the current allowed/blocked preview, then **Review & save selected**. The confirmation lists every source and target.
 6. Inspect each saved, blocked or failed outcome. Successful rows remain saved if another is blocked. Refresh the queue to load current assignments or the next batch.
 
-Suggestions never save themselves. Exact title/SKU matches are included in this panel even when the older Review Candidates queue omits them. A suggestion is not an approval. No-equivalent outcomes are preserved; use their existing review/history flow if a deliberate decision change is needed. Saved assignments can be inspected using the status filter; their change/revoke controls remain in the existing history tabs.
+Suggestions never save themselves. Unique direct Woo-to-Shopify title/SKU matches have a separate **Automatic matches · not approved** filter; they remain reachable for review and are not counted as saved approvals or certified report-ready classifications. A Woo-to-Woo or Woo-to-Square match alone never removes a product from the unlinked queue. Ambiguous Shopify titles remain unlinked. **All Woo products** shows the full inventory. Saved rows disappear from Unlinked/Automatic matches immediately after a completed save; individual results remain in the batch receipt. No-equivalent outcomes are preserved; use their existing review/history flow if a deliberate decision change is needed. Saved assignments can be inspected using the status filter; their change/revoke controls remain in the existing history tabs.
 
 If the response is interrupted, **Check saved batch** reads the same operation. The pending operation also survives browser refresh. It never automatically resubmits a POST. An unresolved operation blocks another save until its outcome is known.
 

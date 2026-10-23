@@ -1253,7 +1253,7 @@
     },
     {
       "file": "test/woo-assignment-panel.test.js",
-      "purpose": "Woo-only complete heuristic inventory, store/status pagination, distinct WW/USD selections, preview and saved-outcome safeguards. Browser gate covers multi-row family assignment, partial results and refresh recovery without resubmission."
+      "purpose": "Woo-only unlinked queue excludes saved links and separates unique direct Shopify automatic matches from unsaved approvals; Woo/Square-only and ambiguous matches remain reachable. Store/status filters precede pagination. Browser gate covers automatic-match filters, multi-row family assignment, saved-row removal, partial results and refresh recovery without resubmission."
     }
   ]
 }
