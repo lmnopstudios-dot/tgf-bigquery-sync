@@ -1,5 +1,7 @@
 # #383 completed diagnostics: retained result retrieval
 
+**Preserved:** the user confirms the successful trace results need no further denominator diagnostic. The active task is now [historical Woo collaboration listing discovery](retention-woo-collaboration-discovery.md), including Iron Maiden archived/Ready-to-Ship/size records. Do not repeat the trace/result discovery below for that task.
+
 Both budget-corrected checks completed successfully using artifact `1f90f178e2a44ee591edc17bbb262862a0957b57`, deployed dependencies at `c22df6162b9e1abdd29c8e628cdaab045496961b`. The supplied paste ends with both `completed:true`, but starts midway through the mapping array: it contains neither allocated job IDs nor trace rows. It retains only 115 complete low-impact mapping rows (12–19 customers each), all without supported target candidates. Those unrelated/unattributed products must not be presented as collaboration relationships inferred from their titles.
 
 The complete catalogue portion does establish:
