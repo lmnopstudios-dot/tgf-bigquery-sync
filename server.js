@@ -39,6 +39,7 @@ import { createAnnualLocationFinanceService } from './oracle/annual-location-fin
 import { createProposalGenerator } from './oracle/proposals.js';
 import { createProductMappingService, governedDecisionCtes, productFamilyCtes } from './oracle/product-mapping.js';
 import { createCollectionClassificationService } from './oracle/collection-classification.js';
+import {createHistoricalCollaborationService} from './oracle/historical-collaboration.js';
 import { redactError } from './oracle/ui-security.js';
 import { evidenceValidationResponse, affinityJustified, partialAnswer, requestId, stageOutcome, terminalMessage } from './oracle/request-observability.js';
 import { RequestToolBudget, boundedToolFailure, toolCallSignature } from './oracle/request-tool-budget.js';
@@ -176,6 +177,7 @@ const oracleFinance = createOracleFinanceService({ bigquery, project: GOOGLE_PRO
 const annualLocationFinance = createAnnualLocationFinanceService({ bigquery, project: GOOGLE_PROJECT_ID });
 const productMappingService = createProductMappingService({ bigquery, project: GOOGLE_PROJECT_ID });
 const collectionClassificationService = createCollectionClassificationService({ bigquery, project: GOOGLE_PROJECT_ID });
+const historicalCollaborationService=createHistoricalCollaborationService({bigquery,project:GOOGLE_PROJECT_ID,productMappingService,collectionClassificationService});
 const shopifyCountryProductsService = createShopifyCountryProductsService({ bigquery, project: GOOGLE_PROJECT_ID });
 const customerOrderIntervalService = createCustomerOrderIntervalService({ bigquery, project: GOOGLE_PROJECT_ID });
 const onlineCountrySalesService = createOnlineCountrySalesService({ bigquery, project: GOOGLE_PROJECT_ID });
@@ -8408,6 +8410,7 @@ if (process.env.ORACLE_UI_PASSWORD || process.env.ORACLE_UI_SESSION_SECRET) {
     reportService: ecommerceReportV2,
     productMappingService,
     collectionClassificationService,
+    historicalCollaborationService,
     analysisJobStore: process.env.ORACLE_ANALYSIS_JOBS_ENABLED === 'true'
       ? createBigQueryAnalysisJobStore({bigquery,project:GOOGLE_PROJECT_ID,dataset:process.env.ORACLE_JOB_DATASET||ORACLE_JOB_DEFAULTS.dataset,table:process.env.ORACLE_JOB_TABLE||ORACLE_JOB_DEFAULTS.table,location:process.env.ORACLE_JOB_DATASET_LOCATION||ORACLE_JOB_DEFAULTS.location})
       : null,

@@ -1258,6 +1258,14 @@
     {
       "file": "test/product-mapping-save-performance.test.js",
       "purpose": "Bounded batch catalogue reuse and atomic submission receipts with current per-row governance, identity conflicts, stale previews, partial success and interrupted receipt recovery. Query-count assertions distinguish warehouse work reduction from unmeasured live latency."
+    },
+    {
+      "file": "test/historical-collaboration.test.js",
+      "purpose": "Direct historical Woo collaboration classification, reviewed choices, append-only changes/removals, store namespaces, inherited conflicts, stale revisions, durable recovery and sync preservation; report consumes the existing shared classification reader."
+    },
+    {
+      "file": "test/historical-collaboration-ui.test.js",
+      "purpose": "Authenticated and CSRF-protected historical classification endpoints execute the real service; Square inputs are rejected and mappings/no-equivalent outcomes remain unchanged."
     }
   ]
 }
