@@ -1254,6 +1254,10 @@
     {
       "file": "test/retention-diagnostic-correlation.test.js",
       "purpose": "Confirmed #383 BigQuery correlated-subquery failures: complete generated diagnostic join/aggregate shape, membership equivalence and count deduplication; local fixtures do not certify BigQuery compatibility."
+    },
+    {
+      "file": "test/retention-woo-collaboration-discovery.test.js",
+      "purpose": "Historical Woo collaboration discovery independent of the top-500 queue; Iron Maiden archived/RTS/size candidates, recorded vs eligible sales, title-only non-identity and governance conflicts."
     }
   ]
 }
