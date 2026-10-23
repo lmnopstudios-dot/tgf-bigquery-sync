@@ -218,5 +218,24 @@ try{
     await openRetentionResults(page);assert.match(await answer.innerText(),/Entry-platform diagnostics/);
     const reads=combinedFixture.wireQueries.length;await page.reload();await page.waitForFunction(()=>!document.querySelector('#send').disabled&&document.querySelector('.analytical-answer'));assert.equal(await page.locator('.analytical-answer').last().innerText(),main);assert.equal(combinedFixture.wireQueries.length,reads);await page.screenshot({path:output+'/combined-tgf-'+width+'.png',fullPage:true});await page.close();
   }}finally{combinedServer.close();}
+  // Mapping presentation only: intercept all governance requests; never save a decision.
+  for(const width of [1280,390]){
+    const page=await browser.newPage({viewport:{width,height:900}});
+    const products=[['square','square','control'],['woo','ww','11737'],['woo','usd','106660'],['shopify','shopify','10434361590087']].map(([source_platform,source_store,source_product_id])=>({source_platform,source_store,source_product_id,source_product_ref:`${source_platform}:${source_store}:${source_product_id}`,title:'Powerslave',mapping_status:'resolved',explicit_mapping_status:'none'}));
+    const writes=[];
+    await page.route('**/api/oracle/product-mappings**',async route=>{
+      const request=route.request(),url=new URL(request.url());
+      if(request.method()!=='GET'){writes.push(request.url());return route.fulfill({status:400,json:{error:'No governance writes in presentation regression'}});}
+      return route.fulfill({json:url.pathname.endsWith('/search')?{items:products}:{items:[],summary:'Fixture queue.',coverage:{by_source:{}},pagination:{total_items:0,page:1,page_size:25,total_pages:1}}});
+    });
+    await page.goto(h.origin+'/oracle/');await page.locator('#password').fill('fixture');await page.locator('#login-form button').click();await page.locator('#app').waitFor({state:'visible'});
+    await page.locator('[data-view="product-mappings"]').click();await page.waitForFunction(()=>document.querySelector('#mapping-summary').textContent.includes('Heuristic'));
+    assert.match(await page.locator('#mapping-summary').innerText(),/not persisted report-ready approvals/);
+    await page.locator('#mapping-create').click();await page.locator('#picker-go').click();await page.locator('.picker-result').first().waitFor();
+    const labels=await page.locator('.picker-result').allTextContents();
+    for(const [i,name] of ['Square','WooCommerce WW','WooCommerce USD','Shopify'].entries()){assert.ok(labels[i].startsWith(name+' — '));assert.ok(labels[i].includes(products[i].source_product_ref));}
+    await page.locator('.picker-result').first().click();const selected=await page.locator('#mapping-dialog-copy').innerText();assert.match(selected,/Selected: Square/);assert.match(selected,/square:square:control/);assert.match(selected,/Heuristic.*not report-ready/);
+    assert.equal(writes.length,0);await page.close();
+  }
   console.log(JSON.stringify({status:'passed',conversations:matrix.conversations.length,viewports:['desktop','mobile'],durable_refresh:true,activated_identity_refresh:true,output}));
 }finally{await browser.close();h.close();}

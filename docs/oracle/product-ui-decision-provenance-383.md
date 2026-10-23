@@ -1,3 +1,5 @@
+> Closed for the inspected operations at the user’s direction: preserve Square decisions and the Woo T-shirt no-equivalent outcome. See [current review list and picker fix](woo-review-and-source-receipts-383.md). Commands below are historical evidence documentation, not further requested checks.
+
 > Update: the supplied production read passed destination, positive-control and parser checks. The 24 Woo references have no persisted decisions; related Square decisions remain separate. See [Woo review and saved-receipt findings](woo-review-and-source-receipts-383.md). Do not rerun the warehouse command below to inspect receipts already saved locally.
 
 # Product Mapping UI provenance: current finding remains unverified

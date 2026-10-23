@@ -1,3 +1,5 @@
+> Current status: inspected-operation source-conversion investigation closed. Preserve Square approvals and the Woo T-shirt no-equivalent outcome. Use the [current Woo review list](woo-review-and-source-receipts-383.md); commands below are archived, not further requested diagnostics.
+
 # Reconcile existing Product Mapping approvals with retention
 
 > Latest live result: both reads completed, but returned no matching decisions for the 24 subjects. The resolver fixes are not a demonstrated solution for these products. Use the [UI destination/positive-control investigation](product-ui-decision-provenance-383.md#one-bounded-ui-destination-and-positive-control-read); do not rerun the empty-scope command below.

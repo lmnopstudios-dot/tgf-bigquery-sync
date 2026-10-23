@@ -41,5 +41,20 @@ assert.ok(output.checks.every(c=>c.records.every(r=>r.source_ref==='square:squar
 assert.ok(!JSON.stringify(output).includes('private-'));
 assert.throws(()=>runInNewContext(source,{statSync:()=>({size:16777217})}),/bound/);
 const doc=fs.readFileSync(new URL('../docs/oracle/woo-review-and-source-receipts-383.md',import.meta.url),'utf8');
-assert.ok(doc.includes(fs.readFileSync(new URL('../diagnostics/read-saved-ui-operation-receipts.js',import.meta.url),'utf8').trim()));
+assert.match(doc,/Closed: inspected operation receipts/);assert.match(doc,/no_equivalent/);
+});
+
+test('picker labels reflect actual namespaces and distinguish heuristics from persisted approval',async()=>{
+ const {mappingProductLabel,mappingEvidenceLabel}=await import('../public/oracle/mapping-presentation.js');
+ for(const [ref,label] of [['woo:ww:11737','WooCommerce WW'],['woo:usd:106660','WooCommerce USD'],['square:square:control','Square'],['shopify:shopify:gid://shopify/Product/10434361590087','Shopify']]){
+  const product={source_product_ref:ref,title:'Powerslave',mapping_status:'resolved'};
+  assert.ok(mappingProductLabel(product).startsWith(label+' — '));assert.ok(mappingProductLabel(product).includes(ref));
+  assert.match(mappingEvidenceLabel(product),/Heuristic.*no persisted identity approval.*not report-ready/);
+  assert.match(mappingEvidenceLabel({...product,explicit_mapping_status:'approved'}),/Persisted identity approval.*graph and classification/);
+ }
+ const app=fs.readFileSync(new URL('../public/oracle/app.js',import.meta.url),'utf8');
+ assert.ok(app.includes('button.textContent=mappingProductLabel(product)'));
+ assert.ok(app.includes('Selected: ${mappingProductLabel(product)}'));
+ assert.ok(!app.includes('button.textContent=`Shopify —'));
+ assert.match(app,/heuristic matches \(not persisted approvals\)/);
 });
