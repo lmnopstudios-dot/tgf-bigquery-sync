@@ -1,4 +1,4 @@
-import {governedDecisionCtes, PRODUCT_FAMILY_TABLE} from './product-mapping.js';
+import {governedDecisionCtes, productFamilyCtes} from './product-mapping.js';
 
 // Representation normalization only: never collapse stores or ProductVariant IDs.
 export const classificationRefSql=expression=>`IF(STARTS_WITH(${expression},'shopify:shopify:'), IF(REGEXP_CONTAINS(SUBSTR(${expression},17),r'^(?:gid://shopify/Product/)?[0-9]+$'),CONCAT('shopify:shopify:',REGEXP_EXTRACT(SUBSTR(${expression},17),r'^(?:gid://shopify/Product/)?([0-9]+)$')),NULL),${expression})`;
@@ -10,14 +10,13 @@ export function normalizeClassificationRef(ref){
 
 /** Shared read-only current evidence. No sync/setup, title inference or writes.
  * Collection decisions are append-only; resolve latest BEFORE filtering status.
+ * Families use the same per-source current-state resolver as the review UI.
  * Reporting families route classifications towards members, never assert identity.
  */
 export function classificationReaderCtes(project){
  const norm=classificationRefSql;
  return `${governedDecisionCtes(project,'cr_map')},
- cr_family_history AS (SELECT *,COALESCE(decision_id,event_id) resolved_decision_id FROM \`${project}.commerce.${PRODUCT_FAMILY_TABLE}\`),
- cr_family_superseded AS (SELECT supersedes_decision_id decision_id FROM cr_family_history WHERE supersedes_decision_id IS NOT NULL),
- cr_family_current AS (SELECT h.* FROM cr_family_history h LEFT JOIN cr_family_superseded s ON s.decision_id=h.resolved_decision_id WHERE s.decision_id IS NULL QUALIFY ROW_NUMBER() OVER(PARTITION BY membership_id ORDER BY reviewed_at DESC,resolved_decision_id DESC)=1),
+ ${productFamilyCtes(project,'cr_family')},
  cr_identity AS (SELECT ${norm('left_ref')} source_ref,${norm('right_ref')} classification_ref FROM cr_map_active UNION DISTINCT SELECT ${norm('right_ref')},${norm('left_ref')} FROM cr_map_active),
  cr_family AS (SELECT ${norm('source_ref')} source_ref,${norm('shopify_parent_ref')} classification_ref FROM cr_family_current WHERE status='active'),
  cr_routes AS (SELECT *, 'approved_identity' mapping_type FROM cr_identity UNION DISTINCT SELECT *, 'approved_reporting_family' FROM cr_family UNION DISTINCT SELECT i.source_ref,f.classification_ref,'approved_reporting_family' FROM cr_identity i JOIN cr_family f ON f.source_ref=i.classification_ref),
