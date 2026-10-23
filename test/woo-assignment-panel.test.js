@@ -51,3 +51,13 @@ test('ambiguous titles remain unlinked; unique SKU matches are separate unsaved 
  const missing=await service.list(options);assert.deepEqual(missing.items.map(x=>x.historical_product.source_product_ref),['woo:ww:1']);
  const auto=await service.list({...options,assignmentStatus:'automatic_matches'});assert.equal(auto.items[0].automatic_shopify_match.mapping_method,'exact_unique_sku');assert.equal(auto.items[0].active_identity_mapping,null);assert.equal(writes,0);
 });
+
+test('no-equivalent and investigation decisions need no target or preview and never send a leftover Shopify choice',()=>{
+ for(const action of ['no_equivalent','needs_investigation']){
+  const rows=[row('woo:ww:11737'),row('woo:usd:106660')];rows[0].target=null;rows[0].preview=null;rows[1].preview=null;
+  const batch=prepareWooBatch(rows,action);assert.equal(batch.length,2);assert.ok(batch.every(x=>x.action===action&&x.shopify_parent_ref===null));assert.equal(new Set(batch.map(x=>x.request_id)).size,2);
+  assert.throws(()=>prepareWooBatch([row('square:square:control')],action),/Woo/);
+  const assigned=row('woo:ww:11737');assigned.item.resolution_status='active_reporting_family';assert.throws(()=>prepareWooBatch([assigned],action),/unassigned/);
+  assert.throws(()=>prepareWooBatch(Array.from({length:9},(_,i)=>row('woo:ww:'+i)),action),/1–8/);
+ }
+});
