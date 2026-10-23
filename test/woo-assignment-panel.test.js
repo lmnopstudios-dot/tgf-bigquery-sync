@@ -31,3 +31,23 @@ test('explicit bulk choices retain WW/USD keys, use distinct idempotency keys an
  const noEquivalent=row('woo:ww:11737');noEquivalent.item.resolution_status='no_equivalent';assert.throws(()=>prepareWooBatch([noEquivalent],'family'),/unassigned/);
  const changed=row('woo:ww:11737');changed.target={source_product_ref:'shopify:shopify:gid://shopify/ProductVariant/1'};assert.throws(()=>prepareWooBatch([changed],'family'),/allowed preview/);
 });
+
+test('default queue hides saved links and Shopify automatic matches, but never treats Woo/Square-only matches as Shopify links',async()=>{
+ const catalog=[p('woo:ww:1','Shared title'),p('woo:usd:2','Shared title'),p('shopify:shopify:3','Shared title'),p('woo:ww:4','Woo/Square only'),p('woo:usd:5','Woo/Square only'),p('square:square:6','Woo/Square only'),p('woo:ww:7','Saved family'),p('woo:usd:8','Saved identity'),p('shopify:shopify:9','Current product')];
+ const families=[{...family,source_ref:'woo:ww:7',shopify_parent_ref:'shopify:shopify:9'}];
+ const identities=[{decision_id:'approved',status:'approved',left_ref:'woo:usd:8',right_ref:'shopify:shopify:9'}];
+ const service=createProductMappingService({project:'fixture',bigquery:{query:async q=>q.query.includes('product_family_decisions')?[families]:q.query.includes('product_mapping_decisions')?[identities]:[[]]}});
+ const options={products:catalog,ensureSchema:false,view:'woo_assignment',sort:'title',pageSize:1};
+ const unlinked=await service.list(options);assert.equal(unlinked.pagination.total_items,2);assert.equal(unlinked.pagination.total_pages,2);assert.ok(['woo:ww:4','woo:usd:5'].includes(unlinked.items[0].historical_product.source_product_ref));
+ const auto=await service.list({...options,assignmentStatus:'automatic_matches',pageSize:50});assert.equal(auto.pagination.total_items,2);assert.ok(auto.items.every(x=>x.resolution_status==='needs_review'&&x.automatic_shopify_match.source_product_ref==='shopify:shopify:3'));
+ const saved=await service.list({...options,assignmentStatus:'assigned',pageSize:50});assert.equal(saved.pagination.total_items,2);
+ const all=await service.list({...options,assignmentStatus:'all',pageSize:50});assert.equal(all.pagination.total_items,6);
+});
+
+test('ambiguous titles remain unlinked; unique SKU matches are separate unsaved suggestions and do not change decisions',async()=>{
+ const catalog=[p('woo:ww:1','Ambiguous'),p('shopify:shopify:2','Ambiguous'),p('shopify:shopify:3','Ambiguous'),{...p('woo:usd:4','Old title'),sku:'RING-4'},{...p('shopify:shopify:5','New title'),sku:'RING-4'}];
+ let writes=0;const service=createProductMappingService({project:'fixture',bigquery:{query:async q=>{if(!q.query.startsWith('SELECT'))writes++;return [[]];}}});
+ const options={products:catalog,ensureSchema:false,view:'woo_assignment'};
+ const missing=await service.list(options);assert.deepEqual(missing.items.map(x=>x.historical_product.source_product_ref),['woo:ww:1']);
+ const auto=await service.list({...options,assignmentStatus:'automatic_matches'});assert.equal(auto.items[0].automatic_shopify_match.mapping_method,'exact_unique_sku');assert.equal(auto.items[0].active_identity_mapping,null);assert.equal(writes,0);
+});

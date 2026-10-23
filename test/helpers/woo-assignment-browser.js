@@ -17,20 +17,23 @@ export async function verifyWooAssignmentPanel({browser,origin,output}){
    if(url.pathname.includes('/bulk-review/')){pendingReads++;return route.fulfill({json:{operation_id:url.pathname.split('/').at(-1),status:'complete',succeeded:1,blocked:0,failed:0,pending:0,results:[{index:0,source_ref:'woo:ww:11737',status:'already_applied'}]}});}
    if(url.pathname.endsWith('/search')){assert.equal(url.searchParams.get('sources'),'shopify');return route.fulfill({json:{items:[target,product('square:square:wrong','Wrong source'),product('shopify:shopify:gid://shopify/ProductVariant/1','Wrong variant')]}});}
    if(url.pathname.endsWith('/choice-preview')){assert.ok(['woo:ww:11737','woo:usd:106660'].includes(url.searchParams.get('source_ref')));return route.fulfill({json:{selected_product:target,family_preview:{allowed:true},identity_preview:{allowed:false,reason:'Identity conflict — family may remain distinct'}}});}
-   const woo=url.searchParams.get('view')==='woo_assignment';
-   const items=woo?products.map((p,i)=>({historical_product:p,resolution_status:'needs_review',shopify_suggestions:[],candidate:{candidate_id:'a'.repeat(24)}})):[];
+   const woo=url.searchParams.get('view')==='woo_assignment';if(woo)assert.ok(['unassigned','automatic_matches'].includes(url.searchParams.get('assignment_status')));
+   const items=woo?products.map((p,i)=>({historical_product:p,resolution_status:'needs_review',shopify_suggestions:[],candidate:{candidate_id:'a'.repeat(24)},...(url.searchParams.get('assignment_status')==='automatic_matches'?{automatic_shopify_match:{source_product_ref:target.source_product_ref,mapping_method:'exact_unique_sku'}}:{})})):[];
    return route.fulfill({json:{items,summary:'Fixture mapping queue',coverage:{by_source:{}},pagination:{page:1,total_pages:1,total_items:items.length,page_size:25}}});
   });
   await page.goto(origin+'/oracle/');await page.locator('#password').fill('fixture');await page.locator('#login-form button').click();await page.locator('#app').waitFor({state:'visible'});
   await page.locator('[data-view="product-mappings"]').click();await page.locator('#woo-assignment-tab').click();await page.locator('.woo-assignment-row').first().waitFor();
   assert.equal(await page.locator('.woo-assignment-row').count(),2);assert.doesNotMatch(await page.locator('#woo-products').innerText(),/square:square/);assert.match(await page.locator('#woo-products').innerText(),/Title\/SKU suggestion only/);
+  assert.equal(await page.locator('#woo-status').inputValue(),'unassigned');
+  await page.locator('#woo-status').selectOption('automatic_matches');await page.waitForFunction(()=>document.querySelector('#woo-products').textContent.includes('Automatic Shopify match — review and save to approve'));
+  await page.locator('#woo-status').selectOption('unassigned');await page.waitForFunction(()=>document.querySelector('#woo-products').textContent.includes('Title/SKU suggestion only'));
   await page.getByLabel('Select unassigned products on this page').check();assert.equal(await page.locator('#woo-selection-count').innerText(),'2 selected');
   await page.locator('#woo-shared-target').click();await page.locator('#woo-target-query').fill('Powerslave');await page.locator('#woo-target-form button[type="submit"]').click();await page.locator('#woo-target-results button').first().waitFor();assert.equal(await page.locator('#woo-target-results button').count(),1);await page.locator('#woo-target-results button').first().click();
   await page.waitForFunction(()=>!document.querySelector('#woo-save').disabled);
   await page.locator('#woo-action').selectOption('identity');assert.ok(await page.locator('#woo-save').isDisabled());assert.match(await page.locator('#woo-products').innerText(),/Identity conflict/);
   await page.locator('#woo-action').selectOption('family');await page.locator('#woo-save').click();await page.waitForFunction(()=>document.querySelector('#woo-batch-status').textContent.includes('1 saved/already applied'));
   assert.equal(writes.length,1);assert.match(await page.locator('#woo-batch-status').innerText(),/1 blocked/);assert.match(await page.locator('#woo-batch-status').innerText(),/woo:usd:106660/);
-  assert.ok(await page.getByLabel('Select woo:ww:11737',{exact:true}).isDisabled());
+  assert.equal(await page.locator('.woo-assignment-row[data-source-ref="woo:ww:11737"]').count(),0);
   assert.ok(await page.getByLabel('Select woo:usd:106660',{exact:true}).isEnabled());
   assert.ok(await page.getByLabel('Shopify target for woo:usd:106660',{exact:true}).isEnabled());
   await page.screenshot({path:output+'/woo-bulk-assignment-'+width+'.png',fullPage:true});

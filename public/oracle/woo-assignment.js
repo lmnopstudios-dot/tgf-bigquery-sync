@@ -47,7 +47,7 @@ export function createWooAssignmentPanel({api,root=document,storage=localStorage
   if(row.loading)return 'Checking current graph and family rules…';
   if(row.error)return row.error;
   if(row.preview){const p=row.preview[action()+'_preview'];return p?.allowed?'Ready for review':`Blocked: ${p?.reason||'current rules reject this relationship'}`;}
-  return row.item.historical_product.mapping_status==='resolved'?'Title/SKU suggestion only — not a saved approval':'Choose a Shopify target';
+  return row.item.automatic_shopify_match?'Automatic Shopify match — review and save to approve':row.item.historical_product.mapping_status==='resolved'?'Title/SKU suggestion only — not a saved approval':'Choose a Shopify target';
  }
  function paintStatus(row){row.status.textContent=statusFor(row);row.status.className='woo-row-status '+(row.preview?.[action()+'_preview']?.allowed?'allowed':row.error||row.result?.error?'blocked':'');controls();}
  async function preview(row){
@@ -95,18 +95,18 @@ export function createWooAssignmentPanel({api,root=document,storage=localStorage
    }
    row.status=text('p',statusFor(row),'woo-row-status');card.append(label,targetBox,row.status);$('woo-products').append(card);
   }
-  if(!rows.length)$('woo-products').append(text('p','No Woo products match these filters. Try All Woo products or a different search.','empty'));
+  if(!rows.length)$('woo-products').append(text('p','No Woo products match this filter. Try Automatic matches (not approved), All Woo products, or a different search.','empty'));
   const pager=$('woo-pagination');pager.replaceChildren();for(const [label,step]of [['Previous',-1],['Next',1]]){const b=text('button',label,'secondary');b.type='button';b.disabled=busy||(step<0?page<=1:page>=pages);b.onclick=()=>{page+=step;load();};pager.append(b);}pager.append(text('span',`Page ${page} of ${pages}`));controls();
  }
  async function load({reset=false}={}){
   if(busy)return;if(reset)page=1;const g=++generation;
-  $('woo-summary').textContent='Loading Woo products, including unsaved title/SKU matches…';
+  $('woo-summary').textContent='Loading Woo products for the selected assignment filter…';
   try{
    const params=new URLSearchParams({view:'woo_assignment',source:$('woo-store').value,assignment_status:$('woo-status').value,search:$('woo-search').value,sort:'title',page:String(page),page_size:'25'});
    const data=await api('/product-mappings?'+params);if(g!==generation)return;
    rows=(data.items||[]).filter(item=>isWoo(item.historical_product?.source_product_ref)).map(item=>({item,selected:false,target:null,preview:null,revision:0}));
    pages=data.pagination.total_pages;page=data.pagination.page;
-   $('woo-summary').textContent=`${data.pagination.total_items} matching historical Woo products · ${rows.length} shown. Saved approvals and no-equivalent decisions are separate from suggestions.`;
+   $('woo-summary').textContent=`${data.pagination.total_items} matching historical Woo products · ${rows.length} shown. Saved links are excluded from Unlinked products. Automatic matches are separate and still need approval for governed reporting.`;
    render();
   }catch(e){if(g===generation){$('woo-summary').textContent='Could not load Woo products: '+e.message;$('woo-products').replaceChildren();rows=[];controls();}}
  }
@@ -114,7 +114,13 @@ export function createWooAssignmentPanel({api,root=document,storage=localStorage
   for(const r of result.results||[]){const ref=r.source_ref||pending?.decisions?.[r.index]?.source_ref;const row=rows.find(x=>x.item.historical_product.source_product_ref===ref);if(row){row.result=r;row.selected=false;row.checkbox.checked=false;if(['saved','already_applied'].includes(r.status)){row.checkbox.disabled=true;row.select&&(row.select.disabled=true);}paintStatus(row);}}
   const detail=(result.results||[]).map(r=>`${r.source_ref||pending?.decisions?.[r.index]?.source_ref||'Row '+(r.index+1)}: ${r.status.replaceAll('_',' ')}${r.error?' — '+r.error:''}`).join('\n');
   $('woo-batch-status').textContent=`Batch ${result.operation_id}: ${result.succeeded||0} saved/already applied · ${result.blocked||0} blocked · ${result.failed||0} failed · ${result.pending||0} pending.\n${detail}`;
-  if(result.status==='complete'||result.results?.length===pending?.decisions?.length&&result.results.every(r=>r.status!=='submitted'))savePending(null);else controls();
+  if(result.status==='complete'||result.results?.length===pending?.decisions?.length&&result.results.every(r=>r.status!=='submitted')){
+   savePending(null);
+   if(['unassigned','automatic_matches'].includes($('woo-status').value)){
+    const remaining=rows.filter(row=>!saved(row));
+    if(remaining.length!==rows.length){rows=remaining;render();$('woo-summary').textContent=`${rows.length} products remain on this page. Saved rows were removed; refresh for current totals. Automatic matches remain separate and unapproved until saved.`;}
+   }
+  }else controls();
  }
  async function recover(){
   if(!pending)return;try{applyResults(await api('/product-mappings/bulk-review/'+encodeURIComponent(pending.operation_id)));}catch(e){$('woo-batch-status').textContent='Batch outcome not confirmed. Check this same batch again; it has not been resubmitted. '+e.message;}controls();
