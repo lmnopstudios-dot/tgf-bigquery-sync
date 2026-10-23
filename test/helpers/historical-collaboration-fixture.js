@@ -1,7 +1,7 @@
 import {fixture as mappingFixture} from './product-mapping-save-fixture.js';
 import {createHistoricalCollaborationService} from '../../oracle/historical-collaboration.js';
-export function historicalFixture(){
- const mapping=mappingFixture({count:2}),rows=[],calls=[],inherited=[];
+export function historicalFixture({count=2}={}){
+ const mapping=mappingFixture({count}),rows=[],calls=[],inherited=[];
  const state={rows,calls,inherited,overflow:false,failAppend:false,loseAppendAck:false};
  const collections=[{collection_id:'10',title:'Alpha',collaboration_name:'alpha',governance_status:'collaboration',product_count:0},{collection_id:'11',title:'Beta',collaboration_name:'beta',governance_status:'collaboration'},{collection_id:'12',title:'Collaborations',collaboration_name:'collaborations',governance_status:'collaboration'},{collection_id:'13',title:'Other',collaboration_name:'other',governance_status:'other'}];
  const active=ref=>{const history=rows.filter(r=>r.subject_ref===ref),superseded=new Set(history.map(r=>r.supersedes_classification_id));return history.filter(r=>!superseded.has(r.classification_id)&&['active','conflict'].includes(r.status)&&['product_group','collaboration_name'].includes(r.classification_type));};
