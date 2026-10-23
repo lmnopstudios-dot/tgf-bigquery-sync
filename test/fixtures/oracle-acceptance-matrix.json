@@ -1254,6 +1254,10 @@
     {
       "file": "test/woo-assignment-panel.test.js",
       "purpose": "Woo-only unlinked queue excludes saved links and separates unique direct Shopify automatic matches from unsaved approvals; Woo/Square-only and ambiguous matches remain reachable. Store/status filters precede pagination. Browser gate covers automatic-match filters, multi-row family assignment, saved-row removal, partial results and refresh recovery without resubmission."
+    },
+    {
+      "file": "test/product-mapping-save-performance.test.js",
+      "purpose": "Bounded batch catalogue reuse and atomic submission receipts with current per-row governance, identity conflicts, stale previews, partial success and interrupted receipt recovery. Query-count assertions distinguish warehouse work reduction from unmeasured live latency."
     }
   ]
 }
