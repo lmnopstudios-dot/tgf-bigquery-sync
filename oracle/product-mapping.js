@@ -232,11 +232,11 @@ export function buildHistoricalReviewQueue(products, candidates, { mappingDecisi
 }
 
 /** Cheap queue state used before suggestion ranking. Keep this O(products + history). */
-export function buildHistoricalReviewIndex(products, {mappingDecisions=[],familyDecisions=[],reviewOutcomes=[]}={}) {
+export function buildHistoricalReviewIndex(products, {mappingDecisions=[],familyDecisions=[],reviewOutcomes=[],includeHeuristic=false}={}) {
   const identity=new Map(),families=new Map(resolveFamilyDecisions(familyDecisions).active.map(x=>[x.source_ref,x]));
   for(const decision of resolveMappingDecisions(mappingDecisions).activeApproved)for(const ref of [decision.left_ref,decision.right_ref])identity.set(ref,decision);
   const outcomes=new Map([...reviewOutcomes].sort((a,b)=>String(a.reviewed_at||'').localeCompare(String(b.reviewed_at||''))).map(x=>[x.source_ref,x]));
-  return products.filter(x=>typeof x.source_product_ref==='string'&&!x.source_product_ref.startsWith('shopify:')&&x.mapping_status!=='resolved'&&classifyProduct(x.title,x)==='merchandise_product').map(source=>{
+  return products.filter(x=>typeof x.source_product_ref==='string'&&!x.source_product_ref.startsWith('shopify:')&&(includeHeuristic||x.mapping_status!=='resolved')&&classifyProduct(x.title,x)==='merchandise_product').map(source=>{
     const ref=source.source_product_ref,outcome=outcomes.get(ref),identityDecision=identity.get(ref),familyDecision=families.get(ref);
     return {historical_product:{...source,source_label:productSourceLabel(source),money_contract:productMoneyContract(source)},resolution_status:identityDecision?'active_identity':familyDecision?'active_reporting_family':outcome?.outcome||'needs_review',active_identity_mapping:identityDecision||null,active_family_assignment:familyDecision||null,review_outcome:outcome||null};
   });
@@ -303,13 +303,16 @@ products AS (SELECT p.*,IF(COUNT(*)=1,ANY_VALUE(m.sales),NULL) sales,IF(COUNT(*)
 normalized AS (SELECT *,LOWER(TRIM(REGEXP_REPLACE(NORMALIZE(title,NFKC),r'\s+',' '))) normalized_title,NULLIF(UPPER(TRIM(sku)),'') exact_sku FROM products),
 keyed AS (SELECT *,COUNT(*) OVER(PARTITION BY source_platform,source_store,normalized_title) local_title_count,COUNT(DISTINCT CONCAT(source_platform,':',source_store)) OVER(PARTITION BY normalized_title) title_sources,COUNT(*) OVER(PARTITION BY source_platform,source_store,exact_sku) local_sku_count,COUNT(DISTINCT CONCAT(source_platform,':',source_store)) OVER(PARTITION BY exact_sku) sku_sources FROM normalized)
 SELECT * EXCEPT(exact_sku,local_title_count,title_sources,local_sku_count,sku_sources),IF((exact_sku IS NOT NULL AND local_sku_count=1 AND sku_sources>1) OR (normalized_title!='' AND local_title_count=1 AND title_sources>1),'resolved','source_specific') mapping_status FROM keyed`,useLegacySql:false,maximumBytesBilled:'10000000000',labels:{component:'product_mapping',operation:'load_products'}}); return rows; });
-  const buildList=async({products,search='',source='',sort='impact',page=1,pageSize=PRODUCT_MAPPING_DEFAULT_PAGE_SIZE,ensureSchema=true,diagnostic=false,signal}={})=>{
+  const buildList=async({products,search='',source='',sort='impact',page=1,pageSize=PRODUCT_MAPPING_DEFAULT_PAGE_SIZE,ensureSchema=true,diagnostic=false,view='review',assignmentStatus='unassigned',signal}={})=>{
+    if(!['review','woo_assignment'].includes(view))throw new Error('invalid mapping view');
+    if(view==='woo_assignment'&&(!['','woo:ww','woo:usd'].includes(source)||!['unassigned','all','assigned','no_equivalent','needs_investigation'].includes(assignmentStatus)))throw new Error('invalid Woo assignment filter');
     const timings={},timed=async(name,action)=>{if(signal?.aborted)throw Object.assign(new Error('mapping request cancelled'),{code:'ABORT_ERR'});const started=performance.now(),cpu=process.cpuUsage();try{return await action()}finally{const used=process.cpuUsage(cpu);timings[name]={wall_ms:Math.round((performance.now()-started)*10)/10,cpu_ms:Math.round((used.user+used.system)/100)/10}}};
     if(ensureSchema)await timed('ensure_schema',setup);
     const [history,families,outcomes]=await Promise.all([timed('mapping_decisions',decisions),timed('family_decisions',familyDecisions),timed('review_outcomes',reviewOutcomes)]);
     const catalog=products||await timed('products',loadProducts);
-    const allItems=await timed('historical_grouping',()=>atGovernanceStage('historical_grouping',null,async()=>buildHistoricalReviewIndex(catalog,{mappingDecisions:history,familyDecisions:families,reviewOutcomes:outcomes})));
-    let items=allItems.filter(x=>['needs_review','needs_investigation'].includes(x.resolution_status));
+    const allItems=await timed('historical_grouping',()=>atGovernanceStage('historical_grouping',null,async()=>buildHistoricalReviewIndex(catalog,{mappingDecisions:history,familyDecisions:families,reviewOutcomes:outcomes,includeHeuristic:view==='woo_assignment'})));
+    let items=view==='woo_assignment'?allItems.filter(x=>['woo:ww','woo:usd'].includes(namespace(x.historical_product))):allItems.filter(x=>['needs_review','needs_investigation'].includes(x.resolution_status));
+    if(view==='woo_assignment'&&assignmentStatus!=='all')items=items.filter(x=>assignmentStatus==='unassigned'?['needs_review','needs_investigation'].includes(x.resolution_status):assignmentStatus==='assigned'?['active_identity','active_reporting_family'].includes(x.resolution_status):x.resolution_status===assignmentStatus);
     if(search)items=items.filter(x=>`${x.historical_product.title} ${x.historical_product.source_product_id} ${x.historical_product.sku||''} ${x.historical_product.source_label}`.toLowerCase().includes(search.toLowerCase()));
     if(source)items=items.filter(x=>namespace(x.historical_product)===source);
     const comparators={impact:(a,b)=>namespace(a.historical_product).localeCompare(namespace(b.historical_product))||String(a.historical_product.currency||'').localeCompare(String(b.historical_product.currency||''))||Number(b.historical_product.sales||0)-Number(a.historical_product.sales||0)||Number(b.historical_product.line_items||0)-Number(a.historical_product.line_items||0),lines:(a,b)=>Number(b.historical_product.line_items||0)-Number(a.historical_product.line_items||0),title:(a,b)=>String(a.historical_product.title).localeCompare(String(b.historical_product.title)),source:(a,b)=>namespace(a.historical_product).localeCompare(namespace(b.historical_product))};

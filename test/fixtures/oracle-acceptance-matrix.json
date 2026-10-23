@@ -1250,6 +1250,10 @@
     {
       "file": "test/retention-limits.test.js",
       "purpose": "Independent section bounds and honest truncation disclosure; cohort calculations and SQL unchanged."
+    },
+    {
+      "file": "test/woo-assignment-panel.test.js",
+      "purpose": "Woo-only complete heuristic inventory, store/status pagination, distinct WW/USD selections, preview and saved-outcome safeguards. Browser gate covers multi-row family assignment, partial results and refresh recovery without resubmission."
     }
   ]
 }

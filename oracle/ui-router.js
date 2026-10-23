@@ -306,7 +306,7 @@ export function createOracleUiRouter({ knowledgeService, bigquery, project, chat
     try {
       if(!productMappingService) throw new Error('Product mappings are unavailable');
       await acquireMappingRead(req);acquired=true;
-      const payload={success:true,...await productMappingService.list({search:String(req.query.search||''),source:String(req.query.source||''),sort:String(req.query.sort||'impact'),page:req.query.page,pageSize:req.query.page_size,signal:cancellation.signal})};
+      const payload={success:true,...await productMappingService.list({search:String(req.query.search||''),source:String(req.query.source||''),sort:String(req.query.sort||'impact'),view:String(req.query.view||'review'),assignmentStatus:String(req.query.assignment_status||'unassigned'),page:req.query.page,pageSize:req.query.page_size,signal:cancellation.signal})};
       // Serialize once (rather than making Express repeat it) and profile local CPU.
       const serializationStarted=performance.now(),serializationCpu=process.cpuUsage(),serialized=JSON.stringify(payload),serializationUsed=process.cpuUsage(serializationCpu);
       console.info('Oracle product mapping read succeeded:',{request_id:requestId,operation:'list_review_candidates',stage:'response_serialization',item_count:payload.items?.length||0,duration_ms:Date.now()-started,serialization_wall_ms:Math.round((performance.now()-serializationStarted)*10)/10,serialization_cpu_ms:Math.round((serializationUsed.user+serializationUsed.system)/100)/10});
