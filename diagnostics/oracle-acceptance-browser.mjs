@@ -1,3 +1,4 @@
+import {verifyWooAssignmentPanel} from '../test/helpers/woo-assignment-browser.js';
 async function openRetentionResults(page){const details=page.locator('.analytical-answer').last().locator('details');if(await details.count()&&(await details.getAttribute('open'))===null)await details.locator('summary').click();}
 // Native composer and visible delivery, backed by real Oracle composition.
 import assert from 'node:assert/strict';
@@ -237,5 +238,6 @@ try{
     await page.locator('.picker-result').first().click();const selected=await page.locator('#mapping-dialog-copy').innerText();assert.match(selected,/Selected: Square/);assert.match(selected,/square:square:control/);assert.match(selected,/Heuristic.*not report-ready/);
     assert.equal(writes.length,0);await page.close();
   }
+  await verifyWooAssignmentPanel({browser,origin:h.origin,output});
   console.log(JSON.stringify({status:'passed',conversations:matrix.conversations.length,viewports:['desktop','mobile'],durable_refresh:true,activated_identity_refresh:true,output}));
 }finally{await browser.close();h.close();}
