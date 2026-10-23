@@ -138,7 +138,7 @@ function transitionContext(existing, message, {now=Date.now(),reportContext=null
     const context=validateAnalysisContext({...base,grain});
     return {context,transition:{continuation:true,set:['grain'],clear:[],retain:ANALYSIS_CONTEXT_FIELDS.filter(k=>k!=='grain'),missing_required_fields:context.unresolved_required_fields,ready_to_execute:!context.unresolved_required_fields.length,applies_to_message:true}};
   }
-  const attribution=requestedAttributionOperation(text,base);
+  const attribution=requestedAttributionOperation(text,retentionIntent(text)?{}:base);
   if(attribution){
     const context=validateAnalysisContext({...emptyAnalysisContext(),...base,...(period(text,now)||{}),requested_subject:base.requested_subject||'klaviyo_email',requested_operations:[attribution],numeric_operation:null,dimensions:['product'],output_preference:null,unresolved_required_fields:[]});
     return {context,transition:{continuation:Boolean(base.requested_subject),set:['requested_operations','dimensions'],clear:['numeric_operation','output_preference'],retain:[],missing_required_fields:[],ready_to_execute:true,applies_to_message:true}};
