@@ -154,6 +154,8 @@ export function assertFamilyAssignment(sourceRef,parentRef,history=[],{replacing
 
 const productSummary=(ref,productByRef)=>{const product=productByRef.get(ref);return{source:namespace(product||{source_platform:ref.split(':')[0],source_store:ref.split(':')[1]}),title:product?.title||null,source_product_ref:ref};};
 
+const familyAssignmentAllowance=(sourceRef,parentRef,history)=>{try{assertFamilyAssignment(sourceRef,parentRef,history);return {allowed:true,reason:null};}catch(error){return {allowed:false,reason:error.message};}};
+
 /** Read-only, shared-authority preview for the two deliberately separate reviewer actions. */
 export function buildProductChoicePreview({products=[],mappingDecisions=[],familyDecisions=[],candidate,selectedRef}={}) {
   const productByRef=new Map(products.map(product=>[product.source_product_ref,product]));
@@ -168,14 +170,14 @@ export function buildProductChoicePreview({products=[],mappingDecisions=[],famil
   const replacement={candidate_id:candidate.candidate_id,left_ref:sourceRef,right_ref:selectedRef,left_title:productByRef.get(sourceRef)?.title||null,right_title:selected.title,candidate_method:'human_replacement'};
   const diagnosis=diagnoseProposedProductEdge({products,explicitEdges,deterministicEdges,candidate:replacement});
   const familyState=resolveFamilyDecisions(familyDecisions),familyMembers=familyState.active.filter(item=>item.shopify_parent_ref===selectedRef);
-  let familyReason=null;try{assertFamilyAssignment(sourceRef,selectedRef,familyDecisions)}catch(error){familyReason=error.message;}
+  const familyAllowance=familyAssignmentAllowance(sourceRef,selectedRef,familyDecisions);
   const previewToken=crypto.createHash('sha256').update(JSON.stringify({sourceRef,selectedRef,mapping:resolveMappingDecisions(mappingDecisions).current.map(x=>x.decision_id||x.event_id).sort(),family:familyState.current.map(x=>x.decision_id||x.event_id).sort()})).digest('hex').slice(0,24);
   return {
     read_only:true,candidate_id:candidate.candidate_id,preview_token:previewToken,selected_product:productSummary(selectedRef,productByRef),
     identity_component:(component?.source_products||[selectedRef]).map(ref=>productSummary(ref,productByRef)),
     reporting_family_members:familyMembers.map(item=>productSummary(item.source_ref,productByRef)),
     identity_preview:{allowed:diagnosis.new_conflicts.length===0,conflicting_products:diagnosis.new_conflicts.flatMap(conflict=>conflict.products.map(item=>productSummary(item.source_product_ref,productByRef))),reason:diagnosis.new_conflicts.length?diagnosis.diagnosis:null},
-    family_preview:{allowed:!familyReason,reason:familyReason,source_ref:sourceRef,shopify_parent_ref:selectedRef,source_identity_preserved:true,canonical_graph_changed:false}
+    family_preview:{...familyAllowance,source_ref:sourceRef,shopify_parent_ref:selectedRef,source_identity_preserved:true,canonical_graph_changed:false}
   };
 }
 
@@ -342,12 +344,18 @@ SELECT * EXCEPT(exact_sku,local_title_count,title_sources,local_sku_count,sku_so
   const appendFamily=async rows=>atGovernanceStage('insert_decision','product_family_append',async()=>{const columns=PRODUCT_FAMILY_SCHEMA.map(x=>x.split(':')[0]);const projections=columns.map(name=>name==='reviewed_at'?`TIMESTAMP(JSON_VALUE(row,'$.${name}')) ${name}`:`JSON_VALUE(row,'$.${name}') ${name}`);await bigquery.query({query:`MERGE \`${familyTable}\` target USING (SELECT ${projections.join(',')} FROM UNNEST(JSON_QUERY_ARRAY(@payload)) row) incoming ON target.decision_id=incoming.decision_id WHEN NOT MATCHED THEN INSERT (${columns.join(',')}) VALUES (${columns.map(x=>`incoming.${x}`).join(',')})`,params:{payload:JSON.stringify(rows)},types:{payload:'STRING'},useLegacySql:false});return rows;});
   const appendOutcome=async row=>atGovernanceStage('insert_decision','product_review_outcome_append',async()=>{await bigquery.query({query:`MERGE \`${outcomeTable}\` target USING (SELECT JSON_VALUE(@payload,'$.event_id') event_id,JSON_VALUE(@payload,'$.source_ref') source_ref,JSON_VALUE(@payload,'$.source_title') source_title,JSON_VALUE(@payload,'$.outcome') outcome,JSON_VALUE(@payload,'$.reviewed_by') reviewed_by,TIMESTAMP(JSON_VALUE(@payload,'$.reviewed_at')) reviewed_at,JSON_VALUE(@payload,'$.provenance') provenance,JSON_VALUE(@payload,'$.note') note,JSON_VALUE(@payload,'$.request_id') request_id) incoming ON target.event_id=incoming.event_id WHEN NOT MATCHED THEN INSERT ROW`,params:{payload:JSON.stringify(row)},types:{payload:'STRING'},useLegacySql:false});return row;});
   const operationEvents=async operationId=>atGovernanceStage('load_current_decision','product_mapping_operation_status',async()=>{const [rows]=await bigquery.query({query:`SELECT * FROM \`${operationTable}\` WHERE operation_id=@operation_id ORDER BY row_index,recorded_at,event_id`,params:{operation_id:operationId},types:{operation_id:'STRING'},useLegacySql:false});return rows;});
-  const appendOperationEvent=async row=>atGovernanceStage('insert_decision','product_mapping_operation_append',async()=>{const event={...row,event_id:stableId(row.operation_id,`operation:${row.row_index}:${row.status}`),recorded_at:new Date().toISOString()};await bigquery.query({query:`MERGE \`${operationTable}\` target USING (SELECT JSON_VALUE(@payload,'$.event_id') event_id,JSON_VALUE(@payload,'$.operation_id') operation_id,SAFE_CAST(JSON_VALUE(@payload,'$.row_index') AS INT64) row_index,JSON_VALUE(@payload,'$.row_request_id') row_request_id,JSON_VALUE(@payload,'$.action') action,JSON_VALUE(@payload,'$.source_ref') source_ref,JSON_VALUE(@payload,'$.shopify_parent_ref') shopify_parent_ref,JSON_VALUE(@payload,'$.status') status,JSON_VALUE(@payload,'$.decision_event_id') decision_event_id,JSON_VALUE(@payload,'$.error') error,JSON_VALUE(@payload,'$.reviewed_by') reviewed_by,TIMESTAMP(JSON_VALUE(@payload,'$.recorded_at')) recorded_at) incoming ON target.event_id=incoming.event_id WHEN NOT MATCHED THEN INSERT ROW`,params:{payload:JSON.stringify(event)},types:{payload:'STRING'},useLegacySql:false});return event;});
+  const appendOperationEvents=async rows=>atGovernanceStage('insert_decision','product_mapping_operation_append',async()=>{
+    const events=rows.map(row=>({...row,event_id:stableId(row.operation_id,`operation:${row.row_index}:${row.status}`),recorded_at:new Date().toISOString()}));
+    const columns=PRODUCT_MAPPING_OPERATION_SCHEMA.map(field=>field.split(':')[0]);
+    const projection=columns.map(name=>name==='row_index'?`SAFE_CAST(JSON_VALUE(payload_row,'$.${name}') AS INT64) ${name}`:name==='recorded_at'?`TIMESTAMP(JSON_VALUE(payload_row,'$.${name}')) ${name}`:`JSON_VALUE(payload_row,'$.${name}') ${name}`);
+    await bigquery.query({query:`MERGE \`${operationTable}\` target USING (SELECT ${projection.join(',')} FROM UNNEST(JSON_QUERY_ARRAY(@payload)) payload_row) incoming ON target.event_id=incoming.event_id WHEN NOT MATCHED THEN INSERT (${columns.join(',')}) VALUES (${columns.map(name=>`incoming.${name}`).join(',')})`,params:{payload:JSON.stringify(events)},types:{payload:'STRING'},useLegacySql:false});return events;
+  });
+  const appendOperationEvent=async row=>(await appendOperationEvents([row]))[0];
   const summarizeOperation=rows=>{const latest=new Map();for(const row of rows)latest.set(Number(row.row_index),row);const results=[...latest.values()].sort((a,b)=>Number(a.row_index)-Number(b.row_index)).map(row=>({index:Number(row.row_index),request_id:row.row_request_id,action:row.action,source_ref:row.source_ref,status:row.status,event_id:row.decision_event_id||null,error:row.error||null}));const terminal=results.filter(x=>x.status!=='submitted');return{operation_id:rows[0]?.operation_id||null,status:results.length>0&&terminal.length===results.length?'complete':'processing',results,succeeded:terminal.filter(x=>['saved','already_applied'].includes(x.status)).length,blocked:terminal.filter(x=>x.status==='blocked').length,failed:terminal.filter(x=>x.status==='failed').length,pending:results.length-terminal.length};};
   const makeFamilyDecision=(source,parent,status,reviewer,{note=null,provenance='oracle_product_family_review',supersedes=null,replacementFor=null,requestId=null}={})=>{const decision_id=stableId(requestId,`${status}:${source.source_product_ref}:${parent.source_product_ref}`);return{event_id:decision_id,decision_id,membership_id:relationshipId(source.source_product_ref,parent.source_product_ref),source_ref:source.source_product_ref,source_title:source.title||null,shopify_parent_ref:parent.source_product_ref,shopify_parent_title:parent.title||null,status,reviewed_by:reviewer,reviewed_at:new Date().toISOString(),provenance,note:sanitizeReviewerNote(note),supersedes_decision_id:supersedes,replacement_for_decision_id:replacementFor};};
   const assertPair=(a,b)=>{if(!a?.source_product_ref||!b?.source_product_ref)throw new Error('invalid product mapping pair');if(namespace(a)===namespace(b))throw new Error('products must come from different source namespaces');};
   const activeEdges=history=>approvedMappingEdges(history);
-  const validateApproval=async(candidate,edges)=>atGovernanceStage('graph_safety','product_mapping_graph_validation',async()=>{const products=await loadProducts();return assertProductGraphExtensionIntegrity({products,explicitEdges:edges,deterministicEdges:deterministicMappingEdges(products),candidate});});
+  const validateApproval=async(candidate,edges,catalogue=null)=>atGovernanceStage('graph_safety','product_mapping_graph_validation',async()=>{const products=catalogue||await loadProducts();return assertProductGraphExtensionIntegrity({products,explicitEdges:edges,deterministicEdges:deterministicMappingEdges(products),candidate});});
   return {
     setup, decisions, familyDecisions, reviewOutcomes,
     async inspectCurrentGraph(history=null){
@@ -395,7 +403,11 @@ SELECT * EXCEPT(exact_sku,local_title_count,title_sources,local_sku_count,sku_so
     async bulkReview({operation_id:operationId,decisions:requests=[]}={},reviewer){
       await setup();operationId=String(operationId||'');if(!operationId||operationId.length>128)throw new Error('operation_id is required for recoverable bulk review');if(!Array.isArray(requests)||!requests.length||requests.length>PRODUCT_MAPPING_MAX_BULK_SIZE)throw new Error(`bulk decisions must contain 1 to ${PRODUCT_MAPPING_MAX_BULK_SIZE} rows`);
       const existing=await operationEvents(operationId);if(existing.length){const known=new Set(existing.filter(x=>x.status==='submitted').map(x=>x.row_request_id));if(requests.some(x=>!known.has(String(x.request_id||''))))throw new Error('operation_id was already used for a different submission');}
-      else for(let index=0;index<requests.length;index++){const request=requests[index]||{};await appendOperationEvent({operation_id:operationId,row_index:index,row_request_id:String(request.request_id||''),action:request.action||null,source_ref:request.source_ref||null,shopify_parent_ref:request.shopify_parent_ref||null,status:'submitted',decision_event_id:null,error:null,reviewed_by:reviewer});}
+      else await appendOperationEvents(requests.map((request,index)=>({operation_id:operationId,row_index:index,row_request_id:String(request?.request_id||''),action:request?.action||null,source_ref:request?.source_ref||null,shopify_parent_ref:request?.shopify_parent_ref||null,status:'submitted',decision_event_id:null,error:null,reviewed_by:reviewer})));
+      // Catalogue data is a snapshot for this submission only. Governance and
+      // operation receipts remain fresh reads before each row; never cache them.
+      let cataloguePromise;
+      const batchProducts=()=>cataloguePromise||=(async()=>{const started=Date.now(),products=await loadProducts();console.info('Oracle mapping batch catalogue loaded:',{operation_id:operationId,row_count:requests.length,duration_ms:Date.now()-started});return products;})();
       const results=[];
       for(let index=0;index<requests.length;index++){
         const request=requests[index]||{},requestId=String(request.request_id||'');
@@ -403,7 +415,10 @@ SELECT * EXCEPT(exact_sku,local_title_count,title_sources,local_sku_count,sku_so
           const prior=(await operationEvents(operationId)).find(x=>Number(x.row_index)===index&&x.status!=='submitted');if(prior){results.push({index,request_id:requestId,status:prior.status,event_id:prior.decision_event_id||null});continue;}
           if(!requestId||requestId.length>128)throw new Error('request_id is required for idempotent retry');
           if(!['identity','family','no_equivalent','needs_investigation'].includes(request.action))throw new Error('invalid review action');
-          const [products,mappingHistory,familyHistory,outcomeHistory]=await Promise.all([loadProducts(),decisions(),familyDecisions(),reviewOutcomes()]);
+          const products=await batchProducts();
+          const outcomeAction=['no_equivalent','needs_investigation'].includes(request.action);
+          const needsGraph=request.action==='identity'||Boolean(request.preview_token);
+          const [mappingHistory,familyHistory,outcomeHistory]=await Promise.all(outcomeAction?[Promise.resolve([]),Promise.resolve([]),reviewOutcomes()]:[needsGraph?decisions():Promise.resolve([]),familyDecisions(),Promise.resolve([])]);
           const source=products.find(x=>x.source_product_ref===request.source_ref);if(!source||source.source_product_ref.startsWith('shopify:'))throw new Error('historical source product was not found');
           const idStatus=request.action==='identity'?'approved':request.action==='family'?'active':request.action;
           const eventId=stableId(requestId,`${idStatus}:${request.source_ref}:${request.shopify_parent_ref||''}`);
@@ -414,11 +429,14 @@ SELECT * EXCEPT(exact_sku,local_title_count,title_sources,local_sku_count,sku_so
           }
           const parent=products.find(x=>x.source_product_ref===request.shopify_parent_ref);if(!parent||!isShopifyParentProduct(parent))throw new Error('selected product must be a Shopify parent product, not a variant');
           const candidate={candidate_id:relationshipId(source.source_product_ref,parent.source_product_ref),left_ref:source.source_product_ref,right_ref:parent.source_product_ref,left_title:source.title,right_title:parent.title};
-          const preview=buildProductChoicePreview({products,mappingDecisions:mappingHistory,familyDecisions:familyHistory,candidate,selectedRef:parent.source_product_ref});
+          // A family does not merge identity graphs. Use the very same family
+          // allowance as the interactive preview; full graph/token checks remain
+          // mandatory for identities and for any submitted global preview token.
+          const preview=needsGraph?buildProductChoicePreview({products,mappingDecisions:mappingHistory,familyDecisions:familyHistory,candidate,selectedRef:parent.source_product_ref}):{family_preview:familyAssignmentAllowance(source.source_product_ref,parent.source_product_ref,familyHistory)};
           if(request.preview_token&&request.preview_token!==preview.preview_token)throw new Error('stale preview; review the current allowed/blocked result and retry');
           if(request.action==='identity'){
             if(!preview.identity_preview.allowed)throw new Error(`identity blocked: ${preview.identity_preview.reason||'current graph rules reject this mapping'}`);
-            await validateApproval(candidate,activeEdges(mappingHistory));const row=makeDecision(candidate,'approved',reviewer,{note:request.note,provenance:'oracle_product_mapping_bulk_review',requestId});await append([row]);results.push({index,request_id:requestId,status:'saved',action:'identity',event_id:row.event_id});
+            await validateApproval(candidate,activeEdges(mappingHistory),products);const row=makeDecision(candidate,'approved',reviewer,{note:request.note,provenance:'oracle_product_mapping_bulk_review',requestId});await append([row]);results.push({index,request_id:requestId,status:'saved',action:'identity',event_id:row.event_id});
           }else{
             if(!preview.family_preview.allowed)throw new Error(`family blocked: ${preview.family_preview.reason}`);
             assertFamilyAssignment(source.source_product_ref,parent.source_product_ref,familyHistory);const row=makeFamilyDecision(source,parent,'active',reviewer,{note:request.note,provenance:'oracle_product_mapping_bulk_review',requestId});await appendFamily([row]);results.push({index,request_id:requestId,status:'saved',action:'family',event_id:row.event_id});
