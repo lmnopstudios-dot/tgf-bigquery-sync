@@ -18,8 +18,14 @@ export const OPERATION_REQUIREMENTS=Object.freeze({
 // Grouped attribution needs linked product evidence; campaign totals cannot
 // satisfy it even when the subject, selected campaign and dates stay the same.
 export function requestedAttributionOperation(text,context={}) {
-  return /\bproducts?\b/i.test(text)&&/\b(?:bought|purchased|sold|sales|revenue|attribut\w*)\b/i.test(text)&&(/\b(?:campaigns?|emails?|ads?)\b/i.test(text)||context.campaign_request&&/\b(?:attribut\w*|from it|through it)\b/i.test(text))&&! /\b(?:all product sales|overall product sales)\b/i.test(text)?'product_attribution':null;
+  // Explicitly excluded reporting domains are not positive attribution intent.
+  // Keep "not only/just" additive requests and any later affirmative clause.
+  const domain=String.raw`(?:advertising(?:\s+campaigns?)?|campaigns?|emails?|ads?)(?:\s+(?:attribution|analysis|reports?|reporting|performance))?`;
+  const excluded=new RegExp(String.raw`\b(?:not|without|excluding|exclude|rather than|instead of)\s+(?!(?:only|just)\b)(?:the\s+)?${domain}(?:\s*(?:,|/|\bor\b|\band\b)\s*${domain})*`,'gi');
+  const affirmative=String(text||'').replace(excluded,' ');
+  return /\bproducts?\b/i.test(affirmative)&&/\b(?:bought|purchased|sold|sales|revenue|attribut\w*)\b/i.test(affirmative)&&(/\b(?:campaigns?|emails?|ads?)\b/i.test(affirmative)||context.campaign_request&&/\b(?:attribut\w*|from it|through it)\b/i.test(affirmative))&&! /\b(?:all product sales|overall product sales)\b/i.test(affirmative)?'product_attribution':null;
 }
+
 export function individualOrderQuestion(message) {
   return /\border\s+#?(?=[A-Z0-9._/-]*\d)[A-Z0-9][A-Z0-9._/-]*\b/i.test(String(message||''))&&/\b(?:details?|look\s*up|shipping|charges?|status|show|get|find)\b/i.test(String(message||''))&&!/\b(?:orders|population|distribution|bands|compare thresholds)\b/i.test(String(message||''));
 }

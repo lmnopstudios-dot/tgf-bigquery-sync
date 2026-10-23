@@ -194,7 +194,7 @@ try{
     try{for(const width of [1280,390]){
       const page=await browser.newPage({viewport:{width,height:900}});
       await page.goto(fullServer.origin+'/oracle/');await page.locator('#password').fill('fixture');await page.locator('#login-form button').click();await page.locator('#app').waitFor({state:'visible'});
-      await page.locator('#message').fill(collaborationQuestion);await page.locator('#send').click();
+      await page.locator('#message').fill(collaborationQuestion+'\nUse approved product attribution. This is customer purchase-retention analysis, not advertising or campaign attribution.');await page.locator('#send').click();
       await page.waitForFunction(()=>!document.querySelector('#send').disabled&&document.querySelector('.analytical-answer'));
       const main=await page.locator('.analytical-answer').last().innerText();assert.match(main,/provisional observed repeat rates/i);assert.ok(main.indexOf('Collaboration comparison')<main.indexOf('product rankings'));assert.ok(main.indexOf('product rankings')<main.indexOf('Second-order products'));assert.doesNotMatch(main,/Governed collection reconciliation/);await openRetentionResults(page);
       const answer=await page.locator('.analytical-answer').last().innerText();

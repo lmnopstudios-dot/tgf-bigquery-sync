@@ -15,7 +15,7 @@ import { applyJourneyAnalysisContext } from './customer-journey.js';
 // Projection of the existing journey contract. No second customer identity or
 // classification model is introduced here.
 export function retentionIntent(text){
-  return /\bcollaborations?\b/i.test(text) && /\b(?:retention|repeat|bring customers back|come back|return(?:ing)? customers?|return purchases?)\b/i.test(text);
+  return /\bcollaborations?\b/i.test(text) && /\b(?:retention|cohort_retention|repeats?|bring customers back|come back|return(?:ing)? customers?|return purchases?)\b/i.test(text);
 }
 export function retentionDefinition(context){
   return {...applyJourneyAnalysisContext({},context),ranking_window:context.ranking_metric==='repeat_rate_360'?360:context.ranking_metric==='repeat_rate_180'?180:context.within_days||90,group_by:[context.journey_group_by==='entry_product'?'retention_product_windows':context.journey_group_by==='collaboration_piece'?'retention_piece_windows':'retention_windows'],

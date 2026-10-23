@@ -160,3 +160,31 @@ test('shared context keeps observation cutoff distinct and rejects unsupported w
   assert.throws(()=>validateJourneyDefinition({start_date:c.start_date,end_date:c.end_date,ranking_window:365}),/ranking_window/);
   assert.throws(()=>validateJourneyDefinition({start_date:c.start_date,end_date:c.end_date,observation_end:'2025-01-01'}),/observation_end/);
 });
+
+// Excluded advertising language must not steal an order-history retention request.
+for(const mode of ['direct','interactive','durable'])test(`retention exclusions and campaign-to-cohort switch reach providers: ${mode}`,async t=>{
+  const f=acceptanceFixture({retention_events:events,observationCertificates:[],identityEnv,now});
+  const h=await acceptanceServer(f,{durable:mode==='durable',now});t.after(h.close);
+  const send=async(message,analysis_context)=>mode==='direct'?(await(await fetch(h.origin+'/agent',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({message,analysis_context})})).json()):h.submit(message);
+  const blocked=await send('Which products were bought from the last email campaign?');
+  assert.match(blocked.answer,/Product attribution is unavailable/);
+  const campaign=transitionAnalysisContext({},'How did the last Klaviyo campaign perform?',{now}).context;
+  const prompt=question+'\nUse approved product attribution. This is customer purchase-retention analysis, not advertising or campaign attribution.';
+  const r=await send(prompt,campaign);
+  assert.equal(r.analysis_context.tool_route,'analyze_customer_journey');assert.equal(r.analysis_context.campaign_request,null);assert.deepEqual(r.analysis_context.requested_operations,[]);
+  assert.equal(r.evidence.kind,'governed_cohort_retention');assert.ok(r.evidence.rows.length);assert.ok(r.evidence.baseline_rows.length);assert.deepEqual(r.analysis_context.retention_windows,[90,180,360]);assert.doesNotMatch(r.answer,/current governed campaign bindings/);
+  if(mode==='durable'){const n=f.wireQueries.length;const saved=await h.get('/jobs/'+r.job_id);assert.deepEqual(saved.evidence,r.evidence);assert.equal(f.wireQueries.length,n);}
+});
+
+test('retention routing accepts plural repeats and does not inherit campaign attribution',async()=>{
+  const {resolveAnalysisDecision}=await import('../oracle/analysis-decision.js');
+  const {requestedAttributionOperation}=await import('../oracle/requested-operations.js');
+  const previous=transitionAnalysisContext({},'How did the last Klaviyo campaign perform?',{now}).context;
+  for(const text of [
+    'Run customer_journey cohort_retention analysis, not advertising or campaign attribution. Compare named collaboration first-purchase cohorts and products. Entry dates: 2022-10-19 through 2026-10-19. Show 90/180/360-day observed repeats and second-order products.',
+    'Compare collaboration customer repeats and product attribution from 2022-10-19 through 2026-10-19. Without ads or email attribution.',
+    'Compare collaboration retention and second-order product attribution from 2022-10-19 through 2026-10-19.'
+  ])for(const base of [{},previous]){const c=transitionAnalysisContext(base,text,{now}).context;assert.equal(c.tool_route,'analyze_customer_journey');assert.equal(c.campaign_request,null);assert.deepEqual(c.requested_operations,[]);assert.equal(resolveAnalysisDecision(c).outcome,'execution');}
+  for(const text of ['Which products were bought from the last email campaign?','Not only campaign revenue: show products purchased from ads.','Not advertising attribution; instead show which products were bought through the email campaign.']){assert.equal(requestedAttributionOperation(text),'product_attribution');const c=transitionAnalysisContext({},text,{now}).context;assert.match(resolveAnalysisDecision(c).answer,/Product attribution is unavailable/);}
+  assert.equal(requestedAttributionOperation('Which products were bought from it?',previous),'product_attribution');
+});
