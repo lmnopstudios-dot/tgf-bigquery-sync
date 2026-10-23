@@ -1266,6 +1266,10 @@
     {
       "file": "test/historical-collaboration-ui.test.js",
       "purpose": "Authenticated and CSRF-protected historical classification endpoints execute the real service; Square inputs are rejected and mappings/no-equivalent outcomes remain unchanged."
+    },
+    {
+      "file": "test/retention-complete-items.test.js",
+      "purpose": "Complete collaboration item retrieval beyond 99 and 600 rows, exact all-window proof, bounded transport and persisted delivery without changing named totals."
     }
   ]
 }

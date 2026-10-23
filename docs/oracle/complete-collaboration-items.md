@@ -1,0 +1,13 @@
+# Complete collaboration item breakdown
+
+The report previously gave the item component a 99-row quota: at three windows per cohort, that admitted only 33 item/collaboration groups. This quota was independent of named collaboration totals but prevented a complete product breakdown.
+
+Full deterministic collaboration reports now ask the item provider for up to 6,000 aggregate rows (2,000 item/collaboration groups). The public journey tool's ordinary 1–100 display limit remains unchanged; the larger quota is an internal complete-items read used only for the collaboration item component. Named totals, sitewide totals, ranking highlights, second-order highlights, source diagnostics and their existing independent quotas are unchanged. Warehouse bytes, statement/request deadlines, source filters, frozen customer linkage, classification and coverage rules remain unchanged.
+
+The generated item query counts the entire pre-selection item-window population. The service reconciles that count against returned rows and requires all three distinct windows for each source/collaboration/product key. Reports state “X of Y eligible item/cohort groups returned” and call the breakdown complete only if the counts match. If the safety bound is exceeded, the report retains the bounded results with explicit incomplete status and total counts. It never claims an unbounded or truncated population is complete. Completeness here concerns the eligible classified aggregate rows, not complete historical collection, product mapping or follow-up coverage.
+
+Proof accompanies persisted source outcomes. Delivery validates the same counts again, rejects removed or duplicate windows, and permits larger evidence only for proven item components; legacy/unproved evidence keeps the old row guard. Thus a saved report cannot quietly lose rows while retaining its completeness claim.
+
+Local verification includes 240 eligible products (720 window rows) through interactive and durable execution/recovery; actual generated ranking/selection CTEs executed after local SQL translation, reproducing 99 old rows and 720 new rows; desktop/mobile rendering of the first and last product; duplicate/missing-window and false-proof rejection. Python SQL verification uses DuckDB and sqlglot, and does not establish native BigQuery execution.
+
+After merge/deployment, submit a new full collaboration-retention request. Check the item completeness line and expanded results. Existing saved reports remain unchanged. Native warehouse execution and production report acceptance remain pending; no production query or data mutation was performed in development.

@@ -1,3 +1,4 @@
+import {RETENTION_ITEM_ROWS,RETENTION_REPORT_ROWS,itemCompleteness,assertItemOutcomeCompleteness} from './retention-item-completeness.js';
 import {retentionLimitEvidence,retentionLimitSummary} from './retention-limits.js';
 import {isRetentionPopulation} from './retention-population.js';
 import {retentionBusinessReport} from './retention-business-report.js';
@@ -23,8 +24,8 @@ export function retentionDefinition(context){
     subsequent:{channel:context.channel==='instore'?'In-store':context.channel==='online'?'Online':null},
     sort:context.sort||'repeat_rate_desc',limit:context.channel_breakdown||context.journey_group_by==='collaboration_piece'?50:100};
 }
-export function retentionRows(rows,sort='repeat_rate_desc',rankingWindow=90){
-  if(!Array.isArray(rows)||rows.length>600)throw new Error('Retention row bound exceeded');
+export function retentionRows(rows,sort='repeat_rate_desc',rankingWindow=90,maximumRows=600){
+  if(!Array.isArray(rows)||rows.length>maximumRows)throw new Error('Retention row bound exceeded');
   return rows.filter(row=>!['collaboration','collaborations'].includes(row.collaboration_name)).map(row=>{
     const count=key=>{const n=Number(row[key]);if(row[key]===null||row[key]===undefined||typeof row[key]==='boolean'||row[key]===''||!Number.isInteger(n)||n<0)throw new Error('Invalid retention count');return n;};
     const cohort_customers=count('cohort_customers'),mature_customers=count('mature_customers'),repeat_customers=count('repeat_customers');
@@ -51,10 +52,10 @@ const retentionValidationReason=error=>({
   'Invalid sitewide baseline':'baseline_scope','Retention source mismatch':'source_scope','Retention grouping mismatch':'grouping_scope','Retention provider row bound exceeded':'row_bound','Retention coverage source mismatch':'coverage_scope','Invalid second-order products':'second_order_product_scope','Invalid conditional retention median':'conditional_median','Invalid retention denominator':'denominator','Invalid retention section':'supplemental_scope'
 }[error.message]||'evidence_contract');
 const safe=value=>String(value).replaceAll('|','\\|').replaceAll('<','&lt;').replaceAll('>','&gt;');
-export function retentionMarkdown(e){return retentionBusinessReport(e,{normalize:rows=>retentionRows(rows,e.definition?.sort,e.ranking_window||90),full:retentionFullMarkdown(e)});}
+export function retentionMarkdown(e){assertItemOutcomeCompleteness(e);return retentionBusinessReport(e,{normalize:rows=>retentionRows(rows,e.definition?.sort,e.ranking_window||90,RETENTION_REPORT_ROWS),full:retentionFullMarkdown(e)});}
 function retentionFullMarkdown(e){
   const primary=e.ranking_window||90;
-  const conservativeRows=data=>retentionRows(data||[],e.definition?.sort,primary).map(r=>r.observation_coverage_status?r:{...r,observation_coverage_status:'unverified',observed_repeat_customers:r.repeat_customers,mature_customers:0,repeat_customers:0,repeat_rate:null,median_days_to_second:null});
+  const conservativeRows=data=>retentionRows(data||[],e.definition?.sort,primary,RETENTION_REPORT_ROWS).map(r=>r.observation_coverage_status?r:{...r,observation_coverage_status:'unverified',observed_repeat_customers:r.repeat_customers,mature_customers:0,repeat_customers:0,repeat_rate:null,median_days_to_second:null});
   const rows=conservativeRows(e.rows),baselines=conservativeRows(e.baseline_rows);
   const reviewedName=name=>{const names=[...new Set((e.catalogue_reconciliation||[]).filter(c=>c.collaboration_name===name).map(c=>c.display_name))];return names.length?names.join(' / '):display(name);};
   const rowLabel=r=>(r.entry_product||reviewedName(r.collaboration_name))+(r.entry_family_status==='governed_family'?' [governed family]':r.entry_family_status==='unmapped_item'?' [unmapped item]':r.entry_family_status==='ambiguous_family'?' [ambiguous family; item retained]':'');
@@ -176,7 +177,7 @@ export async function answerCohortRetention({context,provider,...options}){
   const readOptions={...options,deadlineAt:options.deadlineAt??Date.now()+45000};
   const groups=[...(context.journey_group_by==='collaboration_piece'?['retention_windows','retention_piece_windows']:definition.group_by),...(context.retention_baseline?['retention_baseline_windows']:[])];
   // Each component has its own complete-window budget. Items and baselines
-  // cannot consume the named-collaboration quota. Three sources: at most 600 rows.
+  // cannot consume the named-collaboration quota. Item retrieval has its own bound.
   const componentLimit=group=>['retention_windows','retention_piece_windows'].includes(group)?99:group==='retention_baseline_windows'?3:48;
   // Run at most three independent reads at once under the same deadline.
   // Combined components must not queue behind a complete collaboration script.
@@ -190,15 +191,17 @@ export async function answerCohortRetention({context,provider,...options}){
     const outcome={request_id,source_platform:combined?'tgf':source,source_store:combined?'combined':source_store,group,attempted:true};
     if(readOptions.deadlineAt<=Date.now()){source_outcomes.push({...outcome,attempted:false,state:'not_attempted',status:'not_attempted',stage:'request_deadline'});if(!failed_sources.includes(outcome.source_platform))failed_sources.push(outcome.source_platform);continue;}
     try{
-      const part=await boundedEvidenceRead(timeoutMs=>provider.analyzeCustomerJourney({...definition,limit:componentLimit(group),group_by:[group],cohort:{...definition.cohort,entry_source:source,...(group==='retention_baseline_windows'?{entry_product_classification:null,entry_product_ref:null}:{})}},{...readOptions,timeoutMs,sourceStore:source_store,combined,onProviderStage:event=>{if(event.identity_stage==='activation'&&event.identity_evidence?.activation==='active')providerIdentity=event.identity_evidence;if(['snapshot_read','identity_coverage','activation'].includes(event.identity_stage)){options.onProviderStage?.(event);return;}stage=event.stage==='query_start'?'population_query':stage;if(timings.length<12&&['query_start','query_submission','query_response','query_results','query_failed'].includes(event.stage)&&Number.isFinite(event.elapsed_ms))timings.push({stage:event.stage,elapsed_ms:Math.min(3600000,Math.max(0,Math.round(event.elapsed_ms)))});if(event.query_id)query_id=event.query_id;options.onProviderStage?.(event);}}),readOptions);
+      const part=await boundedEvidenceRead(timeoutMs=>provider.analyzeCustomerJourney({...definition,limit:componentLimit(group),group_by:[group],cohort:{...definition.cohort,entry_source:source,...(group==='retention_baseline_windows'?{entry_product_classification:null,entry_product_ref:null}:{})}},{...readOptions,timeoutMs,sourceStore:source_store,combined,completeItems:group==='retention_piece_windows',onProviderStage:event=>{if(event.identity_stage==='activation'&&event.identity_evidence?.activation==='active')providerIdentity=event.identity_evidence;if(['snapshot_read','identity_coverage','activation'].includes(event.identity_stage)){options.onProviderStage?.(event);return;}stage=event.stage==='query_start'?'population_query':stage;if(timings.length<12&&['query_start','query_submission','query_response','query_results','query_failed'].includes(event.stage)&&Number.isFinite(event.elapsed_ms))timings.push({stage:event.stage,elapsed_ms:Math.min(3600000,Math.max(0,Math.round(event.elapsed_ms)))});if(event.query_id)query_id=event.query_id;options.onProviderStage?.(event);}}),readOptions);
       readCompleted=true;providerIdentity=part?.identity_evidence||null;stage='evidence_validation';
       if(!part||!Array.isArray(part.results))throw new Error('Invalid retention evidence');
       if(combined&&(part.identity_evidence?.activation!=='active'||!part.identity_evidence.snapshot))throw Error('Combined retention identity unavailable');
-      const validated=retentionRows(part.results||[]);
+      const itemLimit=group==='retention_piece_windows'&&part.item_completeness?RETENTION_ITEM_ROWS:componentLimit(group);
+      const validated=retentionRows(part.results||[],definition.sort,definition.ranking_window,itemLimit);
+      if(part.item_completeness){const checked=itemCompleteness(validated,part.item_completeness.total_rows,part.truncated);if(group!=='retention_piece_windows'||Object.keys(checked).some(k=>checked[k]!==part.item_completeness[k]))throw Error('Invalid item completeness');}
       if(group==='retention_baseline_windows'&&(validated.length>3||validated.some(r=>r.collaboration_name!=='Sitewide'||r.entry_product_ref)))throw Error('Invalid sitewide baseline');
       if(validated.some(r=>combined?r.population_scope!=='linked_tgf':r.source_platform!==source||r.source_store!==source_store))throw new Error('Retention source mismatch');
       if(validated.some(r=>(['retention_windows','retention_baseline_windows'].includes(group))===Boolean(r.entry_product_ref)))throw new Error('Retention grouping mismatch');
-      if((part.results||[]).length>componentLimit(group))throw new Error('Retention provider row bound exceeded');
+      if((part.results||[]).length>itemLimit)throw new Error('Retention provider row bound exceeded');
       const coverage=retentionCoverage(part.classification_coverage||[]);
       if(!combined&&coverage.some(c=>c.source_platform!==source||c.source_store!==source_store))throw new Error('Retention coverage source mismatch');
       if(combined)try{
@@ -216,7 +219,7 @@ export async function answerCohortRetention({context,provider,...options}){
           target.push(...section);section_outcomes.push({source_platform:outcome.source_platform,source_store:outcome.source_store,component:key,state:'fulfilled',query_id});
         }catch{section_outcomes.push({source_platform:outcome.source_platform,source_store:outcome.source_store,component:key,state:'rejected',stage:'evidence_validation',population_read:'completed',code:'EVIDENCE_SCOPE_MISMATCH',query_id});}
       }
-      source_outcomes.push({...outcome,...(part.identity_evidence?{identity_evidence:part.identity_evidence}:{}),population_read:'completed',state:'fulfilled',returned_rows:validated.length,row_limit:componentLimit(group),truncated:Boolean(part.truncated),status:validated.length?(validated.some(r=>r.observation_coverage_status==='unverified')?'coverage_unverified':'classified_cohorts'):coverage.some(c=>c.eligible_first_customers>0)?'unclassified_population':'successful_empty',stage:'complete',query_id,timings});
+      source_outcomes.push({...outcome,...(part.identity_evidence?{identity_evidence:part.identity_evidence}:{}),population_read:'completed',state:'fulfilled',returned_rows:validated.length,row_limit:itemLimit,...(part.item_completeness?{item_completeness:part.item_completeness}:{}),truncated:Boolean(part.truncated),status:validated.length?(validated.some(r=>r.observation_coverage_status==='unverified')?'coverage_unverified':'classified_cohorts'):coverage.some(c=>c.eligible_first_customers>0)?'unclassified_population':'successful_empty',stage:'complete',query_id,timings});
       if(group==='retention_baseline_windows')baseline_rows.push(...validated);else results.push(...validated);if(!classification.length)classification.push(...coverage);
       truncated ||= Boolean(part.truncated);
     }catch(error){if(error.code==='LEASE_NOT_OWNED'||error.code==='REQUEST_CANCELLED'||options.signal?.aborted)throw error;const failure=safeReadFailure(error,stage);
@@ -227,7 +230,7 @@ export async function answerCohortRetention({context,provider,...options}){
   }));
   for(const part of parts){entry_platform_rows.push(...part.entry_platform_rows);catalogue_source_reconciliation.push(...part.catalogue_source_reconciliation);section_outcomes.push(...part.section_outcomes);for(const failed of part.failed_sources)if(!failed_sources.includes(failed))failed_sources.push(failed);baseline_period_rows.push(...part.baseline_period_rows);product_ranking_rows.push(...part.product_ranking_rows);catalogue_reconciliation.push(...part.catalogue_reconciliation);results.push(...part.results);baseline_rows.push(...part.baseline_rows);if(!combined||!classification.length)classification.push(...part.classification);source_outcomes.push(...part.source_outcomes);truncated ||= part.truncated;}
   const result={definition,results};
-  const rows=retentionRows(result.results||[],definition.sort,definition.ranking_window);
+  const rows=retentionRows(result.results||[],definition.sort,definition.ranking_window,RETENTION_REPORT_ROWS);
   const evidence={...(combined?{population_scope:'linked_tgf'}:{}),request_id,entry_platform_rows,catalogue_source_reconciliation,source_outcomes,section_outcomes,baseline_period_rows,product_ranking_rows,catalogue_reconciliation,requested_components:{baseline:Boolean(context.retention_baseline),second_products:Boolean(context.retention_second_products)},ranking_window:context.ranking_metric==='repeat_rate_360'?360:context.ranking_metric==='repeat_rate_180'?180:context.within_days||90,component_limitations:context.output_preference?[rows.length?'The supported table is retained. A governed cohort export or chart is not implemented.':'No cohort table is available. A governed cohort export or chart is not implemented.']:[],baseline_rows,kind:'governed_cohort_retention',subject:'customer_journey',operation:'cohort_retention',periods:[{start_date:context.start_date,end_date:context.end_date}],observation_end:definition.observation_end,definition:result.definition,rows,truncated,coverage:{classification,source_status:[['woo','ww'],['woo','usd'],['shopify','shopify']].map(([source_platform,source_store])=>({source_platform,source_store,status:classification.some(c=>c.source_platform===source_platform&&c.source_store===source_store)?'observed_endpoints_only':source_outcomes.some(s=>s.source_store===source_store&&s.state==='rejected')?'unavailable':'coverage_not_returned'})),failed_sources,unevaluable_customers:null,unevaluable_share:null,complete:false,identity:source_outcomes.find(s=>s.identity_evidence?.activation==='active')?.identity_evidence.mode||'source_qualified_only',identity_activation:source_outcomes.filter(s=>s.identity_evidence).map(s=>({source_store:s.source_store,...s.identity_evidence})),prior_history:'unverified',customer_history:customerHistoryContract(source_outcomes.some(s=>s.identity_evidence?.activation==='active'))}};
   return {request_id,answer:retentionMarkdown(evidence),evidence,analysis_context:context,partial:true,...(!rows.length&&!baseline_rows.length?{analysis_unavailable:true}:{}),tools:['analyze_customer_journey']};
 }

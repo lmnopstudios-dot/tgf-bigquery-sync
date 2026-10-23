@@ -66,7 +66,8 @@ export function fixtureRetention(events,args,{pieces=false,baseline=false,allPro
   }
   const first=all[0],ds=all.map(e=>date(e.timestamp)).sort();coverage.push({source_platform:first.source_platform,source_store:first.source_store,eligible_first_customers:eligible,named_customers:named,generic_only_customers:generic,unknown_customers:unknown,history_start:ds[0],history_end:ds.at(-1),identified_orders:all.filter(e=>e.customer).length,anonymous_orders:all.filter(e=>!e.customer).length,migrated_orders:all.filter(e=>e.migrated||e.cancelled).length,excluded_orders:all.filter(e=>e.refunded).length});
  }
- return [...buckets.values()].map(({days,...b})=>{days.sort((a,b)=>a-b);return {...b,provisional_repeat_rate:b.provisional_eligible_customers?b.provisional_repeat_customers/b.provisional_eligible_customers:null,second_order_products:b.second_order_products.sort((a,b)=>b.observed_customers-a.observed_customers||a.product_ref.localeCompare(b.product_ref)).slice(0,10),coverage:combined?[]:coverage,median_days_to_second:days.length?(days[Math.floor((days.length-1)/2)]+days[Math.floor(days.length/2)])/2:null};});
+ const output=[...buckets.values()].map(({days,...b})=>{days.sort((a,b)=>a-b);return {...b,provisional_repeat_rate:b.provisional_eligible_customers?b.provisional_repeat_customers/b.provisional_eligible_customers:null,second_order_products:b.second_order_products.sort((a,b)=>b.observed_customers-a.observed_customers||a.product_ref.localeCompare(b.product_ref)).slice(0,10),coverage:combined?[]:coverage,median_days_to_second:days.length?(days[Math.floor((days.length-1)/2)]+days[Math.floor(days.length/2)])/2:null};});
+ return pieces?output.map(r=>({...r,total_item_window_rows:output.length,truncated:false})):output;
 }
 
 // Supplemental fixture uses complete histories before filtering entry years.
