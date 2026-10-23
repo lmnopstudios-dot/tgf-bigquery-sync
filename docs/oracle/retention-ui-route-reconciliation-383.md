@@ -1,5 +1,7 @@
 # Reconcile existing Product Mapping approvals with retention
 
+> Latest live result: both reads completed, but returned no matching decisions for the 24 subjects. The resolver fixes are not a demonstrated solution for these products. Use the [UI destination/positive-control investigation](product-ui-decision-provenance-383.md#one-bounded-ui-destination-and-positive-control-read); do not rerun the empty-scope command below.
+
 Continue draft #383. The supplied WW/USD discovery succeeded; do not repeat it or the completed denominator trace. No new relationship is proposed for approval here. The compact Iron Maiden/Motörhead rows omit decision history: `approved_route_present:false` from that diagnostic is not proof that the UI has no saved approval.
 
 ## Confirmed shared resolver defects

@@ -1262,6 +1262,10 @@
     {
       "file": "test/product-route-resolver.test.js",
       "purpose": "Persisted UI identity/family current-decision parity, legacy missing relationship/membership IDs, all eight Iron Maiden WW/USD products, Motörhead, revocation and actual generated report resolver consumption. SQLite is local verification only."
+    },
+    {
+      "file": "test/product-ui-provenance-command.test.js",
+      "purpose": "Actual server/UI project binding versus credential-project fallback, persisted positive control and exact-key consumption; missing control and retained-parser mismatch remain unverified. Mocked documented command, not live BigQuery."
     }
   ]
 }
