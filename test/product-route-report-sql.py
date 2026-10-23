@@ -49,7 +49,9 @@ print('10 WW/USD Iron Maiden/Motörhead UI-approved fixture routes consumed by a
 # Execute the exact narrow diagnostic generator on the same persisted histories.
 for store in ['metorik_uk','metorik_us']:
  c.execute('CREATE SCHEMA fixture.'+store)
- c.execute('CREATE TABLE fixture.'+store+'.product_variations(product_id VARCHAR,variation_id VARCHAR,name VARCHAR,sku VARCHAR)')
+
+ for table in ['product_variations','order_line_items']:
+  c.execute('CREATE TABLE fixture.'+store+'.'+table+'(product_id VARCHAR,variation_id VARCHAR,name VARCHAR,sku VARCHAR)')
 audit=subprocess.check_output(['node','--input-type=module','-e',"import {uiRouteReconciliationSql} from './diagnostics/retention-ui-route-reconciliation.js';console.log(uiRouteReconciliationSql('fixture'));"],text=True)
 audit_rows=c.execute(sqlglot.transpile(audit,read='bigquery',write='duckdb')[0]).fetchall()
 assert audit_rows and any(r[0]=='identity_history' for r in audit_rows)

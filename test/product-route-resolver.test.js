@@ -41,6 +41,6 @@ test('pinned narrow artifact is reproducible and its deployed-query builder pres
  assert.equal(a.candidate_query,uiRouteReconciliationSql(a.project));assert.deepEqual(a.subjects,exactWooSubjects);assert.equal(Object.values(a.subjects).flat().length,24);
  const m=await import('data:text/javascript;base64,'+Buffer.from(a.query_builder_source).toString('base64'));
  assert.equal(m.uiRouteReconciliationSql('fixture',{reader:classificationReaderCtes('fixture'),normalizeRef:classificationRefSql,raw:false}),uiRouteReconciliationSql('fixture',{raw:false}));
- assert.doesNotMatch(a.candidate_query,/orders|order_line_items|retention_members|LIMIT 501\) review_rows|\b(?:CREATE|INSERT|UPDATE|MERGE|DELETE)\b/);
- assert.match(a.candidate_query,/scope_variations/);assert.match(a.candidate_query,/supersedes_decision_id IN/);
+ assert.doesNotMatch(a.candidate_query,/\borders\b|retention_members|LIMIT 501\) review_rows|\b(?:CREATE|INSERT|UPDATE|MERGE|DELETE)\b/);
+ assert.match(a.candidate_query,/scope_variations/);assert.match(a.candidate_query,/order_line_items/);assert.doesNotMatch(a.candidate_query,/order_id|customer_id|quantity/);assert.match(a.candidate_query,/supersedes_decision_id IN/);
 });
