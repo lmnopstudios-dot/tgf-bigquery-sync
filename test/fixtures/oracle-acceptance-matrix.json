@@ -1270,6 +1270,10 @@
     {
       "file": "test/retention-complete-items.test.js",
       "purpose": "Complete collaboration item retrieval beyond 99 and 600 rows, exact all-window proof, bounded transport and persisted delivery without changing named totals."
+    },
+    {
+      "file": "test/retention-compact-result.test.js",
+      "purpose": "Compact shared item-result metadata without losing any window, coverage or rankings; paginated header recovery, payload reduction and unchanged execution budgets."
     }
   ]
 }

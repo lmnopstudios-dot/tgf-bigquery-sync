@@ -92,7 +92,8 @@ test('combined item * REPLACE projection carries scope through actual SQL and st
  const projection=combinedRetentionSql(retentionSectionProjection(false),'fixture','retention_piece_windows');
  assert.match(projection,/SELECT AS STRUCT 'linked_tgf' population_scope,\* REPLACE/);
  const q=customerJourneySql('fixture','retention_piece_windows',null,null,identity,true);
- assert.ok(q.includes(projection));
+ const compact=combinedRetentionSql(retentionSectionProjection(false,true),'fixture','retention_piece_windows');
+ assert.ok(q.includes(compact));assert.match(compact,/IF\(r.cohort_rank IS NULL/);
  const sql="WITH section_ranked AS (SELECT 'tgf' source_platform,'combined' source_store,'shopify:shopify:1' entry_product_ref,NULL collaboration_name,90 window_days,1018 cohort_customers,0 mature_customers,0 repeat_customers,262 observed_repeat_customers,1018 provisional_eligible_customers,262 provisional_repeat_customers,262.0/1018 provisional_repeat_rate,1 count_rank,NULL rate_rank,101 provisional_rate_rank,'unverified' observation_coverage_status,NULL median_days_to_second)";
  const unscoped=rankedProjection(sql,{});assert.throws(()=>retentionRows(unscoped),/Missing retention population/);
  const scoped=rankedProjection(sql,{},projection);assert.equal(scoped[0].population_scope,'linked_tgf');assert.equal(retentionRows(scoped).length,1);
@@ -100,5 +101,5 @@ test('combined item * REPLACE projection carries scope through actual SQL and st
  const baseline=combinedRetentionSql(retentionSectionProjection(true),'fixture','retention_baseline_windows');
  assert.match(baseline,/SELECT AS STRUCT 'linked_tgf' population_scope,\* FROM section_totals/);
  assert.ok(customerJourneySql('fixture','retention_baseline_windows',null,null,identity,true).includes(baseline));
- for(const [source,store] of [['woo','ww'],['woo','usd'],['shopify','shopify']])assert.ok(customerJourneySql('fixture','retention_piece_windows',source,store,identity).includes(retentionSectionProjection(false)));
+ for(const [source,store] of [['woo','ww'],['woo','usd'],['shopify','shopify']])assert.ok(customerJourneySql('fixture','retention_piece_windows',source,store,identity).includes(retentionSectionProjection(false,true)));
 });
