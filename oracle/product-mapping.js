@@ -116,9 +116,12 @@ export function deterministicMappingEdges(products) {
   return edges;
 }
 
+// BigQuery TIMESTAMP values arrive as {value: ISO}; String(wrapper) loses time.
+const decisionTime=value=>value instanceof Date?value.toISOString():String(value?.value??value??'');
+
 /** The sole in-process current-state resolver. Supersession links win over timestamps. */
 export function resolveMappingDecisions(history = []) {
-  const ordered=[...history].sort((a,b)=>String(a.reviewed_at||'').localeCompare(String(b.reviewed_at||''))||String(a.decision_id||a.event_id||'').localeCompare(String(b.decision_id||b.event_id||'')));
+  const ordered=[...history].sort((a,b)=>decisionTime(a.reviewed_at).localeCompare(decisionTime(b.reviewed_at))||String(a.decision_id||a.event_id||'').localeCompare(String(b.decision_id||b.event_id||'')));
   const byId=new Map(ordered.map(d=>[d.decision_id||d.event_id,d]));
   const superseded=new Set(ordered.map(d=>d.supersedes_decision_id).filter(Boolean));
   const currentByRelationship=new Map();
@@ -133,7 +136,7 @@ export function resolveMappingDecisions(history = []) {
 
 /** Family membership is deliberately not a canonical identity edge. */
 export function resolveFamilyDecisions(history = []) {
-  const ordered=[...history].sort((a,b)=>String(a.reviewed_at||'').localeCompare(String(b.reviewed_at||''))||String(a.decision_id||a.event_id||'').localeCompare(String(b.decision_id||b.event_id||'')));
+  const ordered=[...history].sort((a,b)=>decisionTime(a.reviewed_at).localeCompare(decisionTime(b.reviewed_at))||String(a.decision_id||a.event_id||'').localeCompare(String(b.decision_id||b.event_id||'')));
   const byId=new Map(ordered.map(d=>[d.decision_id||d.event_id,d])),superseded=new Set(ordered.map(d=>d.supersedes_decision_id).filter(Boolean)),currentBySource=new Map();
   for(const row of ordered){const id=row.decision_id||row.event_id;if(!superseded.has(id))currentBySource.set(row.source_ref,row);}
   const current=[...currentBySource.values()];

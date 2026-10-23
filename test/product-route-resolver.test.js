@@ -4,7 +4,7 @@ import {spawnSync} from 'node:child_process';
 import {governedDecisionCtes,productFamilyCtes,resolveMappingDecisions,resolveFamilyDecisions,relationshipId} from '../oracle/product-mapping.js';
 import {classificationReaderCtes} from '../oracle/classification-reader.js';
 import {customerJourneySql} from '../oracle/customer-journey.js';
-const refs=['woo:ww:11737','woo:usd:106660','woo:ww:11795','woo:usd:106592','woo:ww:23150','woo:usd:106354','woo:ww:44905','woo:usd:106178','woo:ww:11593','woo:usd:106807'];
+const refs=Object.entries({ww:['11737','11795','23150','44905','11549','11593','11594','92837','11634','80797','60637','80795'],usd:['106660','106592','106354','106178','106807','106986','106800','108048','108303','108052','108175','108623']}).flatMap(([store,ids])=>ids.map(id=>`woo:${store}:${id}`));
 export const mapping=refs.map((ref,i)=>({event_id:`m${i}`,decision_id:`m${i}`,relationship_id:null,candidate_id:null,left_ref:ref,right_ref:`shopify:shopify:${i%2?'gid://shopify/Product/':''}${100+i}`,status:'approved',reviewed_at:'2026-01-01',supersedes_decision_id:null}));
 export const families=refs.map((ref,i)=>({event_id:`f${i}`,decision_id:`f${i}`,membership_id:null,source_ref:ref,shopify_parent_ref:`shopify:shopify:gid://shopify/Product/${200+i}`,status:'active',reviewed_at:'2026-01-01',supersedes_decision_id:null}));
 // Replacing a source assignment without a supersession pointer still has one current source assignment.
@@ -43,4 +43,20 @@ test('pinned narrow artifact is reproducible and its deployed-query builder pres
  assert.equal(m.uiRouteReconciliationSql('fixture',{reader:classificationReaderCtes('fixture'),normalizeRef:classificationRefSql,raw:false}),uiRouteReconciliationSql('fixture',{raw:false}));
  assert.doesNotMatch(a.candidate_query,/\borders\b|retention_members|LIMIT 501\) review_rows|\b(?:CREATE|INSERT|UPDATE|MERGE|DELETE)\b/);
  assert.match(a.candidate_query,/scope_variations/);assert.match(a.candidate_query,/order_line_items/);assert.doesNotMatch(a.candidate_query,/order_id|customer_id|quantity/);assert.match(a.candidate_query,/supersedes_decision_id IN/);
+});
+
+test('UI current-state resolution reads actual BigQuery TIMESTAMP wrappers before decision-ID tie breaking',async()=>{
+ const {BigQuery}=await import('@google-cloud/bigquery');
+ const old={...mapping[0],event_id:'z-old',decision_id:'z-old',reviewed_at:BigQuery.timestamp('2025-01-01')};
+ const newer={...old,event_id:'a-new',decision_id:'a-new',status:'revoked',reviewed_at:BigQuery.timestamp('2026-01-01')};
+ assert.equal(resolveMappingDecisions([newer,old]).activeApproved.length,0);
+ const fOld={...families[0],event_id:'z-old',decision_id:'z-old',reviewed_at:old.reviewed_at};
+ const fNew={...fOld,event_id:'a-new',decision_id:'a-new',status:'revoked',reviewed_at:newer.reviewed_at};
+ assert.equal(resolveFamilyDecisions([fNew,fOld]).active.length,0);
+});
+
+test('a deployed UI resolver failure preserves successfully read SQL evidence and the other check',async()=>{
+ const {readUiRouteReconciliation}=await import('../diagnostics/read-retention-ui-routes.js');
+ const out=await readUiRouteReconciliation({project:'fixture',candidateQuery:'SELECT 1',deployedQuery:'SELECT 2',resolveMappingDecisions:()=>{throw Error('UI evaluation failed')},resolveFamilyDecisions,bigquery:{createQueryJob:async()=>[{id:'fixture',getQueryResults:async()=>[[{kind:'identity_history',record:'{}',available_records:1}]]}]}});
+ assert.equal(out.checks[0].status,'read_completed');assert.equal(out.checks[0].groups.identity_history.records.length,1);assert.equal(out.checks[0].ui_evaluation_complete,false);assert.equal(out.checks[1].status,'read_completed');
 });

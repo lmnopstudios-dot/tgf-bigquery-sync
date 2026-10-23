@@ -6,7 +6,7 @@ payload=json.loads(subprocess.check_output(['node','--input-type=module','-e',""
 import {classificationReaderCtes} from './oracle/classification-reader.js';
 import {customerJourneySql} from './oracle/customer-journey.js';
 import {cohortRelations} from './oracle/cohort-execution.js';
-const subjects={ww:['11737','11795','23150','44905','11593'],usd:['106660','106592','106354','106178','106807']};
+const subjects={ww:['11737','11795','23150','44905','11549','11593','11594','92837','11634','80797','60637','80795'],usd:['106660','106592','106354','106178','106807','106986','106800','108048','108303','108052','108175','108623']};
 const refs=Object.entries(subjects).flatMap(([s,ids])=>ids.map(id=>`woo:${s}:${id}`));
 const sql=customerJourneySql('fixture','retention_piece_windows',null,null,{dataset:'customer_identity',snapshot:'history-20261022-billing-v3',orderLinks:true},true);
 const all=cohortRelations(sql).relations;
@@ -23,7 +23,7 @@ c.execute('CREATE TABLE fixture.commerce.collection_classifications(classificati
 c.execute('CREATE TABLE fixture.shopify_catalogue.product_collections(product_id VARCHAR,collection_id VARCHAR)')
 lines=[];entries=[]
 for i,ref in enumerate(payload['refs']):
- platform,store,pid=ref.split(':');target=str(100+i);name='iron_maiden' if i%5<4 else 'mot_rhead'
+ platform,store,pid=ref.split(':');target=str(100+i);name='iron_maiden' if i%12<4 else 'mot_rhead'
  # Persisted identity or family, not both. GID and numeric representations alternate.
  parent='shopify:shopify:'+('gid://shopify/Product/' if i%2 else '')+target
  if i%2:
@@ -41,11 +41,11 @@ query='WITH '+payload['reader']+',source_lines AS ('+' UNION ALL '.join(lines)+'
 translated=sqlglot.transpile(query,read='bigquery',write='duckdb')[0]
 params={'entry_product_ref':None,'entry_classification':'collaboration'}
 rows=c.execute(translated,params).fetchall();names=[x[0] for x in c.description];result=[dict(zip(names,r)) for r in rows]
-assert len(result)==10,result
+assert len(result)==24,result
 assert all(r['collaboration_name'] in ('iron_maiden','mot_rhead') for r in result)
-assert len({r['governed_customer_ref'] for r in result})==10
+assert len({r['governed_customer_ref'] for r in result})==24
 assert all(r['entry_family_status']==('governed_family' if int(r['governed_customer_ref'][1:])%2 else 'governed_product') for r in result)
-print('10 WW/USD Iron Maiden/Motörhead UI-approved fixture routes consumed by actual generated classification/family/entry SQL; size lines deduplicated; unmatched store/variation excluded. DuckDB translation only.')
+print('24 WW/USD Iron Maiden/Motörhead UI-approved fixture routes consumed by actual generated classification/family/entry SQL; size lines deduplicated; unmatched store/variation excluded. DuckDB translation only.')
 # Execute the exact narrow diagnostic generator on the same persisted histories.
 for store in ['metorik_uk','metorik_us']:
  c.execute('CREATE SCHEMA fixture.'+store)
