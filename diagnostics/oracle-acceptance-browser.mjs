@@ -240,6 +240,14 @@ try{
     assert.equal(writes.length,0);await page.close();
   }
   await verifyWooAssignmentPanel({browser,origin:h.origin,output});
+  // A complete item list must survive the UI, not merely provider validation.
+  const itemEvents=Array.from({length:240},(_,i)=>({source_platform:'woo',source_store:'ww',customer:'item-customer-'+i,order:'item-entry-'+i,timestamp:'2024-01-01T12:00:00Z',pieces:[{id:String(i+1),title:'Complete Item '+i,names:['alpha'],group:'collaboration'}]}));
+  const itemFixture=acceptanceFixture({retention_events:itemEvents,retention_combined:true,observationCertificates:[],identityEnv:{ORACLE_CUSTOMER_IDENTITY_MODE:'email_candidate_v2',ORACLE_CUSTOMER_IDENTITY_DATASET:'customer_identity',ORACLE_CUSTOMER_IDENTITY_SNAPSHOT:'fixture-order-email-v2'},now:Date.parse('2026-10-23T12:00:00Z')});
+  const itemServer=await acceptanceServer(itemFixture,{durable:true,now:Date.parse('2026-10-23T12:00:00Z')});
+  try{for(const width of [1280,390]){const page=await browser.newPage({viewport:{width,height:900}});await page.goto(itemServer.origin+'/oracle/');await page.locator('#password').fill('fixture');await page.locator('#login-form button').click();await page.locator('#app').waitFor({state:'visible'});
+    await page.locator('#message').fill('Compare collaboration retention and individual first-purchase items from 2022-10-19 through 2026-10-19, including 90/180/360 days, sitewide baselines and second-order products.');await page.locator('#send').click();await page.waitForFunction(()=>!document.querySelector('#send').disabled&&document.querySelector('.analytical-answer'));
+    assert.match(await page.locator('.analytical-answer').last().innerText(),/240 of 240 eligible item\/cohort groups returned/);await openRetentionResults(page);const text=await page.locator('.analytical-answer').last().innerText();assert.match(text,/Complete Item 239/);assert.match(text,/Complete Item 0/);assert.doesNotMatch(text,/Individual collaboration items.*99\/99/);await page.close();
+  }}finally{await itemServer.close();}
   await verifyHistoricalCollaborationPanel({browser,origin:h.origin,output});
   console.log(JSON.stringify({status:'passed',conversations:matrix.conversations.length,viewports:['desktop','mobile'],durable_refresh:true,activated_identity_refresh:true,output}));
 }finally{await browser.close();h.close();}

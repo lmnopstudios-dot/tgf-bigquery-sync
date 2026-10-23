@@ -1,3 +1,4 @@
+import {assertItemOutcomeCompleteness} from './retention-item-completeness.js';
 import {isRetentionPopulation} from './retention-population.js';
 import {provisionalEvidence,familyEvidence} from './retention-provisional.js';
 import {assertRetentionProductEvidence} from './retention-product-evidence.js';
@@ -85,7 +86,7 @@ export function answerCompleteness(context,result){
       }
     }catch{missing.push('catalogue_reconciliation');}
     const memberships=new Set();
-    if((evidence.rows||[]).length>600)missing.push('row_bound');
+    try{assertItemOutcomeCompleteness(evidence);}catch{missing.push('item_completeness');}
     for(const r of allRows){
       if((evidence.population_scope==='linked_tgf')!==(r.population_scope==='linked_tgf'))missing.push('population_scope');
       const key=JSON.stringify([(evidence.baseline_period_rows||[]).includes(r)?'baseline_period':(evidence.product_ranking_rows||[]).includes(r)?'product_ranking':(evidence.baseline_rows||[]).includes(r)?'baseline':'cohort',r.cohort_year??null,r.source_platform,r.source_store,r.collaboration_name,r.entry_product_ref||null,r.window_days]);

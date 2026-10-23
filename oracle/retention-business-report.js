@@ -36,6 +36,7 @@ export function retentionBusinessReport(e,{normalize,full}){
  const failures=(e.source_outcomes||[]).filter(o=>o.state!=='fulfilled');
  if(failures.length)lines.push(`Calculation availability: ${failures.map(o=>`${source(o)} / ${o.group}: ${o.state} (${o.stage||'stage unavailable'})`).join('; ')}. Successful components are retained; software failures are separate from coverage uncertainty.`);
  if((e.section_outcomes||[]).some(o=>o.state==='rejected'))lines.push('Some supplemental sections failed validation; independent successful results are retained. See full results.');
+ for(const o of e.source_outcomes||[])if(o.group==='retention_piece_windows'&&o.item_completeness){const c=o.item_completeness;lines.push(`Individual collaboration items/families (${source(o)}): ${c.returned_items} of ${c.total_items} eligible item/cohort groups returned, covering all three time windows${c.complete?' — complete.':' — incomplete; additional groups exceed the bounded response.'}`);}
  if(e.truncated)lines.push(retentionLimitSummary(e));
  if(e.request_id)lines.push(`Request reference: ${safe(e.request_id)}.`);
  // The client supports sibling details, not nested details. Keep the complete

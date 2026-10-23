@@ -23,7 +23,7 @@
     },
     {
       "group": "retention_piece_windows",
-      "script_sha256": "3da91d643c9c5f4c4ee58e88896e0a593b3adec873b35eaf754c273a3241e466",
+      "script_sha256": "80c38cadb735f73cccdbe0121a584bd88495927b92f368d6db28cd97a1155963",
       "maximum_bytes_per_statement": "1666666666",
       "data_statements": 12,
       "maximum_bytes_per_component": "20000000000"
