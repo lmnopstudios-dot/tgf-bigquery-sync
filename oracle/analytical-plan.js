@@ -7,6 +7,7 @@ import { createHash } from 'node:crypto';
 
 export function planOperation(c) {
   if(c?.tool_route==='compare_historical_events')return 'named_event_comparison';
+  if(c?.journey_intent==='second_purchase_products')return 'second_purchase_products';
   if(c?.analysis_type==='customer_journey')return (c.journey_intent==='retention'||c.journey_group_by==='collaboration_name')?'cohort_retention':'customer_journey';
   if(c?.tool_route==='get_population_conversion')return 'population_comparison';
   if(c?.requested_operations?.includes('product_attribution'))return 'product_attribution';

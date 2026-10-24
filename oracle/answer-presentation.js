@@ -1,3 +1,4 @@
+import {productJourneyMarkdown} from './product-journeys.js';
 import { retentionMarkdown } from './cohort-retention.js';
 import { populationConversionMarkdown } from './population-conversion.js';
 import { basketBusinessView } from './basket-composition.js';
@@ -203,6 +204,7 @@ function supportingMetadata(e, supporting='') {
 /** Unknown contracts retain their original answer. Never hide an unknown limitation. */
 export function presentAnalyticalAnswer(result, context={}) {
   if(!result?.evidence) return result;
+  if(result.evidence.kind==='governed_second_purchase_products')return {...result,answer:productJourneyMarkdown(result.evidence)};
   if(result.evidence.kind==='governed_cohort_retention')return {...result,answer:retentionMarkdown(result.evidence)};
   if(result.evidence.kind==='governed_population_conversion')return {...result,answer:populationConversionMarkdown(result.evidence)};
   if(result.evidence.subject==='current_stock')return result;

@@ -1,3 +1,4 @@
+import {answerProductJourneys} from './product-journeys.js';
 import {RETENTION_ITEM_ROWS,RETENTION_REPORT_ROWS,itemCompleteness,assertItemOutcomeCompleteness} from './retention-item-completeness.js';
 import {retentionLimitEvidence,retentionLimitSummary} from './retention-limits.js';
 import {isRetentionPopulation} from './retention-population.js';
@@ -162,6 +163,7 @@ export function retentionCoverage(rows=[]){
   });
 }
 export async function answerCohortRetention({context,provider,...options}){
+  if(context.journey_intent==='second_purchase_products')return answerProductJourneys({context,provider,...options});
   const request_id=requestId(options.requestId||options.request_id);
   if(!provider?.analyzeCustomerJourney)return {request_id,answer:`No result was calculated: the governed customer-journey provider binding is missing. Request reference: ${request_id}.`,component_outcomes:['ww','usd','shopify'].map(source_store=>({component:source_store,status:'missing_binding',attempted:false})),analysis_unavailable:true,analysis_context:context,tools:[]};
   const definition=retentionDefinition(context);

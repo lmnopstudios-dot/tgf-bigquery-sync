@@ -1274,6 +1274,10 @@
     {
       "file": "test/retention-compact-result.test.js",
       "purpose": "Compact shared item-result metadata without losing any window, coverage or rankings; paginated header recovery, payload reduction and unchanged execution budgets."
+    },
+    {
+      "file": "test/oracle-second-purchase-products.test.js",
+      "purpose": "4aa86aa8: overall second-purchase popularity and top entry-product journeys, v2 linked identities, explicit denominators, independent row limits and direct/interactive/durable recovery"
     }
   ]
 }

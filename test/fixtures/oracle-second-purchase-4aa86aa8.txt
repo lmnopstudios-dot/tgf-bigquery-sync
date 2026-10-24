@@ -1,0 +1,16 @@
+Analyse customers’ second purchases across linked Woo WW, Woo USD and Shopify histories, using the configured email_candidate_v2 snapshot.
+
+First-observed purchase dates: 2022-10-19 through 2026-10-19. Observation cutoff: 2026-10-19. Timezone: Europe/London.
+
+Show:
+1. The 20 most popular products in customers’ second eligible orders overall, ranked by distinct customer count.
+2. For the 20 most popular first-purchase products by distinct customer count, show the five most common products in their second eligible order.
+3. For each first-product cohort, show entry customers, observed second-purchase customers and the corresponding percentage, with its denominator and provisional status explicit.
+4. For each second-order product, show customer count and percentage of that cohort’s returning customers.
+Use the next eligible order observed by the cutoff as the primary view. Include 90/180/360-day views where supported, distinguishing age-qualified provisional rates from verified rates.
+
+Combine histories before identifying first and second orders. Use approved product identities and reporting families; do not merge products by title alone. Keep Ring Sizers separate from the main jewellery rankings.
+
+Count each customer once per second-order product. Exclude entry-order purchases from second-order counts, but include repurchases of the same product in a genuinely later order. Explain that product percentages can exceed 100% when second orders contain multiple products.
+
+Preserve imported-order exclusions and identity safeguards. Disclose unknown product attribution, small samples and truncation. Keep successful sections if another fails. Do not collect or modify data, and do not substitute a collaboration-retention summary.

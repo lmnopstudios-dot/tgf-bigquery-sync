@@ -220,6 +220,20 @@ try{
     await openRetentionResults(page);assert.match(await answer.innerText(),/Entry-platform diagnostics/);
     const reads=combinedFixture.wireQueries.length;await page.reload();await page.waitForFunction(()=>!document.querySelector('#send').disabled&&document.querySelector('.analytical-answer'));assert.equal(await page.locator('.analytical-answer').last().innerText(),main);assert.equal(combinedFixture.wireQueries.length,reads);await page.screenshot({path:output+'/combined-tgf-'+width+'.png',fullPage:true});await page.close();
   }}finally{combinedServer.close();}
+  // Exact overall/product-journey incident: visible counts, denominator tables,
+  // mobile rendering and serialized durable recovery without provider replay.
+  const productQuestion=readFileSync(new URL('../test/fixtures/oracle-second-purchase-4aa86aa8.txt',import.meta.url),'utf8');
+  const productFixture=acceptanceFixture({product_journeys:true,retention_combined:true,identityEnv:{ORACLE_CUSTOMER_IDENTITY_MODE:'email_candidate_v2',ORACLE_CUSTOMER_IDENTITY_DATASET:'customer_identity',ORACLE_CUSTOMER_IDENTITY_SNAPSHOT:'fixture-order-email-v2'}});
+  const productServer=await acceptanceServer(productFixture,{durable:true,jobStore:durableJsonWire().store});
+  try{for(const width of [1280,390]){
+    const page=await browser.newPage({viewport:{width,height:900}});
+    await page.goto(productServer.origin+'/oracle/');await page.locator('#password').fill('fixture');await page.locator('#login-form button').click();await page.locator('#app').waitFor({state:'visible'});
+    await page.locator('#message').fill(productQuestion);await page.locator('#send').click();await page.waitForFunction(()=>!document.querySelector('#send').disabled&&document.querySelector('.analytical-answer'));
+    const answer=await page.locator('.analytical-answer').last().innerText();
+    assert.match(answer,/Overall top 20 second-order products/);assert.match(answer,/First-product #20/);assert.match(answer,/Returning-customer denominator/);assert.match(answer,/220 \/ 2200 \(10.00%/);assert.match(answer,/Unknown attribution/);assert.doesNotMatch(answer,/Collaboration comparison/);
+    const reads=productFixture.wireQueries.length;await page.reload();await page.waitForFunction(()=>!document.querySelector('#send').disabled&&document.querySelector('.analytical-answer'));assert.equal(await page.locator('.analytical-answer').last().innerText(),answer);assert.equal(productFixture.wireQueries.length,reads);
+    await page.screenshot({path:output+'/second-purchase-4aa86aa8-'+width+'.png',fullPage:true});await page.close();
+  }}finally{productServer.close();}
   // Mapping presentation only: intercept all governance requests; never save a decision.
   for(const width of [1280,390]){
     const page=await browser.newPage({viewport:{width,height:900}});

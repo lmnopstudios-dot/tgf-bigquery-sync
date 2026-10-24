@@ -49,6 +49,7 @@ export const COHORT_EXECUTION_BYTES='20000000000';
 export const COHORT_STATEMENT_BYTES='2500000000';
 export function cohortExecutionPlan(sql,boundaries=null){
   const {relations,result}=cohortRelations(sql),completed=new Set();
+  if(!boundaries&&result.includes('product_journeys'))boundaries=['orders','ranked_orders','cr_routes','cr_collection_current','cr_resolved','classified_lines','retention_reporting_lines','pj_members'];
   boundaries??=result.includes("'linked_tgf' population_scope")?COHORT_COMBINED_BOUNDARIES:COHORT_BOUNDARIES;
   const prefix=(end,root)=>{
     const candidates=relations.slice(0,end).map(r=>({...r,body:completed.has(r.name)?`SELECT * FROM _SESSION.cohort_${r.name}`:r.body}));
