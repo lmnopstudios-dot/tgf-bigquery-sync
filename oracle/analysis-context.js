@@ -110,7 +110,7 @@ export function validateAnalysisContext(value={}){
   out.first_order_semantic=['first_observed_ever','first_observed_in_period'].includes(value.first_order_semantic)?value.first_order_semantic:null;
   for(const key of ['minimum_order_sequence','maximum_order_sequence'])out[key]=Number.isInteger(value[key])&&value[key]>=2?value[key]:null;
   out.within_days=Number.isInteger(value.within_days)&&value.within_days>=1&&value.within_days<=3650?value.within_days:null;
-  out.journey_group_by=['downstream_product','cohort_year_downstream_product','entry_product','collaboration_name','collaboration_piece','summary'].includes(value.journey_group_by)?value.journey_group_by:null;
+  out.journey_group_by=['downstream_product','cohort_year_downstream_product','entry_product','collaboration_name','collaboration_piece','summary','second_purchase_products'].includes(value.journey_group_by)?value.journey_group_by:null;
   out.event_name=typeof value.event_name==='string'?value.event_name.slice(0,100):null;
   out.event_count=Number.isInteger(value.event_count)&&value.event_count>=1&&value.event_count<=5?value.event_count:null;
   out.requested_subject=typeof value.requested_subject==='string'?value.requested_subject.slice(0,100):null;
@@ -148,6 +148,17 @@ function transitionContext(existing, message, {now=Date.now(),reportContext=null
   if(/\b(?:abandoned?[- ](?:checkouts?|carts?)|checkout abandonment|cart abandonment)\b/i.test(text)){
     const context=validateAnalysisContext({...emptyAnalysisContext(),...(period(text,now)||{}),requested_subject:'abandoned_checkouts',analysis_type:'ecommerce',channel:/\bonline\b/i.test(text)?'online':null,geography:/\bUK\b/i.test(text)?'GB':null});
     return {context,transition:{continuation:false,set:['requested_subject','start_date','end_date'],clear:ANALYSIS_CONTEXT_FIELDS,retain:[],missing_required_fields:[],ready_to_execute:true,applies_to_message:true}};
+  }
+  const productJourney=/\b(?:second|next)[- ](?:eligible[- ]|purchase[- ])?(?:orders?|purchases?)\b|\bsecond purchases\b/i.test(text)&&/\b(?:products?|items?)\b/i.test(text)&&/\b(?:popular|popularity|top|common|ranked|ranking)\b/i.test(text)&&(!retentionIntent(text)||/\boverall\b|\bfirst[- ]purchase products\b/i.test(text));
+  const productFollowup=base.journey_intent==='second_purchase_products'&&/^(?:online only|just online|for|in|observation|use|show)\b/i.test(text)&&!retentionIntent(text)&&!/\b(?:sales|campaign|conversion|basket|stock|collaborations?)\b/i.test(text);
+  if(productJourney||productFollowup){
+    const dates=period(text,now)||{},range=text.match(/(?:first[- ]observed purchase dates|cohort entry)\s*:\s*(\d{4}-\d{2}-\d{2})\s+(?:through|to)\s+(\d{4}-\d{2}-\d{2})/i);
+    const context=validateAnalysisContext({...emptyAnalysisContext(),...(productFollowup?base:{}),...dates,...(range?{start_date:range[1],end_date:range[2]}:{}),requested_subject:'customer_journey',analysis_type:'customer_journey',metrics:['customer_journey'],tool_route:'analyze_customer_journey',journey_intent:'second_purchase_products',journey_group_by:'second_purchase_products',entry_product_classification:null,first_order_semantic:'first_observed_ever',sort:'returning_customers_desc',limit:20,time_zone:text.match(/\btimezone\s*:\s*([A-Za-z_]+\/[A-Za-z_]+(?:\/[A-Za-z_]+)?)/i)?.[1]||(productFollowup?base.time_zone:null)||'Europe/London'});
+    context.cohort_entry_start=context.start_date;context.cohort_entry_end=context.end_date;
+    context.observation_end=text.match(/observation(?: cutoff| end)?\s*[:=]?\s*(\d{4}-\d{2}-\d{2})/i)?.[1]||(productFollowup?base.observation_end:null)||context.end_date;
+    context.unresolved_required_fields=context.start_date&&context.end_date?[]:['start_date','end_date'];
+    if(/\bonline only\b|\bjust online\b/i.test(text))context.channel='online';
+    return {context,transition:{continuation:productFollowup,set:ANALYSIS_CONTEXT_FIELDS,clear:[],retain:[],missing_required_fields:context.unresolved_required_fields,ready_to_execute:!context.unresolved_required_fields.length,applies_to_message:true}};
   }
   const retentionFollowup=base.tool_route==='analyze_customer_journey'&&base.journey_intent==='retention'&&(/^(?:online only|just online|within|rank|sort|order|export|download|chart|graph|last|this|past|for|in|include|exclude|observation)\b/i.test(text)||/^(?:show|use|switch to)\s+(?:the\s+)?(?:90|180|360)[- ]days?\b/i.test(text))&&!/\b(?:sales|campaign|conversion|basket|products?)\b/i.test(text);
   if(retentionIntent(text)||retentionFollowup){

@@ -1,0 +1,1 @@
+export const PRODUCT_JOURNEY_CONTRACT=Object.freeze({overall_products:20,entry_products:20,next_products:5,windows:[0,90,180,360],entry_ranking:'distinct_entry_customers_desc',product_ranking:'distinct_returning_customers_desc',primary:'next_eligible_order_by_cutoff',denominator:'all_returning_customers_in_cohort_window',ring_sizers:'separate',identity:'email_candidate_v2'});
