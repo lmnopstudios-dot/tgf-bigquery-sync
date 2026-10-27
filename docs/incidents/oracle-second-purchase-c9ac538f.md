@@ -91,3 +91,69 @@ Local validation completed for this patch:
 
 The PR is published as a draft pending the two bounded BigQuery synthetic checks
 above. No report replay or production-data change is needed for those checks.
+
+## Follow-up: populated diagnostic error was masked
+
+After PR #394 was merged/deployed, the operator reported `verified:true` for the
+synthetic empty check, but `WAREHOUSE_VALIDATION_FAILED` with `provider_errors:[]`
+for the populated fixture. That envelope alone does **not** prove a BigQuery
+execution failure: the CLI catch also caught shared result validation and Node
+assertions and labeled all three as warehouse failures. It omitted assertion
+messages and expected/actual values. This error-handling defect is confirmed.
+
+The diagnostic now reports `stage=warehouse_execution`, `result_validation` or
+`fixture_assertion` and `warehouse_execution_completed`. Named fixture assertions
+carry numeric/synthetic expected and actual values. Result-contract failures
+carry the validator message, bounded numeric/shape snapshots and relevant
+product-denominator/share comparisons. Unknown strings, extra returned fields,
+SDK responses, stacks and SQL are not serialized. Product identifiers are limited
+to the synthetic A/B/Ring Sizer fixture allowlist. The fixture SQL, production
+calculation and empty-check semantics are unchanged.
+
+A new populated aggregate fixture exercises all assertions locally. Regressions
+also cover warehouse errors without provider errors, a wrong unknown-entry count,
+a wrong product denominator, a missing cohort and anonymous product-struct fields.
+They verify that error details cannot expose arbitrary customer strings. Existing
+empty-population verification remains in the same test suite.
+
+The populated fixture passes local assertions. The live populated failure's
+underlying stage/expression is still unconfirmed because this environment's
+attempt remains blocked by `403 EGRESS_FORBIDDEN`. The error-handling fix must not
+be represented as a confirmed repair of an unknown calculation/fixture defect.
+No speculative calculation or populated expectation was changed.
+
+From a checkout of the diagnostic fix, the only live check needed is:
+
+```bash
+node diagnostics/oracle-second-purchase-correlation.js
+```
+
+Do not rerun `--empty` or the Oracle report to diagnose the populated check.
+Alternatively, this single command works on the existing PR #394 Render checkout
+without changing files or restarting the application. It wraps that diagnostic's
+one synthetic query to distinguish completed execution and print the missing
+assertion detail and bounded synthetic product shape:
+
+```bash
+node --input-type=module <<'NODE'
+import {createBigQueryClient} from './bigquery/client.js';
+import {validateProductCorrelation} from './diagnostics/oracle-second-purchase-correlation.js';
+const {bigquery}=createBigQueryClient();
+let completed=false, sample;
+const timer=setTimeout(()=>{console.log(JSON.stringify({verified:false,stage:completed?'validation':'warehouse_execution',reason:'CHECK_DEADLINE'}));process.exit(1);},35000);
+const safe=v=>Array.isArray(v)?v.slice(0,16).map(safe):v===null||typeof v==='number'||typeof v==='boolean'?v:typeof v==='string'&&['family:A','family:B','family:Ring Sizer'].includes(v)?v:{type:typeof v};
+try{
+  console.log(JSON.stringify(await validateProductCorrelation({bigquery:{query:async options=>{const result=await bigquery.query(options);completed=true;sample=result[0]?.[0];return result;}}})));
+}catch(e){
+  console.log(JSON.stringify({verified:false,stage:completed?(e.code==='ERR_ASSERTION'?'fixture_assertion':'result_validation'):'warehouse_execution',code:e.code||null,message:String(e.message).replace(/[^\s@]+@[^\s@]+/g,'[redacted]').slice(0,1200),expected:safe(e.expected),actual:safe(e.actual),rows:sample?.product_journeys?.slice(0,4).map(r=>({entry_product_ref:safe(r.entry_product_ref),window_days:r.window_days,entry_customers:r.entry_customers,returning_customers:r.returning_customers,products:r.products?.slice(0,4).map(p=>({fields:Object.keys(p).filter(k=>/^(?:f[0-9]+_|product_ref|customers|denominator_customers|percentage|product_rank|available_products|is_sizer)$/.test(k)),product_ref:safe(p.product_ref),customers:p.customers,denominator_customers:p.denominator_customers,percentage:p.percentage,product_rank:p.product_rank,available_products:p.available_products,is_sizer:p.is_sizer}))}))}));
+  process.exitCode=1;
+}finally{clearTimeout(timer);}
+NODE
+```
+
+Follow-up validation: 871 acceptance tests passed; desktop/mobile browser and
+recovery gates passed; the focused correlation/product run passed 17 tests.
+The final diagnostic-only regression run passed all nine cases. Populated and
+empty saved local synthetic results also passed the updated assertions. The only
+live attempt in this environment failed at `warehouse_execution` with 403
+`EGRESS_FORBIDDEN` before any fixture result was returned.
