@@ -1,3 +1,4 @@
+import {BigQuery} from '@google-cloud/bigquery';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
@@ -80,4 +81,22 @@ test('missing cohort becomes a named assertion and anonymous struct fields remai
  const failure=await failureFrom({query:async()=>[[data]]});assert.equal(failure.stage,'fixture_assertion');assert.equal(failure.check,'required_cohort_window_present');assert.equal(failure.actual,false);assert.equal(failure.expected,true);
  const bad=productCorrelationResult();bad.product_journeys[0].products[0]={f0_:'private@customer.example'};
  const shape=await failureFrom({query:async()=>[[bad]]});assert.deepEqual(shape.actual[0].products[0].field_names,['f0_']);assert.doesNotMatch(JSON.stringify(shape),/private@/);
+});
+
+for(const empty of [false,true])test(`synthetic ${empty?'empty':'populated'} check sends actual DATE values through the BigQuery SDK`,async()=>{
+ const sdk=new BigQuery({projectId:'fixture'});let wire,calls=0;
+ // Exercise createQueryJob's real parameter serialization; intercept only the
+ // final createJob transport, so this test cannot contact BigQuery.
+ sdk.createJob=(options,callback)=>{calls++;wire=JSON.parse(JSON.stringify(options.configuration.query.queryParameters));callback(null,{id:'synthetic-sdk-job'});};
+ const data=productCorrelationResult();
+ if(empty)data.product_journeys=data.product_journeys.filter(r=>r.entry_product_ref===null).map(r=>({...r,entry_customers:0,returning_customers:0,age_eligible_customers:0,age_repeat_customers:0,missing_line_customers:0,unknown_product_customers:0,products:[]}));
+ const result=await validateProductCorrelation({empty,bigquery:{query:async options=>{await sdk.createQueryJob(options);return [[data]];}}});
+ const parameter=name=>wire.find(p=>p.name===name);
+ for(const [name,value] of Object.entries({cohort_entry_start:'2024-01-01',cohort_entry_end:'2024-01-01',observation_end:'2026-10-19'})){
+  assert.deepEqual(parameter(name).parameterType,{type:'DATE'});
+  assert.deepEqual(parameter(name).parameterValue,{value},`${name} must survive SDK serialization; a DATE declaration alone loses string values`);
+ }
+ for(const name of ['coverage_start','coverage_end'])assert.deepEqual(parameter(name),{name,parameterType:{type:'DATE'},parameterValue:{value:null}});
+ for(const name of ['entry_source','entry_channel'])assert.deepEqual(parameter(name).parameterValue,{value:null});
+ assert.equal(calls,1);assert.equal(result.verified,true);assert.equal(result.cohort_windows,empty?4:12);
 });
