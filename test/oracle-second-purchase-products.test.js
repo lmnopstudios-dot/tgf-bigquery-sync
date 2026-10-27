@@ -29,7 +29,7 @@ test('governed query combines original histories before sequencing, independent 
  assert.ok(q.indexOf('ci_mapping AS')<q.indexOf('ROW_NUMBER() OVER(PARTITION BY governed_customer_ref'));
  assert.match(q,/ROW_NUMBER\(\) OVER\(PARTITION BY is_sizer ORDER BY entry_customers DESC,product_ref\)/);
  assert.match(q,/p.product_rank<=IF\(t.entry_product_ref IS NULL,20,5\)/);assert.match(q,/r.entry_rank<=20/);
- assert.match(q,/COUNT\(DISTINCT c.governed_customer_ref\) customers/);assert.match(q,/t.returning_customers denominator_customers/);assert.match(q,/UNNEST\(\[0,90,180,360\]\)/);
+ assert.match(q,/COUNT\(DISTINCT c.governed_customer_ref\) customers/);assert.match(q,/t.returning_customers AS denominator_customers/);assert.match(q,/UNNEST\(\[0,90,180,360\]\)/);
  assert.match(q,/r.order_timestamp>e.order_timestamp/);assert.doesNotMatch(q,/cohort_rank<=DIV|LIMIT @limit|@entry_classification/);
  assert.match(q,/CREATE TEMP TABLE cohort_pj_members/);assert.doesNotMatch(q,/CREATE TEMP TABLE cohort_retention_members/);
  assert.ok(BigInt(cohortExecutionOptions(sql,45000).maximumBytesBilled)*10n<=20000000000n);
