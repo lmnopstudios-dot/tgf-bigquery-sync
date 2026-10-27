@@ -1,3 +1,4 @@
+import {isDeepStrictEqual} from 'node:util';
 import {resolveAnalyticalPlan,assertPlanAgreement} from './analytical-plan.js';
 import {requestId} from './request-observability.js';
 import {boundedEvidenceRead} from './bounded-evidence-read.js';
@@ -51,7 +52,7 @@ export function productJourneyMarkdown(e){
 export function assertProductJourneyEvidence(c,e){
  assertPlanAgreement(c,e);
  const d=productJourneyDefinition(c);
- if(c.journey_group_by!=='second_purchase_products'||c.entry_product_classification!==null||e.kind!=='governed_second_purchase_products'||e.population_scope!=='linked_tgf'||JSON.stringify(e.contract)!==JSON.stringify(PRODUCT_JOURNEY_CONTRACT)||JSON.stringify(e.definition)!==JSON.stringify(d)||e.identity_evidence?.activation!=='active'||e.identity_evidence.mode!=='email_candidate_v2'||!e.identity_evidence.snapshot||!['available_entry_products','available_sizer_entry_products','unknown_entry_customers'].every(k=>integer(e[k])))throw Error('Product journey evidence scope mismatch');
+ if(c.journey_group_by!=='second_purchase_products'||c.entry_product_classification!==null||e.kind!=='governed_second_purchase_products'||e.population_scope!=='linked_tgf'||!isDeepStrictEqual(e.contract,PRODUCT_JOURNEY_CONTRACT)||!isDeepStrictEqual(e.definition,d)||e.identity_evidence?.activation!=='active'||e.identity_evidence.mode!=='email_candidate_v2'||!e.identity_evidence.snapshot||!['available_entry_products','available_sizer_entry_products','unknown_entry_customers'].every(k=>integer(e[k])))throw Error('Product journey evidence scope mismatch');
  validateProductJourneys(e.rows);
  if(!Array.isArray(e.component_outcomes)||e.component_outcomes.length!==2)throw Error('Missing component outcomes');
  for(const component of ['overall','journeys']){

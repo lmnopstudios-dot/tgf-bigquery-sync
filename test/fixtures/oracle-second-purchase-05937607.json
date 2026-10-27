@@ -1,0 +1,138 @@
+{
+  "job_id": "c791e053-9a69-4f12-b2c4-23801932d710",
+  "requested_context": {
+    "advisory_topic": null,
+    "analysis_type": "customer_journey",
+    "campaign_request": null,
+    "channel": null,
+    "channel_breakdown": false,
+    "cohort_entry_end": "2026-10-19",
+    "cohort_entry_start": "2022-10-19",
+    "comparison_end_date": null,
+    "comparison_start_date": null,
+    "comparison_type": null,
+    "contextual_event_mentions": [],
+    "currencies": [],
+    "current_day_included": false,
+    "customer_segment": null,
+    "date_cutoff": "2026-10-27",
+    "dimensions": [],
+    "email_report_kind": null,
+    "end_date": "2026-10-19",
+    "entity_query": null,
+    "entry_product_classification": null,
+    "event_count": null,
+    "event_name": null,
+    "excluded_product_titles": [],
+    "exclusions": [],
+    "explanation_requested": false,
+    "failed_subject_switch": null,
+    "filters": [],
+    "first_order_semantic": "first_observed_ever",
+    "geography": null,
+    "grain": null,
+    "include_unclassified_products": false,
+    "included_periods": [],
+    "journey_group_by": "second_purchase_products",
+    "journey_intent": "second_purchase_products",
+    "limit": 20,
+    "location": null,
+    "maximum_order_sequence": null,
+    "metrics": [
+      "customer_journey"
+    ],
+    "minimum_order_sequence": null,
+    "native_metrics": [],
+    "numeric_operation": null,
+    "observation_end": "2026-10-19",
+    "output_preference": null,
+    "partial_period": false,
+    "pending_product_candidates": [],
+    "period_issue": null,
+    "placement_context": null,
+    "platform": null,
+    "population_scope": null,
+    "product_ref": null,
+    "product_report": null,
+    "promotion_context": null,
+    "ranking_direction": null,
+    "ranking_metric": null,
+    "report_section": null,
+    "request_detail": null,
+    "request_kind": null,
+    "requested_end_period": "2026-10-19",
+    "requested_formats": [],
+    "requested_operations": [],
+    "requested_subject": "customer_journey",
+    "retention_baseline": false,
+    "retention_second_products": false,
+    "retention_windows": null,
+    "social_scope": null,
+    "sort": "returning_customers_desc",
+    "source_store": null,
+    "start_date": "2022-10-19",
+    "subsequent_product_classification": null,
+    "time_zone": "Europe/London",
+    "tool_route": "analyze_customer_journey",
+    "unresolved_required_fields": [],
+    "within_days": null
+  },
+  "contract": {
+    "denominator": "all_returning_customers_in_cohort_window",
+    "entry_products": 20,
+    "entry_ranking": "distinct_entry_customers_desc",
+    "identity": "email_candidate_v2",
+    "next_products": 5,
+    "overall_products": 20,
+    "primary": "next_eligible_order_by_cutoff",
+    "product_ranking": "distinct_returning_customers_desc",
+    "ring_sizers": "separate",
+    "windows": [
+      0,
+      90,
+      180,
+      360
+    ]
+  },
+  "definition": {
+    "cohort": {
+      "entry_channel": null,
+      "entry_product_classification": null
+    },
+    "cohort_entry_end": "2026-10-19",
+    "cohort_entry_start": "2022-10-19",
+    "first_order_semantic": "first_observed_ever",
+    "group_by": [
+      "retention_product_journeys"
+    ],
+    "limit": 20,
+    "observation_end": "2026-10-19",
+    "sort": "returning_customers_desc",
+    "subsequent": {
+      "channel": null
+    },
+    "time_zone": "Europe/London"
+  },
+  "component_outcomes": [
+    {
+      "component": "overall",
+      "status": "fulfilled"
+    },
+    {
+      "component": "journeys",
+      "status": "fulfilled"
+    }
+  ],
+  "row_count": 100,
+  "contract_comparison": {
+    "semantic": true,
+    "serialized": false
+  },
+  "definition_comparison": {
+    "semantic": true,
+    "serialized": false
+  },
+  "request_id": "05937607-7e9a-468c-804c-c53e2d05026a",
+  "warehouse_job_id": "09eca6ed-5734-41c2-9dec-d9e72307663b",
+  "note": "Saved scope and validation metadata only. No production evidence rows are reconstructed."
+}

@@ -224,7 +224,7 @@ try{
   // mobile rendering and serialized durable recovery without provider replay.
   const productQuestion=readFileSync(new URL('../test/fixtures/oracle-second-purchase-4aa86aa8.txt',import.meta.url),'utf8');
   const productFixture=acceptanceFixture({product_journeys:true,retention_combined:true,identityEnv:{ORACLE_CUSTOMER_IDENTITY_MODE:'email_candidate_v2',ORACLE_CUSTOMER_IDENTITY_DATASET:'customer_identity',ORACLE_CUSTOMER_IDENTITY_SNAPSHOT:'fixture-order-email-v2'}});
-  const productServer=await acceptanceServer(productFixture,{durable:true,jobStore:durableJsonWire().store});
+  const productServer=await acceptanceServer(productFixture,{durable:true,jobStore:durableJsonWire({canonicalObjectKeys:true}).store});
   try{for(const width of [1280,390]){
     const page=await browser.newPage({viewport:{width,height:900}});
     await page.goto(productServer.origin+'/oracle/');await page.locator('#password').fill('fixture');await page.locator('#login-form button').click();await page.locator('#app').waitFor({state:'visible'});

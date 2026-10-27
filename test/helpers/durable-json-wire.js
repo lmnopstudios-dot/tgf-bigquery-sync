@@ -4,10 +4,13 @@ import {createBigQueryAnalysisJobStore,JOB_SCHEMA,compatibleJobRevision} from '.
 
 // SQL transport double only. Production store owns serialization, hydration,
 // claim SQL, lease fences and terminal writes. This does not execute BigQuery SQL.
-export function durableJsonWire(){
+export function durableJsonWire({canonicalObjectKeys=false}={}){
  const rows=new Map(),calls=[];
  const fingerprint=(row,revision)=>createHash('sha256').update(revision+JSON.stringify(row)).digest('hex');
- const wire=row=>row&&({...structuredClone(row),payload_json:JSON.stringify(row.payload_json),result_json:row.result_json==null?null:JSON.stringify(row.result_json),lifecycle_json:row.lifecycle_json==null?null:JSON.stringify(row.lifecycle_json)});
+ // BigQuery JSON storage may reorder object members; arrays retain their order.
+ const canonical=v=>Array.isArray(v)?v.map(canonical):v&&typeof v==='object'?Object.fromEntries(Object.keys(v).sort().map(k=>[k,canonical(v[k])])):v;
+ const encode=value=>JSON.stringify(canonicalObjectKeys?canonical(JSON.parse(JSON.stringify(value))):value);
+ const wire=row=>row&&({...structuredClone(row),payload_json:encode(row.payload_json),result_json:row.result_json==null?null:encode(row.result_json),lifecycle_json:row.lifecycle_json==null?null:encode(row.lifecycle_json)});
  const query=async q=>{
   calls.push(q);assert.equal(q.location,'US');const p=q.params||{},sql=q.query;
   if(sql.startsWith('MERGE ')){
