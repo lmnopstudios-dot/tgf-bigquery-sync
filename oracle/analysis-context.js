@@ -110,7 +110,7 @@ export function validateAnalysisContext(value={}){
   out.first_order_semantic=['first_observed_ever','first_observed_in_period'].includes(value.first_order_semantic)?value.first_order_semantic:null;
   for(const key of ['minimum_order_sequence','maximum_order_sequence'])out[key]=Number.isInteger(value[key])&&value[key]>=2?value[key]:null;
   out.within_days=Number.isInteger(value.within_days)&&value.within_days>=1&&value.within_days<=3650?value.within_days:null;
-  out.journey_group_by=['downstream_product','cohort_year_downstream_product','entry_product','collaboration_name','collaboration_piece','summary','second_purchase_products'].includes(value.journey_group_by)?value.journey_group_by:null;
+  out.journey_group_by=['downstream_product','cohort_year_downstream_product','entry_product','collaboration_name','collaboration_piece','summary','second_purchase_products','collaboration_purchase_products'].includes(value.journey_group_by)?value.journey_group_by:null;
   out.event_name=typeof value.event_name==='string'?value.event_name.slice(0,100):null;
   out.event_count=Number.isInteger(value.event_count)&&value.event_count>=1&&value.event_count<=5?value.event_count:null;
   out.requested_subject=typeof value.requested_subject==='string'?value.requested_subject.slice(0,100):null;
@@ -148,6 +148,26 @@ function transitionContext(existing, message, {now=Date.now(),reportContext=null
   if(/\b(?:abandoned?[- ](?:checkouts?|carts?)|checkout abandonment|cart abandonment)\b/i.test(text)){
     const context=validateAnalysisContext({...emptyAnalysisContext(),...(period(text,now)||{}),requested_subject:'abandoned_checkouts',analysis_type:'ecommerce',channel:/\bonline\b/i.test(text)?'online':null,geography:/\bUK\b/i.test(text)?'GB':null});
     return {context,transition:{continuation:false,set:['requested_subject','start_date','end_date'],clear:ANALYSIS_CONTEXT_FIELDS,retain:[],missing_required_fields:[],ready_to_execute:true,applies_to_message:true}};
+  }
+  const nextProducts=/\b(?:second|next)[- ](?:eligible[- ]|purchase[- ])?(?:orders?|purchases?)\b|\bbuy next\b|\bpurchase next\b/i.test(text)&&/\b(?:products?|items?|pieces?)\b/i.test(text);
+  const collaborationEntry=/\bfirst[- ](?:(?:observed|ever)[- ])?(?:orders?|purchases?)\b[^.\n]{0,140}\bcollaborations?\b|\bcollaborations?\b[^.\n]{0,140}\bfirst[- ](?:(?:observed|ever)[- ])?(?:orders?|purchases?)\b/i.test(text);
+  const retentionPrimary=retentionIntent(text)&&(/\brank[^.\n]{0,100}(?:repeat[- ]purchase|repeat|retention)[- ]rate\b/i.test(text)||/\b(?:collaboration|site[ -]?wide) retention\b/i.test(text));
+  const collaborationProducts=nextProducts&&collaborationEntry&&!retentionPrimary;
+  const collaborationFollowup=base.journey_intent==='collaboration_purchase_products'&&/^(?:online only|just online|in-store only|for|in|observation|use|show)\b/i.test(text)&&!/(?:sales|campaign|conversion|basket|stock|retention|repeat[- ]purchase rate)/i.test(text)&&!(/\b(?:products?|items?)\b/i.test(text)&&!nextProducts);
+  if(collaborationProducts||collaborationFollowup){
+    const dates=period(text,now)||{},range=text.match(/(?:first[- ]observed purchase dates|cohort entry)\s*(?::|from)?\s*(\d{4}-\d{2}-\d{2})\s+(?:through|to)\s+(\d{4}-\d{2}-\d{2})/i);
+    const context=validateAnalysisContext({...emptyAnalysisContext(),...(collaborationFollowup?base:{}),...dates,...(range?{start_date:range[1],end_date:range[2]}:{}),requested_subject:'customer_journey',analysis_type:'customer_journey',metrics:['customer_journey'],tool_route:'analyze_customer_journey',journey_intent:'collaboration_purchase_products',journey_group_by:'collaboration_purchase_products',entry_product_classification:'collaboration',first_order_semantic:'first_observed_ever',sort:'returning_customers_desc',limit:20,time_zone:text.match(/\btimezone\s*:\s*([A-Za-z_]+\/[A-Za-z_]+(?:\/[A-Za-z_]+)?)/i)?.[1]||(collaborationFollowup?base.time_zone:null)||'Europe/London'});
+    context.cohort_entry_start=context.start_date;context.cohort_entry_end=context.end_date;
+    context.observation_end=text.match(/observation(?: cutoff| end)?\s*[:=]?\s*(\d{4}-\d{2}-\d{2})/i)?.[1]||(collaborationFollowup?base.observation_end:null)||context.end_date;
+    if(/\bonline only\b|\bjust online\b/i.test(text))context.channel='online';
+    const online=/\bonline\b/i.test(text),instore=/\bin[ -]?store\b/i.test(text);
+    if(online||instore)context.channel=online&&instore?null:online?'online':'instore';
+    if(/\b(?:shopify|woo(?:commerce)?) only\b|\bonly (?:shopify|woo(?:commerce)?)\b/i.test(text))context.platform=/\bshopify\b/i.test(text)?'shopify':'woo';
+    const country=text.match(/\b(?:for|from|in) (UK|US|Japan|GB|JP) customers?\b/i);if(country)context.geography=country[1].toUpperCase();
+    const days=text.match(/\bwithin (\d+) days?\b/i);if(days)context.within_days=Number(days[1]);
+    if(/\b(?:next|second)[- ](?:order|purchase)[^.\n]{0,60}\bonly (?:the same |other )?collaboration|\bonly collaboration[^.\n]{0,60}\b(?:next|second)[- ](?:order|purchase)/i.test(text))context.subsequent_product_classification='collaboration';
+    context.unresolved_required_fields=context.start_date&&context.end_date?[]:['start_date','end_date'];
+    return {context,transition:{continuation:collaborationFollowup,set:ANALYSIS_CONTEXT_FIELDS,clear:[],retain:[],missing_required_fields:context.unresolved_required_fields,ready_to_execute:!context.unresolved_required_fields.length,applies_to_message:true}};
   }
   const productJourney=/\b(?:second|next)[- ](?:eligible[- ]|purchase[- ])?(?:orders?|purchases?)\b|\bsecond purchases\b/i.test(text)&&/\b(?:products?|items?)\b/i.test(text)&&/\b(?:popular|popularity|top|common|ranked|ranking)\b/i.test(text)&&(!retentionIntent(text)||/\boverall\b|\bfirst[- ]purchase products\b/i.test(text));
   const productFollowup=base.journey_intent==='second_purchase_products'&&/^(?:online only|just online|for|in|observation|use|show)\b/i.test(text)&&!retentionIntent(text)&&!/\b(?:sales|campaign|conversion|basket|stock|collaborations?)\b/i.test(text);

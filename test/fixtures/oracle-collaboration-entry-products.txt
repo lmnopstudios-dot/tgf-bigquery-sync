@@ -1,0 +1,3 @@
+Which products do returning customers buy in their next order after a first-observed purchase containing a named collaboration item?
+Cohort entry: 2022-10-19 through 2026-10-19. Observation cutoff: 2026-10-19. Timezone: Europe/London.
+Show one deduplicated overall collaboration-entry cohort and next-order products across the full range, then breakdowns by named collaboration and by first-purchase collaboration item. Include all available linked Woo WW, Woo USD and Shopify histories, online and in-store. Use the next eligible order by cutoff as primary; disclose provisional and verified 90/180/360-day views separately. Preserve governed classifications, imported-order exclusions, identity safeguards, missing product attribution and independent successful results.
