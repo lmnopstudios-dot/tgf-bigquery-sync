@@ -157,3 +157,77 @@ The final diagnostic-only regression run passed all nine cases. Populated and
 empty saved local synthetic results also passed the updated assertions. The only
 live attempt in this environment failed at `warehouse_execution` with 403
 `EGRESS_FORBIDDEN` before any fixture result was returned.
+
+## Confirmed populated-fixture cause: omitted DATE parameter values
+
+The subsequent Render check returned only the four overall rows. All eight
+`family:A`/`family:B` cohort windows (0/90/180/360) were absent. Overall primary
+counts remained 4 entries, 3 returners and 3 products; 90/180/360-day observed
+returners remained 2. Those observations isolate entry membership from the
+separately built fixture member population.
+
+The diagnostic declared `cohort_entry_start`, `cohort_entry_end` and
+`observation_end` as DATE types but passed plain JavaScript strings. In the
+installed BigQuery SDK 8.3.1, `valueToQueryParameter_` calls `_getValue` for DATE
+and reads the custom value's `.value` property. A string has no `.value`.
+Serializing the request therefore omitted the parameter values:
+
+```json
+{"parameterType":{"type":"DATE"},"parameterValue":{}}
+```
+
+This leaves null DATE values in `entry_orders`' BETWEEN predicate, excluding all
+entries from `pj_entries` and therefore both product cohorts. The overall branch
+survived because the synthetic `cohort_pj_members` table is built separately from
+already-ranked fixture orders without that entry-date predicate. This also
+explains why the empty check passed and why local runs that substituted the
+original JavaScript strings directly into SQL missed the defect.
+
+The calculation and fixture expectations are correct. The diagnostic now uses
+`bigQueryDateParameters`, the existing production-proven helper, for those three
+non-null dates. Nullable coverage dates remain null and explicitly typed. The
+fixture SQL, counts, empty-cohort handling, report calculation, linked sequencing,
+approved attribution and eligibility/identity safeguards are unchanged.
+
+Two regressions run both populated and empty diagnostic options through the real
+SDK's `createQueryJob` serializer, intercepting only `createJob` transport. They
+assert the exact transmitted DATE type **and value**, plus unchanged null coverage
+and source/channel parameters. Mocked result rows alone had not caught this.
+
+A local supplementary check fed actual SDK-serialized values into the synthetic
+SQL: omitted values reproduced the reported overall-only four-row shape; corrected
+values restored 12 cohort/window rows and passed all populated assertions. This
+is local transpiled arithmetic evidence, not a live BigQuery verification.
+
+Live access from this environment remains blocked at warehouse execution by
+HTTP 403 `EGRESS_FORBIDDEN`. This one populated-only Render check works on the
+currently deployed PR #395 checkout, overriding only the three synthetic DATE
+values without editing files, changing production data or invoking Oracle:
+
+```bash
+node --input-type=module <<'NODE'
+import {createBigQueryClient} from './bigquery/client.js';
+import {bigQueryDateParameters} from './bigquery/date-parameters.js';
+import {validateProductCorrelation,productCorrelationFailure} from './diagnostics/oracle-second-purchase-correlation.js';
+const {bigquery}=createBigQueryClient();
+const dates=bigQueryDateParameters({cohort_entry_start:'2024-01-01',cohort_entry_end:'2024-01-01',observation_end:'2026-10-19'});
+const timer=setTimeout(()=>process.exit(1),35000);
+try {
+  console.log(JSON.stringify(await validateProductCorrelation({bigquery:{query:options=>bigquery.query({...options,params:{...options.params,...dates}})}})));
+} catch(error) {
+  console.log(JSON.stringify(productCorrelationFailure(error)));
+  process.exitCode=1;
+} finally {
+  clearTimeout(timer);
+}
+NODE
+```
+
+Expected success is `verified:true`, `empty:false`, `cohort_windows:12`.
+No report replay or empty-check rerun is needed.
+
+Date-value fix validation: all 873 Oracle acceptance tests passed; the
+desktop/mobile browser and durable-recovery gate passed; the focused
+product/correlation run passed 19 tests. Both populated and empty modes exercised
+the SDK serializer regression without contacting a provider. No live empty check,
+report replay, production-data change, merge or deployment was performed.

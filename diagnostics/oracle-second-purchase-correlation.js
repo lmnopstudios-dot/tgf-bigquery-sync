@@ -4,11 +4,12 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {pathToFileURL} from 'node:url';
 import {createBigQueryClient} from '../bigquery/client.js';
+import {bigQueryDateParameters} from '../bigquery/date-parameters.js';
 import {customerJourneySql} from '../oracle/customer-journey.js';
 import {cohortExecutionPlan} from '../oracle/cohort-execution.js';
 import {validateProductJourneys} from '../oracle/product-journeys.js';
 
-export const CORRELATION_PARAMS={time_zone:'Europe/London',cohort_entry_start:'2024-01-01',cohort_entry_end:'2024-01-01',observation_end:'2026-10-19',entry_source:null,entry_channel:null,coverage_status:'unverified',coverage_start:null,coverage_end:null,coverage_evidence:null};
+export const CORRELATION_PARAMS={time_zone:'Europe/London',...bigQueryDateParameters({cohort_entry_start:'2024-01-01',cohort_entry_end:'2024-01-01',observation_end:'2026-10-19'}),entry_source:null,entry_channel:null,coverage_status:'unverified',coverage_start:null,coverage_end:null,coverage_evidence:null};
 export const CORRELATION_TYPES={cohort_entry_start:'DATE',cohort_entry_end:'DATE',observation_end:'DATE',entry_source:'STRING',entry_channel:'STRING',coverage_start:'DATE',coverage_end:'DATE',coverage_evidence:'STRING'};
 export function productCorrelationValidationSql({legacy=false,empty=false}={}){
  const result=legacy?readFileSync(new URL('../test/fixtures/oracle-second-purchase-c9ac538f-result.sql',import.meta.url),'utf8').trim():`CREATE TEMP TABLE cohort_result AS ${cohortExecutionPlan(customerJourneySql('fixture-project','retention_product_journeys',null,null,{dataset:'identity',snapshot:'synthetic',orderLinks:true},true)).result};`;
