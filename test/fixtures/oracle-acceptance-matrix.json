@@ -1286,6 +1286,10 @@
     {
       "file": "test/oracle-second-purchase-persisted-scope.test.js",
       "purpose": "05937607 saved partial answer: strict semantic scope equality after warehouse JSON member reordering; durable execution, authenticated polling/recovery without replay, and real mutation rejection."
+    },
+    {
+      "file": "test/oracle-collaboration-entry-products.test.js",
+      "purpose": "38f9aa99: deduplicated linked named-collaboration entry, full-range next-order products, independent named/item breakdowns, routing switches, strict evidence and direct/interactive/durable recovery."
     }
   ]
 }

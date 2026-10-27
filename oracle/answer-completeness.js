@@ -1,3 +1,4 @@
+import {assertCollaborationJourneyEvidence} from './collaboration-product-journeys.js';
 import {assertProductJourneyEvidence} from './product-journeys.js';
 import {assertItemOutcomeCompleteness} from './retention-item-completeness.js';
 import {isRetentionPopulation} from './retention-population.js';
@@ -10,6 +11,7 @@ import { assertPopulationConversionEvidence } from './population-conversion.js';
 // Operation proof is independent of presentation and saved plan stamps. A plan
 // describes intent; only a compatible evidence producer establishes execution.
 const EVIDENCE_OPERATIONS=Object.freeze({
+  governed_collaboration_purchase_products:['collaboration_purchase_products'],
   governed_second_purchase_products:['second_purchase_products'],
   governed_cohort_retention:['cohort_retention'],
   governed_basket_composition:['basket_composition'],
@@ -19,6 +21,7 @@ const EVIDENCE_OPERATIONS=Object.freeze({
 });
 const REQUIRED_KINDS=Object.freeze(Object.fromEntries(Object.entries(EVIDENCE_OPERATIONS).flatMap(([kind,operations])=>operations.map(op=>[op,kind]))));
 export function requestedOperation(context){
+  if(context?.journey_intent==='collaboration_purchase_products')return 'collaboration_purchase_products';
   if(context?.journey_intent==='second_purchase_products')return 'second_purchase_products';
   if(context?.analysis_type==='customer_journey')return (context.journey_intent==='retention'||context.journey_group_by==='collaboration_name')?'cohort_retention':'customer_journey';
   if(context?.population_scope)return 'population_comparison';
@@ -46,6 +49,7 @@ export function answerCompleteness(context,result){
       if(context.journey_group_by&&!d.group_by?.includes(context.journey_group_by))missing.push('grouping');
     }
   }
+  if(operation==='collaboration_purchase_products'){try{assertCollaborationJourneyEvidence(context,evidence);}catch{missing.push('collaboration_journey_contract');}}
   if(operation==='second_purchase_products'){try{assertProductJourneyEvidence(context,evidence);}catch{missing.push('product_journey_contract');}}
   if(operation==='basket_composition'&&evidence?.kind==='governed_basket_composition'){try{assertBasketEvidence({...context,source_store:result.analysis_context?.source_store||context.source_store},evidence);}catch{missing.push('calculations_or_subset');}}
   if(operation==='population_comparison'&&evidence?.kind==='governed_population_conversion'){try{assertPopulationConversionEvidence(context,evidence);}catch{missing.push('population_or_grouping_or_coverage');}}

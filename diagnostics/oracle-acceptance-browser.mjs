@@ -234,6 +234,23 @@ try{
     const reads=productFixture.wireQueries.length;await page.reload();await page.waitForFunction(()=>!document.querySelector('#send').disabled&&document.querySelector('.analytical-answer'));assert.equal(await page.locator('.analytical-answer').last().innerText(),answer);assert.equal(productFixture.wireQueries.length,reads);
     await page.screenshot({path:output+'/second-purchase-4aa86aa8-'+width+'.png',fullPage:true});await page.close();
   }}finally{productServer.close();}
+  const entryProductQuestion=readFileSync(new URL('../test/fixtures/oracle-collaboration-entry-products.txt',import.meta.url),'utf8');
+  const entryProductFixture=acceptanceFixture({retention_combined:true,identityEnv:{ORACLE_CUSTOMER_IDENTITY_MODE:'email_candidate_v2',ORACLE_CUSTOMER_IDENTITY_DATASET:'customer_identity',ORACLE_CUSTOMER_IDENTITY_SNAPSHOT:'fixture-order-email-v2'}});
+  const entryProductServer=await acceptanceServer(entryProductFixture,{durable:true,jobStore:durableJsonWire().store});
+  try{for(const width of [1280,390]){
+    const page=await browser.newPage({viewport:{width,height:900}});
+    await page.goto(entryProductServer.origin+'/oracle/');await page.locator('#password').fill('fixture');await page.locator('#login-form button').click();await page.locator('#app').waitFor({state:'visible'});
+    await page.locator('#message').fill(entryProductQuestion);await page.locator('#send').click();await page.waitForFunction(()=>!document.querySelector('#send').disabled&&document.querySelector('.analytical-answer'));
+    const answer=await page.locator('.analytical-answer').last().innerText();
+    assert.match(answer,/Overall collaboration-entry cohort/);assert.match(answer,/Collaboration: alpha/);assert.match(answer,/First-purchase collaboration item: Alpha ring/);assert.match(answer,/Core range ring/);assert.match(answer,/4 \/ 5 \(80.00%/);assert.match(answer,/Unknown attribution/);assert.match(answer,/continuous follow-up unverified/);
+    assert.ok(await page.locator('.analytical-answer').last().locator('table').count());
+    const reads=entryProductFixture.wireQueries.length;await page.reload();await page.waitForFunction(()=>!document.querySelector('#send').disabled&&document.querySelector('.analytical-answer'));assert.equal(await page.locator('.analytical-answer').last().innerText(),answer);assert.equal(entryProductFixture.wireQueries.length,reads);
+    await page.screenshot({path:output+'/collaboration-entry-38f9aa99-'+width+'.png',fullPage:true});
+    entryProductFixture.state.collaboration_corrupt='item';await page.locator('#new-question').click();await page.locator('#message').fill(entryProductQuestion);await page.locator('#send').click();await page.waitForFunction(()=>!document.querySelector('#send').disabled&&document.querySelector('.analytical-answer'));
+    const partial=await page.locator('.analytical-answer').last().innerText();assert.match(partial,/item: unavailable/);assert.match(partial,/Overall collaboration-entry cohort/);assert.match(partial,/Collaboration: alpha/);assert.doesNotMatch(partial,/First-purchase collaboration item: Alpha ring/);
+    const partialReads=entryProductFixture.wireQueries.length;await page.reload();await page.waitForFunction(()=>!document.querySelector('#send').disabled&&document.querySelector('.analytical-answer'));assert.equal(await page.locator('.analytical-answer').last().innerText(),partial);assert.equal(entryProductFixture.wireQueries.length,partialReads);
+    entryProductFixture.state.collaboration_corrupt=null;await page.close();
+  }}finally{entryProductServer.close();}
   // Mapping presentation only: intercept all governance requests; never save a decision.
   for(const width of [1280,390]){
     const page=await browser.newPage({viewport:{width,height:900}});
