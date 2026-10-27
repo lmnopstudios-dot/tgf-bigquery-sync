@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {customerJourneySql} from '../oracle/customer-journey.js';
 import {cohortRelations,cohortExecutionPlan,cohortExecutionOptions} from '../oracle/cohort-execution.js';
-import {CORRELATION_PARAMS,productCorrelationValidationSql,validateProductCorrelation} from '../diagnostics/oracle-second-purchase-correlation.js';
+import {productCorrelationResult} from './helpers/product-correlation-result.js';
+import {productCorrelationFailure,CORRELATION_PARAMS,productCorrelationValidationSql,validateProductCorrelation} from '../diagnostics/oracle-second-purchase-correlation.js';
 const retained=readFileSync(new URL('./fixtures/oracle-second-purchase-c9ac538f-result.sql',import.meta.url),'utf8');
 const query=()=>customerJourneySql('fixture-project','retention_product_journeys',null,null,{dataset:'identity',snapshot:'synthetic',orderLinks:true},true);
 test('c9ac538f retained statement has the reported cross-table product ARRAY correlation',()=>{
@@ -46,4 +47,37 @@ test('BigQuery regression exercises the real session-table terminal query using 
 });
 test('collaboration generator does not acquire product-journey aggregation',()=>{
  const sql=customerJourneySql('fixture','retention_windows');assert.doesNotMatch(sql,/pj_product_arrays/);assert.match(sql,/retention_product_arrays/);
+});
+
+async function failureFrom(bigquery){
+ try{await validateProductCorrelation({bigquery});assert.fail('Expected a diagnostic failure');}
+ catch(error){return productCorrelationFailure(error);}
+}
+test('populated synthetic fixture passes all shared validation and named assertions',async()=>{
+ const result=await validateProductCorrelation({bigquery:{query:async()=>[[productCorrelationResult()]]}});
+ assert.equal(result.verified,true);assert.equal(result.empty,false);assert.equal(result.cohort_windows,12);
+});
+test('warehouse error with no provider_errors is still distinguished from completed execution',async()=>{
+ const failure=await failureFrom({query:async()=>{throw Object.assign(Error('Synthetic query transport failed'),{code:400});}});
+ assert.equal(failure.stage,'warehouse_execution');assert.equal(failure.warehouse_execution_completed,false);assert.equal(failure.code,400);assert.equal(failure.message,'Synthetic query transport failed');assert.deepEqual(failure.provider_errors,[]);
+});
+test('fixture assertion failure exposes its check and numeric expected/actual, not a warehouse error',async()=>{
+ const data=productCorrelationResult();data.unknown_entry_customers=2;
+ const failure=await failureFrom({query:async()=>[[data]]});
+ assert.equal(failure.stage,'fixture_assertion');assert.equal(failure.reason,'FIXTURE_ASSERTION_FAILED');assert.equal(failure.code,'ERR_ASSERTION');assert.equal(failure.warehouse_execution_completed,true);
+ assert.equal(failure.check,'unknown_entry_customers');assert.equal(failure.expected,1);assert.equal(failure.actual,2);assert.deepEqual(failure.provider_errors,[]);
+});
+test('shared result-contract failure identifies invalid product denominator and safe shape',async()=>{
+ const data=productCorrelationResult();data.product_journeys[0].products[0].denominator_customers=99;
+ data.product_journeys[0].products[0].product='private@customer.example';data.product_journeys[0].products[0].customer_email='private@customer.example';
+ const failure=await failureFrom({query:async()=>[[data]]});
+ assert.equal(failure.stage,'result_validation');assert.equal(failure.warehouse_execution_completed,true);assert.equal(failure.reason,'RESULT_VALIDATION_FAILED');assert.equal(failure.message,'Invalid product share or ranking');
+ assert.equal(failure.actual[0].products[0].denominator_customers,99);assert.equal(failure.actual[0].returning_customers,3);assert.deepEqual(failure.comparisons[0],{row_index:0,product_index:0,field:'denominator_customers',expected:3,actual:99});
+ assert.doesNotMatch(JSON.stringify(failure),/private@|customer_email|customer\.example/);
+});
+test('missing cohort becomes a named assertion and anonymous struct fields remain visible without their values',async()=>{
+ const data=productCorrelationResult();data.product_journeys=data.product_journeys.filter(r=>r.entry_product_ref===null);
+ const failure=await failureFrom({query:async()=>[[data]]});assert.equal(failure.stage,'fixture_assertion');assert.equal(failure.check,'required_cohort_window_present');assert.equal(failure.actual,false);assert.equal(failure.expected,true);
+ const bad=productCorrelationResult();bad.product_journeys[0].products[0]={f0_:'private@customer.example'};
+ const shape=await failureFrom({query:async()=>[[bad]]});assert.deepEqual(shape.actual[0].products[0].field_names,['f0_']);assert.doesNotMatch(JSON.stringify(shape),/private@/);
 });
