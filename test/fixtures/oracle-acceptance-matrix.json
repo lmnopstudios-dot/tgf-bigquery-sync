@@ -1282,6 +1282,10 @@
     {
       "file": "test/oracle-second-purchase-correlation.test.js",
       "purpose": "Retained c9ac538f BigQuery correlation shape; denominator joins before per-cohort product arrays, unchanged upstream calculations and synthetic session-table validation."
+    },
+    {
+      "file": "test/oracle-second-purchase-persisted-scope.test.js",
+      "purpose": "05937607 saved partial answer: strict semantic scope equality after warehouse JSON member reordering; durable execution, authenticated polling/recovery without replay, and real mutation rejection."
     }
   ]
 }
