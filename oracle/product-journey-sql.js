@@ -56,14 +56,26 @@ export function productJourneySql(base){
    FROM pj_windows c LEFT JOIN pj_lines l ON l.source_platform=c.second_source_platform AND l.source_store=c.second_source_store AND l.order_ref=c.second_order_ref
    GROUP BY c.entry_product_ref,c.window_days
    UNION ALL SELECT CAST(NULL AS STRING),window_days,0,0 FROM UNNEST([0,90,180,360]) window_days WHERE NOT EXISTS(SELECT 1 FROM pj_members)
+ ), pj_product_arrays AS (
+   -- Join each ranked product to its unique cohort/window denominator before
+   -- aggregating. A nested ARRAY reading p while referencing outer t cannot be
+   -- de-correlated by BigQuery when these relations depend on session tables.
+   SELECT p.entry_product_ref,p.window_days,
+     ARRAY_AGG(STRUCT(p.product_ref,p.product,p.family_status,p.is_sizer,p.customers,p.product_rank,p.available_products,
+       t.returning_customers AS denominator_customers,100*SAFE_DIVIDE(p.customers,t.returning_customers) AS percentage)
+       ORDER BY p.is_sizer,p.product_rank) products
+   FROM pj_product_ranks p JOIN pj_totals t
+     ON p.entry_product_ref IS NOT DISTINCT FROM t.entry_product_ref AND p.window_days=t.window_days
+   WHERE p.product_rank<=IF(t.entry_product_ref IS NULL,${CONTRACT.overall_products},${CONTRACT.next_products})
+   GROUP BY p.entry_product_ref,p.window_days
  )
  SELECT 1 cohort_rank,CAST(NULL AS INT64) window_days,'linked_tgf' population_scope,
    ARRAY(SELECT AS STRUCT t.*,u.missing_line_customers,u.unknown_product_customers,
      @coverage_status observation_coverage_status,@coverage_start verified_coverage_start,@coverage_end verified_coverage_end,@coverage_evidence coverage_evidence,
-     ARRAY(SELECT AS STRUCT p.* EXCEPT(entry_product_ref,window_days),t.returning_customers denominator_customers,
-       100*SAFE_DIVIDE(p.customers,t.returning_customers) percentage
-       FROM pj_product_ranks p WHERE p.entry_product_ref IS NOT DISTINCT FROM t.entry_product_ref AND p.window_days=t.window_days AND p.product_rank<=IF(t.entry_product_ref IS NULL,${CONTRACT.overall_products},${CONTRACT.next_products}) ORDER BY p.is_sizer,p.product_rank) products
-     FROM pj_totals t JOIN pj_unknown u ON u.entry_product_ref IS NOT DISTINCT FROM t.entry_product_ref AND u.window_days=t.window_days ORDER BY t.entry_is_sizer,t.entry_rank,t.window_days) product_journeys,
+     IFNULL(a.products,[]) products
+     FROM pj_totals t JOIN pj_unknown u ON u.entry_product_ref IS NOT DISTINCT FROM t.entry_product_ref AND u.window_days=t.window_days
+     LEFT JOIN pj_product_arrays a ON a.entry_product_ref IS NOT DISTINCT FROM t.entry_product_ref AND a.window_days=t.window_days
+     ORDER BY t.entry_is_sizer,t.entry_rank,t.window_days) product_journeys,
    (SELECT COUNT(*) FROM pj_entry_counts WHERE NOT is_sizer) available_entry_products,
    (SELECT COUNT(*) FROM pj_entry_counts WHERE is_sizer) available_sizer_entry_products,
    (SELECT COUNT(DISTINCT e.governed_customer_ref) FROM entry_orders e LEFT JOIN pj_lines l USING(source_platform,source_store,order_ref) WHERE l.order_ref IS NULL OR NOT l.known) unknown_entry_customers`;
