@@ -1290,6 +1290,18 @@
     {
       "file": "test/oracle-collaboration-entry-products.test.js",
       "purpose": "38f9aa99: deduplicated linked named-collaboration entry, full-range next-order products, independent named/item breakdowns, routing switches, strict evidence and direct/interactive/durable recovery."
+    },
+    {
+      "file": "test/square-channel-reporting.test.js",
+      "purpose": "Versioned Square/channel scope, exact native identity and governed attribution; generated SQL cross-channel sequencing/next-selection and coverage regressions."
+    },
+    {
+      "file": "test/square-channel-delivery.test.js",
+      "purpose": "Optional Square across all three accepted reports, direct/interactive/durable JSON delivery, partial sections, scoped refinements, failure boundaries and recovery without replay."
+    },
+    {
+      "file": "test/square-reporting-acceptance.test.js",
+      "purpose": "Bounded read-only Render validation, common-stage reuse, per-stage dry runs, independent failures, safe job metadata and one shared 5 GB execution budget."
     }
   ]
 }

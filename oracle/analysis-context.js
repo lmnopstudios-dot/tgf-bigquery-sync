@@ -1,3 +1,4 @@
+import {validateJourneyScope,requestedJourneyScope} from './journey-scope.js';
 import { validateRequestDetail } from './request-detail.js';
 import { retentionIntent } from './cohort-retention.js';
 import { validatePopulationScope, populationScopeIntent } from './population-scope.js';
@@ -19,7 +20,7 @@ import { isProductReportRequest, resolveProductReportConfig, validateProductRepo
 import { isProductPriorityRequest, priorityDates } from './product-priority.js';
 import { isStockClearanceAdvisory } from './advisory-intent.js';
 
-const FIELDS = new Set([
+const FIELDS = new Set(['journey_scope',
   'period_issue','analysis_type','metrics','start_date','end_date','requested_end_period','grain','comparison_type',
   'comparison_start_date','comparison_end_date','currencies','channel','channel_breakdown','location',
   'platform','geography','customer_segment','product_ref','filters','sort','limit','report_section',
@@ -40,7 +41,7 @@ const TOOL_ROUTES = new Set(ANALYSIS_TOOL_ROUTES);
 const MONTHS = {jan:1,january:1,feb:2,february:2,mar:3,march:3,apr:4,april:4,may:5,jun:6,june:6,jul:7,july:7,aug:8,august:8,sep:9,sept:9,september:9,oct:10,october:10,nov:11,november:11,dec:12,december:12};
 
 export const ANALYSIS_CONTEXT_FIELDS = Object.freeze([...FIELDS]);
-export function emptyAnalysisContext(){return {requested_formats:[],request_detail:null,population_scope:null,period_issue:null,requested_operations:[],numeric_operation:null,analysis_type:null,metrics:[],start_date:null,end_date:null,requested_end_period:null,grain:null,comparison_type:null,comparison_start_date:null,comparison_end_date:null,currencies:[],channel:null,channel_breakdown:false,location:null,platform:null,geography:null,customer_segment:null,product_ref:null,filters:[],sort:null,limit:null,report_section:null,output_preference:null,partial_period:false,date_cutoff:null,current_day_included:false,unresolved_required_fields:[],tool_route:null,request_kind:null,advisory_topic:null,retention_windows:null,retention_baseline:false,retention_second_products:false,journey_intent:null,entry_product_classification:null,subsequent_product_classification:null,excluded_product_titles:[],include_unclassified_products:false,first_order_semantic:null,cohort_entry_start:null,cohort_entry_end:null,observation_end:null,minimum_order_sequence:null,maximum_order_sequence:null,within_days:null,journey_group_by:null,event_name:null,event_count:null,requested_subject:null,included_periods:[],exclusions:[],contextual_event_mentions:[],placement_context:null,entity_query:null,explanation_requested:false,pending_product_candidates:[],product_report:null,email_report_kind:null,social_scope:null,failed_subject_switch:null,campaign_request:null,native_metrics:[],dimensions:[],time_zone:null,source_store:null,ranking_metric:null,ranking_direction:null,promotion_context:null}}
+export function emptyAnalysisContext(){return {journey_scope:null,requested_formats:[],request_detail:null,population_scope:null,period_issue:null,requested_operations:[],numeric_operation:null,analysis_type:null,metrics:[],start_date:null,end_date:null,requested_end_period:null,grain:null,comparison_type:null,comparison_start_date:null,comparison_end_date:null,currencies:[],channel:null,channel_breakdown:false,location:null,platform:null,geography:null,customer_segment:null,product_ref:null,filters:[],sort:null,limit:null,report_section:null,output_preference:null,partial_period:false,date_cutoff:null,current_day_included:false,unresolved_required_fields:[],tool_route:null,request_kind:null,advisory_topic:null,retention_windows:null,retention_baseline:false,retention_second_products:false,journey_intent:null,entry_product_classification:null,subsequent_product_classification:null,excluded_product_titles:[],include_unclassified_products:false,first_order_semantic:null,cohort_entry_start:null,cohort_entry_end:null,observation_end:null,minimum_order_sequence:null,maximum_order_sequence:null,within_days:null,journey_group_by:null,event_name:null,event_count:null,requested_subject:null,included_periods:[],exclusions:[],contextual_event_mentions:[],placement_context:null,entity_query:null,explanation_requested:false,pending_product_candidates:[],product_report:null,email_report_kind:null,social_scope:null,failed_subject_switch:null,campaign_request:null,native_metrics:[],dimensions:[],time_zone:null,source_store:null,ranking_metric:null,ranking_direction:null,promotion_context:null}}
 
 function contextValidationError(field,rule,message=`invalid ${field}`){const error=Object.assign(new Error(message),{code:'INVALID_ANALYSIS_CONTEXT',validation_field:field,validation_rule:rule});return error}
 
@@ -52,6 +53,7 @@ export function validateAnalysisContext(value={}){
   const out={...emptyAnalysisContext()};
   if(value.analysis_type!=null&&!['finance','customers','products','ecommerce','customer_journey'].includes(value.analysis_type)) throw new Error('invalid analysis_type');
   out.analysis_type=value.analysis_type??null;
+  const journeyScope=validateJourneyScope(value.journey_scope);out.journey_scope=out.analysis_type==='customer_journey'?journeyScope:null;
   if(value.retention_windows!=null&&(!Array.isArray(value.retention_windows)||!value.retention_windows.length||value.retention_windows.some(w=>![90,180,360].includes(w))))throw contextValidationError('retention_windows','supported_windows');
   out.retention_windows=value.retention_windows?[...new Set(value.retention_windows)].sort((a,b)=>a-b):null;
   for(const k of ['retention_baseline','retention_second_products']){if(value[k]!=null&&typeof value[k]!=='boolean')throw contextValidationError(k,'boolean');out[k]=Boolean(value[k]);}
@@ -130,6 +132,12 @@ function transitionContext(existing, message, {now=Date.now(),reportContext=null
   if(/^(?:new (?:question|analysis)|forget that|start over)\b/i.test(text))return transitionAnalysisContext(emptyAnalysisContext(),text.replace(/^(?:new (?:question|analysis)|forget that|start over)\s*[:,.]?\s*/i,''),{now});
   if(individualOrderQuestion(text)){const context=emptyAnalysisContext();return {context,transition:{continuation:false,set:[],clear:ANALYSIS_CONTEXT_FIELDS,retain:[],missing_required_fields:[],ready_to_execute:false,applies_to_message:true}};}
   if(reportContext) base=initializeFromReportContext(base,reportContext);
+  const scoped=requestedJourneyScope(text,base.journey_scope);
+  if(base.analysis_type==='customer_journey'&&scoped&&/^(?:include|including|exclude|excluding|with|without|entry|follow[- ]?up|all supported channels|all channels|online only|in[ -]?store only|next (?:purchase|order)|next (?:in[ -]?store|online) (?:purchase|order)|next matching)/i.test(text)&&!/\b(?:sales|campaign|conversion|basket|stock)\b/i.test(text)){
+    const context=validateAnalysisContext({...base,journey_scope:scoped,channel:null,channel_breakdown:false});
+    return {context,transition:{continuation:true,set:['journey_scope','channel'],clear:[],retain:[],missing_required_fields:context.unresolved_required_fields,ready_to_execute:!context.unresolved_required_fields.length,applies_to_message:true}};
+  }
+
   // A grouping-only refinement is compatible with the retained analytical scope.
   // Capability selection still decides whether that producer can execute it.
   const groupingOnly=text.match(/^(?:(?:show|use|give me)\s+)?(?:(by|per|each)\s+(?:calendar\s+)?(day|week|month|quarter|year)|((?:daily|weekly|monthly|quarterly|yearly))|((?:totals?|overall|whole period)))(?:\s+(?:instead|only|please))?[.!?]*$/i);
@@ -169,7 +177,7 @@ function transitionContext(existing, message, {now=Date.now(),reportContext=null
     context.unresolved_required_fields=context.start_date&&context.end_date?[]:['start_date','end_date'];
     return {context,transition:{continuation:collaborationFollowup,set:ANALYSIS_CONTEXT_FIELDS,clear:[],retain:[],missing_required_fields:context.unresolved_required_fields,ready_to_execute:!context.unresolved_required_fields.length,applies_to_message:true}};
   }
-  const productJourney=/\b(?:second|next)[- ](?:eligible[- ]|purchase[- ])?(?:orders?|purchases?)\b|\bsecond purchases\b/i.test(text)&&/\b(?:products?|items?)\b/i.test(text)&&/\b(?:popular|popularity|top|common|ranked|ranking)\b/i.test(text)&&(!retentionIntent(text)||/\boverall\b|\bfirst[- ]purchase products\b/i.test(text));
+  const productJourney=(scoped&&/\b(?:buy|bought|purchase[ds]?) next\b|\bnext (?:in[ -]?store|online) (?:purchase|order)\b/i.test(text)&&!collaborationEntry)||/\b(?:second|next)[- ](?:eligible[- ]|purchase[- ])?(?:orders?|purchases?)\b|\bsecond purchases\b/i.test(text)&&/\b(?:products?|items?)\b/i.test(text)&&/\b(?:popular|popularity|top|common|ranked|ranking)\b/i.test(text)&&(!retentionIntent(text)||/\boverall\b|\bfirst[- ]purchase products\b/i.test(text));
   const productFollowup=base.journey_intent==='second_purchase_products'&&/^(?:online only|just online|for|in|observation|use|show)\b/i.test(text)&&!retentionIntent(text)&&!/\b(?:sales|campaign|conversion|basket|stock|collaborations?)\b/i.test(text);
   if(productJourney||productFollowup){
     const dates=period(text,now)||{},range=text.match(/(?:first[- ]observed purchase dates|cohort entry)\s*:\s*(\d{4}-\d{2}-\d{2})\s+(?:through|to)\s+(\d{4}-\d{2}-\d{2})/i);
@@ -395,7 +403,7 @@ export function analysisScope(context){if(context==null)return null;const c=vali
 export function clarificationFor(context){const c=validateAnalysisContext(context);if(c.period_issue)return 'Please provide valid start and end dates, or a positive relative period (up to 3,660 days or 36 months). The supplied reporting period is invalid; I have not reused earlier dates.';if(c.campaign_request)return null;if(c.unresolved_required_fields.includes('population_scope'))return 'Which visitor country should define the local population and the rest-of-world exclusion?';if(c.failed_subject_switch){if([c.failed_subject_switch.attempted_subject,c.failed_subject_switch.previous_subject].every(s=>['device_conversion','product_sales'].includes(s)))return 'Do you mean conversion rates or product sales for that comparison? The conversion request failed, so I will not reuse the previous product table.';return `Which subject do you mean: ${c.failed_subject_switch.attempted_subject.replaceAll('_',' ')} or ${c.failed_subject_switch.previous_subject.replaceAll('_',' ')}? The subject switch failed; please specify the analysis to retry.`;}if(c.unresolved_required_fields.includes('requested_subject'))return 'Which analysis do you mean? Please specify a supported subject such as sales, customers, product sales, device conversion, shipping countries or Klaviyo email attribution so I can select the correct evidence.';if(c.product_report)return productReportClarification(c.product_report);if(c.tool_route==='get_order_value_analysis'&&c.unresolved_required_fields.length){const fields=c.unresolved_required_fields.map(f=>({start_date:'start date',end_date:'end date',promotion_context:'inclusive exclusion dates (or explicitly no exclusions)',geography:'direct shipping-country code',currencies:'currency'}[f]||f));return 'Please specify the '+fields.join(', ')+'. These fields define the requested population; a reference to an earlier analysis cannot be resolved from the current context.';}if(c.tool_route==='get_population_conversion')return null;if(c.unresolved_required_fields.includes('channel'))return 'Should the weekday analysis cover online sales or in-store sales? The channel determines the provider population.';if(c.unresolved_required_fields.includes('start_date')||c.unresolved_required_fields.includes('end_date')){if(c.tool_route==='get_shopify_online_country_products')return 'What date range would you like? Start and end dates are required to rank country products for a defined reporting period. I’ll keep each currency in a separate ranking unless you specify one.';if(c.analysis_type!=='finance')return 'What date range would you like? Start and end dates are required to select the reporting evidence for this analysis.';return `What date range would you like? Start and end dates are required to select the sales reporting period. I’ll use ${c.currencies[0]||'GBP'} unless you specify another currency.`;}return null}
 
 
-export function transitionAnalysisContext(existing,message,options={}){
+function transitionAnalysisContextBase(existing,message,options={}){
   const base=validateAnalysisContext(existing||{}),intent=messageIntent(message),text=intent.document?intent.instruction:String(message||'').trim();
   if(intent.blocked)return {context:validateAnalysisContext({...emptyAnalysisContext(),request_kind:intent.knowledge?'knowledge_save':null}),transition:{continuation:false,set:[],clear:ANALYSIS_CONTEXT_FIELDS,retain:[],missing_required_fields:[],ready_to_execute:false,applies_to_message:true}};
   if(explicitKnowledgeSaveIntent(text)&&!requestedAnalyticalOperations(text))return {context:validateAnalysisContext({...emptyAnalysisContext(),request_kind:'knowledge_save'}),transition:{continuation:false,set:['request_kind'],clear:ANALYSIS_CONTEXT_FIELDS,retain:[],missing_required_fields:[],ready_to_execute:true,applies_to_message:true,clarification_consumed:null}};
@@ -418,4 +426,15 @@ export function transitionAnalysisContext(existing,message,options={}){
 
   if(pending&&result.transition.continuation&&result.transition.applies_to_message&&result.context.requested_subject===base.requested_subject&&(result.transition.set.length||pending==='campaign'&&sinceSend(text)))result.transition.clarification_consumed=pending;
   return result;
+}
+
+// Attach explicit channel roles after shared subject/date routing; refinement
+// cannot leak Square or journey controls into a different analytical subject.
+export function transitionAnalysisContext(existing,message,options={}){
+ const result=transitionAnalysisContextBase(existing,message,options);
+ if(result.context.analysis_type==='customer_journey'){
+  const scope=requestedJourneyScope(message,result.transition.continuation?existing?.journey_scope:null);
+  if(scope)result.context=validateAnalysisContext({...result.context,journey_scope:scope,channel:null,channel_breakdown:false});
+ }
+ return result;
 }

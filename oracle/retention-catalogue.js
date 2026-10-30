@@ -26,7 +26,7 @@ export function retentionCatalogueSql(project,source=null,store=null){
       FROM catalogue_routes r JOIN line_classification_sets l ON l.source_product_ref=r.source_ref
       WHERE (@entry_source IS NULL OR l.source_platform=@entry_source) AND (@retention_source_store IS NULL OR l.source_store=@retention_source_store) GROUP BY r.collection_id) hr USING(collection_id)
     ORDER BY t.collection_id`;
-  if(source){if(!((source==='woo'&&['ww','usd'].includes(store))||(source==='shopify'&&store==='shopify')))throw Error('Invalid catalogue source');sql=sql.replaceAll('@entry_source',`'${source}'`).replaceAll('@retention_source_store',`'${store}'`);}
+  if(source){if(!((source==='woo'&&['ww','usd'].includes(store))||(source==='shopify'&&store==='shopify')||(source==='square'&&store==='square')))throw Error('Invalid catalogue source');sql=sql.replaceAll('@entry_source',`'${source}'`).replaceAll('@retention_source_store',`'${store}'`);}
   return sql;
 }
 

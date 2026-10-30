@@ -1,3 +1,4 @@
+import {verifySquareChannelControls} from '../test/helpers/square-channel-browser.js';
 import {verifyHistoricalCollaborationPanel} from '../test/helpers/historical-collaboration-browser.js';
 import {verifyWooAssignmentPanel} from '../test/helpers/woo-assignment-browser.js';
 async function openRetentionResults(page){const details=page.locator('.analytical-answer').last().locator('details');if(await details.count()&&(await details.getAttribute('open'))===null)await details.locator('summary').click();}
@@ -280,5 +281,6 @@ try{
     assert.match(await page.locator('.analytical-answer').last().innerText(),/240 of 240 eligible item\/cohort groups returned/);await openRetentionResults(page);const text=await page.locator('.analytical-answer').last().innerText();assert.match(text,/Complete Item 239/);assert.match(text,/Complete Item 0/);assert.doesNotMatch(text,/Individual collaboration items.*99\/99/);await page.close();
   }}finally{await itemServer.close();}
   await verifyHistoricalCollaborationPanel({browser,origin:h.origin,output});
+  await verifySquareChannelControls({browser,output});
   console.log(JSON.stringify({status:'passed',conversations:matrix.conversations.length,viewports:['desktop','mobile'],durable_refresh:true,activated_identity_refresh:true,output}));
 }finally{await browser.close();h.close();}

@@ -1,0 +1,653 @@
+{
+  "source": "supplied Render output for PR #400",
+  "preview_only": true,
+  "existing_snapshot_guard_passed": true,
+  "summary": {
+    "square_snapshot_candidate_ids": 1543,
+    "square_snapshot_candidate_orders": 2050,
+    "eligible_linked_square_orders": 2026,
+    "eligible_linked_square_ids": 1524,
+    "preserved_square_local_orders": 47814,
+    "preserved_square_local_ids": 15515
+  },
+  "eligible_by_source_year": [
+    {
+      "source": "shopify",
+      "year": 2025,
+      "eligible_orders": 2246,
+      "native_customer_ids": 2136,
+      "linked_orders": 160,
+      "linked_email_candidate_records": 148,
+      "observed_start": {
+        "value": "2025-11-16T17:48:30.000Z"
+      },
+      "observed_end": {
+        "value": "2025-12-31T23:19:14.000Z"
+      },
+      "linked_order_pct": 7.12
+    },
+    {
+      "source": "shopify",
+      "year": 2026,
+      "eligible_orders": 10223,
+      "native_customer_ids": 6471,
+      "linked_orders": 638,
+      "linked_email_candidate_records": 479,
+      "observed_start": {
+        "value": "2026-01-01T00:14:56.000Z"
+      },
+      "observed_end": {
+        "value": "2026-10-19T13:53:02.000Z"
+      },
+      "linked_order_pct": 6.24
+    },
+    {
+      "source": "square",
+      "year": 2021,
+      "eligible_orders": 7515,
+      "native_customer_ids": 4,
+      "linked_orders": 1,
+      "linked_email_candidate_records": 1,
+      "observed_start": {
+        "value": "2021-01-04T12:19:20.000Z"
+      },
+      "observed_end": {
+        "value": "2021-12-31T15:59:56.000Z"
+      },
+      "linked_order_pct": 0.01
+    },
+    {
+      "source": "square",
+      "year": 2022,
+      "eligible_orders": 11853,
+      "native_customer_ids": 0,
+      "linked_orders": 0,
+      "linked_email_candidate_records": 0,
+      "observed_start": {
+        "value": "2022-01-02T11:34:42.000Z"
+      },
+      "observed_end": {
+        "value": "2022-12-31T15:10:44.000Z"
+      },
+      "linked_order_pct": 0
+    },
+    {
+      "source": "square",
+      "year": 2023,
+      "eligible_orders": 10155,
+      "native_customer_ids": 5419,
+      "linked_orders": 533,
+      "linked_email_candidate_records": 469,
+      "observed_start": {
+        "value": "2023-01-02T10:40:09.000Z"
+      },
+      "observed_end": {
+        "value": "2023-12-31T15:47:15.000Z"
+      },
+      "linked_order_pct": 5.25
+    },
+    {
+      "source": "square",
+      "year": 2024,
+      "eligible_orders": 9612,
+      "native_customer_ids": 5826,
+      "linked_orders": 633,
+      "linked_email_candidate_records": 521,
+      "observed_start": {
+        "value": "2024-01-02T10:50:42.000Z"
+      },
+      "observed_end": {
+        "value": "2024-12-31T15:43:17.000Z"
+      },
+      "linked_order_pct": 6.59
+    },
+    {
+      "source": "square",
+      "year": 2025,
+      "eligible_orders": 9398,
+      "native_customer_ids": 5873,
+      "linked_orders": 717,
+      "linked_email_candidate_records": 578,
+      "observed_start": {
+        "value": "2025-01-02T10:41:28.000Z"
+      },
+      "observed_end": {
+        "value": "2025-12-31T14:39:32.970Z"
+      },
+      "linked_order_pct": 7.63
+    },
+    {
+      "source": "square",
+      "year": 2026,
+      "eligible_orders": 1307,
+      "native_customer_ids": 850,
+      "linked_orders": 142,
+      "linked_email_candidate_records": 128,
+      "observed_start": {
+        "value": "2026-01-02T10:51:54.371Z"
+      },
+      "observed_end": {
+        "value": "2026-09-04T15:34:19.692Z"
+      },
+      "linked_order_pct": 10.86
+    },
+    {
+      "source": "usd",
+      "year": 2022,
+      "eligible_orders": 897,
+      "native_customer_ids": 164,
+      "linked_orders": 7,
+      "linked_email_candidate_records": 7,
+      "observed_start": {
+        "value": "2022-04-01T23:21:12.000Z"
+      },
+      "observed_end": {
+        "value": "2022-12-31T20:49:57.000Z"
+      },
+      "linked_order_pct": 0.78
+    },
+    {
+      "source": "usd",
+      "year": 2023,
+      "eligible_orders": 1113,
+      "native_customer_ids": 359,
+      "linked_orders": 30,
+      "linked_email_candidate_records": 22,
+      "observed_start": {
+        "value": "2023-01-01T06:38:37.000Z"
+      },
+      "observed_end": {
+        "value": "2023-12-31T18:18:32.000Z"
+      },
+      "linked_order_pct": 2.7
+    },
+    {
+      "source": "usd",
+      "year": 2024,
+      "eligible_orders": 1221,
+      "native_customer_ids": 435,
+      "linked_orders": 43,
+      "linked_email_candidate_records": 28,
+      "observed_start": {
+        "value": "2024-01-01T04:27:48.000Z"
+      },
+      "observed_end": {
+        "value": "2024-12-31T00:16:38.000Z"
+      },
+      "linked_order_pct": 3.52
+    },
+    {
+      "source": "usd",
+      "year": 2025,
+      "eligible_orders": 836,
+      "native_customer_ids": 262,
+      "linked_orders": 30,
+      "linked_email_candidate_records": 21,
+      "observed_start": {
+        "value": "2025-01-01T07:46:21.000Z"
+      },
+      "observed_end": {
+        "value": "2025-11-19T21:18:22.000Z"
+      },
+      "linked_order_pct": 3.59
+    },
+    {
+      "source": "ww",
+      "year": 2021,
+      "eligible_orders": 8912,
+      "native_customer_ids": 1433,
+      "linked_orders": 187,
+      "linked_email_candidate_records": 150,
+      "observed_start": {
+        "value": "2021-03-25T12:56:21.000Z"
+      },
+      "observed_end": {
+        "value": "2021-12-31T23:31:42.000Z"
+      },
+      "linked_order_pct": 2.1
+    },
+    {
+      "source": "ww",
+      "year": 2022,
+      "eligible_orders": 8067,
+      "native_customer_ids": 2442,
+      "linked_orders": 332,
+      "linked_email_candidate_records": 281,
+      "observed_start": {
+        "value": "2022-01-01T01:21:15.000Z"
+      },
+      "observed_end": {
+        "value": "2022-12-31T22:11:06.000Z"
+      },
+      "linked_order_pct": 4.12
+    },
+    {
+      "source": "ww",
+      "year": 2023,
+      "eligible_orders": 6917,
+      "native_customer_ids": 2291,
+      "linked_orders": 405,
+      "linked_email_candidate_records": 316,
+      "observed_start": {
+        "value": "2023-01-01T00:55:24.000Z"
+      },
+      "observed_end": {
+        "value": "2023-12-31T23:31:00.000Z"
+      },
+      "linked_order_pct": 5.86
+    },
+    {
+      "source": "ww",
+      "year": 2024,
+      "eligible_orders": 8052,
+      "native_customer_ids": 2508,
+      "linked_orders": 699,
+      "linked_email_candidate_records": 455,
+      "observed_start": {
+        "value": "2024-01-01T12:35:12.000Z"
+      },
+      "observed_end": {
+        "value": "2024-12-31T22:23:10.000Z"
+      },
+      "linked_order_pct": 8.68
+    },
+    {
+      "source": "ww",
+      "year": 2025,
+      "eligible_orders": 5299,
+      "native_customer_ids": 1892,
+      "linked_orders": 429,
+      "linked_email_candidate_records": 333,
+      "observed_start": {
+        "value": "2025-01-01T00:13:56.000Z"
+      },
+      "observed_end": {
+        "value": "2025-11-20T00:26:22.000Z"
+      },
+      "linked_order_pct": 8.1
+    }
+  ],
+  "journey_totals": [
+    {
+      "origin": "shopify",
+      "destination": "square",
+      "email_candidate_records": 53,
+      "destination_orders": 53
+    },
+    {
+      "origin": "square",
+      "destination": "shopify",
+      "email_candidate_records": 548,
+      "destination_orders": 732
+    },
+    {
+      "origin": "square",
+      "destination": "usd",
+      "email_candidate_records": 29,
+      "destination_orders": 40
+    },
+    {
+      "origin": "square",
+      "destination": "ww",
+      "email_candidate_records": 476,
+      "destination_orders": 728
+    },
+    {
+      "origin": "usd",
+      "destination": "square",
+      "email_candidate_records": 40,
+      "destination_orders": 48
+    },
+    {
+      "origin": "ww",
+      "destination": "square",
+      "email_candidate_records": 839,
+      "destination_orders": 1082
+    }
+  ],
+  "exclusions": [
+    {
+      "source": "shopify",
+      "reason": "cancelled",
+      "orders": 55,
+      "native_customer_ids": 47
+    },
+    {
+      "source": "shopify",
+      "reason": "fully_refunded_or_missing_positive_total",
+      "orders": 267,
+      "native_customer_ids": 193
+    },
+    {
+      "source": "shopify",
+      "reason": "ineligible_or_missing_financial_status",
+      "orders": 234,
+      "native_customer_ids": 205
+    },
+    {
+      "source": "shopify",
+      "reason": "matrixify_import",
+      "orders": 2158,
+      "native_customer_ids": 1943
+    },
+    {
+      "source": "shopify",
+      "reason": "unsafe_snapshot_identity",
+      "orders": 103,
+      "native_customer_ids": 59
+    },
+    {
+      "source": "square",
+      "reason": "email_candidate",
+      "orders": 2050,
+      "native_customer_ids": 1543
+    },
+    {
+      "source": "square",
+      "reason": "ineligible_status",
+      "orders": 386,
+      "native_customer_ids": 182
+    },
+    {
+      "source": "square",
+      "reason": "missing_or_conflicting_native_id",
+      "orders": 29987,
+      "native_customer_ids": 0
+    },
+    {
+      "source": "square",
+      "reason": "missing_or_out_of_scope_timestamp",
+      "orders": 0,
+      "native_customer_ids": 0
+    },
+    {
+      "source": "square",
+      "reason": "native_id_conflict",
+      "orders": 254,
+      "native_customer_ids": 0
+    },
+    {
+      "source": "square",
+      "reason": "no_exact_directory_id",
+      "orders": 7299,
+      "native_customer_ids": 6565
+    },
+    {
+      "source": "square",
+      "reason": "no_snapshot_candidate",
+      "orders": 6715,
+      "native_customer_ids": 5676
+    },
+    {
+      "source": "square",
+      "reason": "no_usable_directory_email",
+      "orders": 3239,
+      "native_customer_ids": 2845
+    },
+    {
+      "source": "square",
+      "reason": "shared_or_conflicting_directory_email",
+      "orders": 550,
+      "native_customer_ids": 410
+    },
+    {
+      "source": "usd",
+      "reason": "fully_refunded_or_missing_positive_total",
+      "orders": 228,
+      "native_customer_ids": 74
+    },
+    {
+      "source": "usd",
+      "reason": "ineligible_or_missing_financial_status",
+      "orders": 216,
+      "native_customer_ids": 70
+    },
+    {
+      "source": "usd",
+      "reason": "unsafe_snapshot_identity",
+      "orders": 28,
+      "native_customer_ids": 10
+    },
+    {
+      "source": "ww",
+      "reason": "fully_refunded_or_missing_positive_total",
+      "orders": 1127,
+      "native_customer_ids": 347
+    },
+    {
+      "source": "ww",
+      "reason": "ineligible_or_missing_financial_status",
+      "orders": 1251,
+      "native_customer_ids": 427
+    },
+    {
+      "source": "ww",
+      "reason": "unsafe_snapshot_identity",
+      "orders": 483,
+      "native_customer_ids": 121
+    }
+  ],
+  "compilation_and_execution": [
+    {
+      "stage": "sp_guard",
+      "phase": "dry_run",
+      "state": "succeeded",
+      "query_sha256": "fea58a4ff151d41e93b1e7f39ccca6fc2d1f8817133562f68057c9fd56f053a3"
+    },
+    {
+      "stage": "sp_guard",
+      "phase": "execute",
+      "state": "succeeded",
+      "compiled_and_executed": true,
+      "billed_bytes": "20971520"
+    },
+    {
+      "stage": "sp_square_latest",
+      "phase": "dry_run",
+      "state": "succeeded",
+      "query_sha256": "0de14be0a0eda2e093af208135085da865b961005838857e04a945563b8b61a4"
+    },
+    {
+      "stage": "sp_square_latest",
+      "phase": "execute",
+      "state": "succeeded",
+      "compiled_and_executed": true,
+      "billed_bytes": "119537664"
+    },
+    {
+      "stage": "sp_payments",
+      "phase": "dry_run",
+      "state": "succeeded",
+      "query_sha256": "3d3b374703dd42bb4658188db56a22420da20af211ed7f20eb0c519b9cf1a817"
+    },
+    {
+      "stage": "sp_payments",
+      "phase": "execute",
+      "state": "succeeded",
+      "compiled_and_executed": true,
+      "billed_bytes": "25165824"
+    },
+    {
+      "stage": "sp_square",
+      "phase": "dry_run",
+      "state": "succeeded",
+      "query_sha256": "92dc20ecf7e93b8d54929a74842726d97fd346013ecff120f1ac80cb509ac106"
+    },
+    {
+      "stage": "sp_square",
+      "phase": "execute",
+      "state": "succeeded",
+      "compiled_and_executed": true,
+      "billed_bytes": "20971520"
+    },
+    {
+      "stage": "sp_directory",
+      "phase": "dry_run",
+      "state": "succeeded",
+      "query_sha256": "d51a5d1ee7f9c0d76c4b2d171dfb0af31313dd828e0e5442adc55555703ea704"
+    },
+    {
+      "stage": "sp_directory",
+      "phase": "execute",
+      "state": "succeeded",
+      "compiled_and_executed": true,
+      "billed_bytes": "10485760"
+    },
+    {
+      "stage": "sp_email_values",
+      "phase": "dry_run",
+      "state": "succeeded",
+      "query_sha256": "70fc382acd863b64b11119a70cfc778d30b29d7b5cc70b70fe110d7ed8737c86"
+    },
+    {
+      "stage": "sp_email_values",
+      "phase": "execute",
+      "state": "succeeded",
+      "compiled_and_executed": true,
+      "billed_bytes": "10485760"
+    },
+    {
+      "stage": "sp_email_bad",
+      "phase": "dry_run",
+      "state": "succeeded",
+      "query_sha256": "a59f45f898b462906d78d26b93c32b0e5479125a276090b6536cbdecaa7ac580"
+    },
+    {
+      "stage": "sp_email_bad",
+      "phase": "execute",
+      "state": "succeeded",
+      "compiled_and_executed": true,
+      "billed_bytes": "10485760"
+    },
+    {
+      "stage": "sp_snapshot",
+      "phase": "dry_run",
+      "state": "succeeded",
+      "query_sha256": "9142f9acadea40a96ddbd643764afcdd2a6ef7c2a57770e8c099f127684208f0"
+    },
+    {
+      "stage": "sp_snapshot",
+      "phase": "execute",
+      "state": "succeeded",
+      "compiled_and_executed": true,
+      "billed_bytes": "20971520"
+    },
+    {
+      "stage": "sp_snapshot_bad",
+      "phase": "dry_run",
+      "state": "succeeded",
+      "query_sha256": "04dd496932eb37d7a6268b53a92e7e3fe2b7ba6764417441b92995c59f1316b8"
+    },
+    {
+      "stage": "sp_snapshot_bad",
+      "phase": "execute",
+      "state": "succeeded",
+      "compiled_and_executed": true,
+      "billed_bytes": "10485760"
+    },
+    {
+      "stage": "sp_links",
+      "phase": "dry_run",
+      "state": "succeeded",
+      "query_sha256": "0157d09a8a9df5fc31a90ed1f344d7f39fad548034b61186e31bbe365292c3bf"
+    },
+    {
+      "stage": "sp_links",
+      "phase": "execute",
+      "state": "succeeded",
+      "compiled_and_executed": true,
+      "billed_bytes": "62914560"
+    },
+    {
+      "stage": "sp_online_raw",
+      "phase": "dry_run",
+      "state": "succeeded",
+      "query_sha256": "0376ee11c59ba1de1b38adb1f7f228e56f767abd416a0dbfc33cb5c4ec796f82"
+    },
+    {
+      "stage": "sp_online_raw",
+      "phase": "execute",
+      "state": "succeeded",
+      "compiled_and_executed": true,
+      "billed_bytes": "52428800"
+    },
+    {
+      "stage": "sp_online_orders",
+      "phase": "dry_run",
+      "state": "succeeded",
+      "query_sha256": "826b856253a65f9aeaf818396da7207cd5a1c957e878d7733bd2d2bba58ebbfe"
+    },
+    {
+      "stage": "sp_online_orders",
+      "phase": "execute",
+      "state": "succeeded",
+      "compiled_and_executed": true,
+      "billed_bytes": "10485760"
+    },
+    {
+      "stage": "sp_online",
+      "phase": "dry_run",
+      "state": "succeeded",
+      "query_sha256": "f1e396fbfa13865603b94f6df5525a0ebfe06c69bfe8e9de57f13400eac0edbd"
+    },
+    {
+      "stage": "sp_online",
+      "phase": "execute",
+      "state": "succeeded",
+      "compiled_and_executed": true,
+      "billed_bytes": "31457280"
+    },
+    {
+      "stage": "sp_eligible",
+      "phase": "dry_run",
+      "state": "succeeded",
+      "query_sha256": "256fee6002bc27bdff9a8240ae490b0c25a418f75ef15fcc8d0d18aabde32deb"
+    },
+    {
+      "stage": "sp_eligible",
+      "phase": "execute",
+      "state": "succeeded",
+      "compiled_and_executed": true,
+      "billed_bytes": "31457280"
+    },
+    {
+      "stage": "sp_linked_refs",
+      "phase": "dry_run",
+      "state": "succeeded",
+      "query_sha256": "e616f990c75d18da018fa40b9aa5430c0af43a342d5e1693e9384abe9c44e9cd"
+    },
+    {
+      "stage": "sp_linked_refs",
+      "phase": "execute",
+      "state": "succeeded",
+      "compiled_and_executed": true,
+      "billed_bytes": "11534336"
+    },
+    {
+      "stage": "sp_journeys",
+      "phase": "dry_run",
+      "state": "succeeded",
+      "query_sha256": "0bfd30c7ee007dec6327315037be8353392f4c1b0e642fc2d4fa26024c11cc60"
+    },
+    {
+      "stage": "sp_journeys",
+      "phase": "execute",
+      "state": "succeeded",
+      "compiled_and_executed": true,
+      "billed_bytes": "20971520"
+    },
+    {
+      "stage": "sp_result",
+      "phase": "dry_run",
+      "state": "succeeded",
+      "query_sha256": "85c07a289ddd6a464ad0e0ae0a210b94373d370b39a14816b07c285cc851b186"
+    },
+    {
+      "stage": "sp_result",
+      "phase": "execute",
+      "state": "succeeded",
+      "compiled_and_executed": true,
+      "billed_bytes": "83886080"
+    }
+  ]
+}

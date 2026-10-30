@@ -1,6 +1,6 @@
 import {retentionLimitSummary} from './retention-limits.js';
 const safe=v=>String(v??'Unknown').replaceAll('|','\\|').replaceAll('<','&lt;').replaceAll('>','&gt;');
-const source=r=>r.source_platform==='tgf'?'TGF':r.source_platform==='woo'?(r.source_store==='ww'?'Woo WW':'Woo USD'):'Shopify';
+const source=r=>r.source_platform==='tgf'?'TGF':r.source_platform==='square'?'Square':r.source_platform==='woo'?(r.source_store==='ww'?'Woo WW':'Woo USD'):'Shopify';
 const key=r=>[r.source_platform,r.source_store,r.collaboration_name,r.entry_product_ref,r.cohort_year].join('|');
 export function retentionBusinessReport(e,{normalize,full}){
  const rows=normalize(e.rows||[]),rankings=normalize(e.product_ranking_rows||[]),baselines=normalize(e.baseline_rows||[]),primary=e.ranking_window||90;

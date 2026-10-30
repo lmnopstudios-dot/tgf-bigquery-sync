@@ -51,6 +51,7 @@ export function cohortExecutionPlan(sql,boundaries=null){
   const {relations,result}=cohortRelations(sql),completed=new Set();
   if(!boundaries&&(result.includes('product_journeys')||result.includes('collaboration_journeys')))boundaries=['orders','ranked_orders','cr_routes','cr_collection_current','cr_resolved','classified_lines','retention_reporting_lines','pj_members'];
   boundaries??=result.includes("'linked_tgf' population_scope")?COHORT_COMBINED_BOUNDARIES:COHORT_BOUNDARIES;
+  if(relations.some(r=>r.name==='sx_links'))boundaries=[...relations.filter(r=>r.name.startsWith('sx_')&&!r.name.startsWith('sx_reporting_')).map(r=>r.name),...boundaries];
   const prefix=(end,root)=>{
     const candidates=relations.slice(0,end).map(r=>({...r,body:completed.has(r.name)?`SELECT * FROM _SESSION.cohort_${r.name}`:r.body}));
     const needed=new Set();
