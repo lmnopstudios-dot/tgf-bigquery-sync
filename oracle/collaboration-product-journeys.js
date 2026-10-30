@@ -1,3 +1,4 @@
+import {applyJourneyScopeDefinition,journeyReportContract,assertJourneyScopeEvidence,journeyScopeText,reportingCoverageText,JOURNEY_SCOPE_LIMITATION} from './journey-scope.js';
 import {validateJourneyDefinition} from './customer-journey.js';
 import {PRODUCT_JOURNEY_CONTRACT,validateProductJourneys} from './product-journeys.js';
 import {resolveAnalyticalPlan,assertPlanAgreement,stableAnalyticalJSON} from './analytical-plan.js';
@@ -7,7 +8,7 @@ import {safeReadFailure} from './read-failure.js';
 export const COLLABORATION_JOURNEY_CONTRACT=Object.freeze({...PRODUCT_JOURNEY_CONTRACT,entry_population:'first_observed_order_contains_governed_named_collaboration',overall:'distinct_linked_entry_customers',breakdowns:['collaboration','item'],collaborations:20,entry_products:20,downstream:'all_products_on_next_eligible_order'});
 export function collaborationJourneyDefinition(c){
  const channel=c.channel==='online'?'Online':c.channel==='instore'?'In-store':null;
- return {cohort_entry_start:c.cohort_entry_start||c.start_date,cohort_entry_end:c.cohort_entry_end||c.end_date,observation_end:c.observation_end||c.end_date,time_zone:c.time_zone,first_order_semantic:'first_observed_ever',cohort:{entry_product_classification:'collaboration',entry_channel:channel},subsequent:{channel},group_by:['retention_collaboration_journeys'],sort:'returning_customers_desc',limit:20};
+ return applyJourneyScopeDefinition({cohort_entry_start:c.cohort_entry_start||c.start_date,cohort_entry_end:c.cohort_entry_end||c.end_date,observation_end:c.observation_end||c.end_date,time_zone:c.time_zone,first_order_semantic:'first_observed_ever',cohort:{entry_product_classification:'collaboration',entry_channel:channel},subsequent:{channel},group_by:['retention_collaboration_journeys'],sort:'returning_customers_desc',limit:20},c);
 }
 const integer=v=>Number.isSafeInteger(v)&&v>=0;
 const components=['overall','collaboration','item'];
@@ -36,8 +37,8 @@ function validateHeader(e){
  if(!['available_collaborations','available_items','available_sizer_items'].every(k=>integer(e[k])))throw Error('Invalid available cohorts');
 }
 export function assertCollaborationJourneyEvidence(c,e){
- assertPlanAgreement(c,e);
- if(c.journey_intent!=='collaboration_purchase_products'||c.journey_group_by!=='collaboration_purchase_products'||c.entry_product_classification!=='collaboration'||e.kind!=='governed_collaboration_purchase_products'||e.operation!=='collaboration_purchase_products'||e.subject!=='customer_journey'||e.population_scope!=='linked_tgf'||stableAnalyticalJSON(e.contract)!==stableAnalyticalJSON(COLLABORATION_JOURNEY_CONTRACT)||stableAnalyticalJSON(e.definition)!==stableAnalyticalJSON(collaborationJourneyDefinition(c))||e.identity_evidence?.activation!=='active'||e.identity_evidence.mode!=='email_candidate_v2'||!e.identity_evidence.snapshot)throw Error('Collaboration journey scope mismatch');
+ assertPlanAgreement(c,e);assertJourneyScopeEvidence(c,e);if(c.journey_scope)reportingCoverageText(e.reporting_coverage);
+ if(c.journey_intent!=='collaboration_purchase_products'||c.journey_group_by!=='collaboration_purchase_products'||c.entry_product_classification!=='collaboration'||e.kind!=='governed_collaboration_purchase_products'||e.operation!=='collaboration_purchase_products'||e.subject!=='customer_journey'||e.population_scope!=='linked_tgf'||stableAnalyticalJSON(e.contract)!==stableAnalyticalJSON(journeyReportContract(COLLABORATION_JOURNEY_CONTRACT,c.journey_scope))||stableAnalyticalJSON(e.definition)!==stableAnalyticalJSON(collaborationJourneyDefinition(c))||e.identity_evidence?.activation!=='active'||e.identity_evidence.mode!=='email_candidate_v2'||!e.identity_evidence.snapshot)throw Error('Collaboration journey scope mismatch');
  validateHeader(e);
  if(!Array.isArray(e.rows)||e.rows.some(r=>!components.includes(r.cohort_type))||!Array.isArray(e.component_outcomes)||e.component_outcomes.length!==3)throw Error('Missing collaboration outputs');
  for(const component of components){
@@ -75,7 +76,8 @@ export function collaborationJourneyMarkdown(e){
  }
  lines.push(`Independent cohort quotas, ranked by distinct entry customers: ${Math.min(20,e.available_collaborations)} / ${e.available_collaborations} named collaborations; ${Math.min(20,e.available_items)} / ${e.available_items} collaboration-item cohorts; ${Math.min(20,e.available_sizer_items)} / ${e.available_sizer_items} Ring Sizer item cohorts. Up to 20 per quota; additional cohorts are truncated. Overall top 20 next-order products and top five per breakdown, with separate Ring Sizers; quotas never restrict the overall entry population.`,
  'First observed uses all available eligible history before the entry dates. Prior history and continuous follow-up may be incomplete; latest activity alone never verifies coverage. Verified windows require evidence-backed continuous coverage and a full calendar window before the cutoff. Unverified follow-up has no supported mature rate; observed results remain provisional.',`Request reference: ${e.request_id}.`);
- return lines.join('\n\n');
+ if(e.definition.report_scope)lines.unshift(journeyScopeText(e.definition.report_scope),JOURNEY_SCOPE_LIMITATION,...reportingCoverageText(e.reporting_coverage));
+ return (e.definition.report_scope?lines.map(l=>(e.definition.report_scope.next==='next_matching_channel'?l.replaceAll('next-order','selected-follow-up'):l).replace('Woo WW, Woo USD and Shopify','Woo WW, Woo USD, Shopify'+(e.definition.report_scope.include_square?' and eligible Square':'')).replace('Products come from the next strictly later eligible order across the full range','Products come from the selected strictly later eligible order under the stated follow-up rule')):lines).join('\n\n');
 }
 export async function answerCollaborationJourneys({context,provider,...options}){
  const request_id=requestId(options.requestId||options.request_id),definition=collaborationJourneyDefinition(context);
@@ -84,7 +86,7 @@ export async function answerCollaborationJourneys({context,provider,...options})
  try{
   const part=await boundedEvidenceRead(timeoutMs=>provider.analyzeCustomerJourney(definition,{...options,timeoutMs,combined:true}),{...options,deadlineAt:options.deadlineAt??Date.now()+45000});
   if(part.population_scope!=='linked_tgf'||stableAnalyticalJSON(part.definition)!==stableAnalyticalJSON(validateJourneyDefinition(definition)))throw Error('Provider collaboration scope mismatch');
-  const evidence={kind:'governed_collaboration_purchase_products',subject:'customer_journey',operation:'collaboration_purchase_products',request_id,population_scope:'linked_tgf',contract:COLLABORATION_JOURNEY_CONTRACT,definition,analytical_plan:resolveAnalyticalPlan(context),identity_evidence:part.identity_evidence,available_collaborations:part.available_collaborations,available_items:part.available_items,available_sizer_items:part.available_sizer_items,rows:[],component_outcomes:[]};
+  const evidence={...(context.journey_scope?{reporting_coverage:part.reporting_coverage}:{}),kind:'governed_collaboration_purchase_products',subject:'customer_journey',operation:'collaboration_purchase_products',request_id,population_scope:'linked_tgf',contract:journeyReportContract(COLLABORATION_JOURNEY_CONTRACT,context.journey_scope),definition,analytical_plan:resolveAnalyticalPlan(context),identity_evidence:part.identity_evidence,available_collaborations:part.available_collaborations,available_items:part.available_items,available_sizer_items:part.available_sizer_items,rows:[],component_outcomes:[]};
   validateHeader(evidence);
   if(!Array.isArray(part.collaboration_journeys)||part.collaboration_journeys.length>244||part.collaboration_journeys.some(r=>!components.includes(r.cohort_type)))throw Error('Invalid collaboration row bound');
   for(const component of components){
@@ -103,5 +105,5 @@ export async function answerCollaborationJourneys({context,provider,...options})
   }
   assertCollaborationJourneyEvidence(context,evidence);
   return {request_id,analysis_context:context,partial:true,evidence,answer:collaborationJourneyMarkdown(evidence),tools:['analyze_customer_journey']};
- }catch(error){if(['LEASE_NOT_OWNED','REQUEST_CANCELLED'].includes(error.code)||options.signal?.aborted)throw error;return unavailable(safeReadFailure(error,'population_query'));}
+ }catch(error){if(error.code==='SQUARE_EXTENSION_REVIEW_REQUIRED')return {...unavailable(),answer:'Square reporting requires review and separate activation of its versioned extension. No Square-inclusive figures or substitute legacy population were returned.'};if(['LEASE_NOT_OWNED','REQUEST_CANCELLED'].includes(error.code)||options.signal?.aborted)throw error;return unavailable(safeReadFailure(error,'population_query'));}
 }

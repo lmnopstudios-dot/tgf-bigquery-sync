@@ -1,3 +1,4 @@
+import {channelValue,assertJourneyScopeEvidence,reportingCoverageText} from './journey-scope.js';
 import {assertCollaborationJourneyEvidence} from './collaboration-product-journeys.js';
 import {assertProductJourneyEvidence} from './product-journeys.js';
 import {assertItemOutcomeCompleteness} from './retention-item-completeness.js';
@@ -36,6 +37,7 @@ export function answerCompleteness(context,result){
   if(result?.clarification?.fields?.length)return {status:'pending',operation,missing:result.clarification.fields};
   if(result?.analysis_unavailable)return {status:'limited',operation,missing:[]};
   const missing=[];
+  if(context.journey_scope&&evidence){try{assertJourneyScopeEvidence(context,evidence);reportingCoverageText(evidence.reporting_coverage);}catch{missing.push('journey_channel_scope');}}
   if(!evidence)missing.push('executed_evidence');
   else if(REQUIRED_KINDS[operation]&&!(EVIDENCE_OPERATIONS[evidence.kind]||[]).includes(operation))missing.push('operation');
   else if(operation==='customer_journey'){
@@ -71,7 +73,7 @@ export function answerCompleteness(context,result){
       if(!counts.every(k=>Number.isSafeInteger(c[k])&&c[k]>=0)||c.named_customers+c.generic_only_customers+c.unknown_customers+(c.core_only_customers||0)!==c.eligible_first_customers)missing.push('classification_coverage');
     }
     const expectedChannel=context.channel==='online'?'Online':context.channel==='instore'?'In-store':null;
-    if((evidence.definition?.cohort?.entry_channel||null)!==expectedChannel||(evidence.definition?.subsequent?.channel||null)!==expectedChannel)missing.push('population');
+    if((evidence.definition?.cohort?.entry_channel||null)!==(context.journey_scope?channelValue(context.journey_scope.entry):expectedChannel)||(evidence.definition?.subsequent?.channel||null)!==(context.journey_scope?channelValue(context.journey_scope.followup):expectedChannel))missing.push('population');
     const windows=context.retention_windows||(context.within_days?[context.within_days]:[90,180]);
     if(evidence.population_scope==='linked_tgf'&&((evidence.rows?.length||evidence.baseline_rows?.length)&&(!['email_candidate_v1','email_candidate_v2'].includes(evidence.coverage?.identity)||evidence.definition?.cohort?.entry_source)))missing.push('linked_identity');
     if(evidence.population_scope==='linked_tgf'){const active=(evidence.source_outcomes||[]).filter(o=>o.state==='fulfilled').map(o=>o.identity_evidence);if(active.some(i=>i?.activation!=='active'||typeof i.snapshot!=='string'||!i.snapshot)||new Set(active.map(i=>i?.mode+'|'+i?.snapshot)).size>1)missing.push('linked_identity');}

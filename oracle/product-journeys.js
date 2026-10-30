@@ -1,3 +1,4 @@
+import {applyJourneyScopeDefinition,journeyReportContract,assertJourneyScopeEvidence,journeyScopeText,reportingCoverageText,JOURNEY_SCOPE_LIMITATION} from './journey-scope.js';
 import {isDeepStrictEqual} from 'node:util';
 import {resolveAnalyticalPlan,assertPlanAgreement} from './analytical-plan.js';
 import {requestId} from './request-observability.js';
@@ -5,7 +6,7 @@ import {boundedEvidenceRead} from './bounded-evidence-read.js';
 
 import {PRODUCT_JOURNEY_CONTRACT} from './product-journey-contract.js';
 export {PRODUCT_JOURNEY_CONTRACT} from './product-journey-contract.js';
-export function productJourneyDefinition(c){return {cohort_entry_start:c.cohort_entry_start||c.start_date,cohort_entry_end:c.cohort_entry_end||c.end_date,observation_end:c.observation_end||c.end_date,time_zone:c.time_zone,first_order_semantic:'first_observed_ever',cohort:{entry_product_classification:null,entry_channel:c.channel==='online'?'Online':c.channel==='instore'?'In-store':null},subsequent:{channel:c.channel==='online'?'Online':c.channel==='instore'?'In-store':null},group_by:['retention_product_journeys'],sort:'returning_customers_desc',limit:PRODUCT_JOURNEY_CONTRACT.entry_products};}
+export function productJourneyDefinition(c){return applyJourneyScopeDefinition({cohort_entry_start:c.cohort_entry_start||c.start_date,cohort_entry_end:c.cohort_entry_end||c.end_date,observation_end:c.observation_end||c.end_date,time_zone:c.time_zone,first_order_semantic:'first_observed_ever',cohort:{entry_product_classification:null,entry_channel:c.channel==='online'?'Online':c.channel==='instore'?'In-store':null},subsequent:{channel:c.channel==='online'?'Online':c.channel==='instore'?'In-store':null},group_by:['retention_product_journeys'],sort:'returning_customers_desc',limit:PRODUCT_JOURNEY_CONTRACT.entry_products},c);}
 const integer=n=>Number.isSafeInteger(n)&&n>=0;
 const countKeys=['entry_customers','returning_customers','age_eligible_customers','age_repeat_customers','verified_customers','verified_repeat_customers','missing_line_customers','unknown_product_customers'];
 export function validateProductJourneys(rows){
@@ -47,12 +48,13 @@ export function productJourneyMarkdown(e){
    ...[false,true].map(s=>{const ps=r.products.filter(p=>p.is_sizer===s);return ps.length?`${s?'Ring Sizers':'Main products'}: ${ps.length} / ${ps[0].available_products} available products shown${ps.length<ps[0].available_products?'; truncated by requested product limit':''}.`:''}).filter(Boolean));
  }
  lines.push(`First-product selection: top 20 by distinct entry customers; ${e.available_entry_products} main products available${e.available_entry_products>20?'; truncated to the requested top 20':''}. Ring Sizers: ${e.available_sizer_entry_products} available, separately ranked. Unknown entry attribution: ${e.unknown_entry_customers} customers; these remain in the overall population.`,...(e.component_outcomes||[]).filter(o=>o.status!=='fulfilled').map(o=>`${o.component}: unavailable (${o.status}); successful sections retained.`),`Request reference: ${e.request_id}.`);
- return lines.join('\n\n');
+ if(e.definition.report_scope)lines.unshift(journeyScopeText(e.definition.report_scope),JOURNEY_SCOPE_LIMITATION,...reportingCoverageText(e.reporting_coverage));
+ return (e.definition.report_scope?lines.map(l=>(e.definition.report_scope.next==='next_matching_channel'?l.replaceAll('next eligible order','selected follow-up purchase'):l).replace('Woo WW, Woo USD and Shopify','Woo WW, Woo USD, Shopify'+(e.definition.report_scope.include_square?' and eligible Square':'')).replaceAll('Observed second-purchase customers','Observed selected-follow-up customers').replace('Second-purchase product popularity',e.definition.report_scope.next==='next_matching_channel'?'Next matching-channel purchase product popularity':'Second-purchase product popularity')):lines).join('\n\n');
 }
 export function assertProductJourneyEvidence(c,e){
  assertPlanAgreement(c,e);
- const d=productJourneyDefinition(c);
- if(c.journey_group_by!=='second_purchase_products'||c.entry_product_classification!==null||e.kind!=='governed_second_purchase_products'||e.population_scope!=='linked_tgf'||!isDeepStrictEqual(e.contract,PRODUCT_JOURNEY_CONTRACT)||!isDeepStrictEqual(e.definition,d)||e.identity_evidence?.activation!=='active'||e.identity_evidence.mode!=='email_candidate_v2'||!e.identity_evidence.snapshot||!['available_entry_products','available_sizer_entry_products','unknown_entry_customers'].every(k=>integer(e[k])))throw Error('Product journey evidence scope mismatch');
+ const d=productJourneyDefinition(c);assertJourneyScopeEvidence(c,e);if(c.journey_scope)reportingCoverageText(e.reporting_coverage);
+ if(c.journey_group_by!=='second_purchase_products'||c.entry_product_classification!==null||e.kind!=='governed_second_purchase_products'||e.population_scope!=='linked_tgf'||!isDeepStrictEqual(e.contract,journeyReportContract(PRODUCT_JOURNEY_CONTRACT,c.journey_scope))||!isDeepStrictEqual(e.definition,d)||e.identity_evidence?.activation!=='active'||e.identity_evidence.mode!=='email_candidate_v2'||!e.identity_evidence.snapshot||!['available_entry_products','available_sizer_entry_products','unknown_entry_customers'].every(k=>integer(e[k])))throw Error('Product journey evidence scope mismatch');
  validateProductJourneys(e.rows);
  if(!Array.isArray(e.component_outcomes)||e.component_outcomes.length!==2)throw Error('Missing component outcomes');
  for(const component of ['overall','journeys']){
@@ -68,7 +70,7 @@ export async function answerProductJourneys({context,provider,...options}){
  try{
   const part=await boundedEvidenceRead(timeoutMs=>provider.analyzeCustomerJourney(definition,{...options,timeoutMs,combined:true}),{...options,deadlineAt:options.deadlineAt??Date.now()+45000});
   if(part.population_scope!=='linked_tgf'||part.definition?.group_by?.[0]!=='retention_product_journeys'||part.definition.cohort_entry_start!==definition.cohort_entry_start||part.definition.cohort_entry_end!==definition.cohort_entry_end||part.definition.observation_end!==definition.observation_end||part.definition.time_zone!==definition.time_zone||part.definition.cohort?.entry_product_classification!==null)throw Error('Provider product journey scope mismatch');
-  const evidence={kind:'governed_second_purchase_products',subject:'customer_journey',operation:'second_purchase_products',population_scope:'linked_tgf',request_id,definition,contract:PRODUCT_JOURNEY_CONTRACT,analytical_plan:resolveAnalyticalPlan(context),identity_evidence:part.identity_evidence,rows:part.product_journeys,available_entry_products:Number(part.available_entry_products),available_sizer_entry_products:Number(part.available_sizer_entry_products),unknown_entry_customers:Number(part.unknown_entry_customers),periods:[{start_date:context.start_date,end_date:context.end_date}]};
+  const evidence={...(context.journey_scope?{reporting_coverage:part.reporting_coverage}:{}),kind:'governed_second_purchase_products',subject:'customer_journey',operation:'second_purchase_products',population_scope:'linked_tgf',request_id,definition,contract:journeyReportContract(PRODUCT_JOURNEY_CONTRACT,context.journey_scope),analytical_plan:resolveAnalyticalPlan(context),identity_evidence:part.identity_evidence,rows:part.product_journeys,available_entry_products:Number(part.available_entry_products),available_sizer_entry_products:Number(part.available_sizer_entry_products),unknown_entry_customers:Number(part.unknown_entry_customers),periods:[{start_date:context.start_date,end_date:context.end_date}]};
   if(!Array.isArray(evidence.rows))throw Error('Missing product journey rows');
   const accepted=[],component_outcomes=[];
   for(const component of ['overall','journeys']){
@@ -82,5 +84,5 @@ export async function answerProductJourneys({context,provider,...options}){
   evidence.rows=accepted;evidence.component_outcomes=component_outcomes;
   assertProductJourneyEvidence(context,evidence);
   return {request_id,answer:productJourneyMarkdown(evidence),evidence,analysis_context:context,partial:true,tools:['analyze_customer_journey']};
- }catch(error){if(['LEASE_NOT_OWNED','REQUEST_CANCELLED'].includes(error.code)||options.signal?.aborted)throw error;return {request_id,analysis_context:context,analysis_unavailable:true,partial:true,answer:`Second-purchase product analysis unavailable: linked provider retrieval or evidence validation failed. No ranking or percentage was inferred. Request reference: ${request_id}.`,tools:['analyze_customer_journey']};}
+ }catch(error){if(error.code==='SQUARE_EXTENSION_REVIEW_REQUIRED')return {request_id,analysis_context:context,analysis_unavailable:true,partial:true,answer:'Square reporting requires review and separate activation of its versioned extension. No Square-inclusive figures or substitute legacy population were returned.',tools:[]};if(['LEASE_NOT_OWNED','REQUEST_CANCELLED'].includes(error.code)||options.signal?.aborted)throw error;return {request_id,analysis_context:context,analysis_unavailable:true,partial:true,answer:`Second-purchase product analysis unavailable: linked provider retrieval or evidence validation failed. No ranking or percentage was inferred. Request reference: ${request_id}.`,tools:['analyze_customer_journey']};}
 }

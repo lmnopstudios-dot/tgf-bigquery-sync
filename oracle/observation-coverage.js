@@ -18,8 +18,8 @@ export function observationWindow({entry,days,requestedEnd,coverage}){
 // Linked histories can return through any participating source. An entry-source
 // certificate alone cannot certify non-returners. Consume only the common
 // certified interval across every source read by the identity wrapper.
-export function linkedObservationCoverage(certificates=[],timeZone='Europe/London'){
-  const sources=[['woo','ww'],['woo','usd'],['shopify','shopify']];
+export function linkedObservationCoverage(certificates=[],timeZone='Europe/London',includeSquare=false){
+  const sources=[['woo','ww'],['woo','usd'],['shopify','shopify'],...(includeSquare?[['square','square']]:[])];
   const coverage=sources.map(([source,store])=>observationCoverage(certificates,source,store,timeZone));
   const unknown={status:'unverified',start:null,end:null,evidence:null};
   if(coverage.some(c=>c.status!=='verified_continuous'))return unknown;
