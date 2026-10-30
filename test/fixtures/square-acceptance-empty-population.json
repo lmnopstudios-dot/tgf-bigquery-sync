@@ -1,0 +1,427 @@
+{
+  "source": "Supplied Render output; leading rows truncated. All three aggregate reports and final summary are complete.",
+  "interpretation": "Executed successfully but population acceptance is invalid; empty coverage is not evidence of zero customers.",
+  "summary": {
+    "stage": "acceptance_summary",
+    "preview_only": true,
+    "outcomes": [
+      {
+        "case": "collaboration_retention_all_channels",
+        "state": "succeeded"
+      },
+      {
+        "case": "overall_instore_entry_next_anywhere",
+        "state": "succeeded"
+      },
+      {
+        "case": "collaboration_online_entry_next_instore",
+        "state": "succeeded"
+      }
+    ],
+    "known_billed_bytes": "1393557504",
+    "execution_ceiling_bytes": "5000000000"
+  },
+  "reports": [
+    {
+      "case": "collaboration_retention_all_channels",
+      "definition": {
+        "report_scope": {
+          "version": "square_channels_v1",
+          "include_square": true,
+          "entry": "all",
+          "followup": "all",
+          "next": "anywhere_then_filter"
+        },
+        "start_date": "2022-10-19",
+        "end_date": "2026-10-19",
+        "cohort_entry_start": "2022-10-19",
+        "cohort_entry_end": "2026-10-19",
+        "observation_end": "2026-10-19",
+        "first_order_semantic": "first_observed_ever",
+        "time_zone": "Europe/London",
+        "ranking_window": 90,
+        "cohort": {
+          "entity": "customer",
+          "entry_event": "purchase",
+          "entry_sequence": "first_observed_order",
+          "entry_product_classification": "collaboration",
+          "entry_product_ref": null,
+          "entry_channel": null,
+          "entry_source": null,
+          "require_new_customer": true
+        },
+        "subsequent": {
+          "event": "purchase",
+          "after_entry": true,
+          "minimum_order_sequence": 2,
+          "maximum_order_sequence": null,
+          "within_days": null,
+          "product_classification": null,
+          "product_ref": null,
+          "excluded_product_titles": [],
+          "include_unclassified": false,
+          "channel": null,
+          "source": null
+        },
+        "metrics": [
+          "cohort_customers",
+          "customers_with_subsequent_purchase",
+          "repeat_purchase_rate",
+          "downstream_orders",
+          "downstream_units",
+          "downstream_source_native_net_sales",
+          "average_downstream_order_value",
+          "orders_per_returning_customer",
+          "days_to_next_purchase",
+          "median_days_to_next_purchase",
+          "downstream_product_customer_count",
+          "downstream_product_order_count",
+          "downstream_product_units",
+          "downstream_product_sales"
+        ],
+        "group_by": [
+          "retention_windows"
+        ],
+        "sort": "repeat_rate_desc",
+        "limit": 100
+      },
+      "rows": [
+        {
+          "reporting_coverage": [],
+          "population_scope": "linked_tgf",
+          "window_days": null,
+          "cohort_customers": null,
+          "coverage": []
+        }
+      ],
+      "reported_state": "succeeded",
+      "expected_state": "failed_population_validation"
+    },
+    {
+      "case": "overall_instore_entry_next_anywhere",
+      "definition": {
+        "report_scope": {
+          "version": "square_channels_v1",
+          "include_square": true,
+          "entry": "instore",
+          "followup": "all",
+          "next": "anywhere_then_filter"
+        },
+        "start_date": "2022-10-19",
+        "end_date": "2026-10-19",
+        "cohort_entry_start": "2022-10-19",
+        "cohort_entry_end": "2026-10-19",
+        "observation_end": "2026-10-19",
+        "first_order_semantic": "first_observed_ever",
+        "time_zone": "Europe/London",
+        "ranking_window": 90,
+        "cohort": {
+          "entity": "customer",
+          "entry_event": "purchase",
+          "entry_sequence": "first_observed_order",
+          "entry_product_classification": null,
+          "entry_product_ref": null,
+          "entry_channel": "In-store",
+          "entry_source": null,
+          "require_new_customer": true
+        },
+        "subsequent": {
+          "event": "purchase",
+          "after_entry": true,
+          "minimum_order_sequence": 2,
+          "maximum_order_sequence": null,
+          "within_days": null,
+          "product_classification": null,
+          "product_ref": null,
+          "excluded_product_titles": [],
+          "include_unclassified": false,
+          "channel": null,
+          "source": null
+        },
+        "metrics": [
+          "cohort_customers",
+          "customers_with_subsequent_purchase",
+          "repeat_purchase_rate",
+          "downstream_orders",
+          "downstream_units",
+          "downstream_source_native_net_sales",
+          "average_downstream_order_value",
+          "orders_per_returning_customer",
+          "days_to_next_purchase",
+          "median_days_to_next_purchase",
+          "downstream_product_customer_count",
+          "downstream_product_order_count",
+          "downstream_product_units",
+          "downstream_product_sales"
+        ],
+        "group_by": [
+          "retention_product_journeys"
+        ],
+        "sort": "returning_customers_desc",
+        "limit": 20
+      },
+      "rows": [
+        {
+          "reporting_coverage": [],
+          "population_scope": "linked_tgf",
+          "product_journeys": [
+            {
+              "entry_product_ref": null,
+              "entry_product": "Overall",
+              "entry_is_sizer": false,
+              "entry_rank": 0,
+              "window_days": 0,
+              "entry_customers": 0,
+              "returning_customers": 0,
+              "age_eligible_customers": 0,
+              "age_repeat_customers": 0,
+              "verified_customers": 0,
+              "verified_repeat_customers": 0,
+              "missing_line_customers": 0,
+              "unknown_product_customers": 0,
+              "observation_coverage_status": "unverified",
+              "verified_coverage_start": null,
+              "verified_coverage_end": null,
+              "coverage_evidence": null,
+              "products": []
+            },
+            {
+              "entry_product_ref": null,
+              "entry_product": "Overall",
+              "entry_is_sizer": false,
+              "entry_rank": 0,
+              "window_days": 90,
+              "entry_customers": 0,
+              "returning_customers": 0,
+              "age_eligible_customers": 0,
+              "age_repeat_customers": 0,
+              "verified_customers": 0,
+              "verified_repeat_customers": 0,
+              "missing_line_customers": 0,
+              "unknown_product_customers": 0,
+              "observation_coverage_status": "unverified",
+              "verified_coverage_start": null,
+              "verified_coverage_end": null,
+              "coverage_evidence": null,
+              "products": []
+            },
+            {
+              "entry_product_ref": null,
+              "entry_product": "Overall",
+              "entry_is_sizer": false,
+              "entry_rank": 0,
+              "window_days": 180,
+              "entry_customers": 0,
+              "returning_customers": 0,
+              "age_eligible_customers": 0,
+              "age_repeat_customers": 0,
+              "verified_customers": 0,
+              "verified_repeat_customers": 0,
+              "missing_line_customers": 0,
+              "unknown_product_customers": 0,
+              "observation_coverage_status": "unverified",
+              "verified_coverage_start": null,
+              "verified_coverage_end": null,
+              "coverage_evidence": null,
+              "products": []
+            },
+            {
+              "entry_product_ref": null,
+              "entry_product": "Overall",
+              "entry_is_sizer": false,
+              "entry_rank": 0,
+              "window_days": 360,
+              "entry_customers": 0,
+              "returning_customers": 0,
+              "age_eligible_customers": 0,
+              "age_repeat_customers": 0,
+              "verified_customers": 0,
+              "verified_repeat_customers": 0,
+              "missing_line_customers": 0,
+              "unknown_product_customers": 0,
+              "observation_coverage_status": "unverified",
+              "verified_coverage_start": null,
+              "verified_coverage_end": null,
+              "coverage_evidence": null,
+              "products": []
+            }
+          ],
+          "available_entry_products": 0,
+          "available_sizer_entry_products": 0,
+          "unknown_entry_customers": 0
+        }
+      ],
+      "reported_state": "succeeded",
+      "expected_state": "failed_population_validation"
+    },
+    {
+      "case": "collaboration_online_entry_next_instore",
+      "definition": {
+        "report_scope": {
+          "version": "square_channels_v1",
+          "include_square": true,
+          "entry": "online",
+          "followup": "instore",
+          "next": "next_matching_channel"
+        },
+        "start_date": "2022-10-19",
+        "end_date": "2026-10-19",
+        "cohort_entry_start": "2022-10-19",
+        "cohort_entry_end": "2026-10-19",
+        "observation_end": "2026-10-19",
+        "first_order_semantic": "first_observed_ever",
+        "time_zone": "Europe/London",
+        "ranking_window": 90,
+        "cohort": {
+          "entity": "customer",
+          "entry_event": "purchase",
+          "entry_sequence": "first_observed_order",
+          "entry_product_classification": "collaboration",
+          "entry_product_ref": null,
+          "entry_channel": "Online",
+          "entry_source": null,
+          "require_new_customer": true
+        },
+        "subsequent": {
+          "event": "purchase",
+          "after_entry": true,
+          "minimum_order_sequence": 2,
+          "maximum_order_sequence": null,
+          "within_days": null,
+          "product_classification": null,
+          "product_ref": null,
+          "excluded_product_titles": [],
+          "include_unclassified": false,
+          "channel": "In-store",
+          "source": null
+        },
+        "metrics": [
+          "cohort_customers",
+          "customers_with_subsequent_purchase",
+          "repeat_purchase_rate",
+          "downstream_orders",
+          "downstream_units",
+          "downstream_source_native_net_sales",
+          "average_downstream_order_value",
+          "orders_per_returning_customer",
+          "days_to_next_purchase",
+          "median_days_to_next_purchase",
+          "downstream_product_customer_count",
+          "downstream_product_order_count",
+          "downstream_product_units",
+          "downstream_product_sales"
+        ],
+        "group_by": [
+          "retention_collaboration_journeys"
+        ],
+        "sort": "returning_customers_desc",
+        "limit": 20
+      },
+      "rows": [
+        {
+          "reporting_coverage": [],
+          "population_scope": "linked_tgf",
+          "collaboration_journeys": [
+            {
+              "entry_product_ref": null,
+              "entry_product": "Overall",
+              "entry_is_sizer": false,
+              "entry_rank": 0,
+              "window_days": 0,
+              "entry_customers": 0,
+              "returning_customers": 0,
+              "age_eligible_customers": 0,
+              "age_repeat_customers": 0,
+              "verified_customers": 0,
+              "verified_repeat_customers": 0,
+              "cohort_type": "overall",
+              "collaboration_name": null,
+              "collaboration_product_ref": null,
+              "missing_line_customers": 0,
+              "unknown_product_customers": 0,
+              "observation_coverage_status": "unverified",
+              "verified_coverage_start": null,
+              "verified_coverage_end": null,
+              "coverage_evidence": null,
+              "products": []
+            },
+            {
+              "entry_product_ref": null,
+              "entry_product": "Overall",
+              "entry_is_sizer": false,
+              "entry_rank": 0,
+              "window_days": 90,
+              "entry_customers": 0,
+              "returning_customers": 0,
+              "age_eligible_customers": 0,
+              "age_repeat_customers": 0,
+              "verified_customers": 0,
+              "verified_repeat_customers": 0,
+              "cohort_type": "overall",
+              "collaboration_name": null,
+              "collaboration_product_ref": null,
+              "missing_line_customers": 0,
+              "unknown_product_customers": 0,
+              "observation_coverage_status": "unverified",
+              "verified_coverage_start": null,
+              "verified_coverage_end": null,
+              "coverage_evidence": null,
+              "products": []
+            },
+            {
+              "entry_product_ref": null,
+              "entry_product": "Overall",
+              "entry_is_sizer": false,
+              "entry_rank": 0,
+              "window_days": 180,
+              "entry_customers": 0,
+              "returning_customers": 0,
+              "age_eligible_customers": 0,
+              "age_repeat_customers": 0,
+              "verified_customers": 0,
+              "verified_repeat_customers": 0,
+              "cohort_type": "overall",
+              "collaboration_name": null,
+              "collaboration_product_ref": null,
+              "missing_line_customers": 0,
+              "unknown_product_customers": 0,
+              "observation_coverage_status": "unverified",
+              "verified_coverage_start": null,
+              "verified_coverage_end": null,
+              "coverage_evidence": null,
+              "products": []
+            },
+            {
+              "entry_product_ref": null,
+              "entry_product": "Overall",
+              "entry_is_sizer": false,
+              "entry_rank": 0,
+              "window_days": 360,
+              "entry_customers": 0,
+              "returning_customers": 0,
+              "age_eligible_customers": 0,
+              "age_repeat_customers": 0,
+              "verified_customers": 0,
+              "verified_repeat_customers": 0,
+              "cohort_type": "overall",
+              "collaboration_name": null,
+              "collaboration_product_ref": null,
+              "missing_line_customers": 0,
+              "unknown_product_customers": 0,
+              "observation_coverage_status": "unverified",
+              "verified_coverage_start": null,
+              "verified_coverage_end": null,
+              "coverage_evidence": null,
+              "products": []
+            }
+          ],
+          "available_collaborations": 0,
+          "available_items": 0,
+          "available_sizer_items": 0
+        }
+      ],
+      "reported_state": "succeeded",
+      "expected_state": "failed_population_validation"
+    }
+  ]
+}
