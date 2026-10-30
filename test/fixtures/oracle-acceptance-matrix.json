@@ -1302,6 +1302,10 @@
     {
       "file": "test/square-reporting-acceptance.test.js",
       "purpose": "Bounded read-only Render validation, common-stage reuse, per-stage dry runs, independent failures, safe job metadata and one shared 5 GB execution budget."
+    },
+    {
+      "file": "test/square-acceptance-sdk-dates.test.js",
+      "purpose": "Square preview empty-population incident: installed BigQuery SDK DATE serialization, real REST request/decode boundary, generated persisted-history SQL with actual wire parameters, and intentional-null coverage dates."
     }
   ]
 }

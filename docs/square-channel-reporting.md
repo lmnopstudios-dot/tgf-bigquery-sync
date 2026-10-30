@@ -218,3 +218,17 @@ SQL-hash/error-location instrumentation change. These results are local fixture
 validation; the newly generated report queries still require the Render warehouse
 acceptance command above. No production report execution, publication, activation,
 merge or deployment was performed here.
+
+### Follow-up: SDK calendar binding correction
+
+The supplied Render execution of the original diagnostic compiled successfully
+but returned empty coverage and incorrectly accepted zero cohorts. Its explicit
+DATE types were paired with plain strings; the installed SDK omitted their scalar
+values. The normal report provider already uses date wrappers and is unchanged.
+The diagnostic now reuses that helper, proves the installed SDK's DATE encoding
+locally, checks materialized native Square history before cohort work, and rejects
+missing full-history coverage while still permitting genuine empty filtered cohorts.
+See [the incident and corrected acceptance boundary](incidents/square-acceptance-empty-population.md).
+The same command and shared 5 GB cap apply; the extra aggregate checkpoint is
+charged from that allowance and reused across cases. The prior zero results are
+invalid for reporting and do not establish absent customers or absent email.
