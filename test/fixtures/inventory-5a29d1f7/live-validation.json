@@ -1,0 +1,148 @@
+{
+  "source": "User-supplied read-only Render validation output, 2026-11-02",
+  "validated_source_commit": "0d5bf0e96915fb4c9db77e1b520773d4a5cfa18a",
+  "deployed_runtime_revision": "2afbd0b9b1caae9a226cfecf5e214a520ff78f97",
+  "checks": [
+    {
+      "stage": "retained_inventory_export",
+      "request_id": "5a29d1f7-b66d-4742-9006-649bf270e82e",
+      "read_only": true,
+      "report_replayed": false,
+      "owner_scoped": true,
+      "status": "found",
+      "complete": false,
+      "catalogue_complete": false,
+      "products": 32,
+      "locations": 6,
+      "sha256_matches": true,
+      "repaired_workbook_validation": "verified",
+      "integrity": null,
+      "legacy_json_member_order_differences": 837,
+      "example_cells": [
+        {
+          "sheet": "Location quantities",
+          "row": 2,
+          "column": 16
+        },
+        {
+          "sheet": "Location quantities",
+          "row": 3,
+          "column": 16
+        },
+        {
+          "sheet": "Location quantities",
+          "row": 4,
+          "column": 16
+        },
+        {
+          "sheet": "Location quantities",
+          "row": 5,
+          "column": 16
+        },
+        {
+          "sheet": "Location quantities",
+          "row": 6,
+          "column": 16
+        },
+        {
+          "sheet": "Location quantities",
+          "row": 7,
+          "column": 16
+        },
+        {
+          "sheet": "Location quantities",
+          "row": 8,
+          "column": 16
+        },
+        {
+          "sheet": "Location quantities",
+          "row": 9,
+          "column": 16
+        },
+        {
+          "sheet": "Location quantities",
+          "row": 10,
+          "column": 16
+        },
+        {
+          "sheet": "Location quantities",
+          "row": 11,
+          "column": 16
+        }
+      ],
+      "examples_truncated": true
+    },
+    {
+      "stage": "shopify_read_complete",
+      "complete": true,
+      "products": 301,
+      "variants": 3138,
+      "locations": [
+        {
+          "id": "gid://shopify/Location/104532967751",
+          "name": "Kings Cross",
+          "isActive": true
+        },
+        {
+          "id": "gid://shopify/Location/105063874887",
+          "name": "Online Ready to Ship",
+          "isActive": true
+        },
+        {
+          "id": "gid://shopify/Location/104532836679",
+          "name": "Shoreditch",
+          "isActive": true
+        },
+        {
+          "id": "gid://shopify/Location/105063842119",
+          "name": "Shoreditch Workshop",
+          "isActive": true
+        },
+        {
+          "id": "gid://shopify/Location/104514388295",
+          "name": "Soho",
+          "isActive": true
+        },
+        {
+          "id": "gid://shopify/Location/105063809351",
+          "name": "Soho Workshop",
+          "isActive": true
+        }
+      ],
+      "catalogue_complete": true,
+      "catalogue_status_counts": {
+        "ACTIVE": 590,
+        "DRAFT": 53,
+        "ARCHIVED": 2,
+        "UNLISTED": 55
+      },
+      "eligible_statuses": [
+        "ACTIVE",
+        "DRAFT",
+        "UNLISTED"
+      ],
+      "catalogue_scanned_count": 700,
+      "related_tags": [
+        {
+          "tag": "made-to-order",
+          "product_count": 397
+        }
+      ],
+      "failures": [],
+      "started_at": "2026-11-02T17:59:54.595Z",
+      "as_of": "2026-11-02T18:03:05.414Z"
+    },
+    {
+      "stage": "export_complete",
+      "path": "/tmp/oracle-inventory-5a29d1f7.xlsx",
+      "bytes": 1232085,
+      "sha256": "22b5ecfacc62d784aa794a3d2de09e6603685e307ff1ef5aadd931946d3175e4",
+      "complete": true,
+      "tag_convention_verified": true,
+      "live_validation": "verified",
+      "durable_storage": "not_attempted",
+      "chat_delivery": "not_attempted"
+    }
+  ],
+  "scope": "Live diagnostic and retained-artifact validation succeeded. The workbook resides on Render; its bytes were not attached here. Durable storage and conversational delivery of the new complete workbook were not attempted."
+}

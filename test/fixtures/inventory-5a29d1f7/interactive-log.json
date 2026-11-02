@@ -1,0 +1,13 @@
+{
+  "source": "User-supplied correlated Render logs, 2026-11-02",
+  "request_id": "5a29d1f7-b66d-4742-9006-649bf270e82e",
+  "deployed_revision": "2afbd0b9b1caae9a226cfecf5e214a520ff78f97",
+  "requested_subject": "current_stock",
+  "selected_route": "get_shopify_inventory_by_location",
+  "stage": "agent_request",
+  "outcome": "failed",
+  "elapsed_ms": 18082,
+  "error_code": "EXPORT_INTEGRITY_FAILED",
+  "durable_job": "none (user confirmed)",
+  "scope": "Confirms workbook integrity verification rejection on the interactive route. Native-JSON metadata order is reproduced locally; retained artifact inspection confirms whether the specific saved artifact has that mismatch."
+}

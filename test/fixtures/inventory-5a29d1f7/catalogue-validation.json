@@ -1,0 +1,11 @@
+{
+  "source": "User-supplied read-only Render probe, 2026-11-02",
+  "stage": "catalogue_validation",
+  "product_id": "gid://shopify/Product/10434334097735",
+  "page": 1,
+  "index": 38,
+  "field": "status",
+  "value_type": "string",
+  "observed_value": "UNLISTED",
+  "scope": "Confirms the live catalogue-validator rejection only; does not establish the cause of the original interactive service rejection."
+}
