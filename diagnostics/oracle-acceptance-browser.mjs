@@ -1,3 +1,4 @@
+import {verifyInventoryReportBrowser} from '../test/helpers/inventory-report-browser.js';
 import {verifySquareChannelControls} from '../test/helpers/square-channel-browser.js';
 import {verifyHistoricalCollaborationPanel} from '../test/helpers/historical-collaboration-browser.js';
 import {verifyWooAssignmentPanel} from '../test/helpers/woo-assignment-browser.js';
@@ -16,6 +17,7 @@ const f=acceptanceFixture(),h=await acceptanceServer(f,{durable:true});
 const browser=await chromium.launch({executablePath:process.env.ORACLE_CHROMIUM||(existsSync('/usr/bin/chromium')?'/usr/bin/chromium':chromium.executablePath()),headless:true,args:['--no-sandbox']});
 const output=process.env.ORACLE_BROWSER_OUTPUT||'/tmp/oracle-acceptance-browser';await mkdir(output,{recursive:true});
 try{
+  await verifyInventoryReportBrowser(browser);
   for(const [name,width,height] of [['desktop',1280,900],['mobile',390,844]]){
     const page=await browser.newPage({viewport:{width,height}}),errors=[];page.on('pageerror',e=>errors.push(e.message));
     await page.goto(h.origin+'/oracle/');await page.locator('#password').fill('fixture');await page.locator('#login-form button').click();await page.locator('#app').waitFor({state:'visible'});

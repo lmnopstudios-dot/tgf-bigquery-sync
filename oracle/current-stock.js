@@ -1,8 +1,10 @@
+import {inventoryReportScope,createInventoryReportService,inventoryReportAnswer} from './inventory-report.js';
 import {classificationReaderCtes} from './classification-reader.js';
 import {createInventoryReadBudget,inventoryDiagnostic} from '../shopify/inventory-budget.js';
 import {createBatchedInventoryByLocation,inventoryLocationSelector,inventoryLocationSelectorForRequest} from '../shopify/inventory-by-location.js';
 
 export function currentStockScope(message) {
+  const catalogue=inventoryReportScope(message);if(catalogue)return catalogue;
   const text=String(message||'').trim();
   // Leave velocity, historical analysis, exports and replenishment to existing tooling.
   if(/\b(?:history|historical|sales|sold|velocity|capacity|components?|stones?|export|chart|graph|last|yesterday|20\d{2})\b/i.test(text))return null;
@@ -21,6 +23,7 @@ const esc=value=>String(value??'Unavailable').replace(/[\r\n]/g,' ').replaceAll(
 const number=value=>typeof value==='number'?String(value):'Unavailable';
 
 export function stockAnswer(evidence) {
+  if(evidence.kind==='inventory_report')return inventoryReportAnswer(evidence);
   if(evidence.ambiguous)return `Which product group do you mean by **${esc(evidence.entity_query)}**? Please give a more specific catalogue title or product group.\n\n${(evidence.candidates||[]).slice(0,8).map((p,i)=>`${i+1}. ${esc(p.title)}`).join('\n')}`;
   const rows=evidence.products.flatMap(p=>p.variants.flatMap(v=>v.locations.map(l=>({p,v,l}))));
   const observed=rows.filter(r=>r.l.evidence_state==='observed'),short=observed.filter(r=>r.l.available<=0);
@@ -54,8 +57,11 @@ export function createStockGroupLookup({bigquery,project}) {
   };
 }
 
-export function createCurrentStockService({graphql,getToken,lookupGroup=null,locationSelector=inventoryLocationSelector(),now=Date.now,log=()=>{}}) {
+export function createCurrentStockService({graphql,getToken,lookupGroup=null,locationSelector=inventoryLocationSelector(),now=Date.now,log=()=>{},artifactStore}) {
+  const inventoryReport=artifactStore?createInventoryReportService({graphql,getToken,artifactStore,now}):null;
   return async(message,options={})=>{
+    const report=await inventoryReport?.(message,options);if(report)return report;
+    if(inventoryReportScope(message)||options.analysisContext?.entity_query==='all products without made-to-order tag')throw Object.assign(new Error('Inventory export storage unavailable'),{code:'EXPORT_STORAGE_UNAVAILABLE'});
     const scope=options.analysisContext?.requested_subject==='current_stock'?{entity_query:options.analysisContext.entity_query,location:options.analysisContext.location,all_locations:options.analysisContext.location==null}:currentStockScope(message);
     if(!scope)return null;
     const deadlineAt=Math.min(options.deadlineAt??Infinity,now()+45_000),budget=createInventoryReadBudget({deadlineAt,signal:options.signal,maxRequests:4,now});

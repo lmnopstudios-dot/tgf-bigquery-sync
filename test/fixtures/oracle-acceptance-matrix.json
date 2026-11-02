@@ -1306,6 +1306,10 @@
     {
       "file": "test/square-acceptance-sdk-dates.test.js",
       "purpose": "Square preview empty-population incident: installed BigQuery SDK DATE serialization, real REST request/decode boundary, generated persisted-history SQL with actual wire parameters, and intentional-null coverage dates."
+    },
+    {
+      "file": "test/oracle-inventory-report.test.js",
+      "purpose": "Exact failed all-location non-MTO inventory request: tag population, pagination, active/draft statuses, native quantity separation, missing versus zero, workbook, direct/interactive/durable download and recovery."
     }
   ]
 }

@@ -4206,7 +4206,7 @@ const productEvidenceReport=createProductEvidenceReportService({
 });
 const generalAnalytics=createGeneralAnalyticsService({loadReport:ecommerceReportV2,inspectProductHistory:createReadOnlyProductHistory({bigquery,project:GOOGLE_PROJECT_ID})});
 const {artifactStore:priorityExportStore,service:productPriorityExport}=createProductionPriorityDependencies({bigquery,project:GOOGLE_PROJECT_ID});
-const currentStock=createCurrentStockService({graphql:shopifyGraphQL,getToken:getShopifyAccessToken,lookupGroup:createStockGroupLookup({bigquery,project:GOOGLE_PROJECT_ID}),locationSelector:oracleInventoryLocationSelector,log:diagnostic=>console.info('Oracle inventory read:',diagnostic)});
+const currentStock=createCurrentStockService({artifactStore:priorityExportStore,graphql:shopifyGraphQL,getToken:getShopifyAccessToken,lookupGroup:createStockGroupLookup({bigquery,project:GOOGLE_PROJECT_ID}),locationSelector:oracleInventoryLocationSelector,log:diagnostic=>console.info('Oracle inventory read:',diagnostic)});
 baselineOverview=createOracleBaselineDispatcher({currentStock,productPriorityExport,generalAnalytics,historicalEventComparison,ecommerceBaselineOverview,productEvidenceReport});
 
 async function getSalesByLocation({
