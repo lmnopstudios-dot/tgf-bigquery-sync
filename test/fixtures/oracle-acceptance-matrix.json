@@ -1310,6 +1310,18 @@
     {
       "file": "test/oracle-inventory-report.test.js",
       "purpose": "Exact failed all-location non-MTO inventory request: tag population, pagination, active/draft statuses, native quantity separation, missing versus zero, workbook, direct/interactive/durable download and recovery."
+    },
+    {
+      "file": "test/oracle-inventory-incident.test.js",
+      "purpose": "5a29d1f7 investigation boundary: production chat entrypoint and SQL export-store adapter with mocked remote responses, active-and-draft intent equivalence, stage-specific lookup/workbook/persistence failures and independent read-only local XLSX recovery preserving partial coverage."
+    },
+    {
+      "file": "test/inventory-catalogue-schema.test.js",
+      "purpose": "Render-confirmed catalogue rejection: Product/10434334097735 status UNLISTED at page 1 index 38, schema-valid status versus requested population, field-level failures and all six locations with unchanged zero/negative/unstocked/untracked/failed states."
+    },
+    {
+      "file": "test/inventory-artifact-json.test.js",
+      "purpose": "5a29d1f7 EXPORT_INTEGRITY_FAILED: production native JSON reordering, legacy metadata JSON strings, unchanged byte checksum and strict quantities/identities/array order; owner-scoped read-only retained artifact inspection without report replay."
     }
   ]
 }

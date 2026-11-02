@@ -1,4 +1,4 @@
-import {inventoryReportScope,createInventoryReportService,inventoryReportAnswer} from './inventory-report.js';
+import {inventoryReportScope,createInventoryReportService,inventoryReportAnswer,isInventoryReportContext} from './inventory-report.js';
 import {classificationReaderCtes} from './classification-reader.js';
 import {createInventoryReadBudget,inventoryDiagnostic} from '../shopify/inventory-budget.js';
 import {createBatchedInventoryByLocation,inventoryLocationSelector,inventoryLocationSelectorForRequest} from '../shopify/inventory-by-location.js';
@@ -61,7 +61,7 @@ export function createCurrentStockService({graphql,getToken,lookupGroup=null,loc
   const inventoryReport=artifactStore?createInventoryReportService({graphql,getToken,artifactStore,now}):null;
   return async(message,options={})=>{
     const report=await inventoryReport?.(message,options);if(report)return report;
-    if(inventoryReportScope(message)||options.analysisContext?.entity_query==='all products without made-to-order tag')throw Object.assign(new Error('Inventory export storage unavailable'),{code:'EXPORT_STORAGE_UNAVAILABLE'});
+    if(inventoryReportScope(message)||isInventoryReportContext(options.analysisContext))throw Object.assign(new Error('Inventory export storage unavailable'),{code:'EXPORT_STORAGE_UNAVAILABLE'});
     const scope=options.analysisContext?.requested_subject==='current_stock'?{entity_query:options.analysisContext.entity_query,location:options.analysisContext.location,all_locations:options.analysisContext.location==null}:currentStockScope(message);
     if(!scope)return null;
     const deadlineAt=Math.min(options.deadlineAt??Infinity,now()+45_000),budget=createInventoryReadBudget({deadlineAt,signal:options.signal,maxRequests:4,now});
