@@ -32,7 +32,9 @@ failure/limit. Limits are 20,000 GraphQL attempts, 100,000 retained variants,
 1,000,000 location rows, ten minutes maximum (the caller may impose a shorter
 request deadline), 8 MB serialized durable artifact storage, 16,384 columns and
 32,767 characters per Excel cell. Row/storage overflow rejects the export rather
-than silently truncating it. Normal downloads use authenticated durable export
+than silently truncating it. Catalogue-wide inventory selects the existing background-job transport so full
+pagination is not clipped by the short interactive budget; named-product stock
+keeps the chat route. Normal downloads use authenticated durable export
 storage; saved bytes are verified on download and recovery without Shopify replay.
 JSON metadata compares parsed semantics because native JSON storage can reorder
 object members. Checksums, quantities, identities, statuses and array order remain

@@ -1,3 +1,4 @@
+import {isInventoryReportContext} from './inventory-report.js';
 import {COLLABORATION_JOURNEY_CONTRACT} from './collaboration-product-journeys.js';
 import {PRODUCT_JOURNEY_CONTRACT} from './product-journey-contract.js';
 import { ORDER_VALUE_DEFINITIONS } from './order-value-provider.js';
@@ -63,5 +64,5 @@ export function resolveExecutionPlan(context,bindings) {
   if(plan.requested_operations.includes('product_attribution'))limitation='Product attribution is unavailable from the current governed campaign bindings. Linked campaign/order/product identities and compatible attribution windows are required. Campaign revenue and purchase totals cannot identify products bought from a campaign; no prior performance report was substituted.';
   const components=(plan.requested_operations||[]).map(operation=>({operation,status:limitation?'blocked':capability?.operations?.includes(operation)?(['basket_composition','numeric_bands','merchandise_mean','merchandise_median','basket_gaps'].includes(operation)?'supported':'conditional'):'unsupported',blocker:limitation||(operation==='profit_optimization'?'Profit optimization requires compatible product and fulfilment costs; supply those costs before requesting a profit recommendation.':operation==='behaviour_forecast'?'A user-supplied behaviour change is an unverified scenario assumption. A validated behaviour model is required for forecasts; the displayed arithmetic keeps existing orders and behaviour unchanged.':null)}));
   if(context?.tool_route==='get_order_value_analysis'&&(plan.comparison.start_date||plan.comparison.included_periods.length))components.push({operation:'period_comparison',status:'unsupported',blocker:'The additional period comparison has no verified order-value binding. The primary requested window is retained; request each comparison window separately.'});
-  return {plan,capability,limitation,components,delivery:context?.unresolved_required_fields?.length||limitation?'chat':capability?.preferred_transport||null,execute:bindings?.[context?.tool_route]||null};
+  return {plan,capability,limitation,components,delivery:context?.unresolved_required_fields?.length||limitation?'chat':isInventoryReportContext(context)?'job':capability?.preferred_transport||null,execute:bindings?.[context?.tool_route]||null};
 }

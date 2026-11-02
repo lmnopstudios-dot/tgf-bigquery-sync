@@ -20,7 +20,7 @@ async function chatFixture(t,{fail=null,longCell=false,unlistedBoundary=false}={
  const app=express();app.use('/api/oracle',createOracleUiRouter({knowledgeService:{},bigquery,project:'fixture',baselineOverview:baseline,exportStore:store,chat:async()=>assert.fail('Unexpected conversational fallback'),env:{ORACLE_UI_PASSWORD:'fixture',ORACLE_UI_SESSION_SECRET:'fixture-session-secret-with-enough-bytes'}}));
  const server=await new Promise((resolve,reject)=>{const s=app.listen(0,'127.0.0.1',()=>resolve(s));s.on('error',reject);});t.after(()=>server.close());const base=`http://127.0.0.1:${server.address().port}`;
  const login=await fetch(base+'/api/oracle/auth/login',{method:'POST',headers:{origin:base,'content-type':'application/json'},body:JSON.stringify({password:'fixture'})});const auth=await login.json(),cookie=login.headers.getSetCookie().map(c=>c.split(';')[0]).join('; '),headers={cookie,origin:base,'content-type':'application/json','x-csrf-token':auth.csrf};
- return{...f,sql,events,send:async message=>{const response=await fetch(base+'/api/oracle/chat',{method:'POST',headers:{...headers,'x-request-id':crypto.randomUUID()},body:JSON.stringify({message,new_question:true})});return{status:response.status,body:await response.json()};}};
+ return{...f,sql,events,route:async message=>{const r=await fetch(base+'/api/oracle/analysis/route',{method:'POST',headers,body:JSON.stringify({message,new_question:true})});assert.equal(r.status,200);return r.json();},send:async message=>{const response=await fetch(base+'/api/oracle/chat',{method:'POST',headers:{...headers,'x-request-id':crypto.randomUUID()},body:JSON.stringify({message,new_question:true})});return{status:response.status,body:await response.json()};}};
 }
 for(const message of [inventoryRequest,'Show inventory at every active Shopify location for all active and draft products that do not have the `made-to-order` tag.','Export stock for all draft and active Shopify products except made-to-order'])test(`production chat scope: ${message}`,async t=>{
  const f=await chatFixture(t),r=await f.send(message);assert.equal(r.status,200,JSON.stringify(r.body));assert.equal(r.body.evidence.kind,'inventory_report');assert.equal(r.body.evidence.products.length,26);assert.deepEqual([...new Set(r.body.evidence.products.map(p=>p.status))].sort(),['ACTIVE','DRAFT']);assert.ok(r.body.artifact);assert.ok(f.sql.some(q=>q.startsWith('MERGE')));assert.ok(f.events.some(e=>e.stage==='inventory_workbook_generation'&&e.status==='success'));assert.ok(f.events.some(e=>e.stage==='inventory_export_verification'&&e.status==='success'));
@@ -42,4 +42,9 @@ test('production chat exports beyond the exact retained UNLISTED boundary with a
 });
 test('expected location count cannot silently truncate locations or produce complete coverage',async()=>{
  const f=inventoryFixture(),events=[];const result=await runInventoryExport({...f.deps,expectedLocations:6,emit:e=>events.push(e),write:async()=>{}});assert.equal(result.complete,false);const read=events.find(e=>e.stage==='shopify_read_complete');assert.equal(read.locations.length,12);assert.ok(read.failures.some(f=>f.code==='INVENTORY_LOCATION_COUNT_MISMATCH'));assert.equal(result.live_validation,'partial');
+});
+
+test('production preflight routes catalogue inventory to the existing job budget before any Shopify reads',async t=>{
+ const f=await chatFixture(t);for(const q of [inventoryRequest,'Stock for everything except made-to-order','Show inventory for all active and draft products without made-to-order'])assert.equal((await f.route(q)).route,'job');assert.equal(f.calls.length,0);assert.equal(f.sql.length,0);
+ assert.equal((await f.route('What is the current stock levels for eye rings?')).route,'chat');assert.equal(f.calls.length,0);
 });

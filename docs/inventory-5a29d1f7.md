@@ -45,8 +45,10 @@ metadata could therefore fail after persistence. This is a confirmed local
 mechanism consistent with the deployed code; the owner-scoped retained-artifact
 probe reports whether the original saved workbook has those exact differences.
 It performs a bounded SELECT independently of missing job evidence, never DDL
-or report replay. The retained artifact itself has not been fetched from this
-network-restricted workspace.
+or report replay. The subsequent user-supplied Render diagnostic confirms the saved artifact
+exists, its SHA-256 matches, 837 metadata cells differ only by JSON member order,
+and the repaired verifier accepts the unchanged workbook. That artifact remains
+explicitly partial (32 products, six locations, incomplete catalogue).
 
 The fix canonicalises new JSON metadata and compares only the explicitly JSON
 metadata cells using parsed JSON semantics, so legacy saved bytes remain valid.
@@ -82,8 +84,44 @@ exclusions, stage-specific storage/workbook failures and partial local recovery.
 Browser regressions exercise visible download and refresh on desktop/mobile.
 These are mocked remote reads, not a complete live catalogue export.
 
-A complete fixed live export remains pending until the Render diagnostic succeeds
-with `catalogue_complete=true`, the full status/product counts, all six active
-locations and `complete=true`. The original interactive rejection is confirmed at integrity verification;
-matching its specific saved artifact to the JSON-order false positive remains
-pending the owner-scoped read. Neither claim establishes a complete live export.
+## Live validation completed
+
+The user supplied a successful pinned-commit Render run, retained in
+`live-validation.json`, for source commit
+`0d5bf0e96915fb4c9db77e1b520773d4a5cfa18a`. It scanned all 700 products:
+590 ACTIVE, 53 DRAFT, 2 ARCHIVED and 55 UNLISTED. The observed canonical tag was
+`made-to-order` on 397 products. The full export contains 301 eligible products,
+3,138 variants and all six active locations, with no failures and complete
+catalogue/inventory coverage. The second sheet therefore has 18,828 variant/location rows. Native untracked
+and unstocked states remain distinct wherever present.
+
+Locations: Kings Cross, Online Ready to Ship, Shoreditch, Shoreditch Workshop,
+Soho and Soho Workshop. The original native location IDs are retained in the
+sanitized live-validation fixture and workbook.
+
+Read interval: 2026-11-02 17:59:54.595–18:03:05.414 UTC (about 191 seconds).
+The verified local workbook is `/tmp/oracle-inventory-5a29d1f7.xlsx` on Render,
+1,232,085 bytes, SHA-256
+`22b5ecfacc62d784aa794a3d2de09e6603685e307ff1ef5aadd931946d3175e4`.
+No workbook bytes were attached to this chat. Do not fabricate a local download
+link or rebuild stock quantities from the aggregate log output.
+
+The same run independently confirmed the saved original artifact's JSON-order
+false positive and preserved its incomplete flags. No durable job exists for
+that original interactive request.
+
+## Normal report transport
+
+The measured 191-second complete read exceeds the 60-second interactive budget.
+Catalogue-wide inventory requests now choose the existing durable job transport
+from their resolved inventory population, before provider reads. Named-product
+stock retains chat transport. This does not increase timeouts or bypass scope,
+lease, cancellation or storage limits. If background jobs are disabled, the
+existing composer reports that requirement instead of starting a short chat read.
+Production route-preflight and browser regressions verify job selection and
+normal authenticated download/recovery with mocked remote responses.
+
+Live validation of the new complete workbook's durable persistence and normal
+chat/browser delivery is still outstanding: the diagnostic reported
+`durable_storage=not_attempted` and `chat_delivery=not_attempted`. The live CLI
+success must not be relabelled as deployed conversational-delivery success.
