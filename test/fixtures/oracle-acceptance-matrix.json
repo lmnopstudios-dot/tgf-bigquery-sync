@@ -1338,6 +1338,10 @@
     {
       "file": "test/current-stock-conversation.test.js",
       "purpose": "Shared product-stock intent, exact Alphabones failures, catalogue typo choices, independent locations, workshop exclusions, persisted multi-turn refinements and authenticated Excel download."
+    },
+    {
+      "file": "test/retained-spreadsheet.test.js",
+      "purpose": "Shared formatting-only spreadsheet intent; retained inventory/sales/customer evidence, unchanged scope, zero provider reads, numeric/unknown semantics, authenticated download and durable recovery."
     }
   ]
 }

@@ -68,7 +68,7 @@ export function createCurrentStockService({graphql,getToken,lookupGroup=null,loc
     const report=scope?.stock_scope?null:await inventoryReport?.(message,options);if(report)return report;
     if(!scope?.stock_scope&&(inventoryReportScope(message)||isInventoryReportContext(options.analysisContext)))throw Object.assign(new Error('Inventory export storage unavailable'),{code:'EXPORT_STORAGE_UNAVAILABLE'});
     if(!scope)return null;
-    if(scope.stock_scope?.format==='xlsx'&&!artifactStore)throw Object.assign(new Error('Export storage unavailable'),{code:'EXPORT_STORAGE_UNAVAILABLE'});
+    if((scope.stock_scope?.format==='xlsx'||options.analysisContext?.output_preference==='xlsx')&&!artifactStore)throw Object.assign(new Error('Export storage unavailable'),{code:'EXPORT_STORAGE_UNAVAILABLE'});
     const deadlineAt=Math.min(options.deadlineAt??Infinity,now()+45_000),budget=createInventoryReadBudget({deadlineAt,signal:options.signal,maxRequests:4,now});
     let resolvedToken;
     let resolution={method:'unresolved',product_ids:[]},candidates=[],result,ambiguity=false;
@@ -110,7 +110,7 @@ export function createCurrentStockService({graphql,getToken,lookupGroup=null,loc
     const evidence={...result,subject:'current_stock',kind:'current_stock',entity_query:scope.entity_query,stock_scope:scope.stock_scope||null,resolution,ambiguous:ambiguity,candidates,diagnostics:{resolution:budget.finish(),inventory:result.diagnostics||null}};
     const rendered=stockAnswer(evidence),split=rendered.indexOf('<details>');
     const answer={answer:rendered,tools:['get_shopify_inventory_by_location'],evidence,presentation:{version:1,summary_markdown:split<0?rendered:rendered.slice(0,split).trim(),supporting_markdown:split<0?'':rendered.slice(split).replace(/<\/?details>|<summary>Show details<\/summary>/g,'').trim()}};
-    if(scope.stock_scope?.format==='xlsx'&&evidence.products.length){
+    if((scope.stock_scope?.format==='xlsx'||options.analysisContext?.output_preference==='xlsx')&&evidence.products.length){
       const {exportOwner,requestId,downloadBase='/api/oracle/exports'}=options;
       if(!exportOwner||!requestId)throw Object.assign(new Error('Export owner required'),{code:'EXPORT_OWNER_REQUIRED'});
       const envelope={...evidence,kind:'inventory_report',products:evidence.products.map(p=>({...p,variants:p.variants.map(v=>({...v,inventoryItem:{id:v.inventory_item_id,tracked:v.inventory_tracked}}))})),locations:evidence.location_coverage.resolved,started_at:evidence.as_of,tag_convention:{predicate:'Catalogue product identity; no tag exclusion',observed_tags:[],catalogue_complete:evidence.complete},limits:INVENTORY_EXPORT_LIMITS};
