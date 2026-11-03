@@ -1,0 +1,138 @@
+[
+  {
+    "event_id": "ev_f9521f60-1aaf-41f6-a540-4e4bf00082dd",
+    "event_type": "black_friday_campaign",
+    "title": "Black Friday 2025 public campaign",
+    "description": "Public Black Friday promotion running Friday to Sunday. The promotion was online-only and offered 20% off eligible silver products, excluding eye rings, mixed-metal products, enamel products and collaborations. Physical stores did not participate; POS was still operated through Square. A mailing-list VIP preview took place on 27 November 2025 before public access began.",
+    "start_date": "2025-11-28",
+    "end_date": "2025-11-30",
+    "date_precision": "range",
+    "recorded_at": "2026-09-21T13:40:21.074Z",
+    "source_type": "human_entered",
+    "source_reference": "Confirmed by TGF ecommerce team",
+    "status": "confirmed",
+    "created_by": "authenticated-admin",
+    "supersedes": null,
+    "superseded_by": null,
+    "tags": [
+      "black-friday",
+      "promotion",
+      "online-only"
+    ]
+  },
+  {
+    "event_id": "ev_2523cea3-5058-481e-9ac0-f6d4520603d6",
+    "event_type": "black_friday_vip_access",
+    "title": "Black Friday 2025 VIP early access",
+    "description": "VIP early access for mailing-list customers. Customers on the mailing list received access one day before the public Black Friday promotion. The promotion was online-only and offered 20% off eligible silver products, excluding eye rings, mixed-metal products, enamel products and collaborations. Physical stores did not participate; POS was still operated through Square.",
+    "start_date": "2025-11-27",
+    "end_date": "2025-11-27",
+    "date_precision": "day",
+    "recorded_at": "2026-09-21T13:39:37.334Z",
+    "source_type": "human_entered",
+    "source_reference": "Confirmed by TGF ecommerce team",
+    "status": "confirmed",
+    "created_by": "authenticated-admin",
+    "supersedes": null,
+    "superseded_by": null,
+    "tags": [
+      "black-friday",
+      "promotion",
+      "vip",
+      "email",
+      "online-only"
+    ]
+  },
+  {
+    "event_id": "ev_4f0a2bbe-6f60-4c09-bf4c-1dfb8f421309",
+    "event_type": "store_sale",
+    "title": "TGF East Black Friday Sale 2024",
+    "description": "TGF East sale hours: 9 November 2024, 10:30 AM–6:30 PM. Applicable campaign discounts: 20% off 925 sterling silver; 15% off eye jewellery; 20% off music collaborations; 10% off enamel and stone rings; and 20% off clothing. Exclusions: gold, wedding, other collaboration pieces and collaboration clothing, leather goods, selected newly released items, and selected earrings.",
+    "start_date": "2024-11-09",
+    "end_date": "2024-11-09",
+    "date_precision": "day",
+    "recorded_at": "2026-09-21T15:44:10.155Z",
+    "source_type": "human_entered",
+    "source_reference": "User-provided Black Friday 2024 campaign details",
+    "status": "confirmed",
+    "created_by": "Stuart",
+    "supersedes": null,
+    "superseded_by": null,
+    "tags": [
+      "Black Friday",
+      "TGF East",
+      "store sale",
+      "discounts",
+      "exclusions"
+    ]
+  },
+  {
+    "event_id": "ev_d62be9ed-527e-403a-a661-cb2d11095ca5",
+    "event_type": "online_sale",
+    "title": "Online Black Friday Sale 2024",
+    "description": "Online sale ran from 8 November 2024 at 8:00 AM GMT through 10 November 2024 at midnight GMT. Discounts: 20% off 925 sterling silver; 15% off eye jewellery; 20% off music collaborations; 10% off enamel and stone rings; and 20% off clothing. Exclusions: gold, wedding, other collaboration pieces and collaboration clothing, leather goods, selected newly released items, and selected earrings.",
+    "start_date": "2024-11-08",
+    "end_date": "2024-11-10",
+    "date_precision": "range",
+    "recorded_at": "2026-09-21T15:44:09.764Z",
+    "source_type": "human_entered",
+    "source_reference": "User-provided Black Friday 2024 campaign details",
+    "status": "confirmed",
+    "created_by": "Stuart",
+    "supersedes": null,
+    "superseded_by": null,
+    "tags": [
+      "Black Friday",
+      "online sale",
+      "GMT",
+      "discounts",
+      "exclusions"
+    ]
+  },
+  {
+    "event_id": "ev_9eb3d3c7-1645-40d5-9f87-c9eeb1cc68fc",
+    "event_type": "sales_campaign",
+    "title": "Black Friday Sale 2024",
+    "description": "Black Friday sale offering discounts on almost everything. Campaign dates: 7–10 November 2024. Promoted as the biggest Black Friday sale yet. The promotion noted that Sunday 10 November 2024 was the last order date for Christmas gifts involving made-to-order jewellery.",
+    "start_date": "2024-11-07",
+    "end_date": "2024-11-10",
+    "date_precision": "range",
+    "recorded_at": "2026-09-21T15:44:08.392Z",
+    "source_type": "human_entered",
+    "source_reference": "User-provided Black Friday 2024 campaign details",
+    "status": "confirmed",
+    "created_by": "Stuart",
+    "supersedes": null,
+    "superseded_by": null,
+    "tags": [
+      "Black Friday",
+      "sale",
+      "2024",
+      "Christmas gifts",
+      "made-to-order jewellery"
+    ]
+  },
+  {
+    "event_id": "ev_35c7f84c-75aa-44df-9878-e1e76676f898",
+    "event_type": "store_sale",
+    "title": "TGF Soho Black Friday Sale 2024",
+    "description": "TGF Soho sale hours: 7 November 2024, 12:00 PM–8:00 PM. Applicable campaign discounts: 20% off 925 sterling silver; 15% off eye jewellery; 20% off music collaborations; 10% off enamel and stone rings; and 20% off clothing. Exclusions: gold, wedding, other collaboration pieces and collaboration clothing, leather goods, selected newly released items, and selected earrings.",
+    "start_date": "2024-11-07",
+    "end_date": "2024-11-07",
+    "date_precision": "day",
+    "recorded_at": "2026-09-21T15:44:09.156Z",
+    "source_type": "human_entered",
+    "source_reference": "User-provided Black Friday 2024 campaign details",
+    "status": "confirmed",
+    "created_by": "Stuart",
+    "supersedes": null,
+    "superseded_by": null,
+    "tags": [
+      "Black Friday",
+      "TGF Soho",
+      "store sale",
+      "discounts",
+      "exclusions"
+    ]
+  }
+]

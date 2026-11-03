@@ -119,7 +119,7 @@ test('explicit unsupported population filters produce a specific limitation with
 });
 test('in-store selection now resolves its own knowledge scope instead of using online dates',async()=>{
   const f=fixture(),r=await direct(f,QUESTION+' in-store only');
-  assert.equal(r.evidence.version,'event_sale_report.v1');
+  assert.equal(r.evidence.version,'event_sale_report.v2');
   assert.equal(r.evidence.sections.length,0);
   assert.ok(r.evidence.resolved_scope.issues.every(i=>i.channel==='instore'));
   assert.equal(f.queries.length,0);

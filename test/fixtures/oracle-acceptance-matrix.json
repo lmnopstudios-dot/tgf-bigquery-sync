@@ -1354,6 +1354,10 @@
     {
       "file": "test/oracle-black-friday-conversation.test.js",
       "purpose": "Verbatim failed conversational Black Friday request; annual fallback and unsolicited comparison prevention; actual KB windows by channel/year, exact warehouse bindings, product identities/units/refund limits, independent partial failures, multi-turn scope and retained XLSX recovery without replay."
+    },
+    {
+      "file": "test/oracle-black-friday-sessions.test.js",
+      "purpose": "Recovered live KB negation failure; online-only 2025 VIP/public sessions versus explicit nonparticipating stores; exact 2024 store clocks and user-confirmed midnight endpoint; source authority, verified location binding, native payment/refund boundary SQL execution, true conflicts and retained workbook/v1 recovery without replay."
     }
   ]
 }

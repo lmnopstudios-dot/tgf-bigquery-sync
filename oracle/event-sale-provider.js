@@ -1,9 +1,12 @@
+import {createEventTimestampProvider,squareSessionCtes} from './event-timestamp-provider.js';
+import {datasetLocation} from '../bigquery/dataset-location.js';
 import {createCanonicalFinanceService,MATRIXIFY_APP_ID} from '../finance/canonical.js';
 import {governedDecisionCtes,productFamilyCtes} from './product-mapping.js';
 const id=v=>{if(!/^[\w-]+$/.test(v||''))throw Error('Invalid project');return v;};
 const fail=code=>Object.assign(Error(code),{code});
 // No calendar aggregation or automatic comparison: every read has one KB window.
-export function eventProductSql(project,source){
+export function eventProductSql(project,source,{timestamps=false}={}){
+ const predicate=t=>timestamps?`${t} >= TIMESTAMP(@start_at) AND ${t} < TIMESTAMP(@end_exclusive)`:`DATE(${t},@timezone) BETWEEN DATE(@start_date) AND DATE(@end_date)`;
  id(project);
  const dedup=(table,keys)=>`SELECT * FROM \`${project}.${table}\` t QUALIFY ROW_NUMBER() OVER(PARTITION BY ${keys} ORDER BY synced_at DESC,TO_JSON_STRING(t) DESC)=1`;
  let lines;
@@ -11,7 +14,7 @@ export function eventProductSql(project,source){
  SELECT 'shopify:shopify' namespace,CAST(li.order_id AS STRING) order_id,CAST(li.line_item_id AS STRING) line_id,li.product_id product_id,li.title title,li.quantity units,li.discounted_total_presentment sales,UPPER(li.presentment_currency) currency,
  CASE WHEN l.retail_location_id IS NOT NULL THEN 'instore' WHEN LOWER(l.order_source)='online store' THEN 'online' ELSE 'unknown' END channel
  FROM lines li JOIN locations l USING(order_id) JOIN financials f USING(order_id)
- WHERE DATE(f.created_at,@timezone) BETWEEN DATE(@start_date) AND DATE(@end_date)
+ WHERE ${predicate('f.created_at')}
  AND (l.source_app_id IS NULL OR l.source_app_id!=@matrixify_app_id) AND f.cancelled_at IS NULL
  AND EXISTS(SELECT 1 FROM UNNEST(IFNULL(JSON_QUERY_ARRAY(SAFE.PARSE_JSON(f.transactions_json)),[])) tx WHERE JSON_VALUE(tx,'$.status')='SUCCESS' AND JSON_VALUE(tx,'$.kind') IN ('SALE','CAPTURE'))`;
  else if(source==='square')lines=`SELECT 'square:square' namespace,CAST(order_id AS STRING) order_id,COALESCE(line_item_uid,CAST(source_line_offset AS STRING)) line_id,
@@ -24,9 +27,27 @@ export function eventProductSql(project,source){
  const ds=source==='ww'?'metorik_uk':'metorik_us';
  lines=`WITH lines AS (${dedup(ds+'.order_line_items','order_id,line_item_id')}), orders AS (${dedup(ds+'.orders','order_id')})
  SELECT 'woo:${source}' namespace,CAST(li.order_id AS STRING) order_id,CAST(li.line_item_id AS STRING) line_id,CAST(li.product_id AS STRING) product_id,li.name title,li.quantity units,li.total sales,UPPER(li.currency) currency,'online' channel
- FROM lines li JOIN orders o USING(order_id) WHERE DATE(o.order_created_at,@timezone) BETWEEN DATE(@start_date) AND DATE(@end_date) AND LOWER(o.status) IN ('completed','processing')`;
+ FROM lines li JOIN orders o USING(order_id) WHERE ${predicate('o.order_created_at')} AND LOWER(o.status) IN ('completed','processing')`;
  }else throw fail('EVENT_PRODUCT_SOURCE_UNSUPPORTED');
  return `WITH event_lines AS (${lines}), normalized_lines AS (SELECT * REPLACE(COALESCE(NULLIF(TRIM(CAST(product_id AS STRING)),''),CONCAT('unidentified-line:',order_id,':',line_id)) AS product_id) FROM event_lines) SELECT namespace,product_id,ANY_VALUE(title) title,currency,channel,SUM(units) units,SUM(sales) sales,COUNT(*) line_count,COUNTIF(sales IS NULL) missing_sales,COUNTIF(units IS NULL) missing_units FROM normalized_lines WHERE channel IN (@channel,'unknown') GROUP BY namespace,product_id,currency,channel ORDER BY currency,sales DESC`;
+}
+export function timestampProductSql(project,source){
+ if(source!=='square')return eventProductSql(project,source,{timestamps:true});
+ return `WITH ${squareSessionCtes(project)},paid_orders AS(
+ SELECT JSON_VALUE(j,'$.order_id') oid FROM payment_latest WHERE UPPER(JSON_VALUE(j,'$.status'))='COMPLETED'
+ GROUP BY oid HAVING COUNTIF(SAFE_CAST(JSON_VALUE(j,'$.created_at') AS TIMESTAMP) IS NULL)=0
+ AND MIN(SAFE_CAST(JSON_VALUE(j,'$.created_at') AS TIMESTAMP))>=TIMESTAMP(@start_at)
+ AND MAX(SAFE_CAST(JSON_VALUE(j,'$.created_at') AS TIMESTAMP))<TIMESTAMP(@end_exclusive)
+ AND COUNTIF(JSON_VALUE(j,'$.location_id') IS NULL OR JSON_VALUE(j,'$.location_id')!=@location_id)=0),lines AS(
+ SELECT o.oid,COALESCE(JSON_VALUE(line,'$.item_id'),JSON_VALUE(line,'$.catalog_object_id'),CONCAT('unidentified-line:',o.oid,':',CAST(off AS STRING))) product_id,
+ JSON_VALUE(line,'$.name') title,SAFE_CAST(JSON_VALUE(line,'$.quantity') AS NUMERIC) units,
+ SAFE_CAST(JSON_VALUE(line,'$.total_money.amount') AS NUMERIC) minor_sales,
+ UPPER(COALESCE(JSON_VALUE(line,'$.total_money.currency'),JSON_VALUE(line,'$.base_price_money.currency'))) currency,IF(c.channel='In-store','instore','unknown') channel
+ FROM sx_square o JOIN paid_orders USING(oid) JOIN sx_channels c USING(oid),UNNEST(COALESCE(JSON_QUERY_ARRAY(o.j,'$.line_items'),JSON_QUERY_ARRAY(SAFE.PARSE_JSON(JSON_VALUE(o.j,'$.line_items'))),ARRAY<JSON>[])) line WITH OFFSET off
+ WHERE o.location_id=@location_id AND o.state IN ('COMPLETE','COMPLETED'))
+ SELECT 'square:square' namespace,product_id,ANY_VALUE(title) title,currency,channel,SUM(units) units,
+ CASE WHEN currency IN ('JPY','KRW') THEN SUM(minor_sales) WHEN currency IN ('GBP','USD','EUR') THEN SUM(minor_sales)/100 ELSE NULL END sales,
+ COUNTIF(minor_sales IS NULL) missing_sales,COUNTIF(units IS NULL) missing_units FROM lines GROUP BY product_id,currency,channel`;
 }
 function ledgerDaysCompatible(w){
  const start=Date.parse(w.start_date+'T00:00:00Z'),end=Date.parse(w.end_date+'T00:00:00Z');
@@ -35,11 +56,20 @@ function ledgerDaysCompatible(w){
  for(let t=start;t<=end;t+=86400000)if(f.format(new Date(t))!=='00:00')return false;
  return true;
 }
-export function createEventSaleProvider({bigquery,project}){
+export function createEventSaleProvider({bigquery,project,deadlineAt=Infinity,signal}){
  const finance=createCanonicalFinanceService({bigquery,project});
- const run=(query,params={})=>bigquery.query({query,params,...(Object.keys(params).length?{types:Object.fromEntries(Object.keys(params).map(k=>[k,'STRING']))}:{}),useLegacySql:false,maximumBytesBilled:'1000000000',jobTimeoutMs:15000,labels:{component:'oracle_event_sale'}}).then(r=>r[0]);
+ let queryCount=0;
+ const run=async(query,params={})=>{
+  if(signal?.aborted)throw fail('REQUEST_CANCELLED');if(Date.now()>=deadlineAt)throw fail('EVENT_DEADLINE_EXCEEDED');if(++queryCount>60)throw fail('EVENT_QUERY_LIMIT');
+  const datasets=[...new Set([...query.matchAll(new RegExp('`'+project+'\\.([A-Za-z0-9_]+)\\.','g'))].map(m=>m[1]))];
+  const locations=await Promise.all(datasets.map(d=>datasetLocation(bigquery,project,d)));if(new Set(locations).size>1)throw fail('EVENT_DATASET_LOCATION_MISMATCH');
+  if(signal?.aborted)throw fail('REQUEST_CANCELLED');if(Date.now()>=deadlineAt)throw fail('EVENT_DEADLINE_EXCEEDED');
+  return bigquery.query({query,params,...(locations[0]?{location:locations[0]}:{}),...(Object.keys(params).length?{types:Object.fromEntries(Object.keys(params).map(k=>[k,'STRING']))}:{}),useLegacySql:false,maximumBytesBilled:'1000000000',jobTimeoutMs:Math.max(1,Math.min(15000,deadlineAt-Date.now())),labels:{component:'oracle_event_sale'}}).then(r=>r[0]);};
+ const timestamp=createEventTimestampProvider({bigquery,project,run});
  return {
+  forRequest:options=>createEventSaleProvider({bigquery,project,deadlineAt:options.deadlineAt,signal:options.signal}),
   async totals(window){
+   if(window.source_selection)return timestamp.totals(window);
    if(window.location_name)throw fail('EVENT_LOCATION_FINANCE_UNSUPPORTED');
    // Canonical legacy evidence is calendar DATE, so intraday windows cannot be
    // reconstructed from it. London Black Friday dates are GMT/UTC days.
@@ -48,9 +78,11 @@ export function createEventSaleProvider({bigquery,project}){
    return {period:window,definition:'canonical_net_gross',rows,coverage:{complete:null},timezone_basis:'Canonical ledger dates; native Shopify DATE(timestamp) in UTC. Applied Europe/London days verified to match UTC ledger days.'};
   },
   async products(window){
-   if(window.location_name||window.intraday)throw fail('EVENT_PRODUCT_WINDOW_UNSUPPORTED');
-   const sources=window.channel==='online'?['ww','usd','shopify']:['square','shopify'];
-   const settled=await Promise.allSettled(sources.map(source=>run(eventProductSql(project,source),{start_date:window.start_date,end_date:window.end_date,timezone:window.timezone,channel:window.channel,matrixify_app_id:MATRIXIFY_APP_ID})));
+   let bound=null;
+   if(window.source_selection)bound=await timestamp.bind(window);
+   else if(window.location_name||window.intraday)throw fail('EVENT_PRODUCT_WINDOW_UNSUPPORTED');
+   const sources=window.source_selection==='woo'?['ww','usd']:window.source_selection?[window.source_selection]:window.channel==='online'?['ww','usd','shopify']:['square','shopify'];
+   const settled=await Promise.allSettled(sources.map(source=>run(bound?timestampProductSql(project,source):eventProductSql(project,source),{start_date:window.start_date,end_date:window.end_date,timezone:window.timezone,channel:window.channel,matrixify_app_id:MATRIXIFY_APP_ID,...(bound?{start_at:bound.start_at,end_exclusive:bound.end_exclusive,location_id:bound.location_id}:{})})));
    const components=settled.map((s,i)=>s.status==='fulfilled'?{source:sources[i],status:'fulfilled',rows:s.value}:{source:sources[i],status:'failed',code:'EVENT_PRODUCT_SOURCE_FAILED'});
    let mappings=[],mapping_status='available';
    try{mappings=await run(`WITH ${governedDecisionCtes(project)}, ${productFamilyCtes(project)} SELECT source_ref,shopify_parent_ref target_ref,shopify_parent_title title FROM family_active UNION ALL SELECT left_ref,right_ref,CAST(NULL AS STRING) FROM governed_active`);}catch{mapping_status='unavailable';}
@@ -60,7 +92,7 @@ export function createEventSaleProvider({bigquery,project}){
    const rows=components.flatMap(c=>(c.rows||[]).map(r=>({...r,source_product_ref:`${r.namespace}:${r.product_id}`,product_ref:identity(`${r.namespace}:${r.product_id}`),mapping_status:identity(`${r.namespace}:${r.product_id}`).startsWith('approved:')?'approved':'unmapped',sales:r.missing_sales||! /^[A-Z]{3}$/.test(r.currency||'')?null:r.sales,units:r.missing_units?null:r.units,refunded_units:null,product_refunds:null})));
    const grouped=new Map();
    for(const row of rows){const key=JSON.stringify([row.namespace,row.product_ref,row.currency,row.channel]),prior=grouped.get(key);if(!prior){grouped.set(key,{...row,source_product_refs:[row.source_product_ref]});continue;}for(const metric of ['units','sales'])prior[metric]=prior[metric]==null||row[metric]==null?null:Number(prior[metric])+Number(row[metric]);prior.source_product_refs.push(row.source_product_ref);}
-   return {period:window,definition:'source_native_product_line_sales',rows:[...grouped.values()],components,mapping_status,coverage:{complete:null},limitations:['Operational discounted line sales are not canonical finance totals; Woo line totals exclude tax, Shopify discounted presentment amounts and Square line totals retain source tax semantics. Rank within source and currency.','Product refund units/amounts at event-transaction grain are unavailable; canonical total refund amounts remain independent.','JPY/KRW Square minor units are unscaled; GBP/USD/EUR divide by 100; other Square currency values are unavailable.','Square line-level channel attribution has no joined payment-channel contract here; Square product rows are shown as unknown channel, never assumed in-store.',
+   return {period:window,definition:'source_native_product_line_sales',rows:[...grouped.values()],components,mapping_status,...(bound?{location_evidence:bound.location_evidence}:{}),coverage:{complete:null},limitations:['Operational discounted line sales are not canonical finance totals; Woo line totals exclude tax, Shopify discounted presentment amounts and Square line totals retain source tax semantics. Rank within source and currency.','Product refund units/amounts at event-transaction grain are unavailable; canonical total refund amounts remain independent.','JPY/KRW Square minor units are unscaled; GBP/USD/EUR divide by 100; other Square currency values are unavailable.',...(bound?['Square products require all successful payments inside the exact session at its verified location; cross-boundary split payments are excluded rather than allocating a whole order arbitrarily.']:['Square line-level channel attribution has no joined payment-channel contract here; Square product rows are shown as unknown channel, never assumed in-store.']),
 'Source-qualified IDs are preserved; only active reviewed family/mapping edges link platforms. Unmapped products remain separate. Woo JP product evidence has no bound source here.']};
   }
  };
