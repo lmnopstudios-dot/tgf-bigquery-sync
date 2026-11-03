@@ -70,7 +70,7 @@ export function inventoryVariantSelection(e){
  for(const p of e.products)for(const v of p.variants){const required=[...groups.pos,...groups.online];const quantities=required.map(l=>v.locations.find(q=>q.location_id===l.id)?.available);const known=!failures.length&&required.length===c.pos.names.length+1&&v.inventoryItem?.tracked===true&&quantities.every(n=>typeof n==='number'&&Number.isFinite(n));const pos=known?quantities.slice(0,groups.pos.length).reduce((a,n)=>a+n,0):null,online=known?quantities.at(-1):null;
  rows.push({p,v,state:!known?'unknown':compare(pos,c.pos)&&compare(online,c.online)?'qualified':'does_not_match',pos_total_available:pos,online_available:online});}
  rows.sort((a,b)=>Number(b.state==='qualified')-Number(a.state==='qualified')||(c.sort.direction==='desc'?-1:1)*((a.pos_total_available??0)-(b.pos_total_available??0))||String(a.v.id).localeCompare(String(b.v.id)));
- return{groups,rows,qualified:rows.filter(r=>r.state==='qualified'),unknown_count:rows.filter(r=>r.state==='unknown').length};
+ return{groups,rows,qualified:rows.filter(r=>r.state==='qualified'),evaluated_count:e.selection_coverage?.evaluated??rows.length,unknown_count:e.selection_coverage?.unknown??rows.filter(r=>r.state==='unknown').length};
 }
 
 export function inventoryReportScopeLabel(c){const op={gt:'>',gte:'>=',lt:'<',lte:'<='};return `${c.statuses.join('/')} variants · ${c.pos.names.join(' + ')} Available ${op[c.pos.operator]} ${c.pos.threshold} · ${c.online.names[0]} Available ${op[c.online.operator]} ${c.online.threshold} · exclude exact tags: ${c.excluded_tags.join(', ')||'none'}`;}

@@ -1330,6 +1330,10 @@
     {
       "file": "test/oracle-inventory-multiline.test.js",
       "purpose": "Verbatim failed #405 multiline request: operator-before-Available wording, bullets/line breaks, product-tag exclusion, real preflight/chat/job/export dispatch and authenticated workbook/recovery; fail-closed legacy-tool guard; separate deployed-revision/planning/chat-delivery diagnostic."
+    },
+    {
+      "file": "test/inventory-export-storage.test.js",
+      "purpose": "0c52483a inventory_export_size: 9,322-variant/1,308-read fixture, component measurements, pre-artifact predicate projection, production durable job/export SQL adapters, authenticated download, strict quantities/checksum, incomplete coverage and recovery without provider replay."
     }
   ]
 }

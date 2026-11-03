@@ -1,0 +1,28 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {createBigQueryExportStore} from '../oracle/product-priority-storage.js';
+import {createHash} from 'node:crypto';
+import ExcelJS from 'exceljs';
+import {durableJsonWire} from './helpers/durable-json-wire.js';
+import {largeInventoryFixture} from './helpers/large-inventory.js';
+import {filteredInventoryRequest} from './helpers/filtered-inventory.js';
+import {filteredInventoryServer} from './helpers/filtered-inventory-server.js';
+import {filteredInventoryScope} from '../oracle/inventory-report-config.js';
+import {readInventoryReport,compactInventoryReportEvidence,inventoryReportWorkbook,inventoryArtifactSize,inventoryReportAnswer,assertInventoryArtifact,INVENTORY_EXPORT_LIMITS} from '../oracle/inventory-report.js';
+const config=filteredInventoryScope(filteredInventoryRequest).inventory_report;
+const read=fixture=>readInventoryReport({...fixture,reportConfig:config});
+test('9,322 scanned variants: measure pre-fix package; durable SQL adapter, job, authenticated download and recovery retain only requested rows',async t=>{
+ const fixture=largeInventoryFixture(),raw=await read(fixture);assert.equal(raw.products.reduce((n,p)=>n+p.variants.length,0),9322);assert.equal(raw.request_count,1308);assert.equal(raw.complete,true);
+ const bytes=await inventoryReportWorkbook(raw),legacyArtifact={request:filteredInventoryRequest,analysis_context:{requested_subject:'current_stock',tool_route:'get_shopify_inventory_by_location',entity_query:raw.entity_query,inventory_report:config,output_preference:'xlsx',requested_formats:['xlsx']},envelope:raw,filename:'oracle-inventory.xlsx',answer:inventoryReportAnswer(raw),sha256:createHash('sha256').update(bytes).digest('hex'),xlsx_base64:bytes.toString('base64')},legacy=inventoryArtifactSize(legacyArtifact);assert.ok(legacy.serialized_package_bytes>INVENTORY_EXPORT_LIMITS.storage_bytes);assert.ok(legacy.envelope_components.products>8_000_000);
+ const boundedStore=createBigQueryExportStore({bigquery:{query:()=>assert.fail('Oversized packages must not reach SQL')},project:'fixture'});await assert.rejects(boundedStore.put('id','owner',legacyArtifact),e=>e.code==='EXPORT_STORAGE_SIZE_EXCEEDED');
+ const live=largeInventoryFixture(),wire=durableJsonWire({canonicalObjectKeys:true}),h=await filteredInventoryServer({fixture:live,jobStore:wire.store});t.after(h.close);const result=await h.submit(filteredInventoryRequest,{fresh:true,id:'storage-9322'});assert.equal(live.calls.length,1308);assert.equal(result.partial,false);assert.equal(result.artifact.row_count,131);
+ const a=h.artifacts.get(result.artifact.id),size=inventoryArtifactSize(a);console.log(JSON.stringify({measurement:'synthetic_9322_variant_package',legacy,compact:size}));assert.ok(size.serialized_package_bytes<8_000_000);assert.ok(size.envelope_bytes<legacy.envelope_bytes/10);assert.equal(a.envelope.selection_coverage.evaluated,9322);assert.equal(a.envelope.selection_coverage.unknown,2);assert.equal(a.envelope.selection_coverage.does_not_match,9189);assert.equal(a.envelope.products.reduce((n,p)=>n+p.variants.length,0),131);assert.equal(a.envelope.request_count,1308);assert.equal(a.envelope.population.audit.length,553);
+ assert.ok(h.sql.some(q=>q.query.startsWith('MERGE')&&Buffer.byteLength(q.params.artifact)===size.serialized_package_bytes));await assertInventoryArtifact(a);
+ const response=await fetch(h.origin+result.artifact.download_url,{headers:h.headers});assert.equal(response.status,200);const downloaded=Buffer.from(await response.arrayBuffer());assert.equal(createHash('sha256').update(downloaded).digest('hex'),a.sha256);const wb=new ExcelJS.Workbook();await wb.xlsx.load(downloaded);const sheet=wb.getWorksheet('Inventory');assert.equal(sheet.rowCount,132);assert.equal(wb.getWorksheet('Location quantities').rowCount,525);assert.equal(wb.getWorksheet('Variant selection'),undefined);const rows=sheet.getRows(2,131);assert.ok(rows.some(r=>r.getCell(12).value===0));assert.ok(rows.some(r=>r.getCell(12).value<0));assert.ok(rows.every(r=>r.getCell(11).value===10&&r.getCell(12).value<3));
+ const denied=await fetch(h.origin+result.artifact.download_url);assert.equal(denied.status,401);assert.ok(wire.calls.some(q=>q.query.includes("status=IF(cancel_requested")&&q.params.result));const job=wire.rows.get(result.job_id);job.status='failed';job.result_json=null;const recovered=await h.get('/jobs/'+result.job_id);assert.equal(recovered.recovered_persisted_export,true);assert.equal(recovered.artifact.row_count,131);assert.equal(live.calls.length,1308);
+ for(const mutate of [a=>a.envelope.selection_coverage.qualified++,a=>a.envelope.products[0].variants[0].locations[0].available=0,a=>a.envelope.products[0].tags.push('Enquire')]){const changed=structuredClone(a);mutate(changed);await assert.rejects(assertInventoryArtifact(changed),e=>e.code==='EXPORT_INTEGRITY_FAILED');}
+});
+test('projection retains incomplete coverage and all qualifying rows without truncation',async()=>{
+ const raw=await read(largeInventoryFixture({partial:true})),e=compactInventoryReportEvidence(raw);assert.equal(e.complete,false);assert.deepEqual(e.failures,raw.failures);assert.equal(e.selection_coverage.evaluated,9322);assert.equal(e.selection_coverage.unknown,3);assert.equal(e.selection_coverage.qualified,131);assert.ok(e.failures.some(f=>f.code==='INVENTORY_FAILED'));
+ const all=compactInventoryReportEvidence(await read(largeInventoryFixture({allQualify:true})));assert.equal(all.selection_coverage.qualified,9320);assert.equal(all.products.reduce((n,p)=>n+p.variants.length,0),9320);assert.equal(INVENTORY_EXPORT_LIMITS.storage_bytes,8_000_000);
+});
