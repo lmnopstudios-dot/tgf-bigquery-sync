@@ -43,11 +43,11 @@ function totalsRows(report,ch){
  const groups=new Map();
  for(const r of report.rows||[]){if(channel(r)!==ch&&channel(r)!=='unknown')continue;
   const key=JSON.stringify([r.source,r.channel,r.currency]),g=groups.get(key)||{source:r.source,channel:channel(r),currency:r.currency,sales:null,refunds:null,refund_events:null,observed:false};
-  const amount=num(r.amount);
+  const currencyKnown=/^[A-Z]{3}$/.test(r.currency||'');const amount=currencyKnown?num(r.amount):null;
   // A net total includes only observed sale/refund components; a missing
   // currency amount never turns into zero.
   g.sales=!g.observed?amount:g.sales==null||amount==null?null:g.sales+amount;g.observed=true;
-  if(r.transaction_type==='refund'){g.refunds=num(r.amount);g.refund_events=num(r.refund_events);}
+  if(r.transaction_type==='refund'){g.refunds=currencyKnown?num(r.amount):null;g.refund_events=num(r.refund_events);}
   groups.set(key,g);
  }return [...groups.values()];
 }
@@ -95,7 +95,7 @@ export function createEventSaleReportService({knowledgeService,provider,now=Date
   const reads=await Promise.allSettled(searches.map(s=>knowledgeService.searchKnowledge({...s,knowledge_type:'event',start_date:null,end_date:null,limit:50})));
   const items=[...new Map(reads.flatMap(r=>r.status==='fulfilled'?(r.value.items||[]):[]).map(r=>[r.id,r])).values()];
   const resolved=resolveEventSaleWindows(items,scope,asOf),sections=[];
-  stage({stage:'event_knowledge_resolution',status:'success',window_count:resolved.windows.length,issue_count:resolved.issues.length,failed_reads:reads.filter(r=>r.status==='rejected').length});
+  stage({stage:'event_knowledge_resolution',status:reads.every(r=>r.status==='rejected')?'failed':'success',window_count:resolved.windows.length,issue_count:resolved.issues.length,failed_reads:reads.filter(r=>r.status==='rejected').length});
   stage({stage:'event_capability_selection',status:'resolved',metrics:context.metrics,source_grains:['canonical_transaction_date','source_product_line'],currency_policy:'separate'});
   const execute=async(operation,w)=>{stage({stage:'event_'+operation,status:'started',window_id:w.id,start_date:w.start_date,end_date:w.end_date,channel:w.channel});try{const evidence=await provider[operation](w);if(stableAnalyticalJSON(evidence.period)!==stableAnalyticalJSON(w))throw Object.assign(Error('Scope mismatch'),{code:'EVIDENCE_SCOPE_MISMATCH'});stage({stage:'event_'+operation,status:'success',window_id:w.id});return {status:'fulfilled',evidence};}catch(error){stage({stage:'event_'+operation,status:'failed',window_id:w.id,code:code(error)});return {status:'failed',code:code(error)};}};
   for(const window of resolved.windows){const operations=await Promise.all([execute('totals',window),...(scope.products?[execute('products',window)]:[])]);sections.push({window,totals:operations[0],...(scope.products?{products:operations[1]}:{})});}
@@ -108,7 +108,7 @@ export function assertEventSaleEvidence(context,e){
  const fail=()=>{throw Object.assign(Error('Event sale scope mismatch'),{code:'EVIDENCE_SCOPE_MISMATCH'});};
  if(e.version!=='event_sale_report.v1'||stableAnalyticalJSON(context.event_scope)!==stableAnalyticalJSON(e.requested_scope?.sale_scope)||e.requested_scope.event!==context.event_name||e.subject!=='sales')fail();
  if(e.requested_scope.count!==context.event_count||stableAnalyticalJSON(e.metrics)!==stableAnalyticalJSON(context.metrics)||stableAnalyticalJSON(resolveEventSaleWindows(e.knowledge_entries||[],context.event_scope,e.requested_scope.as_of))!==stableAnalyticalJSON(e.resolved_scope))fail();
- if(e.sections?.length!==e.resolved_scope.windows.length)fail();
+ if(e.sections?.length!==e.resolved_scope.windows.length||e.requested_scope.currencies!=='separate'||stableAnalyticalJSON(e.periods)!==stableAnalyticalJSON(e.resolved_scope.windows.map(w=>({event_id:w.id,start_date:w.start_date,end_date:w.end_date,channel:w.channel}))))fail();
  const ids=new Set();
  for(const s of e.sections||[]){const w=s.window;if(!w||ids.has(w.id)||!context.event_scope.years.includes(w.year)||!context.event_scope.channels.includes(w.channel)||!valid(w.start_date)||!valid(w.end_date)||w.start_date>w.end_date||!w.knowledge_entries?.length||w.knowledge_entries.some(k=>k.status!=='confirmed'))fail();if(!e.resolved_scope.windows.some(r=>stableAnalyticalJSON(r)===stableAnalyticalJSON(w)))fail();ids.add(w.id);
   if(s.totals.status==='fulfilled'&&(s.totals.evidence.definition!=='canonical_net_gross'||!Array.isArray(s.totals.evidence.rows)))fail();

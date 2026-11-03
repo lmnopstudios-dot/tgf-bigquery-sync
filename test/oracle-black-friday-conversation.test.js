@@ -102,3 +102,9 @@ test('direct agent uses the same event context, warehouse scope and deterministi
  const response=await fetch(h.origin+'/agent',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({message:comparison})});
  assert.equal(response.status,200);const r=await response.json();assert.equal(r.evidence.version,'event_sale_report.v1');assert.equal(r.evidence.sections.length,4);assert.match(r.answer,/Ring A/);assert.equal(r.analysis_context.start_date,null);
 });
+
+test('event dates in persisted presentation metadata cannot be broadened independently of KB windows',async()=>{
+ const f=eventSaleFixture(),context=transitionAnalysisContext(null,comparison,{now}).context;
+ const r=await f.baseline(comparison,{analysisContext:context});r.evidence.periods[0].start_date='2025-01-01';
+ assert.throws(()=>assertEvidenceAgreement(context,r.evidence),e=>e.code==='EVIDENCE_SCOPE_MISMATCH');
+});
