@@ -66,11 +66,11 @@ export function assertAggregateReport(rows,group){
   for(const type of ['overall','collaboration','item'])validateProductJourneys(data.filter(r=>r.cohort_type===type));
  }else retentionRows(rows.filter(r=>r.window_days!=null));
 }
-export async function acceptSquareReports({bigquery,project,identity,location,emit,now=Date.now}){
+export async function acceptSquareReports({bigquery,project,identity,location,emit,now=Date.now,casePlans=null,validateReport=assertAggregateReport}){
  let session,spent=0n,submissions=0,fatal=false;const started=now(),cache=new Map(),checkedPopulations=new Set(),outcomes=[];
  const connection=()=>session?{connectionProperties:[{key:'session_id',value:session}]}:{};
  const submit=async o=>{if(++submissions>ACCEPTANCE_LIMITS.maxSubmissions)throw Error('Submission bound');return bigquery.createQueryJob(o);};
- const cases=reportingAcceptanceCases().map(c=>({...c,plan:acceptanceQueryPlan(project,identity,c)}));
+ const cases=casePlans||reportingAcceptanceCases().map(c=>({...c,plan:acceptanceQueryPlan(project,identity,c)}));
  const dateQuery='SELECT @cohort_entry_start,@cohort_entry_end,@observation_end,@start_date,@end_date,@coverage_start,@coverage_end';
  for(const c of cases)emit({stage:'date_parameter_contract',case:c.name,state:'validated_locally',bindings:dateBindingContract(selectedParameters(dateQuery,c.plan.params))});
  emit({stage:'manifest',preview_only:true,publication:false,activation:false,limits:ACCEPTANCE_LIMITS,prior_evidence:{eligible_linked_square_ids:1524,eligible_linked_square_orders:2026},cases:cases.map(c=>({name:c.name,scope:c.definition.report_scope})),limitation:JOURNEY_SCOPE_LIMITATION,temporary_storage:'Session temporary storage is separately metered until cleanup/automatic expiry.'});
@@ -106,10 +106,10 @@ export async function acceptSquareReports({bigquery,project,identity,location,em
      spent+=BigInt(billed);accounted=true;if(spent>BigInt(ACCEPTANCE_LIMITS.totalBytes))throw Error('Cumulative billing invariant');
      if(m.status?.errorResult)throw m.status.errorResult;
      if(!session||m.status?.state!=='DONE'||next||response?.jobComplete===false)throw Error('Incomplete acceptance stage');
-     emit({case:c.name,stage,phase,state:'succeeded',compiled_and_executed:true,query_sha256:createHash('sha256').update(execution).digest('hex'),billed_bytes:String(billed),cumulative_billed_bytes:String(spent)});
+     emit({case:c.name,stage,phase,state:'succeeded',compiled_and_executed:true,job_id:job.id||planned,query_sha256:createHash('sha256').update(execution).digest('hex'),billed_bytes:String(billed),cumulative_billed_bytes:String(spent)});
      if(s.population){if(response?.totalRows!=null&&String(response.totalRows)!==String(rows.length))throw Error('Incomplete population retrieval');assertPopulationCheckpoint(rows);checkedPopulations.add(hash);emit({case:c.name,stage,state:'population_validated',rows});}
      else if(!s.result){if(rows.length)throw Error('Unexpected materialization output');cache.set(hash,table);physical.set(s.name,table);}
-     else{if(response?.totalRows!=null&&String(response.totalRows)!==String(rows.length))throw Error('Incomplete aggregate retrieval');assertAggregateReport(rows,c.definition.group_by[0]);emit({case:c.name,stage:'aggregate_results',state:'succeeded',preview_only:true,definition:c.definition,rows});}
+     else{if(response?.totalRows!=null&&String(response.totalRows)!==String(rows.length))throw Error('Incomplete aggregate retrieval');validateReport(rows,c.definition.group_by[0]);emit({case:c.name,stage:'aggregate_results',state:'succeeded',preview_only:true,definition:c.definition,rows});}
     }
     outcomes.push({case:c.name,state:'succeeded'});
    }catch(e){
