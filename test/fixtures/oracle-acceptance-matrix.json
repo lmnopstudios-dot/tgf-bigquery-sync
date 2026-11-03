@@ -1322,6 +1322,10 @@
     {
       "file": "test/inventory-artifact-json.test.js",
       "purpose": "5a29d1f7 EXPORT_INTEGRITY_FAILED: production native JSON reordering, legacy metadata JSON strings, unchanged byte checksum and strict quantities/identities/array order; owner-scoped read-only retained artifact inspection without report replay."
+    },
+    {
+      "file": "test/oracle-filtered-inventory.test.js",
+      "purpose": "Active variants with Kings Cross + Shoreditch + Soho Available > 7 and Online Ready to Ship Available < 3: exact enquire-tag exclusion, MTO inclusion, native IDs/no workshops, all-four numeric coverage, strict boundaries/negative/zero, shared planning/job persistence, authenticated filtered XLSX and saved recovery without provider replay."
     }
   ]
 }

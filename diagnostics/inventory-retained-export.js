@@ -18,6 +18,7 @@ export async function inspectRetainedInventoryExport({bigquery,project,dataset,r
    if(!inventoryJsonMetadataCell(name,key,row))continue;
    let expected=row[key];
    // Reproduce the deployed pre-fix metadata encoding using hydrated native JSON.
+   if(name==='Coverage'&&!['Export limits','Coverage failure','Observed product tag'].includes(row.Field))continue;
    if(name==='Coverage')expected=JSON.stringify(row.Field==='Export limits'?e.limits:row.Field==='Coverage failure'?e.failures[failureIndex++]:e.tag_convention.observed_tags[tagIndex++]);
    else expected=JSON.stringify(e.failures.filter(f=>(!f.product_id||f.product_id===row['Product ID'])&&(!f.variant_id||f.variant_id===row['Variant ID'])&&(!f.location_id||f.location_id===row['Location ID'])));
    const actual=sheet.getRow(i+2).getCell(j+1).value??null;
