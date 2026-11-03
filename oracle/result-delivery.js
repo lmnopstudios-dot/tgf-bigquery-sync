@@ -1,3 +1,4 @@
+import { inventorySalesDisclosure } from './inventory-report.js';
 import { accountForDelivery } from './component-outcomes.js';
 import { answerCompleteness } from './answer-completeness.js';
 import { normalizeOracleResult, oracleResultContent, RESULT_VERSION } from '../public/oracle/result-contract.js';
@@ -10,6 +11,11 @@ export const safeDeliveryId=value=>/^[A-Za-z0-9_.-]{1,80}$/.test(String(value||'
 export function deliverOracleResult(input,context, {present=presentAnalyticalAnswer,artifactBase='/api/oracle/exports'}={}) {
   let result=normalizeOracleResult(input);
   context=context||result.analysis_context;
+  if(result.evidence?.kind==='inventory_report'&&(context?.inventory_report?.sales_requested||result.evidence.inventory_report?.sales_requested)){
+    const disclosure=inventorySalesDisclosure({inventory_report:{sales_requested:true}});
+    const answer=String(result.answer||'');
+    result={...result,partial:true,answer:answer.includes(disclosure.trim())?answer:answer+'\n\n'+disclosure.trim(),presentation:null};
+  }
   const completeness=answerCompleteness(context,result);
   if(completeness.status==='incomplete')return {...result,answer:'The retrieved evidence does not answer the requested '+completeness.operation.replaceAll('_',' ')+'. Missing: '+completeness.missing.map(field=>({executed_evidence:'evidence from the requested calculation',operation:'the requested calculation',cohort_outputs:'cohort results',period:'the requested reporting period',observation_window:'the requested observation window',customer_history:'verified customer history and migration linkage',observation_coverage:'verified source follow-up coverage',observed_returns:'valid observed repeat counts',entry_classification:'verified entry classifications',population:'the requested population',denominator:'valid mature-window counts and rates',retention_windows:'all requested retention windows',conditional_median:'valid time-to-second-purchase figures',identity:'governed source identities',duplicate_cohort:'unique cohort membership',row_bound:'a bounded cohort result',cohort_period:'the requested cohort dates',grouping:'the requested grouping'}[field]||field.replaceAll('_',' '))).join(', ')+'. No substitute report is presented.',presentation:null,charts:[],inline_chart:null,artifact:null,analysis_unavailable:true,partial:true,completeness,delivery:{version:RESULT_VERSION,status:'limitation',code:'ANSWER_INCOMPLETE',answer_present:true,evidence_present:Boolean(result.evidence),artifact_present:false}};
   result={...result,...(completeness.status!=='not_applicable'?{completeness}:{})};

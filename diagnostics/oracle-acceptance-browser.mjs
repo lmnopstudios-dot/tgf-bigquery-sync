@@ -1,5 +1,5 @@
 import {verifyRetainedSpreadsheetBrowser} from '../test/helpers/retained-spreadsheet-browser.js';
-import {verifyFilteredInventoryBrowser} from '../test/helpers/filtered-inventory-browser.js';
+import {verifyFilteredInventoryBrowser,verifyInventorySalesBrowser} from '../test/helpers/filtered-inventory-browser.js';
 import {verifyInventoryReportBrowser} from '../test/helpers/inventory-report-browser.js';
 import {verifySquareChannelControls} from '../test/helpers/square-channel-browser.js';
 import {verifyHistoricalCollaborationPanel} from '../test/helpers/historical-collaboration-browser.js';
@@ -22,6 +22,7 @@ try{
   await verifyRetainedSpreadsheetBrowser(browser);
   await verifyInventoryReportBrowser(browser);
   await verifyFilteredInventoryBrowser(browser);
+  await verifyInventorySalesBrowser(browser);
   for(const [name,width,height] of [['desktop',1280,900],['mobile',390,844]]){
     const page=await browser.newPage({viewport:{width,height}}),errors=[];page.on('pageerror',e=>errors.push(e.message));
     await page.goto(h.origin+'/oracle/');await page.locator('#password').fill('fixture');await page.locator('#login-form button').click();await page.locator('#app').waitFor({state:'visible'});

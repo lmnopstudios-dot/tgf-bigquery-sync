@@ -1342,6 +1342,10 @@
     {
       "file": "test/retained-spreadsheet.test.js",
       "purpose": "Shared formatting-only spreadsheet intent; retained inventory/sales/customer evidence, unchanged scope, zero provider reads, numeric/unknown semantics, authenticated download and durable recovery."
+    },
+    {
+      "file": "test/oracle-inventory-sales-completeness.test.js",
+      "purpose": "Synthetic stock plus sales requests retain missing metric intent, online stock sorting, unsupported sales disclosures, owner-scoped workbook download, manifest and failed-job recovery. Does not establish validation against retained export abf857 or its original request."
     }
   ]
 }
