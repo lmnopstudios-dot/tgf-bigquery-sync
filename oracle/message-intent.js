@@ -1,10 +1,12 @@
+import {inventoryCatalogueExportIntent} from './inventory-export-intent.js';
 import { explicitKnowledgeSaveIntent } from './clarification-consumption.js';
 /** Current-message authority boundary. Supplied material is evidence, not instructions. */
 export const DOCUMENT_CLARIFICATION='Would you like me to edit this, use it as context, or propose knowledge records?';
 export function messageIntent(message) {
   const text=String(message||'').trim();
   // Explicit containers and email structure delimit payload; no subject-specific rules.
-  const boundary=text.search(/^(?:\s*(?:From:|Subject:|Dear\s+\w|Hi\s+\w[^\n]*[,!]|Hello\s+\w[^\n]*[,!])|\s*(?:Email|Document|Quoted text|Context|Source)\s*:|\s*```|\s*>|\s*[“‘"'])/im);
+  const boundaryText=inventoryCatalogueExportIntent(text)?text.replace(/^([ \t]*)(>)(?==?\s*-?\d)/gm,(_,space)=>space+' '):text;
+  const boundary=boundaryText.search(/^(?:\s*(?:From:|Subject:|Dear\s+\w|Hi\s+\w[^\n]*[,!]|Hello\s+\w[^\n]*[,!])|\s*(?:Email|Document|Quoted text|Context|Source)\s*:|\s*```|\s*>|\s*[“‘"'])/im);
   const introduction=text.match(/^[^\n]*(?:\b(?:below|following|attached|pasted)\s+(?:email|document|text|brief)|\b(?:email|document|text|brief)\s+(?:below|follows))[^\n]*\n/i);
   const offset=boundary>=0?boundary:introduction?introduction[0].length:-1;
   const structuredDocument=offset>=0;

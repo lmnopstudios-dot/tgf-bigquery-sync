@@ -1,3 +1,4 @@
+import {assertLegacyInventoryAllowed} from './oracle/inventory-export-intent.js';
 let stopOracleAnalysisWorker=()=>Promise.resolve();
 import { messageIntent } from './oracle/message-intent.js';
 import { orderValueRuntimeBinding } from './oracle/runtime-capability-bindings.js';
@@ -1570,6 +1571,7 @@ async function resolveOracleInventoryLocation(requestedLocation, token = null) {
 }
 
 async function getShopifyInventoryByLocation({query,location=null,limit=10},options={}) {
+  assertLegacyInventoryAllowed(options);
   if(typeof query!=='string'||!query.trim()||!Number.isInteger(limit)||limit<1||limit>25)throw Object.assign(new Error('Invalid inventory arguments'),{code:'INVENTORY_INVALID_ARGUMENTS'});
   const deadlineAt=Math.min(options.deadlineAt??requestBudget.getStore()?.deadlineAt??Infinity,Date.now()+45_000);
   const signal=options.signal||requestBudget.getStore()?.signal;
@@ -8276,7 +8278,7 @@ Important rules:
 
 } else if (item.name === 'get_shopify_inventory_by_location') {
 
-  result = await getShopifyInventoryByLocation(args,{deadlineAt:deadlineAt-callBudget.synthesisReserveMs,signal:cancellation.signal});
+  result = await getShopifyInventoryByLocation(args,{message,analysisContext:suppliedContext,deadlineAt:deadlineAt-callBudget.synthesisReserveMs,signal:cancellation.signal});
 
 } else if (item.name === 'get_shopify_profitability') {
 

@@ -77,3 +77,50 @@ Nov 2 live validation belongs to the previous broad catalogue report, not this
 new filter. No live Shopify products, tags or stock are modified by this change.
 All existing pagination, deadline, Excel and durable-storage bounds remain in
 force; any incomplete read is still disclosed rather than treated as zero.
+
+## Multiline request routing (#405 follow-up)
+
+The unchanged failed submission is retained in
+`test/fixtures/inventory-multiline/failed-submission.txt`. At #405's exact source
+commit, it returned no inventory scope: comparisons before “available units” and
+comma/and-separated store names missed the narrower grammar. The real UI router
+classified it as `policy_definition`. A generic job heuristic still chose `job`,
+but the worker reached the general agent without inventory configuration. The
+retained reproduction trace uses mocked providers; it does not establish the
+running Render revision or replace correlated production logs.
+
+The parser now accepts word/symbol comparisons, bullets and line breaks, and
+“Exclude products tagged enquire”. The same typed filters travel through
+preflight, context, plan, worker and artifact download. Catalogue export intent
+is recognised separately from supported predicate grammar: an unresolved export
+returns a typed scope error, and the legacy model tool rejects such requests
+before Shopify authentication. Numeric comparison lines are not quoted documents.
+
+### Separate deployed checks
+
+After deploying this revision, run in the Render application directory:
+
+```bash
+node diagnostics/oracle-inventory-chat-delivery.js
+```
+
+This reads the running HTTP revision, verifies ancestry of #405 when Git history
+is present, authenticates with the configured UI password, and sends the retained
+submission through the actual HTTP route preflight. It does not request Shopify
+reads. A selected `job` alone is insufficient: typed scope must match too.
+
+To submit one live read-only inventory job, poll it and validate the authenticated
+normal download, run:
+
+```bash
+node diagnostics/oracle-inventory-chat-delivery.js --execute --output=/tmp/oracle-inventory-multiline.xlsx
+```
+
+The diagnostic refuses submission if deployment ancestry or typed routing cannot
+be verified. It prints sanitized stages/codes, request/job IDs and the normal
+authenticated download path; it never prints credentials or upstream bodies.
+Workbook checks cover native resolved location IDs, status/tag eligibility,
+numeric quantities, strict thresholds, totals and ordering. A partial export
+retains its coverage flags and exits 2. Local/browser fixtures use mocked Shopify;
+only a successful deployed execution verifies live delivery. No live deployment
+or current qualifying population is inferred from passing fixture tests.

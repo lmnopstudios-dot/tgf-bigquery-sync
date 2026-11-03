@@ -1,0 +1,15 @@
+{
+  "source_revision": "93a6822769069aca6a572a4bf7c84a7ba179e7bf",
+  "scope": null,
+  "subject": null,
+  "tool_route": null,
+  "request_kind": "policy_definition",
+  "preflight_route": "job",
+  "chat_status": 200,
+  "model_fallback_calls": 1,
+  "provider_reads": 0,
+  "artifact_present": false,
+  "model_and_providers": "mocked",
+  "deployed_verification": "not_established",
+  "source": "Isolated production chat composition checked out at #405; model/providers mocked. Not a deployed trace."
+}
