@@ -1338,6 +1338,10 @@
     {
       "file": "test/current-stock-conversation.test.js",
       "purpose": "Shared product-stock intent, exact Alphabones failures, catalogue typo choices, independent locations, workshop exclusions, persisted multi-turn refinements and authenticated Excel download."
+    },
+    {
+      "file": "test/square-coverage-review.test.js",
+      "purpose": "Coverage-only Square source/identity/channel/mapping audit, exact DATE serialization, shared five-GB cap, aggregate output and no retention/next-product report replay."
     }
   ]
 }
