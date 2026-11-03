@@ -1334,6 +1334,10 @@
     {
       "file": "test/inventory-export-storage.test.js",
       "purpose": "0c52483a inventory_export_size: 9,322-variant/1,308-read fixture, component measurements, pre-artifact predicate projection, production durable job/export SQL adapters, authenticated download, strict quantities/checksum, incomplete coverage and recovery without provider replay."
+    },
+    {
+      "file": "test/current-stock-conversation.test.js",
+      "purpose": "Shared product-stock intent, exact Alphabones failures, catalogue typo choices, independent locations, workshop exclusions, persisted multi-turn refinements and authenticated Excel download."
     }
   ]
 }
