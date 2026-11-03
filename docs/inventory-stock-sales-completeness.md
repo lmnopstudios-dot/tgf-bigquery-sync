@@ -9,7 +9,14 @@ The existing inventory export binding does not execute exact variant/location sa
 The separate `get_shopify_product_performance` implementation in `server.js` groups
 by parent product, filters Online Store and caps results at 50. Those results cannot
 be joined to every retained Shopify variant or used to infer refunded units by POS
-location. This change explicitly reports these components as unsupported. It does
+location. The inventory-history tool includes variant IDs but reports inventory
+measures, not the requested sales/refund measures. Warehouse order-line code
+(`oracle/shopify-country-products.js`) retains variant IDs, while finance refresh
+retains order locations and refund line-item JSON. These are potential future
+inputs, not an executed exact-variant sales contract: channel classification,
+line/refund linkage, period attribution and complete source coverage still need
+validation. No live warehouse discovery or report was run. This change explicitly
+reports these components as unsupported in the inventory-export binding. It does
 not implement a new sales source, infer zero sales, or combine currencies.
 
 Each of units sold, refunded units and net sales has an unsupported component
