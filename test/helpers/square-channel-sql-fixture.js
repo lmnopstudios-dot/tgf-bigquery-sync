@@ -4,7 +4,7 @@ import {cohortRelations} from '../../oracle/cohort-execution.js';
 const literal=(x,t='STRING')=>x==null?`CAST(NULL AS ${t})`:t==='BOOL'?(x?'TRUE':'FALSE'):['INT64','NUMERIC'].includes(t)?String(x):`CAST('${String(x).replaceAll("'","''")}' AS ${t})`;
 const table=(cols,rows)=>rows.length?rows.map(row=>'SELECT '+cols.map(([k,t],i)=>`${literal(row[i],t)} ${k}`).join(',')).join(' UNION ALL '):'SELECT '+cols.map(([k,t])=>`CAST(NULL AS ${t}) ${k}`).join(',')+' WHERE FALSE';
 const reference=x=>'c_'+createHash('sha256').update('email-record|'+x.toLowerCase()).digest('hex');
-export function squareChannelSqlFixture(scope,{group='retention_product_journeys',terminal=null,missingPersistedFor=[],emptyPayloadFor=[]}={}){
+export function squareChannelSqlFixture(scope,{group='retention_product_journeys',terminal=null,missingPersistedFor=[],emptyPayloadFor=[],paymentShape='nested'}={}){
  const identity={dataset:'identity',snapshot:'fixture',mode:'email_candidate_v2',orderLinks:true};
  const parsed=cohortRelations(customerJourneySql('fixture',group,null,null,identity,true,scope,{state:'preview'}));
  const by=new Map(parsed.relations.map(r=>[r.name,r]));
@@ -36,7 +36,7 @@ export function squareChannelSqlFixture(scope,{group='retention_product_journeys
  // input is placed first, without changing any identity/transaction expressions.
  const sourceTables={
  square_orders:table([['id','STRING'],['customer_id','STRING'],['location_id','STRING'],['created_at','STRING'],['updated_at','STRING'],['state','STRING'],['line_items','STRING'],['currency','STRING']],[...sq,sq[0]]),
- square_payments:pay.map(r=>'SELECT '+r.slice(0,5).map((v,i)=>literal(v)+' '+['order_id','customer_id','location_id','status','source_type'][i]).join(',')+`,STRUCT(${literal(r[5])} AS entry_method) card_details`).join(' UNION ALL '),
+ square_payments:pay.map(r=>'SELECT '+r.slice(0,5).map((v,i)=>literal(v)+' '+['order_id','customer_id','location_id','status','source_type'][i]).join(',')+(paymentShape==='flat'?`,${literal(r[5])} card_details_entry_method`:paymentShape==='encoded'?`,${literal(JSON.stringify({entry_method:r[5]}))} card_details` :`,STRUCT(${literal(r[5])} AS entry_method) card_details`)).join(' UNION ALL '),
  square_items:table([['order_id','STRING'],['source_line_offset','INT64'],['line_item_uid','STRING'],['catalog_object_id','STRING'],['quantity','NUMERIC'],['transaction_line_item_json','STRING']],[...items.filter(r=>!missingPersistedFor.includes(r[0])),items[0]]),
  directory:table([['id','STRING'],['email_address','STRING']],['A','B','C','D','E','E2','T'].map(k=>[k,(k==='E2'?'e':k.toLowerCase())+'@real.org'])),
  ww:table([['order_id','STRING'],['customer_id','INT64'],['order_created_at','TIMESTAMP'],['status','STRING'],['currency','STRING'],['total','NUMERIC'],['total_refunds','NUMERIC']],[...woo,woo[0]]),

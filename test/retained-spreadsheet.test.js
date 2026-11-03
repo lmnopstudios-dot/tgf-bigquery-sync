@@ -53,6 +53,11 @@ for(const durable of [false,true])test(`exact Alphabones follow-up through ${dur
  const url=new URL(r.artifact.download_url,new URL(f.base).origin);const download=await fetch(url,{headers:{cookie:f.headers.cookie}});assert.equal(download.status,200);assert.match(download.headers.get('content-disposition'),/oracle-retained-results/);const wb=new ExcelJS.Workbook();await wb.xlsx.load(Buffer.from(await download.arrayBuffer()));assert.equal(wb.worksheets[0].getCell('E2').value,-1);
  const denied=await fetch(url);assert.equal(denied.status,401);
  const manifest=await(await fetch(url+'/manifest',{headers:{cookie:f.headers.cookie}})).json();assert.ok(manifest.artifact);assert.equal(f.reads(),count);
+ const latest=await(await fetch(f.base+'/analysis/latest',{headers:{cookie:f.headers.cookie}})).json();assert.match(latest.analysis.answer,/No data was refreshed/);assert.equal(latest.analysis.artifact.id,r.artifact.id);
+ const repeated=await f.ask('Excel please',durable);assert.ok(repeated.artifact);assert.equal(f.reads(),count);
+ // Owner-scoped manifest exposes the retained source response, not another export confirmation.
+ const repeatedManifest=await(await fetch(new URL(repeated.artifact.download_url,new URL(f.base).origin)+'/manifest',{headers:{cookie:f.headers.cookie}})).json();assert.equal(repeatedManifest.retained_source_answer,manifest.retained_source_answer);assert.doesNotMatch(repeatedManifest.retained_source_answer,/Spreadsheet created from/);
+
  if(durable){const job=f.jobs.jobs.get(r.job_id);job.status='failed';job.result_json=null;const recovered=await(await fetch(f.base+'/jobs/'+job.job_id,{headers:{cookie:f.headers.cookie}})).json();assert.equal(recovered.recovered_persisted_export,true);assert.ok(recovered.artifact);assert.equal(f.reads(),count);}
 });
 
