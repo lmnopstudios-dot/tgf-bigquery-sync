@@ -13,7 +13,9 @@ const GRAINS = Object.freeze({
  * Shopify refunds are one row per persisted refund event. Existing non-Shopify
  * accountant rows preserve Woo/Square history and legitimate migration overlap.
  */
-export function canonicalFinanceCtes(project) {
+export function canonicalFinanceCtes(project,{channel_basis='ledger'}={}) {
+  if(!['ledger','recorded'].includes(channel_basis))throw new Error('Unsupported finance channel basis');
+  const shopifyChannel=channel_basis==='recorded'?"CASE WHEN l.retail_location_id IS NOT NULL THEN 'POS' WHEN LOWER(TRIM(l.order_source))='online store' THEN 'Online' ELSE 'Unknown' END":"IF(l.retail_location_id IS NULL,'Online','POS')";
   return `legacy_non_shopify AS (
     SELECT date transaction_date,LOWER(transaction_type) transaction_type,
       COALESCE(source,'Unclassified') source,COALESCE(channel,'Unclassified') channel,
@@ -24,7 +26,7 @@ export function canonicalFinanceCtes(project) {
     WHERE NOT REGEXP_CONTAINS(LOWER(COALESCE(source,'')),r'shopify')
   ), native_shopify_sales AS (
     SELECT DATE(f.created_at),'sale','Shopify',
-      IF(l.retail_location_id IS NULL,'Online','POS'),UPPER(f.presentment_currency),
+      ${shopifyChannel},UPPER(f.presentment_currency),
       CAST(f.original_total_presentment AS NUMERIC),CAST(f.original_tax_presentment AS NUMERIC),
       CAST(f.original_total_presentment-f.original_tax_presentment AS NUMERIC),f.order_id,f.order_id,
       'shopify_data.order_financials:presentment'
@@ -38,7 +40,7 @@ export function canonicalFinanceCtes(project) {
           AND JSON_VALUE(transaction,'$.kind') IN ('SALE','CAPTURE'))
   ), native_shopify_refunds AS (
     SELECT DATE(r.refund_created_at),'refund','Shopify',
-      IF(l.retail_location_id IS NULL,'Online','POS'),
+      ${shopifyChannel},
       UPPER(COALESCE(r.presentment_currency,f.presentment_currency)),
       -ABS(CAST(r.refund_total_presentment AS NUMERIC)),
       -ABS(CAST(COALESCE(r.refund_tax_presentment,0) AS NUMERIC)),
@@ -57,13 +59,13 @@ export function canonicalFinanceCtes(project) {
   )`;
 }
 
-export function buildCanonicalFinanceQuery(project,{grain='day',dimensions=[]}={}) {
+export function buildCanonicalFinanceQuery(project,{grain='day',dimensions=[],channel_basis='ledger'}={}) {
   if (!Object.hasOwn(GRAINS,grain)) throw new Error('grain must be summary, day, week, or month');
   const allowed=new Set(['source','channel','currency','transaction_type']);
   if (!dimensions.every(x=>allowed.has(x))) throw new Error('unsupported finance dimension');
   const selected=[`${GRAINS[grain]} period`,...[...new Set([...dimensions,'currency'])]];
   const grouped=selected.map((_,i)=>String(i+1)).join(',');
-  return `WITH ${canonicalFinanceCtes(project)}
+  return `WITH ${canonicalFinanceCtes(project,{channel_basis})}
     SELECT ${selected.join(',')},COUNT(*) transaction_count,
       COUNTIF(transaction_type='refund') refund_events,
       COUNT(DISTINCT IF(transaction_type='refund',order_id,NULL)) distinct_refunded_orders,
@@ -81,8 +83,8 @@ export function buildCanonicalFinanceQuery(project,{grain='day',dimensions=[]}={
 }
 
 export function createCanonicalFinanceService({bigquery,project}) {
-  return async function queryFinance({start_date,end_date,grain='day',currency=null,channel=null,source=null,transaction_type=null,dimensions=[]}) {
-    const query=buildCanonicalFinanceQuery(project,{grain,dimensions});
+  return async function queryFinance({start_date,end_date,grain='day',currency=null,channel=null,source=null,transaction_type=null,dimensions=[],channel_basis='ledger'}) {
+    const query=buildCanonicalFinanceQuery(project,{grain,dimensions,channel_basis});
     const params={start_date,end_date,currency,channel,source,transaction_type,matrixify_app_id:MATRIXIFY_APP_ID};
     const [rows]=await bigquery.query({query,params,types:{currency:'STRING',channel:'STRING',source:'STRING',transaction_type:'STRING'},maximumBytesBilled:'5000000000',useLegacySql:false});
     return rows;

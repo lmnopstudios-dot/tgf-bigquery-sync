@@ -1,9 +1,11 @@
+import {assertEventSaleEvidence} from './event-sale-report.js';
 import { ONLINE_COUNTRY_SALES_SEMANTICS, SHOPIFY_NATIVE_HISTORY_START } from './online-country-sales.js';
 // Validate producer observations, not a copy of the submitted analytical plan.
 const fail=field=>{throw Object.assign(Error('Campaign evidence does not satisfy the requested scope.'),{code:'EVIDENCE_SCOPE_MISMATCH',failed_stage:'evidence_validation',scope_field:field});};
 const key=p=>`${p?.event_id||p?.id}/${p?.start_date}/${p?.end_date}`;
 const finite=x=>typeof x==='number'&&Number.isFinite(x);
 export function assertHistoricalEventEvidence(context,evidence){
+  if(context.event_scope)return assertEventSaleEvidence(context,evidence);
   const requested=evidence?.requested_scope,resolved=evidence?.resolved_scope;
   if(context.requested_subject!=='sales'||evidence?.kind!=='historical_event_comparison'||evidence.subject!=='sales')fail('event_subject');
   if(!Array.isArray(evidence.metrics)||evidence.metrics.length!==1||evidence.metrics[0]!=='sales'||context.metrics.some(metric=>!evidence.metrics.includes(metric)))fail('event_metrics');

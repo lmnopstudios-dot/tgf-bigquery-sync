@@ -112,10 +112,17 @@ test('latest N completed selection is governed by actual completion, including a
   const f=fixture({items}),r=await direct(f,'Compare the latest 3 Summer Sale campaigns');
   assert.deepEqual(r.evidence.resolved_scope.events.map(e=>e.year),[2026,2025,2024]);
 });
-test('explicit unsupported channel and population filters produce a specific limitation without reads',async()=>{
-  for(const suffix of [' in-store only',' UK only',' in USD',' Shopify only']){
+test('explicit unsupported population filters produce a specific limitation without reads',async()=>{
+  for(const suffix of [' UK only',' in USD',' Shopify only']){
     const f=fixture(),r=await direct(f,QUESTION+suffix);assert.equal(r.analysis_unavailable,true);assert.match(r.answer,/no verified campaign binding/);assert.equal(f.queries.length,0);
   }
+});
+test('in-store selection now resolves its own knowledge scope instead of using online dates',async()=>{
+  const f=fixture(),r=await direct(f,QUESTION+' in-store only');
+  assert.equal(r.evidence.version,'event_sale_report.v1');
+  assert.equal(r.evidence.sections.length,0);
+  assert.ok(r.evidence.resolved_scope.issues.every(i=>i.channel==='instore'));
+  assert.equal(f.queries.length,0);
 });
 test('interactive validation failures return typed 422 and retain the request reference',async t=>{
   const f=fixture({corrupt:r=>r.source_coverage[0].source_platform='square'}),h=await acceptanceServer(f,{now:NOW});t.after(h.close);

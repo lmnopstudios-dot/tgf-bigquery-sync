@@ -1,3 +1,4 @@
+import {verifyBlackFridayBrowser} from '../test/helpers/black-friday-browser.js';
 import {verifyRetainedSpreadsheetBrowser} from '../test/helpers/retained-spreadsheet-browser.js';
 import {verifyFilteredInventoryBrowser} from '../test/helpers/filtered-inventory-browser.js';
 import {verifyInventoryReportBrowser} from '../test/helpers/inventory-report-browser.js';
@@ -19,6 +20,7 @@ const f=acceptanceFixture(),h=await acceptanceServer(f,{durable:true});
 const browser=await chromium.launch({executablePath:process.env.ORACLE_CHROMIUM||(existsSync('/usr/bin/chromium')?'/usr/bin/chromium':chromium.executablePath()),headless:true,args:['--no-sandbox']});
 const output=process.env.ORACLE_BROWSER_OUTPUT||'/tmp/oracle-acceptance-browser';await mkdir(output,{recursive:true});
 try{
+  await verifyBlackFridayBrowser(browser);
   await verifyRetainedSpreadsheetBrowser(browser);
   await verifyInventoryReportBrowser(browser);
   await verifyFilteredInventoryBrowser(browser);
