@@ -49,8 +49,9 @@ status, IDs, SKU, size/options, tags, each POS store's Available, total POS and
 online RTS Available. It sorts by total POS descending, then stable variant ID
 for ties. The second sheet retains native location quantities. Coverage records
 the requested filters, resolved location IDs, qualifying/unknown counts, read
-timestamps, failures and limits. Variant selection and product eligibility audit
-sheets record excluded and unknown rows explicitly. An empty result retains the
+timestamps, failures and limits. Coverage retains aggregate variant selection counts and inventory states; the
+product eligibility sheet audits catalogue exclusions. Full per-variant
+quantities are retained for qualifying rows only (see Storage projection below). An empty result retains the
 requested headers and an artifact row count of zero.
 
 The existing authenticated export store, size limits, download checksum/cell
@@ -124,3 +125,51 @@ numeric quantities, strict thresholds, totals and ordering. A partial export
 retains its coverage flags and exits 2. Local/browser fixtures use mocked Shopify;
 only a successful deployed execution verifies live delivery. No live deployment
 or current qualifying population is inferred from passing fixture tests.
+
+## Storage projection (0c52483a)
+
+Request `0c52483a-f6a6-4060-a080-4d6191375fd8`, job
+`fc1be9f9-d862-4284-a38e-520a2689b5f4`, revision
+`c4abb94afdde89401e110e03f9bb61f209380c25` completed retrieval and workbook
+generation, then failed at `inventory_export_size` (reported deployed evidence).
+That guard precedes the export-store write and the evidence callback/checkpoint;
+workbook bytes exist only in process memory at that stage. It does not write a
+local XLSX. A retained job/export lookup must be attempted before deciding a new
+Shopify read is necessary. This workspace's read-only incident lookup returned
+`EGRESS_FORBIDDEN`, so deployed recovery remains unverified; no live replay was
+performed. An owner-scoped Render lookup command was provided separately.
+
+The previous artifact embedded full location evidence for every scanned variant
+while its first two workbook sheets already contained only qualifying variants.
+The `Variant selection` sheet additionally retained all scanned variant totals.
+Filtered exports now project qualifying variants before workbook construction.
+Coverage retains evaluated/qualified/nonmatching/unknown counts, state counts,
+and a SHA256 fingerprint of the scanned inventory; the fingerprint is provenance,
+not an independent proof of omitted stock. Original catalogue eligibility audit,
+status counts, tags, request count, native location bindings, retrieval interval,
+limits and **all** failures remain. Qualifying rows retain their full product,
+variant and native location quantities/timestamps for predicate and cell checks.
+There is no per-variant quantity audit for omitted nonqualifying rows in the new
+artifact. Coverage states this retention scope; old artifacts remain readable.
+
+The shared BigQuery export adapter rejects serialized JSON over 8,000,000 bytes
+before issuing its parameterized DML request. This leaves headroom for the
+BigQuery 10 MB request bound and other request fields. Both existing guards stay
+at 8 MB. A legitimately larger qualifying export still fails explicitly: there
+is no result truncation or automatic provider replay. Measurements log total
+JSON bytes, each envelope component, workbook raw/base64 bytes and other package
+metadata, without product data or credentials.
+
+The synthetic regression uses 553 eligible parents, 9,322 variants, six catalogue
+pages and four required stores: 1,308 mocked reads. Its old envelope is 9,827,773
+bytes (9,774,362 product/variant bytes), and its XLSX is about 275 KB raw/367 KB
+base64: about 10.19 MB total. Projection retains 131 qualifying variants and a
+211,160-byte envelope; XLSX is about 60 KB raw/80 KB base64: about 293 KB total.
+ZIP timestamps can vary exact workbook byte counts. These are fixture
+measurements, not reconstructed byte measurements of the failed live package.
+
+The regression exercises production durable job and export SQL adapters over
+JSON transport doubles, authenticated download/checksum/cells, unauthorized
+access, persisted-artifact recovery without repeated reads, partial coverage,
+unknown/unstocked/untracked states and preserving every qualifying row. Actual
+BigQuery SQL execution and fresh live delivery remain separate deployed checks.
