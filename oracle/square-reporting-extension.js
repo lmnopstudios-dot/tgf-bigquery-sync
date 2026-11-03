@@ -1,3 +1,4 @@
+import {squarePaymentChannelEvidenceSql,squareOrderChannelsSql} from './square-channels.js';
 import {squarePreviewPlan} from '../customer-identity/square-preview.js';
 import {fq} from '../customer-identity/collect.js';
 import {cohortRelations} from './cohort-execution.js';
@@ -36,13 +37,8 @@ export function extendJourneyChannelsSql(sql,project,identity,scope,extension){
    if(s.name==='sp_square_latest')body=body.replace('SELECT COALESCE(', 'SELECT j,COALESCE(');
    extra.push({name:s.name.replace('sp_','sx_'),body});
   }
-  extra.push({name:'sx_channel_evidence',body:`WITH p AS(SELECT TO_JSON(p,stringify_wide_numbers=>TRUE) j FROM ${fq(project,'square_data','payments')} p)
-    SELECT JSON_VALUE(j,'$.order_id') oid,JSON_VALUE(j,'$.location_id') location_id,
-    COUNTIF(UPPER(JSON_VALUE(j,'$.status'))='COMPLETED') completed_payments,
-    COUNTIF(UPPER(JSON_VALUE(j,'$.status'))='COMPLETED' AND UPPER(JSON_VALUE(j,'$.source_type'))='CARD' AND UPPER(JSON_VALUE(j,'$.card_details.entry_method')) IN ('EMV','SWIPED','CONTACTLESS')) card_present_payments
-    FROM p GROUP BY oid,location_id`});
-  extra.push({name:'sx_square_channels',body:`SELECT o.oid,IF(COUNTIF(p.completed_payments>0 AND p.location_id=o.location_id)>0 AND SUM(p.completed_payments)=SUM(p.card_present_payments) AND COUNTIF(p.location_id IS NULL OR p.location_id!=o.location_id)=0,'In-store','Unknown') channel
-    FROM sx_square o LEFT JOIN sx_channel_evidence p USING(oid) GROUP BY o.oid`});
+  extra.push({name:'sx_channel_evidence',body:squarePaymentChannelEvidenceSql(project)});
+  extra.push({name:'sx_square_channels',body:squareOrderChannelsSql()});
   extra.push({name:'sx_square_projection',body:`SELECT 'square' source_platform,'square' source_store,c.channel,o.oid order_ref,o.cid source_customer_id,o.ts order_timestamp,LOWER(o.state) status,
     COALESCE(JSON_VALUE(o.j,'$.currency'),JSON_VALUE(o.j,'$.total_money.currency')) currency,CAST(NULL AS NUMERIC) order_total,CAST(NULL AS NUMERIC) refunds,FALSE migrated,FALSE cancelled,TRUE customer_record_present,o.cid IS NULL persisted_guest
     FROM sx_square o JOIN sx_square_channels c USING(oid) CROSS JOIN sx_guard g WHERE g.passed`});
