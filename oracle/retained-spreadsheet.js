@@ -47,7 +47,7 @@ export function retainedSpreadsheetTables(evidence,{answer='',context={},as_of=n
   visit(evidence);
   if(!tables.length)throw fail('SPREADSHEET_NO_STRUCTURED_ROWS');
  }
- const observationTimes=[...new Map((evidence.products||[]).flatMap(p=>(p.variants||[]).flatMap(v=>(v.locations||[]).map(l=>[JSON.stringify([l.location_id,l.observed_at]),{location:l.location_name,observed_at:l.observed_at}])))).values()];
+ const observationTimes=[...new Map((evidence.products||[]).flatMap(p=>(p.variants||[]).flatMap(v=>(v.locations||[]).map(l=>[JSON.stringify([p.title,v.title,l.location_id,l.observed_at]),{product:p.title,variant:v.title,location:l.location_name,observed_at:l.observed_at}])))).values()];
  const metadata={source_timestamps:{as_of:evidence.as_of,generated_at:evidence.generated_at,started_at:evidence.started_at},periods:evidence.periods||null,observation_times:observationTimes,retained_evidence:true,refreshed:false,as_of,partial:partial||incomplete(evidence),scope:context,coverage:evidence.coverage??evidence.classification_coverage??null,limitations:evidence.limitations??evidence.semantics??null,failures:evidence.failures??null,source_response:answer,blank_cells:'Unavailable or absent in source evidence; never substituted with zero.',ordering:'Source order preserved; no cross-currency totals or recomputed rates.'};
  const notes=Object.entries(metadata).flatMap(([k,v])=>{const value=scalar(v);if(typeof value!=='string'||value.length<=30000)return [[k,value]];const rows=[];for(let i=0;i<value.length;i+=30000)rows.push([`${k} part ${Math.floor(i/30000)+1}`,value.slice(i,i+30000)]);return rows;});
  tables.push({name:'Source notes',headers:['Field','Value'],rows:notes});
@@ -59,6 +59,9 @@ export const isRetainedSpreadsheetArtifact=a=>a?.envelope?.kind==='retained_spre
 export const spreadsheetSourceEvidence=a=>a.envelope.kind==='retained_spreadsheet'?a.envelope.source_evidence:a.envelope;
 const sourceInfo=a=>a.envelope.kind==='retained_spreadsheet'?a.envelope:{...a.retained_export,source_evidence:a.envelope,row_count:a.envelope.rows?.length||0};
 async function nativeWorkbook(e,c,answer){
+ // Full source text is split safely into notes below; the native overview
+ // cell must also stay within Excel's single-cell limit.
+ answer=answer.slice(0,30000);
  const {reportWorkbook}=await import('./report-export.js');
  const period=e.periods?.[0];
  if(e.kind==='governed_klaviyo_campaign_set'){
@@ -87,7 +90,7 @@ export async function assertRetainedSpreadsheet(a){
 }
 export function retainedSpreadsheetResult(a,id,downloadBase='/api/oracle/exports'){
  const e=sourceInfo(a);
- return {retained_at:e.source_retained_at,retained_source_answer:e.source_answer,answer:`Spreadsheet created from the retained results${e.source_partial||e.source_evidence.complete===false?' (incomplete evidence; see Source notes)':''}. No data was refreshed. Original observation times and limitations are retained.\n\n<details><summary>Show details</summary>\n\n${e.source_answer||'See workbook source notes.'}\n\n</details>`,presentation:{version:1,summary_markdown:'Spreadsheet created from retained results. No data was refreshed.',supporting_markdown:e.source_answer||''},analysis_context:a.analysis_context,evidence:e.source_evidence,partial:e.source_partial||e.source_evidence.complete===false,tools:[],artifact:{id,filename:a.filename,row_count:e.row_count,download_url:`${downloadBase}/${id}`}};
+ return {retained_at:e.source_retained_at,retained_source_answer:e.source_answer,answer:`Spreadsheet created from the retained results${e.source_partial||e.source_evidence.complete===false?' (incomplete evidence; see Source notes)':''}. No data was refreshed. Original observation times and limitations are retained.\n\n<details><summary>Show details</summary>\n\n${e.source_answer||'See workbook source notes.'}\n\n</details>`,presentation:{version:1,summary_markdown:`Spreadsheet created from retained results${e.source_partial||e.source_evidence.complete===false?' (incomplete evidence; see workbook source notes)':''}. No data was refreshed.`,supporting_markdown:e.source_answer||''},analysis_context:a.analysis_context,evidence:e.source_evidence,partial:e.source_partial||e.source_evidence.complete===false,tools:[],artifact:{id,filename:a.filename,row_count:e.row_count,download_url:`${downloadBase}/${id}`}};
 }
 export async function exportRetainedSpreadsheet({recent,context,store,owner,requestId,downloadBase,assertAgreement,now=Date.now()}){
  const unavailable=(code,detail)=>({answer:detail+' No data was refreshed.',analysis_context:context,tools:[],analysis_unavailable:true,export_outcome:{status:'failed',detail,code}});
