@@ -38,7 +38,13 @@ export async function runCoverageReview({bigquery,project,identity,location,emit
 }
 export async function main(){
  const path=`/tmp/square-coverage-${Date.now()}.jsonl`,fd=openSync(path,'wx',0o600),encode=x=>JSON.stringify(x,(_k,v)=>typeof v==='bigint'?String(v):v);
- const emit=x=>{writeSync(fd,encode(x)+'\n');fsyncSync(fd);if(['manifest','population_validated','aggregate_results','acceptance_summary'].includes(x.stage)||x.state==='failed'||x.state==='population_validated')console.log(encode(x));};
+ const emit=x=>{
+  writeSync(fd,encode(x)+'\n');fsyncSync(fd);
+  if(x.stage==='aggregate_results'){
+   const sections=Object.fromEntries(Object.entries(x.rows[0]).filter(([,v])=>Array.isArray(v)).map(([name,rows])=>{const columns=[...new Set(rows.flatMap(Object.keys))];return [name,{columns,rows:rows.map(r=>columns.map(k=>r[k]??null))}];}));
+   console.log(encode({stage:'coverage_review',case:x.case,cutoff:'2026-10-19',time_zone:'Europe/London',sections,limitation:'Source/year/channel analytical records and collaboration cohorts overlap; do not add them as unique people. Email links remain candidates; continuous coverage is unverified.'}));
+  }else if(['manifest','acceptance_summary'].includes(x.stage)||x.state==='failed'||x.state==='population_validated')console.log(encode(x));
+ };
  console.log(encode({stage:'output_file',path,coverage_only:true,report_replayed:false,activation:false,production_writes:false}));
  try{
   if(process.argv.length!==2)throw Error('No arguments supported');const identity=identityConfiguration();
