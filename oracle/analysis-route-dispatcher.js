@@ -68,6 +68,7 @@ export function assertEvidenceAgreement(contextValue,evidence,requestMessage=nul
 
   const context=contextValue==null?null:validateAnalysisContext(contextValue);
   if(context?.inventory_report&&evidence){if(inventoryReportConfigKey(context.inventory_report)!==inventoryReportConfigKey(evidence.inventory_report)||requestMessage&&filteredInventoryScope(requestMessage)?.inventory_report&&inventoryReportConfigKey(filteredInventoryScope(requestMessage).inventory_report)!==inventoryReportConfigKey(context.inventory_report))throw Object.assign(new Error('Inventory filters differ from resolved request'),{code:'EVIDENCE_SCOPE_MISMATCH',failed_stage:'evidence_validation'});}
+  if(context?.stock_scope&&evidence&&(context.entity_query!==evidence.entity_query||JSON.stringify(context.stock_scope)!==JSON.stringify(evidence.stock_scope)))throw Object.assign(new Error('Stock scope differs from evidence'),{code:'EVIDENCE_SCOPE_MISMATCH'});
   assertPlanAgreement(context,evidence);
   if(evidence)assertAnswerCompleteness(context,{evidence,partial:true});
   if(context?.population_scope&&evidence)assertPopulationConversionEvidence(context,evidence);

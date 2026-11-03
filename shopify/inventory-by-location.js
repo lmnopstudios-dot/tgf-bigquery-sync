@@ -43,6 +43,18 @@ export function resolveInventoryLocation(locations,selector=inventoryLocationSel
   return{location:null,selector,reason,identity_match_count:identityMatches.length};
 }
 
+// Requested names resolve independently; no combined string is sent as a name.
+export function selectStockLocations(locations,request,configured){
+ const active=locations.filter(l=>l.isActive),selected=[],missing=[];
+ for(const name of request.locations){const matches=active.filter(l=>l.name.toLowerCase()===name.toLowerCase());if(matches.length===1)selected.push(matches[0]);else missing.push(name);}
+ for(const group of request.location_groups){
+   if(group==='all')selected.push(...active);
+   if(group==='online'){const match=resolveInventoryLocation(active,configured);const exact=active.filter(l=>/^online ready to ship$/i.test(l.name));if(exact.length===1)selected.push(exact[0]);else if(match.location)selected.push(match.location);else missing.push('online');}
+   if(group==='pos'){const matches=active.filter(l=>/^(?:Kings Cross|Shoreditch|Soho)$/i.test(l.name));if(matches.length)selected.push(...matches);else missing.push('pos');}
+ }
+ return {locations:[...new Map(selected.map(l=>[l.id,l])).values()].filter(l=>!request.excluded_location_terms.some(t=>l.name.toLowerCase().includes(t.toLowerCase()))),missing};
+}
+
 export async function listAndResolveInventoryLocations({call,selector=inventoryLocationSelector(),maxPages=5}){
   const locations=[];let cursor=null,pages=0,truncated=false;
   do{
@@ -62,7 +74,7 @@ export async function listAndResolveInventoryLocations({call,selector=inventoryL
 export function createBatchedInventoryByLocation({graphql,getToken,locationSelector=inventoryLocationSelector(),now=Date.now,sleep,log=()=>{},parentBatchSize=5,itemBatchSize=50,concurrency=2}){
   // Keep nested parent query cost below Shopify's 1,000-point ceiling.
   parentBatchSize=Math.max(1,Math.min(5,parentBatchSize));itemBatchSize=Math.max(1,Math.min(50,itemBatchSize));concurrency=Math.max(1,Math.min(2,concurrency));
-  return async(parentIds,{deadlineAt=now()+45_000,signal,allLocations=false,variantIds=null,maxRequests=40,maxVariantPages=5,maxVariants=500,maxLocations=10}={})=>{
+  return async(parentIds,{deadlineAt=now()+45_000,signal,allLocations=false,variantIds=null,maxRequests=40,maxVariantPages=5,maxVariants=500,maxLocations=10,locationRequest=null}={})=>{
     deadlineAt=Math.min(deadlineAt,now()+45_000);
     maxRequests=Math.max(1,Math.min(40,maxRequests));maxVariantPages=Math.max(1,Math.min(5,maxVariantPages));maxVariants=Math.max(1,Math.min(500,maxVariants));maxLocations=Math.max(1,Math.min(10,maxLocations));
     parentIds=[...new Set(parentIds)];
@@ -77,6 +89,7 @@ export function createBatchedInventoryByLocation({graphql,getToken,locationSelec
         resolution=await listAndResolveInventoryLocations({call,selector:locationSelector,maxPages:2});
         if(resolution.truncated)failures.push({stage:'location_resolution',code:'INVENTORY_LOCATION_PAGE_LIMIT'});
         locations=allLocations?resolution.locations.filter(l=>l.isActive).slice(0,maxLocations):resolution.location?[resolution.location]:[];
+        if(locationRequest){const requested=selectStockLocations(resolution.locations,locationRequest,locationSelector);locations=requested.locations.slice(0,maxLocations);if(requested.missing.length)failures.push({stage:'location_resolution',code:'INVENTORY_LOCATION_UNRESOLVED',requested:requested.missing});if(requested.locations.length>maxLocations)failures.push({stage:'location_resolution',code:'INVENTORY_LOCATION_LIMIT'});}
         if(allLocations&&resolution.locations.filter(l=>l.isActive).length>maxLocations)failures.push({stage:'location_resolution',code:'INVENTORY_LOCATION_LIMIT'});
         if(!locations.length)throw Object.assign(new Error('Inventory location unavailable'),{code:'ONLINE_LOCATION_NOT_FOUND'});
         await mapConcurrent(chunk(parentIds,parentBatchSize),async ids=>{
@@ -123,6 +136,6 @@ export function createBatchedInventoryByLocation({graphql,getToken,locationSelec
     stats.returned_parents=products.length;stats.variants=products.reduce((n,p)=>n+p.variants.length,0);
     const diagnostics={...stats,...budget.finish(),complete};diagnostics.throttle_waits=diagnostics.retry_count;
     log(diagnostics);
-    return {products,requested_count:parentIds.length,completed_count:products.length,missing_ids:missing,complete,availability:complete?'complete':rows.some(r=>r.evidence_state==='observed')?'partial':failures.length?'failed':'unavailable',failures,diagnostics,as_of:new Date(now()).toISOString(),source:'live_shopify_admin',location:allLocations?null:locations[0]?.name??null,location_id:allLocations?null:locations[0]?.id??null,resolved_location:allLocations?null:locations[0]??null,location_coverage:{requested:allLocations?'all_active':locationSelector,resolved:locations.map(l=>({id:l.id,name:l.name})),observed:locations.filter(l=>rows.some(r=>r.location_id===l.id&&r.evidence_state==='observed')).map(l=>({id:l.id,name:l.name})),complete}};
+    return {products,requested_count:parentIds.length,completed_count:products.length,missing_ids:missing,complete,availability:complete?'complete':rows.some(r=>r.evidence_state==='observed')?'partial':failures.length?'failed':'unavailable',failures,diagnostics,as_of:new Date(now()).toISOString(),source:'live_shopify_admin',location:allLocations?null:locations[0]?.name??null,location_id:allLocations?null:locations[0]?.id??null,resolved_location:allLocations?null:locations[0]??null,location_coverage:{requested:locationRequest|| (allLocations?'all_active':locationSelector),resolved:locations.map(l=>({id:l.id,name:l.name})),observed:locations.filter(l=>rows.some(r=>r.location_id===l.id&&r.evidence_state==='observed')).map(l=>({id:l.id,name:l.name})),complete}};
   };
 }

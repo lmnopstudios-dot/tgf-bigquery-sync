@@ -12,7 +12,7 @@ const INVENTORY_POPULATIONS=Object.freeze({
   'all products without made-to-order tag':['ACTIVE','DRAFT','UNLISTED'],
   'active and draft products without made-to-order tag':['ACTIVE','DRAFT']
 });
-export const isInventoryReportContext=context=>context?.requested_subject==='current_stock'&&(context.inventory_report!=null||Object.hasOwn(INVENTORY_POPULATIONS,context.entity_query));
+export const isInventoryReportContext=context=>context?.requested_subject==='current_stock'&&(context.stock_scope?.format==='xlsx'||context.inventory_report!=null||Object.hasOwn(INVENTORY_POPULATIONS,context.entity_query));
 const typeOf=value=>value===null?'null':Array.isArray(value)?'array':typeof value;
 export function validateInventoryProduct(product,{page=1,index=0}={}){
   const invalid=(field,value,expected)=>{
@@ -156,6 +156,7 @@ export const inventoryReportRowCount=e=>inventoryVariantSelection(e)?.qualified.
 export function inventoryReportAnswer(e){const selection=inventoryVariantSelection(e);if(selection)return `Inventory export: ${selection.qualified.length} qualifying variants; ${selection.unknown_count} variants excluded because required Available quantities are unknown. Filters: ${inventoryReportScopeLabel(e.inventory_report).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;')}. ${e.complete?'Coverage complete.':'Coverage incomplete; see Coverage sheet.'} All requested location quantities must be known numeric values; zero and negatives are retained. Sorted by total POS ${e.inventory_report.sort.direction}.`;return `Inventory export: ${e.products.length} eligible products (${(e.population?.eligible_statuses||['ACTIVE','DRAFT']).join('/')}) at ${e.locations.length} active locations. ${e.complete?'Coverage complete.':'Coverage incomplete; see Coverage sheet.'} Product eligibility uses tags. Available, On hand and Committed remain separate. Retrieved ${e.started_at} to ${e.as_of} (UTC). Export limits: ${JSON.stringify(e.limits)}.`;}
 export function createInventoryReportService({graphql,getToken,artifactStore,now=Date.now}){
   return async(message,options={})=>{
+    if(options.analysisContext?.stock_scope)return null;
     const scope=inventoryReportScope(message);if(!scope&&!isInventoryReportContext(options.analysisContext))return null;
     const entityQuery=options.analysisContext?.entity_query||scope?.entity_query;
     const config=validateInventoryReportConfig(options.analysisContext?.inventory_report||scope?.inventory_report);
