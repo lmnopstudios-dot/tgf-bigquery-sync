@@ -160,7 +160,7 @@ export function createOracleUiRouter({ knowledgeService, bigquery, project, chat
     const previous=req.body.new_question===true?emptyAnalysisContext():sessionContext(req);
     const result=requestTransition(req,previous,req.body.message,{now:now(),reportContext:req.body.report_context||null});
     const execution=resolveExecutionPlan(result.context);
-    res.json({success:true,route:execution.delivery||oracleRequestRoute(req.body.message)});
+    res.json({success:true,route:execution.delivery||oracleRequestRoute(req.body.message),resolved_subject:result.context.requested_subject,tool_route:result.context.tool_route,inventory_report:result.context.inventory_report,deployed_revision:env.RENDER_GIT_COMMIT||null,providers_attempted:0});
   });
   router.post('/analysis/clear',authenticate,protectWrite,json,(req,res)=>{clearAnalysis(req,res);res.json({success:true,analysis_scope:null,scope_generation:generation(req)})});
   // Durable jobs remain opt-in until the production-shaped enqueue/claim/finish/poll
@@ -373,6 +373,7 @@ export function createOracleUiRouter({ knowledgeService, bigquery, project, chat
     if (invalidJson) return res.status(400).json({ success: false, code: 'INVALID_JSON', error: 'Invalid JSON request' });
     const id=req.oracleRequestId||requestId(req.get('x-request-id'));
     console.error('Oracle UI unhandled request failure:',serverFailureDiagnostic({id,path:req.originalUrl,stage:req.oracleFailureStage,error}));
+    if(error?.code==='INVALID_INVENTORY_REPORT'||error?.code==='INVENTORY_EXPORT_REQUIRES_REPORT')return res.status(422).json({success:false,code:error.code,failure_stage:error.failed_stage||'inventory_scope_resolution',error:'The catalogue inventory export could not be planned. No capped stock lookup was run.',request_id:id});
     if(error?.code==='EVIDENCE_SCOPE_MISMATCH')return res.status(409).json({success:false,code:'EVIDENCE_SCOPE_MISMATCH',error:'The saved evidence does not match this analysis. Retry explicitly; no mismatched figures were returned.',request_id:id});
     res.status(500).json({success:false,code:'ORACLE_REQUEST_FAILED',error:'The Oracle request could not be completed. Retry explicitly; if it repeats, give an administrator the correlation ID.',request_id:id});
   });

@@ -1,3 +1,4 @@
+import {inventoryCatalogueExportIntent,inventoryScopeError} from './inventory-export-intent.js';
 import {FILTERED_INVENTORY_ENTITY,filteredInventoryScope,validateInventoryReportConfig,inventoryReportConfigKey,resolveInventoryGroups,inventoryVariantSelection,inventoryReportScopeLabel} from './inventory-report-config.js';
 import ExcelJS from 'exceljs';
 import {createHash} from 'node:crypto';
@@ -31,9 +32,9 @@ export function validateInventoryProduct(product,{page=1,index=0}={}){
 export function inventoryReportScope(message){
   const filtered=filteredInventoryScope(message);if(filtered)return filtered;
   const text=String(message||'');
-  if(!/\b(?:stock|inventory)\b/i.test(text)||! /\b(?:all\s+(?:(?:active\s+(?:and|&)\s+draft|draft\s+(?:and|&)\s+active)\s+)?(?:Shopify\s+)?(?:products|items)|everything|entire catalog(?:ue)?)\b/i.test(text))return null;
+  if(!/\b(?:stock|inventory)\b/i.test(text)||! /\b(?:all\s+(?:(?:active\s+(?:and|&)\s+draft|draft\s+(?:and|&)\s+active)\s+)?(?:Shopify\s+)?(?:products|items)|everything|entire catalog(?:ue)?)\b/i.test(text)){if(inventoryCatalogueExportIntent(message))throw inventoryScopeError();return null;}
   const exclusion=text.match(/\b(?:except|excluding|exclude|without|do not have|don't have|not tagged)\b[\s\S]*?[`"“']?(made[- ]to[- ]order)\b/i);
-  if(!exclusion)return null;
+  if(!exclusion){if(inventoryCatalogueExportIntent(message))throw inventoryScopeError();return null;}
   const explicitStatuses=/\ball\s+(?:active\s+(?:and|&)\s+draft|draft\s+(?:and|&)\s+active)\b/i.test(text);
   return {entity_query:explicitStatuses?'active and draft products without made-to-order tag':'all products without made-to-order tag',location:null,all_locations:true,excluded_tag:'made-to-order'};
 }

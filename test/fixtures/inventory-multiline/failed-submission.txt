@@ -1,0 +1,8 @@
+Create a downloadable Excel spreadsheet of active product variants with:
+- More than 7 available units combined across Kings Cross, Shoreditch and Soho.
+- Fewer than 3 available units at Online Ready to Ship.
+Include made-to-order products. Exclude products tagged enquire, and exclude draft, unlisted and archived products. Exclude workshop stock.
+
+Show one row per variant with product name, size/options, available stock at each of the three stores, total POS stock and Online Ready to Ship stock. Sort by total POS stock, highest first.
+
+Include zero and negative online quantities. Require known numeric quantities at all four locations; missing or unknown quantities must not count as zero or qualify. Use the complete paginated catalogue. Do not modify inventory.

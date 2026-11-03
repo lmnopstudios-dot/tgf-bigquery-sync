@@ -1,6 +1,7 @@
+import {inventoryScopeError} from './inventory-export-intent.js';
 // Governed variant inventory predicates. No title matching, Shopify writes or
 // store IDs inferred from names. Names are bound to native locations at read time.
-const fail=()=>Object.assign(new Error('Invalid inventory report filters'),{code:'INVALID_INVENTORY_REPORT'});
+const fail=inventoryScopeError;
 export const FILTERED_INVENTORY_ENTITY='filtered variant inventory';
 const statuses=['ACTIVE','DRAFT','UNLISTED','ARCHIVED'];
 const operators={'>':'gt','>=':'gte','<':'lt','<=':'lte'};
@@ -19,21 +20,43 @@ export function validateInventoryReportConfig(value){
 }
 const canonical=v=>Array.isArray(v)?v.map(canonical):v&&typeof v==='object'?Object.fromEntries(Object.keys(v).sort().map(k=>[k,canonical(v[k])])):v;
 export const inventoryReportConfigKey=value=>JSON.stringify(canonical(validateInventoryReportConfig(value)));
+const comparisonPattern=/(>=|<=|>|<|at least|at most|greater than|more than|fewer than|less than|above|below|over|under)\s*(-?\d+(?:\.\d+)?)/gi;
+const comparisonOperator=op=>operators[op]||({'at least':'gte','at most':'lte','greater than':'gt','more than':'gt','fewer than':'lt','less than':'lt',above:'gt',below:'lt',over:'gt',under:'lt'})[op.toLowerCase()];
+function locationNames(value){
+ let text=value.replace(/^.*?\b(?:where|with)\s+/i,'').trim();
+ text=text.replace(/^[\s,:;()]+|[\s,:;().]+$/g,'');
+ const prefix=/^(?:(?:and|the|sum|of|combined|total|POS|retail|available|units?|stock|inventory|across|at|in|locations?|stores?|is|must|be)\b[\s:=(]*)+/i;
+ text=text.replace(prefix,'');
+ return text.split(/\s*\+\s*|\s*,\s*|\s+and\s+/i).map(n=>clean(n).replace(/^(?:available\s*\(|["'])|["')]+$/g,'').replace(/(?:\s+(?:available|units?|stock|inventory|combined|together|total))+[\s:()]*$/i,'').trim()).filter(Boolean);
+}
 export function filteredInventoryScope(message){
- const text=String(message||'').replace(/[*`“”]/g,'').trim();
- if(!/\b(?:variants?|products?)\b/i.test(text)||!/\bavailable(?:\s+stock|\s+inventory)?\s*(?:>=|<=|>|<)/i.test(text))return null;
- const groups=[...text.matchAll(/(?:\bwhere\s+|\band\s+|[,;\n]\s*|^)([A-Za-z][A-Za-z0-9 '\-+]*?)\s+available(?:\s+(?:stock|inventory))?\s*(>=|<=|>|<)\s*(-?\d+(?:\.\d+)?)/gi)].map(m=>({names:m[1].replace(/^.*?\bwhere\s+/i,'').replace(/^and\s+/i,'').split('+').map(clean),operator:operators[m[2]],threshold:Number(m[3])}));
- // A sum of POS locations and a separate single-location quantity. Other
- // expressions must not silently become an unfiltered or capped stock lookup.
- if(groups.length!==2)throw fail();
- const pos=groups.find(g=>g.names.length>1),online=groups.find(g=>g!==pos);if(!pos||!online||online.names.length!==1)throw fail();
+ const text=String(message||'').normalize('NFKC').replace(/&gt;/gi,'>').replace(/&lt;/gi,'<').replace(/≥/g,'>=').replace(/≤/g,'<=').replace(/[*`“”]/g,'').replace(/^\s*(?:[-•]|\d+[.)])\s+/gm,'').replace(/[\t ]+/g,' ').trim();
+ const matches=[...text.matchAll(comparisonPattern)];
+ if(!matches.length||!(/\b(?:variants?|products?|stock|inventory)\b/i.test(text))||!(/\b(?:available|POS|RTS)\b/i.test(text)))return null;
+ const declaration=text.match(/\b(?:POS|retail|store)\s+(?:locations?|stores?)\s*[:=]\s*([^\n;.]+)/i);
+ const declaredPOS=declaration?locationNames(declaration[1]):[];
+ const onlineDeclaration=text.match(/\bonline(?:\s+RTS)?\s+location\s*[:=]\s*([^\n;.]+)/i);
+ const declaredOnline=onlineDeclaration?locationNames(onlineDeclaration[1]):[];
+ const groups=matches.map((m,i)=>{
+   const before=text.slice(i?matches[i-1].index+matches[i-1][0].length:0,m.index).trim().split(/[.;\n]/).filter(Boolean).at(-1)||'';
+   const after=text.slice(m.index+m[0].length,i+1<matches.length?matches[i+1].index:undefined).trim().split(/[.;\n]/)[0];
+   const suffix=/^(?:available|units?|stock|inventory|across|at|in)\b/i.test(after),part=suffix?after:before;
+   let names=locationNames(part);const posLabel=/\bPOS\b/i.test(part),onlineLabel=/\bonline\s+RTS\b/i.test(part);
+   if(posLabel&&(!names.length||names.every(n=>/^(?:available|stock|total|units)$/i.test(n))))names=declaredPOS;
+   if(onlineLabel&&names.length===1&&/^online\s+RTS$/i.test(names[0]))names=declaredOnline.length?declaredOnline:['Online Ready to Ship'];
+   return {names,operator:comparisonOperator(m[1]),threshold:Number(m[2])};
+ });
+ const unique=[...new Map(groups.map(g=>[JSON.stringify(g),g])).values()];
+ if(unique.length!==2)throw fail();
+ const pos=unique.find(g=>g.names.length>1),online=unique.find(g=>g!==pos);if(!pos||!online||online.names.length!==1)throw fail();
  let requested=['ACTIVE','DRAFT','UNLISTED'];
- if(/\bactive\s+(?:Shopify\s+)?(?:variants|products)\b/i.test(text))requested=['ACTIVE'];
- if(/\bactive\s+and\s+draft\s+(?:variants|products)\b/i.test(text))requested=['ACTIVE','DRAFT'];
+ if(/\bactive(?:[- ]only)?\s+(?:(?:Shopify|product)\s+)?(?:variants?|products?)\b|\b(?:status|products?)\s*:\s*active(?:\s+only)?\b/i.test(text))requested=['ACTIVE'];
+ if(/\bactive\s+and\s+draft\s+(?:product\s+)?(?:variants?|products?)\b/i.test(text))requested=['ACTIVE','DRAFT'];
  for(const clause of text.split(/[.!;\n]/))if(/\bexclud(?:e|ing)\b/i.test(clause)&&/\b(?:draft|unlisted|archived)\b/i.test(clause))requested=requested.filter(s=>!new RegExp(`\\b${s}\\b`,'i').test(clause));
  const tags=[...text.matchAll(/\b(?:exclude|excluding|without)\s+(?:the\s+)?(?:exact\s+)?["']?([\w-]+)["']?\s+tags?\b/gi)].map(m=>m[1]);
+ for(const m of text.matchAll(/\b(?:exclude|excluding|without)\s+(?:products?\s+)?(?:(?:with|having)\s+)?(?:the\s+)?(?:exact\s+)?(?:tagged|tags?\s*:)\s*["']?([\w-]+)["']?/gi))tags.push(m[1]);
  if(/\binclude\s+made[- ]to[- ]order\b/i.test(text)&&tags.some(t=>t.toLowerCase()==='made-to-order'))throw fail();
- const config=validateInventoryReportConfig({version:1,statuses:requested,excluded_tags:tags,pos,online,exclude_workshops:/\bexclude\s+(?:the\s+)?workshops?\b/i.test(text),require_known_available:true,sort:{metric:'pos_total_available',direction:/\b(?:total\s+POS|POS\s+total)\s+asc(?:ending)?\b/i.test(text)?'asc':'desc'}});
+ const config=validateInventoryReportConfig({version:1,statuses:requested,excluded_tags:tags,pos,online,exclude_workshops:/\bexclude\s+(?:the\s+)?workshops?\b/i.test(text),require_known_available:true,sort:{metric:'pos_total_available',direction:/\b(?:total\s+POS|POS\s+total)(?:\s+stock)?\s*,?\s*(?:asc(?:ending)?|lowest first)\b/i.test(text)?'asc':'desc'}});
  return{entity_query:FILTERED_INVENTORY_ENTITY,location:null,all_locations:true,inventory_report:config};
 }
 export function resolveInventoryGroups(config,locations){

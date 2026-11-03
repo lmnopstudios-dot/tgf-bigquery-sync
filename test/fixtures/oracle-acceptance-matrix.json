@@ -1326,6 +1326,10 @@
     {
       "file": "test/oracle-filtered-inventory.test.js",
       "purpose": "Active variants with Kings Cross + Shoreditch + Soho Available > 7 and Online Ready to Ship Available < 3: exact enquire-tag exclusion, MTO inclusion, native IDs/no workshops, all-four numeric coverage, strict boundaries/negative/zero, shared planning/job persistence, authenticated filtered XLSX and saved recovery without provider replay."
+    },
+    {
+      "file": "test/oracle-inventory-multiline.test.js",
+      "purpose": "Verbatim failed #405 multiline request: operator-before-Available wording, bullets/line breaks, product-tag exclusion, real preflight/chat/job/export dispatch and authenticated workbook/recovery; fail-closed legacy-tool guard; separate deployed-revision/planning/chat-delivery diagnostic."
     }
   ]
 }
