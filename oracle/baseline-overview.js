@@ -232,5 +232,7 @@ export function createBaselineOverviewService({managementReport,onlineCountrySal
     const structured={kind:'ecommerce_monthly_baseline',requested_at:iso(requestedAt),periods,evidence:Object.fromEntries(Object.entries(evidence).map(([key,item])=>[key,{tool:item.tool,status:item.result.status,query_executed_at:item.query_executed_at,...(item.result.status==='fulfilled'?{result:item.result.value}:{error_code:safeCode(item.result.reason)})}]))};
     return{answer:lines.join('\n'),tools:[...new Set(successful.map(x=>x.tool))],attempted_tools:specs.map(x=>x[1]),evidence:structured};
   };
-  return async(...args)=>withOracleCharts(await run(...args));
+  const service=async(...args)=>withOracleCharts(await run(...args));
+  service.spreadsheetExportStore=socialExportStore;service.spreadsheetNow=()=>new Date(now()).getTime();
+  return service;
 }

@@ -12,7 +12,7 @@ const INVENTORY_POPULATIONS=Object.freeze({
   'all products without made-to-order tag':['ACTIVE','DRAFT','UNLISTED'],
   'active and draft products without made-to-order tag':['ACTIVE','DRAFT']
 });
-export const isInventoryReportContext=context=>context?.requested_subject==='current_stock'&&(context.stock_scope?.format==='xlsx'||context.inventory_report!=null||Object.hasOwn(INVENTORY_POPULATIONS,context.entity_query));
+export const isInventoryReportContext=context=>context?.requested_subject==='current_stock'&&(context.stock_scope&&(context.stock_scope.format==='xlsx'||context.output_preference==='xlsx')||context.inventory_report!=null||Object.hasOwn(INVENTORY_POPULATIONS,context.entity_query));
 const typeOf=value=>value===null?'null':Array.isArray(value)?'array':typeof value;
 export function validateInventoryProduct(product,{page=1,index=0}={}){
   const invalid=(field,value,expected)=>{
