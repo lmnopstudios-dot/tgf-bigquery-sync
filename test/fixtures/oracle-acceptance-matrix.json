@@ -1350,6 +1350,10 @@
     {
       "file": "test/square-channel-validation.test.js",
       "purpose": "Narrow aggregate-only Square channel validation, order/payment-only inputs, exact cutoff, dry-run guard, one 1-GB bounded execution and no business report replay."
+    },
+    {
+      "file": "test/square-activation-plan.test.js",
+      "purpose": "Exact marker-setup SQL regression: explicit one-row INSERT SELECT source before WHERE, unchanged record/guard and generated-document parity. No warehouse execution."
     }
   ]
 }
