@@ -1,0 +1,41 @@
+{
+  "source_commit": "5126c28",
+  "validation": "local production-router composition with fixture provider; no cached evidence and no live report",
+  "request": "Can i have a break down of sales from last years black friday sale period. Seperated to online and instore",
+  "context": {
+    "requested_subject": "channel_sales",
+    "tool_route": "get_general_sales_analysis",
+    "start_date": "2025-01-01",
+    "end_date": "2025-12-31",
+    "comparison_type": null,
+    "event_name": null
+  },
+  "provider_calls": [
+    {
+      "section": "sales",
+      "args": {
+        "start_date": "2025-01-01",
+        "end_date": "2025-12-31",
+        "comparison": "previous_period"
+      }
+    },
+    {
+      "section": "context",
+      "args": {
+        "start_date": "2025-01-01",
+        "end_date": "2025-12-31",
+        "comparison": "previous_period",
+        "promotion_request": {
+          "pending_endpoint_date": null,
+          "endpoint_choice": null,
+          "pending_endpoint": false,
+          "query": "from last years black friday sale",
+          "treatment": "compare_excluding",
+          "pending_dates": false,
+          "supplied_periods": []
+        }
+      }
+    }
+  ],
+  "result_evidence_kind": "governed_channel_sales"
+}

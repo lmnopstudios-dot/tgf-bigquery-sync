@@ -1350,6 +1350,10 @@
     {
       "file": "test/square-channel-validation.test.js",
       "purpose": "Narrow aggregate-only Square channel validation, order/payment-only inputs, exact cutoff, dry-run guard, one 1-GB bounded execution and no business report replay."
+    },
+    {
+      "file": "test/oracle-black-friday-conversation.test.js",
+      "purpose": "Verbatim failed conversational Black Friday request; annual fallback and unsolicited comparison prevention; actual KB windows by channel/year, exact warehouse bindings, product identities/units/refund limits, independent partial failures, multi-turn scope and retained XLSX recovery without replay."
     }
   ]
 }

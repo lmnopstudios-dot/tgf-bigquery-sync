@@ -23,12 +23,13 @@ export function historicalEventRequest(message){
   if(intent.blocked)return null;
   const text=intent.instruction;
   if(/\b(?:klaviyo|email|e-mail|flows?|sent campaigns?)\b/i.test(text))return null;
-  if(!/\b(?:compare|comparison|contrast|analyse|analyze|report|overview)\b/i.test(intent.actionText))return null;
+  if(/\b(?:customers?|conversion|sessions?|traffic|visitors?|inventory|stock)\b/i.test(text)&&! /\b(?:sales|revenue)\b/i.test(text))return null;
+  if(!/\b(?:compare|comparison|contrast|analyse|analyze|report|overview|show|give|provide|break[ -]?down)\b/i.test(intent.actionText))return null;
   if(/\b(?:exclude|excluding|except|outside|not)\b[\s\S]{0,45}\b(?:sale|friday|promotion)\b|context only|as context/i.test(text))return null;
   const match=text.match(/\b(?:last|latest)\s+(\d{1,2})\s+(?:completed\s+)?([a-z][a-z -]{1,60}?)\s+(?:campaigns?|promotions?|events?)\b/i)||text.match(/\b(?:last|latest)\s+(\d{1,2})\s+(?:completed\s+)?([a-z][a-z -]{1,60}?)\s+(?:sale(?:s| periods?)?|periods?|years?)\b/i);
   const name=match?.[2]?.trim()||(BF.test(text)?'Black Friday':null);
   if(!name||/^(?:online|shopify|woo(?:commerce)?|sales|revenue|latest|previous)$/i.test(name))return null;
-  return {name:name.replace(/\b\w/g,c=>c.toUpperCase()),count:Math.max(1,Math.min(Number(match?.[1]||text.match(/\b(?:last|latest)\s+(\d{1,2})\b/i)?.[1]||3),5))};
+  return {name:name.replace(/\b\w/g,c=>c.toUpperCase()),count:Math.max(1,Math.min(Number(match?.[1]||text.match(/\b(?:last|latest)\s+(\d{1,2})\b/i)?.[1]||([...new Set([...text.matchAll(/\b20\d{2}\b/g)].map(m=>m[0]))].length)||(/\blast year(?:s|'s|’s)?\b/i.test(text)?(/\byear before\b/i.test(text)?2:1):3)),5))};
 }
 export function isHistoricalEventComparison(message){return Boolean(historicalEventRequest(message));}
 
