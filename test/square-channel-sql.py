@@ -2,7 +2,7 @@
 import json,re,sys
 import duckdb,sqlglot
 p=json.load(open(sys.argv[1])) if len(sys.argv)>1 else json.load(sys.stdin)
-tree=sqlglot.parse_one(p['query'].replace('SAFE.PARSE_JSON(', 'PARSE_JSON('),read='bigquery')
+tree=sqlglot.parse_one(p['query'].replace('SAFE.PARSE_JSON(', 'SAFE_PARSE_JSON('),read='bigquery')
 # BigQuery COUNTIF returns zero for all-null inputs; DuckDB COUNT_IF returns NULL.
 tree=tree.transform(lambda n: sqlglot.exp.Coalesce(this=n.copy(),expressions=[sqlglot.exp.Literal.number(0)]) if isinstance(n,sqlglot.exp.CountIf) else n)
 q=tree.sql(dialect='duckdb')
@@ -28,7 +28,7 @@ q=q.replace(' LIMIT 10)', ')')
 q=q.replace('GROUP BY entry_source_platform, entry_source_store, collaboration_name, window_days ORDER BY source_platform NULLS FIRST, source_store NULLS FIRST', 'GROUP BY entry_source_platform, entry_source_store, collaboration_name, window_days ORDER BY entry_source_platform NULLS FIRST, entry_source_store NULLS FIRST')
 used=set(re.findall(r'\$([A-Za-z_][A-Za-z_0-9]*)',q));params={k:v for k,v in p['params'].items() if k in used}
 try:
- c=duckdb.connect();r=c.execute(q,params)
+ c=duckdb.connect();c.execute('CREATE MACRO SAFE_PARSE_JSON(x) AS TRY_CAST(x AS JSON)');r=c.execute(q,params)
  rows=[dict(zip([d[0] for d in r.description],row)) for row in r.fetchall()]
  print(json.dumps(rows,default=str))
 except Exception:
