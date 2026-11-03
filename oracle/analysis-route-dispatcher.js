@@ -1,3 +1,5 @@
+import {isSpreadsheetFollowup} from './spreadsheet-intent.js';
+import {exportRetainedSpreadsheet,rememberSpreadsheetEvidence,spreadsheetEvidenceFor} from './retained-spreadsheet.js';
 import {inventoryReportConfigKey,filteredInventoryScope} from './inventory-report-config.js';
 import { scopeAgreementError } from './scope-diagnostics.js';
 import { assertHistoricalEventEvidence } from './historical-event-scope.js';
@@ -137,6 +139,7 @@ function disclosePeriod(result,context){
   return {...result,answer:`**Resolved dates:** ${context.start_date} to ${context.end_date}${context.comparison_start_date?` versus ${context.comparison_start_date} to ${context.comparison_end_date}`:''}, inclusive (Europe/London). Current day ${context.current_day_included?'included; evidence through the runtime cutoff may be partial':'excluded'}. Runtime cutoff: ${context.date_cutoff}.\n\n${result.answer}`};
 }
 export async function dispatchAnalysisRequest({message,analysisContext,baselineOverview=null,baselineOptions,chat,chatOptions}){
+  if(isSpreadsheetFollowup(message)){const result=await exportRetainedSpreadsheet({recent:Object.hasOwn(baselineOptions||{},'recentEvidence')&&baselineOptions.recentEvidence==null?null:baselineOptions?.recentEvidence?.retained_at?baselineOptions.recentEvidence:spreadsheetEvidenceFor(baselineOverview,baselineOptions?.exportOwner)||baselineOptions?.recentEvidence,context:validateAnalysisContext(analysisContext||{}),store:baselineOptions?.exportStore||baselineOverview?.spreadsheetExportStore,owner:baselineOptions?.exportOwner,requestId:baselineOptions?.requestId,downloadBase:baselineOptions?.downloadBase,assertAgreement:assertEvidenceAgreement,now:baselineOptions?.now??baselineOverview?.spreadsheetNow?.()??Date.now()});await baselineOptions?.onEvidence?.(result);return deliverOracleResult(result,result.analysis_context);}
   const nonAnalysis=nonAnalyticalResult(message);
   if(nonAnalysis){if(nonAnalysis.answer)return deliverOracleResult(nonAnalysis,null);return chat?await chat(message,{...chatOptions,analysisContext:null,toolsAllowed:false}):{answer:'Please specify the text edit you would like.',tools:[]};}
   const intent=messageIntent(message);
@@ -152,6 +155,7 @@ export async function dispatchAnalysisRequest({message,analysisContext,baselineO
   const binding=execution.execute||baselineThenAgent;
   let result=await binding({message,baselineOverview,baselineOptions:{...baselineOptions,analysisContext:analysisContext??context},chat,chatOptions});
   validateAnalysisResult(context,result,baselineOptions?.onProviderStage);
+  rememberSpreadsheetEvidence(baselineOverview,baselineOptions?.exportOwner,result,context,baselineOptions?.now??baselineOverview?.spreadsheetNow?.()??Date.now());
   if(result?.evidence&&context?.requested_subject&&!result.evidence.report_config)result={...result,evidence:{...result.evidence,analytical_plan:resolveAnalyticalPlan(result.analysis_context||context)}};
   if(result&&!context?.product_report)result={...result,analysis_context:result.analysis_context||context};
   await baselineOptions?.onEvidence?.(result);
@@ -160,6 +164,7 @@ export async function dispatchAnalysisRequest({message,analysisContext,baselineO
 
 /** Shared deterministic /agent entrypoint; a null result continues existing model tooling. */
 export async function executeGovernedAgentAnalysis({message,analysisContext,baselineOverview,baselineOptions={},scopeResolved=false,now=Date.now()}){
+  if(isSpreadsheetFollowup(message))return dispatchAnalysisRequest({message,analysisContext,baselineOverview,baselineOptions:{...baselineOptions,now}});
   const nonAnalysis=nonAnalyticalResult(message);
   if(nonAnalysis){if(nonAnalysis.answer)return deliverOracleResult(nonAnalysis,null);return null;}
   const intent=messageIntent(message);
@@ -180,6 +185,7 @@ export async function executeGovernedAgentAnalysis({message,analysisContext,base
     return null;
   }
   validateAnalysisResult(resolved.context,result,baselineOptions.onProviderStage);
+  rememberSpreadsheetEvidence(baselineOverview,baselineOptions.exportOwner,result,resolved.context,baselineOptions.now??now);
   if(result.evidence&&!result.evidence.report_config)result={...result,evidence:{...result.evidence,analytical_plan:resolveAnalyticalPlan(result.analysis_context||resolved.context)}};
   if(!resolved.context.product_report)result={...result,analysis_context:result.analysis_context||resolved.context};
   await baselineOptions.onEvidence?.(result);

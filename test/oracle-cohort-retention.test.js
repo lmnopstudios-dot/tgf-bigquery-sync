@@ -92,7 +92,7 @@ test('relative-year bounds and London midnight are shared by date resolution',()
  const p=reportPeriodResolution('past three years',Date.parse('2026-10-15T23:30:00Z')).period;
  assert.equal(p.start_date,'2023-10-16');assert.equal(p.end_date,'2026-10-16');assert.equal(p.current_day_included,true);
 });
-for(const mode of ['direct','interactive','durable'])test(`production pending request and unsupported export preserve the piece population through ${mode}`,async t=>{
+for(const mode of ['direct','interactive','durable'])test(`production pending request and retained export preserve the piece population through ${mode}`,async t=>{
  const f=acceptanceFixture({retention:true}),h=await acceptanceServer(f,{durable:mode==='durable'});t.after(h.close);
  const c=transitionAnalysisContext(null,production,{now:NOW}).context;
  const pending={...c,start_date:null,end_date:null,cohort_entry_start:null,cohort_entry_end:null,observation_end:null,unresolved_required_fields:['start_date','end_date']};
@@ -102,7 +102,7 @@ for(const mode of ['direct','interactive','durable'])test(`production pending re
  else{await send(production.replace(' from the last 3 years',''));r=await send('Last 3 years.');}
  assert.equal(r.analysis_context.journey_group_by,'entry_product');assert.equal(r.analysis_context.channel_breakdown,true);assert.equal(r.analysis_context.sort,'returning_customers_desc');assert.ok(r.evidence.rows.length);
  const before=f.calls.length,exported=await send('Export that to Excel.',r.analysis_context);
- assert.ok(exported.evidence.rows.length);assert.match(exported.answer,/cohort export or chart is not implemented/);assert.equal(exported.analysis_context.journey_group_by,'entry_product');assert.equal(f.calls.length,mode==='direct'?before+3:before);
+ if(mode==='direct'){assert.equal(exported.analysis_unavailable,true);assert.match(exported.answer,/storage is unavailable/);}else{assert.ok(exported.evidence.rows.length);assert.ok(exported.artifact);assert.match(exported.answer,/No data was refreshed/);}assert.equal(exported.analysis_context.journey_group_by,'entry_product');assert.equal(f.calls.length,before);
 });
 test('piece cohort SQL uses mature fixed windows, distinct entry membership and unconditional later-purchase outcome',()=>{
  const sql=customerJourneySql('fixture','retention_product_windows');

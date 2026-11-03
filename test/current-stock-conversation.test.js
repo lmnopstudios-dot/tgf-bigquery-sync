@@ -40,8 +40,8 @@ test('unrelated product names, shared followups and subject switches retain only
   let c=transitionAnalysisContext(null,`Show inventory for ${name} at Soho. Show one row per variant.`).context;
   assert.equal(c.entity_query,name);
   c=transitionAnalysisContext(c,'include online too').context;assert.equal(c.entity_query,name);assert.deepEqual(c.stock_scope.locations,['Soho']);assert.deepEqual(c.stock_scope.location_groups,['online']);
-  c=transitionAnalysisContext(c,'put that in Excel').context;assert.equal(c.stock_scope.format,'xlsx');assert.equal(c.output_preference,'xlsx');
-  c=transitionAnalysisContext(c,'just Soho').context;assert.equal(c.entity_query,name);assert.deepEqual(c.stock_scope.location_groups,[]);assert.equal(c.stock_scope.format,'xlsx');
+  c=transitionAnalysisContext(c,'put that in Excel').context;assert.equal(c.stock_scope.format,'table');assert.equal(c.output_preference,'xlsx');
+  c=transitionAnalysisContext(c,'just Soho').context;assert.equal(c.entity_query,name);assert.deepEqual(c.stock_scope.location_groups,[]);assert.equal(c.stock_scope.format,'table');
   const switched=transitionAnalysisContext(c,'Sales last month').context;assert.equal(switched.stock_scope,null);
  }
 });
