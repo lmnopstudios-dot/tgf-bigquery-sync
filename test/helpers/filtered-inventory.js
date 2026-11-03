@@ -1,0 +1,17 @@
+import assert from 'node:assert/strict';
+export const filteredInventoryRequest='Active variants where Kings Cross + Shoreditch + Soho available stock > 7, and Online Ready to Ship available stock < 3. Include made-to-order products. Exclude exact `enquire` tags case-insensitively, and exclude draft, unlisted and archived products. Exclude workshops. Resolve locations to their actual Shopify IDs. Require known numeric quantities at all four locations before a variant qualifies; retain zero and negative values. Generate a downloadable Excel file with one row per variant: product, size/options, each store’s available quantity, total POS quantity and online RTS quantity. Sort total POS descending.';
+export const realInventoryLocations=[['104532967751','Kings Cross'],['104532836679','Shoreditch'],['104514388295','Soho'],['105063874887','Online Ready to Ship'],['105063842119','Shoreditch Workshop'],['105063809351','Soho Workshop']].map(([id,name])=>({id:`gid://shopify/Location/${id}`,name,isActive:true}));
+const page=(nodes,next=null)=>({nodes,pageInfo:{hasNextPage:Boolean(next),endCursor:next}});
+const gid=(type,id)=>`gid://shopify/${type}/${id}`;
+export function filteredInventoryFixture({missingNode=false,missingLocation=false,duplicateLocation=false,failLocation=false}={}){
+ const calls=[];const product=i=>({id:gid('Product',i),title:i===12?'Enquire title only':`P${i}`,status:({6:'DRAFT',7:'UNLISTED',8:'ARCHIVED'})[i]||'ACTIVE',tags:i===1?['made-to-order']:i===3?['EnQuIrE']:i===4?['pre-enquire']:i===5?['enquire later']:[]});
+ const variant=id=>({id:gid('ProductVariant',id),title:id===102?'M':'L',sku:`SKU${id}`,selectedOptions:[{name:'Size',value:id===102?'M':'L'}],inventoryItem:{id:gid('InventoryItem',id),tracked:Math.floor(id/100)!==9}});
+ const graphql=async(token,q,a,signal)=>{assert.ok(signal instanceof AbortSignal);calls.push({q,a});assert.doesNotMatch(q,/mutation|StockProductResolution|InventoryProducts\(/);
+  if(q.includes('InventoryCatalogue'))return{products:page(a.cursor?Array.from({length:12},(_,i)=>product(i+21)):Array.from({length:20},(_,i)=>product(i+1)),a.cursor?null:'products-2')};
+  if(q.includes('InventoryReportLocations')){let list=realInventoryLocations.filter(l=>!missingLocation||l.name!=='Soho');if(duplicateLocation)list=[...list,{id:gid('Location',999),name:'soho',isActive:true}];return{locations:a.cursor?page(list.slice(2)):page(list.slice(0,2),'locations-2')};}
+  if(q.includes('InventoryReportVariants')){const p=Number(a.id.split('/').at(-1));return{product:{variants:page([variant(a.cursor?102:p*100+1)],p===1&&!a.cursor?'variants-2':null)}};}
+  if(q.includes('InventoryReportLevels')){assert.ok(!realInventoryLocations.slice(4).some(l=>l.id===a.location));if(failLocation&&a.location===realInventoryLocations[1].id)throw Object.assign(new Error('private upstream body'),{code:'ACCESS_DENIED'});
+   return{nodes:a.ids.filter(id=>!(missingNode&&id===gid('InventoryItem',1201)&&a.location===realInventoryLocations[3].id)).map(id=>{const n=Number(id.split('/').at(-1)),p=Math.floor(n/100),l=realInventoryLocations.findIndex(l=>l.id===a.location);const qty=n===102?[5,0,3,-1]:p===1?[4,3,2,2]:p===2?[5,5,5,0]:p===4?[8,0,0,-2]:p===5?[6,1,0,0]:p===11?[8,1,0,3]:p===12?[3,3,2,1]:[0,0,0,0];return{id,inventoryLevel:p===10&&l===3?null:{quantities:[{name:'available',quantity:qty[l]},{name:'on_hand',quantity:20},{name:'committed',quantity:2}]}};})};}
+  assert.fail(q);
+ };return{graphql,getToken:async()=> 'test-token',calls};
+}
