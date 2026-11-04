@@ -9,6 +9,9 @@ export function componentOutcomes(context,result,{artifactBase='/api/oracle/expo
     const executed=e?.components?.find(c=>c.operation===operation);
     return {component:operation,status:executed?({supported:'delivered',conditional:'partially_delivered',unavailable:'unsupported',blocked:'unsupported'}[executed.status]||executed.status):result?.analysis_unavailable?'unsupported':'failed',detail:executed?.detail||executed?.blocker||'No compatible executed component was recorded.'};
   });
+  if(e?.kind==='inventory_report'&&(context?.inventory_report?.sales_requested||e.inventory_report?.sales_requested)){
+    for(const channel of ['online','Kings Cross','Shoreditch','Soho','other_pos','unknown'])for(const metric of ['units_sold','refunded_units','net_sales'])outcomes.push({component:`${channel}:${metric}`,status:'unsupported',detail:'The inventory-export pipeline has no exact Shopify variant/location sales binding. Coverage is unverified; missing values are not zero and currencies have not been combined.'});
+  }
   if(e?.kind==='governed_cohort_retention')for(const item of e.source_outcomes||[])outcomes.push({component:`cohort_${item.source_store}_${item.group}`,status:item.state==='fulfilled'?'delivered':item.state==='not_attempted'?'not_attempted':'failed',detail:item.status,request_id:e.request_id});
   const requested=context?.request_detail;
   if(requested&&e?.kind==='governed_basket_composition'){

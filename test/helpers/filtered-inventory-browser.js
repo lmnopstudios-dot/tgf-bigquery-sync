@@ -13,3 +13,21 @@ export async function verifyFilteredInventoryBrowser(browser){
   const count=h.calls.length;await page.reload();await page.waitForFunction(()=>!document.querySelector('#send').disabled&&document.querySelector('.analytical-answer'));assert.match(await page.locator('.analytical-answer').last().innerText(),/5 qualifying variants/);assert.equal(h.calls.length,count);
  }finally{await page.close();}}}finally{await h.close();}
 }
+
+// Synthetic multipart extension: the real incident request remains pending recovery.
+export async function verifyInventorySalesBrowser(browser){
+ const h=await filteredInventoryServer();
+ try{
+  const page=await browser.newPage();
+  try{
+   await page.goto(h.origin+'/oracle/');await page.locator('#password').fill('fixture');await page.locator('#login-form button').click();await page.locator('#app').waitFor({state:'visible'});
+   const message=filteredInventoryRequest.replace('Sort total POS descending.','Sort by Online Ready to Ship stock descending.')+' Include units sold, refunded units and net sales by online and POS location.';
+   await page.locator('#message').fill(message);await page.locator('#send').click();await page.waitForFunction(()=>!document.querySelector('#send').disabled&&document.querySelector('.analytical-answer'));
+   assert.match(await page.locator('.analytical-answer').last().innerText(),/Sales incomplete/);
+   const count=h.calls.length;
+   await page.reload();await page.waitForFunction(()=>!document.querySelector('#send').disabled&&document.querySelector('.analytical-answer'));
+   assert.match(await page.locator('.analytical-answer').last().innerText(),/Sales incomplete/);
+   assert.equal(h.calls.length,count);
+  }finally{await page.close();}
+ }finally{await h.close();}
+}

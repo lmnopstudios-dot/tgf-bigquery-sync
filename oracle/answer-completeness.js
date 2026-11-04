@@ -33,6 +33,7 @@ export function requestedOperation(context){
 }
 export function answerCompleteness(context,result){
   const operation=requestedOperation(context),evidence=result?.evidence;
+  if(context?.inventory_report?.sales_requested)return {status:'limited',operation:'inventory_and_sales',missing:['units_sold','refunded_units','net_sales'],reason:'EXACT_VARIANT_LOCATION_SALES_UNSUPPORTED'};
   if(!operation)return {status:'not_applicable',operation:null,missing:[]};
   if(result?.clarification?.fields?.length)return {status:'pending',operation,missing:result.clarification.fields};
   if(result?.analysis_unavailable)return {status:'limited',operation,missing:[]};

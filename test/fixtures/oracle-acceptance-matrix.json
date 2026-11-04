@@ -1344,6 +1344,10 @@
       "purpose": "Shared formatting-only spreadsheet intent; retained inventory/sales/customer evidence, unchanged scope, zero provider reads, numeric/unknown semantics, authenticated download and durable recovery."
     },
     {
+      "file": "test/oracle-inventory-sales-completeness.test.js",
+      "purpose": "Synthetic stock plus sales requests retain missing metric intent, online stock sorting, unsupported sales disclosures, owner-scoped workbook download, manifest and failed-job recovery. Does not establish validation against retained export abf857 or its original request."
+    },
+    {
       "file": "test/square-payment-channels.test.js",
       "purpose": "Shared flattened/nested/encoded Square payment channel resolution; generated SQL on 24 status/tender/join/conflict cases and full customer-report parity."
     },

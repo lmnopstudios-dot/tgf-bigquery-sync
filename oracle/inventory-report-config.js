@@ -9,14 +9,15 @@ const clean=value=>String(value).normalize('NFKC').trim();
 const allowed=(value,keys)=>value&&typeof value==='object'&&!Array.isArray(value)&&Object.keys(value).every(k=>keys.includes(k));
 export function validateInventoryReportConfig(value){
  if(value==null)return null;
- if(!allowed(value,['version','statuses','excluded_tags','pos','online','exclude_workshops','require_known_available','sort'])||value.version!==1)throw fail();
+ if(!allowed(value,['version','statuses','excluded_tags','pos','online','exclude_workshops','require_known_available','sort','sales_requested'])||value.version!==1)throw fail();
  if(!Array.isArray(value.statuses)||!value.statuses.length||value.statuses.some(s=>!statuses.includes(s)))throw fail();
  if(!Array.isArray(value.excluded_tags)||value.excluded_tags.some(t=>typeof t!=='string'||!t.trim()||t.length>100))throw fail();
  const group=(g,single)=>{if(!allowed(g,['names','operator','threshold'])||!Array.isArray(g.names)||!g.names.length||g.names.length>20||single&&g.names.length!==1||g.names.some(n=>typeof n!=='string'||!n.trim()||n.length>100)||!['gt','gte','lt','lte'].includes(g.operator)||typeof g.threshold!=='number'||!Number.isFinite(g.threshold))throw fail();const names=g.names.map(clean);if(new Set(names.map(n=>n.toLowerCase())).size!==names.length)throw fail();return{names,operator:g.operator,threshold:g.threshold};};
  const pos=group(value.pos,false),online=group(value.online,true);
- if(pos.names.some(n=>online.names.some(o=>o.toLowerCase()===n.toLowerCase()))||value.require_known_available!==true||typeof value.exclude_workshops!=='boolean'||!allowed(value.sort,['metric','direction'])||value.sort.metric!=='pos_total_available'||!['asc','desc'].includes(value.sort.direction))throw fail();
+ if(pos.names.some(n=>online.names.some(o=>o.toLowerCase()===n.toLowerCase()))||value.require_known_available!==true||typeof value.exclude_workshops!=='boolean'||!allowed(value.sort,['metric','direction'])||!['pos_total_available','online_available'].includes(value.sort.metric)||!['asc','desc'].includes(value.sort.direction))throw fail();
+ if(value.sales_requested!=null&&value.sales_requested!==true)throw fail();
  if(value.exclude_workshops&&[...pos.names,...online.names].some(n=>/\bworkshops?\b/i.test(n)))throw fail();
- return{version:1,statuses:statuses.filter(s=>value.statuses.includes(s)),excluded_tags:[...new Set(value.excluded_tags.map(t=>clean(t).toLowerCase()))].sort(),pos,online,exclude_workshops:value.exclude_workshops,require_known_available:true,sort:{metric:'pos_total_available',direction:value.sort.direction}};
+ return{version:1,statuses:statuses.filter(s=>value.statuses.includes(s)),excluded_tags:[...new Set(value.excluded_tags.map(t=>clean(t).toLowerCase()))].sort(),pos,online,exclude_workshops:value.exclude_workshops,require_known_available:true,sort:{metric:value.sort.metric,direction:value.sort.direction},...(value.sales_requested?{sales_requested:true}:{})};
 }
 const canonical=v=>Array.isArray(v)?v.map(canonical):v&&typeof v==='object'?Object.fromEntries(Object.keys(v).sort().map(k=>[k,canonical(v[k])])):v;
 export const inventoryReportConfigKey=value=>JSON.stringify(canonical(validateInventoryReportConfig(value)));
@@ -56,7 +57,8 @@ export function filteredInventoryScope(message){
  const tags=[...text.matchAll(/\b(?:exclude|excluding|without)\s+(?:the\s+)?(?:exact\s+)?["']?([\w-]+)["']?\s+tags?\b/gi)].map(m=>m[1]);
  for(const m of text.matchAll(/\b(?:exclude|excluding|without)\s+(?:products?\s+)?(?:(?:with|having)\s+)?(?:the\s+)?(?:exact\s+)?(?:tagged|tags?\s*:)\s*["']?([\w-]+)["']?/gi))tags.push(m[1]);
  if(/\binclude\s+made[- ]to[- ]order\b/i.test(text)&&tags.some(t=>t.toLowerCase()==='made-to-order'))throw fail();
- const config=validateInventoryReportConfig({version:1,statuses:requested,excluded_tags:tags,pos,online,exclude_workshops:/\bexclude\s+(?:the\s+)?workshops?\b/i.test(text),require_known_available:true,sort:{metric:'pos_total_available',direction:/\b(?:total\s+POS|POS\s+total)(?:\s+stock)?\s*,?\s*(?:asc(?:ending)?|lowest first)\b/i.test(text)?'asc':'desc'}});
+ const sortClause=text.match(/\bsort(?:ed)?\b[^.;\n]*/i)?.[0]||'';
+ const config=validateInventoryReportConfig({version:1,statuses:requested,excluded_tags:tags,pos,online,exclude_workshops:/\bexclude\s+(?:the\s+)?workshops?\b/i.test(text),require_known_available:true,...(/\b(?:sales|units sold|refunded units|refunds|revenue)\b/i.test(text)?{sales_requested:true}:{}),sort:{metric:/\b(?:online|RTS)\b/i.test(sortClause)?'online_available':'pos_total_available',direction:/\b(?:asc(?:ending)?|lowest first)\b/i.test(sortClause)?'asc':'desc'}});
  return{entity_query:FILTERED_INVENTORY_ENTITY,location:null,all_locations:true,inventory_report:config};
 }
 export function resolveInventoryGroups(config,locations){
@@ -69,7 +71,7 @@ export function inventoryVariantSelection(e){
  const {groups,failures}=resolveInventoryGroups(c,e.locations),rows=[];
  for(const p of e.products)for(const v of p.variants){const required=[...groups.pos,...groups.online];const quantities=required.map(l=>v.locations.find(q=>q.location_id===l.id)?.available);const known=!failures.length&&required.length===c.pos.names.length+1&&v.inventoryItem?.tracked===true&&quantities.every(n=>typeof n==='number'&&Number.isFinite(n));const pos=known?quantities.slice(0,groups.pos.length).reduce((a,n)=>a+n,0):null,online=known?quantities.at(-1):null;
  rows.push({p,v,state:!known?'unknown':compare(pos,c.pos)&&compare(online,c.online)?'qualified':'does_not_match',pos_total_available:pos,online_available:online});}
- rows.sort((a,b)=>Number(b.state==='qualified')-Number(a.state==='qualified')||(c.sort.direction==='desc'?-1:1)*((a.pos_total_available??0)-(b.pos_total_available??0))||String(a.v.id).localeCompare(String(b.v.id)));
+ rows.sort((a,b)=>Number(b.state==='qualified')-Number(a.state==='qualified')||(c.sort.direction==='desc'?-1:1)*((a[c.sort.metric]??0)-(b[c.sort.metric]??0))||String(a.v.id).localeCompare(String(b.v.id)));
  return{groups,rows,qualified:rows.filter(r=>r.state==='qualified'),evaluated_count:e.selection_coverage?.evaluated??rows.length,unknown_count:e.selection_coverage?.unknown??rows.filter(r=>r.state==='unknown').length};
 }
 
