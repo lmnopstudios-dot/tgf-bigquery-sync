@@ -1,0 +1,12 @@
+{
+  "validation": "Local production dispatcher and general analytics with retained submitted context; fixture-only model stub, zero data/provider/model reads",
+  "selected_route": "get_product_sales_analysis",
+  "general_analytics_supported_subjects": [
+    "channel_sales",
+    "product_sales"
+  ],
+  "actual_subject": "platform_sales",
+  "general_provider_calls": 0,
+  "chat_fallback_calls": 1,
+  "actual_historical_returned_evidence": "not retained; no inference of the original first failing validation field"
+}

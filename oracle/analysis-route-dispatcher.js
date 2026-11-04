@@ -85,9 +85,9 @@ export function assertEvidenceAgreement(contextValue,evidence,requestMessage=nul
   if(!evidence||!context?.requested_subject)return true;
   if(context.tool_route==='compare_historical_events'){assertHistoricalEventEvidence(context,evidence);return true;}
   const actual=evidence.requested_subject||evidence.subject||({sales_baseline:'sales'}[evidence.selected_intent])||({shopify_operational_sales_baseline:'sales',governed_device_conversion:'device_conversion',focused_woo_historical_conversion:'woo_traffic_conversion',independent_calendar_month_comparison:'calendar_period_comparison',woo_shopify_platform_comparison:'platform_sales',woo_shopify_monthly_platform_comparison:'platform_sales'}[evidence.kind]);
-  if(actual!==context.requested_subject)throw Object.assign(new Error('Retrieved evidence does not agree with the resolved analytical subject.'),{code:'EVIDENCE_SCOPE_MISMATCH',failed_stage:'evidence_validation'});
-  if(evidence.metrics&&context.metrics.some(metric=>!evidence.metrics.includes(metric)))throw Object.assign(new Error('Retrieved evidence does not agree with the resolved analytical metrics.'),{code:'EVIDENCE_SCOPE_MISMATCH',failed_stage:'evidence_validation'});
-  if(evidence.periods?.length&&context.start_date&&!evidence.periods.some(period=>period.start_date===context.start_date&&period.end_date===context.end_date))throw Object.assign(new Error('Retrieved evidence does not agree with the resolved analytical period.'),{code:'EVIDENCE_SCOPE_MISMATCH',failed_stage:'evidence_validation'});
+  if(actual!==context.requested_subject)throw scopeMismatch('evidence.subject');
+  if(evidence.metrics&&context.metrics.some(metric=>!evidence.metrics.includes(metric)))throw scopeMismatch('evidence.metrics');
+  if(evidence.periods?.length&&context.start_date&&!evidence.periods.some(period=>period.start_date===context.start_date&&period.end_date===context.end_date))throw scopeMismatch('evidence.periods');
   if(evidence.kind==='governed_klaviyo_campaign_set'){assertCampaignSetEvidence(context,evidence);return true;}
   if(['device_conversion','klaviyo_email','meta_ads','instagram'].includes(context.requested_subject)){
     const expected=[{start_date:context.start_date,end_date:context.end_date},...(context.comparison_start_date?[{start_date:context.comparison_start_date,end_date:context.comparison_end_date}]:[])];

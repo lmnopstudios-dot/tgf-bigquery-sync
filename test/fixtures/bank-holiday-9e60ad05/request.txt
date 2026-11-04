@@ -1,0 +1,7 @@
+Create a report on The Great Frog’s May 2026 Bank Holiday sale. Use 1–4 May 2026 inclusive, Europe/London. If our knowledge base records exact opening and closing times for either channel, use those times and show them in the report.
+
+Use Shopify only. Split results into Online Store and POS, combining all participating Shopify POS locations into one subtotal. Exclude imported WooCommerce orders and keep unknown channels separate.
+
+For each channel and currency, show gross sales including tax, refunds and sales after refunds where supported. Then list the top 20 products by recorded line sales for each channel and currency, with units sold and line sales. Keep currencies separate and mark missing figures as unavailable.
+
+Report sales recorded during the sale window. If you can verify which orders received the sale discount, show that separately. If one section is unavailable, explain why and retain the results you can provide.
