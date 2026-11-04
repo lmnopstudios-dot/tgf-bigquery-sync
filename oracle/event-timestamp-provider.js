@@ -1,3 +1,4 @@
+import {bindSquareLocation} from './event-square-locations.js';
 import {MATRIXIFY_APP_ID} from '../finance/canonical.js';
 import {squarePaymentChannelEvidenceSql,squareOrderChannelsSql} from './square-channels.js';
 const fail=(code,missing=[])=>Object.assign(Error(code),{code,missing});
@@ -49,11 +50,7 @@ export function createEventTimestampProvider({bigquery,project,run}){
    let location_id=null,location_evidence=null;
    if(w.channel==='instore'){
     if(!w.location_name)throw fail('EVENT_STORE_NOT_RECORDED');
-    let rows,locationSource='square_data.retail_locations';try{rows=await execute(`SELECT location_id,location_name,timezone,has_persisted_location_metadata FROM \`${project}.square_data.retail_locations\``,{});}catch{locationSource='square_data.locations';rows=await execute(`SELECT COALESCE(JSON_VALUE(j,'$.location_id'),JSON_VALUE(j,'$.id')) location_id,JSON_VALUE(j,'$.name') location_name,JSON_VALUE(j,'$.timezone') timezone,JSON_VALUE(j,'$.name') IS NOT NULL has_persisted_location_metadata FROM(SELECT TO_JSON(l,stringify_wide_numbers=>TRUE) j FROM \`${project}.square_data.locations\` l)`,{});}
-    const norm=x=>String(x||'').toLowerCase().replace(/^tgf\s+/,'').trim(),matches=rows.filter(r=>r.has_persisted_location_metadata===true&&norm(r.location_name)===norm(w.location_name));
-    if(matches.length!==1)throw fail(matches.length?'EVENT_LOCATION_AMBIGUOUS':'EVENT_LOCATION_NOT_VERIFIED',[w.location_name]);
-    if(!matches[0].timezone||!['Europe/London','UTC','GMT'].includes(matches[0].timezone))throw fail('EVENT_STORE_TIMEZONE_NOT_VERIFIED',[matches[0].timezone||'timezone']);
-    location_id=matches[0].location_id;location_evidence={...matches[0],observed_at:new Date().toISOString(),source:locationSource};
+    ({location_id,location_evidence}=await bindSquareLocation(execute,project,w));
    }
    return {start_at:w.start_at,end_exclusive:w.end_exclusive,location_id,matrixify_app_id:MATRIXIFY_APP_ID,location_evidence};
   },

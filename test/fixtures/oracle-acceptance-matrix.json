@@ -1362,6 +1362,10 @@
     {
       "file": "test/oracle-black-friday-routing-415.test.js",
       "purpose": "Both verbatim post-415 failures through real chat and durable entrypoints, competing current-product producer, preflight/context/capability/dispatch traces, sale-session versus traffic parsing, knowledge-read versus write intent, partial historical failures and retained workbook download without replay."
+    },
+    {
+      "file": "test/oracle-black-friday-clarification-416.test.js",
+      "purpose": "Exact 2024 WooCommerce endpoint reply through interactive/durable chat; consume clarification without knowledge proposals or narrowing report, retain independent sections without replay; recovered native Square brand names and verified/missing/ambiguous/inactive bindings with exact session SQL and payment-coverage gaps."
     }
   ]
 }

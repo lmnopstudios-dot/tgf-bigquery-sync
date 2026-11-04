@@ -1,0 +1,23 @@
+{
+ "provenance":"User-pasted read-only Render BigQuery results, 4 November 2026; no report replay",
+ "project":"gf-full-data","dataset":"square_data","region":"US",
+ "raw_location_count":10,"retail_location_count":7,
+ "locations":[
+  {"location_id":"AZM5427E1CX5W","location_name":"The Great Frog Soho","location_status":"ACTIVE","timezone":"Europe/London","created_at":"2016-09-16T12:14:18Z","has_persisted_location_metadata":true},
+  {"location_id":"0PK6CB3STX295","location_name":"The Great Frog East","location_status":"ACTIVE","timezone":"Europe/London","created_at":"2018-12-06T12:22:43Z","has_persisted_location_metadata":true}
+ ],
+ "inactive_raw_locations":[
+  {"location_id":"NWYSJCPPXGJM9","name":"Assembly Chopper Show","status":"INACTIVE"},
+  {"location_id":"M3SBJHDAMNHJ9","name":"Bloodstock 2017","status":"INACTIVE"},
+  {"location_id":"CNVNNGC075R34","name":"Emily Testing","status":"INACTIVE"},
+  {"location_id":"V000V8HPCR727","name":"Wedding Show","status":"INACTIVE"}
+ ],
+ "orders_2024_native_location_presence":[
+  {"location_id":"AZM5427E1CX5W","persisted_rows":6641,"first_observed_at":{"value":"2024-01-02T10:50:42.000Z"},"last_observed_at":{"value":"2024-12-31T15:43:17.000Z"}},
+  {"location_id":"0PK6CB3STX295","persisted_rows":2659,"first_observed_at":{"value":"2024-01-02T12:35:22.000Z"},"last_observed_at":{"value":"2024-12-31T15:42:31.000Z"}}
+ ],
+ "payments_2024_native_location_presence":[
+  {"location_id":"AZM5427E1CX5W","persisted_rows":7521,"first_observed_at":{"value":"2024-01-02T10:50:43.126Z"},"last_observed_at":{"value":"2024-12-31T15:43:17.348Z"}}
+ ],
+ "limitations":["Historical presence is not verified financial coverage or a sale-window total.","No East row returned by the bounded 2024 payment-presence query; no payment completeness claim or zero-sales inference.","No location history/snapshot table was listed. Current names and pre-2024 creation timestamps are persisted; no East-to-Shoreditch rename is inferred.","The initial whole-row JSON order query exceeded its 100 MB cap. The three-column read succeeded."]
+}
