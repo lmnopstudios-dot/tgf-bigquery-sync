@@ -14,7 +14,7 @@ export const comparison='Compare the actual 2025 and 2024 Black Friday sale peri
 const now=Date.parse('2026-11-03T12:00:00Z');
 test('verbatim failed request selects only last year event periods, never annual scope or unsolicited comparison',()=>{
  const context=transitionAnalysisContext(null,failed,{now}).context;
- assert.equal(context.tool_route,'compare_historical_events');assert.deepEqual(context.event_scope,{years:[2025],channels:['instore','online'],products:false});
+ assert.equal(context.tool_route,'compare_historical_events');assert.deepEqual(context.event_scope,{source_policy:'bf-2024-2025-v1',years:[2025],channels:['instore','online'],products:false});
  for(const k of ['start_date','end_date','comparison_type','comparison_start_date','comparison_end_date'])assert.equal(context[k],null);
  assert.deepEqual(resolveAnalyticalPlan(context).event_selection.sale_scope,context.event_scope);
 });
@@ -23,7 +23,7 @@ for(const durable of [false,true])test(`real ${durable?'durable':'interactive'} 
  const one=await h.submit(failed,{fresh:true,id:'bf-original'});
  assert.equal(one.evidence.sections.length,2);assert.match(one.answer,/2025-11-27 to 2025-11-30/);assert.doesNotMatch(one.answer,/2025-01|2024-01|Year-on-year/);
  const r=await h.submit(comparison,{fresh:true,id:'bf-two-years'});
- assert.equal(r.evidence.sections.length,4);assert.match(r.answer,/2024-11-08 to 2024-11-10/);assert.match(r.answer,/2024-11-07 to 2024-11-09/);assert.match(r.answer,/Europe\/London/);assert.match(r.answer,/ev_d62be9ed/);assert.match(r.answer,/Ring A/);assert.match(r.answer,/111.11%/);
+ assert.equal(r.evidence.sections.length,4);assert.match(r.answer,/2024-11-08 to 2024-11-10/);assert.match(r.answer,/2024-11-07 to 2024-11-09/);assert.match(r.answer,/Europe\/London/);assert.match(r.answer,/ev_d62be9ed/);assert.match(r.answer,/Ring A/);assert.match(r.answer,/Square instore GBP.*111.11%/);assert.doesNotMatch(r.answer,/Year-on-year[^\n]*online/);
  assert.equal(f.calls.filter(c=>c.provider==='knowledge').length,4);
  for(const c of f.calls.filter(c=>['finance','products'].includes(c.provider))){assert.ok(c.args.start_date.includes('-11-'));assert.ok(c.args.end_date.includes('-11-'));}
  if(durable){const n=f.calls.length,job=h.jobs.jobs.get(r.job_id);job.status='failed';job.error_code='DELIVERY_FAILED';const recovered=await h.get('/jobs/'+r.job_id);assert.equal(recovered.recovered_persisted_result,true);assert.deepEqual(recovered.evidence,r.evidence);assert.equal(f.calls.length,n);}
@@ -68,7 +68,7 @@ test('provider refuses unrepresentable store/intraday windows before any warehou
  await assert.rejects(p.totals({intraday:true}),e=>e.code==='EVENT_FINANCE_TIME_GRAIN_UNSUPPORTED');assert.equal(calls,0);
 });
 test('production warehouse adapter binds only KB windows and retains unmapped products when mapping lookup fails',async()=>{
- const calls=[],bigquery={query:async q=>{calls.push(q);if(q.query.includes('governed_active'))throw Error('mapping not ready');if(q.query.includes('canonical_transactions'))return [[{period:'summary',source:'Square',channel:'In-store',currency:'GBP',transaction_type:'sale',amount:50}]];return [[{namespace:'shopify:shopify',product_id:'gid://shopify/Product/1',title:'Ring',currency:'USD',channel:'online',units:2,sales:25,missing_sales:0}]];}};
+ const calls=[],bigquery={dataset:()=>({getMetadata:async()=>[{location:'US'}]}),query:async q=>{calls.push(q);if(q.query.includes('governed_active'))throw Error('mapping not ready');if(q.query.includes('canonical_transactions'))return [[{period:'summary',source:'Square',channel:'In-store',currency:'GBP',transaction_type:'sale',amount:50}]];return [[{namespace:'shopify:shopify',product_id:'gid://shopify/Product/1',title:'Ring',currency:'USD',channel:'online',units:2,sales:25,missing_sales:0}]];}};
  const provider=createEventSaleProvider({bigquery,project:'fixture'}),w={start_date:'2025-11-27',end_date:'2025-11-30',timezone:'Europe/London',channel:'online'};
  const totals=await provider.totals(w),products=await provider.products(w);
  assert.equal(totals.definition,'canonical_net_gross');assert.match(calls[0].query,/LOWER\(TRIM\(l.order_source\)\)='online store'/);assert.match(calls[0].query,/ELSE 'Unknown'/);assert.equal(products.mapping_status,'unavailable');assert.ok(products.rows.every(r=>r.product_ref.startsWith('source:')));
@@ -100,7 +100,7 @@ test('ambiguous knowledge asks one focused question while retaining other succes
 test('direct agent uses the same event context, warehouse scope and deterministic rendering',async t=>{
  const f=eventSaleFixture(),h=await acceptanceServer(f,{durable:false});t.after(h.close);
  const response=await fetch(h.origin+'/agent',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({message:comparison})});
- assert.equal(response.status,200);const r=await response.json();assert.equal(r.evidence.version,'event_sale_report.v1');assert.equal(r.evidence.sections.length,4);assert.match(r.answer,/Ring A/);assert.equal(r.analysis_context.start_date,null);
+ assert.equal(response.status,200);const r=await response.json();assert.equal(r.evidence.version,'event_sale_report.v2');assert.equal(r.evidence.sections.length,4);assert.match(r.answer,/Ring A/);assert.equal(r.analysis_context.start_date,null);
 });
 
 test('event dates in persisted presentation metadata cannot be broadened independently of KB windows',async()=>{

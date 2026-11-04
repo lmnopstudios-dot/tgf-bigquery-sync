@@ -96,3 +96,90 @@ They do not assert live knowledge contents, figures or collection completeness.
 No production report, source collection, mapping write or other production change
 was executed. Deployed knowledge contents, source availability and numerical
 reconciliation remain unverified; no automatic report replay is authorized.
+
+## Follow-up: recovered source evidence and exact sessions
+
+The user recovered the live knowledge rows with a read-only Render SELECT on
+3 November 2026. The unmodified rows are retained in
+`test/fixtures/black-friday-conversation/live-knowledge.json`; numerical provider
+fixtures remain synthetic. Both 2025 entries explicitly say the promotion was
+**online-only** and **physical stores did not participate**:
+
+| Knowledge ID | Title | Documented dates | Hours |
+|---|---|---|---|
+| ev_f9521f60-1aaf-41f6-a540-4e4bf00082dd | Black Friday 2025 public campaign | 28–30 November 2025 | Not recorded |
+| ev_2523cea3-5058-481e-9ac0-f6d4520603d6 | Black Friday 2025 VIP early access | 27 November 2025 | Not recorded |
+
+The #414 physical detector matched “Physical stores did not participate” as
+positive applicability. It excluded both rows from online resolution, then grouped
+them into one unspecified-store bucket and called the distinct dates conflicting.
+The new session resolver classifies applicability before store/session grouping.
+It keeps the public and VIP online sessions separate. It does not invent a 2025
+Square campaign period from either online record. Confirmed nonparticipation is
+reported as such, without asking the user to choose between those records.
+
+The recovered 2024 rows establish:
+
+* Soho (`ev_35c7f84c-75aa-44df-9878-e1e76676f898`): 7 November, 12:00 PM–8:00 PM.
+* TGF East (`ev_4f0a2bbe-6f60-4c09-bf4c-1dfb8f421309`): 9 November, 10:30 AM–6:30 PM.
+* Online (`ev_d62be9ed-527e-403a-a661-cb2d11095ca5`): from 8 November at 8:00 AM GMT,
+  “through 10 November 2024 at midnight GMT.” The source alone does not distinguish
+  start/end of that day. The user explicitly confirmed **end of 10 November**.
+  The request-scoped exclusive endpoint is **11 November 2024 00:00 GMT**; the
+  stored knowledge text is unchanged.
+
+All exact windows use half-open timestamps. Distinct stores, explicitly distinct
+sessions, and non-overlapping sessions remain independent. Only contradictory
+windows for the same store/session generate a conflict question. Identical
+records merge their citations without duplicating a provider calculation.
+
+### Source authority and timestamp providers
+
+The request-scoped `bf-2024-2025-v1` source policy applies to totals and products:
+2025 online is native Shopify Online Store, 2024 online is WooCommerce, and
+in-store is Square. Shopify Matrixify imports are excluded. The policy survives
+scope validation, provider execution, durable persistence and XLSX refinements.
+
+The timestamp adapter binds existing Square payments/refunds by native IDs,
+completion status and verified location. It reuses the existing card-present
+channel rule; cash/mixed/unknown tender is not silently classified as POS. Amounts
+are deduplicated at payment/refund identity before aggregation. Products require
+all successful payments of the native order to lie inside the session; boundary
+split payments are not allocated to a whole order without evidence. Refunds use
+their own event timestamp rather than the original order's timestamp.
+
+Woo WW/USD adapters use persisted order creation timestamps and `refunds_api`
+refund timestamps, joining currency through exact native order IDs. Shopify uses
+persisted financial/refund timestamps, successful sale/capture/refund evidence,
+and the Online Store predicate. Product queries use the same source selection and
+instant bounds. Reviewed family/identity reads do not modify mappings.
+
+Gross observations survive an independently missing refund source; net remains
+unavailable when refund evidence is missing. Unknown money/currency is never zero.
+Native timestamped source totals are explicitly distinguished from reconciled
+canonical ledger totals. Calendar-date observations for the 2025 entries are
+labelled as date-grain evidence with **hours unrecorded**, not exact sale-hour
+results. Source-native line tax definitions remain separate. Neither temporal
+membership nor a 20% discount proves campaign-discount attribution.
+
+Location lookup requires one persisted native Square location ID, an exact
+normalized store name (only the cosmetic TGF prefix is removed), and a compatible
+recorded timezone. East is not guessed to mean Shoreditch. Missing or duplicate
+bindings fail that store independently. Dataset locations come from metadata;
+knowledge's EU job location is not applied to warehouse datasets.
+
+### Remaining verification boundary
+
+Initial Render warehouse reads used an incorrectly fixed EU job location and
+returned `notFound`. They do **not** establish absent data. The user has been given
+a region-aware metadata/location extraction; its output is pending. Therefore
+native deployed Square location IDs, warehouse schemas, per-window row coverage
+and actual financial figures remain unverified. No sales report, collection,
+source/mapping write or production replay has been executed for this follow-up.
+
+The new `event_sale_report.v2` contract retains session bounds and source authority.
+A frozen v1 resolver validates already-retained #414 evidence without provider
+calls. Local regressions use recovered knowledge plus synthetic financial rows;
+generated Square SQL is also transpiled/executed locally against timestamp,
+store, successful-payment and refund boundary fixtures. This verifies calculations
+and SQL semantics, not deployed warehouse availability or completeness.
