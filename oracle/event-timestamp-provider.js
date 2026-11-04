@@ -1,3 +1,4 @@
+import {shopifyRecordedChannel,shopifyRecordedSource,shopifySaleTimeSql,bindShopifySaleSessions} from './shopify-sale-binding.js';
 import {bindSquareLocation} from './event-square-locations.js';
 import {MATRIXIFY_APP_ID} from '../finance/canonical.js';
 import {squarePaymentChannelEvidenceSql,squareOrderChannelsSql} from './square-channels.js';
@@ -16,7 +17,7 @@ export function squareSessionCtes(project){safeProject(project);return `square_r
  sx_channel_evidence AS(${squarePaymentChannelEvidenceSql(project)}),sx_channels AS(${squareOrderChannelsSql()}),
  square_payments AS(SELECT TO_JSON(p,stringify_wide_numbers=>TRUE) j FROM \`${project}.square_data.payments\` p),
  payment_latest AS(SELECT * FROM square_payments QUALIFY ROW_NUMBER() OVER(PARTITION BY ${jf('j','payment_id','id')} ORDER BY ${ts(jf('j','updated_at','created_at'))} DESC,TO_JSON_STRING(j) DESC)=1)`;}
-export function timestampSalesSql(project,source,measure){
+export function timestampSalesSql(project,source,measure,{shopifyChannel=false}={}){
  safeProject(project);
  if(source==='square'){
   const c=squareSessionCtes(project);
@@ -29,9 +30,10 @@ export function timestampSalesSql(project,source,measure){
  }
  if(source==='shopify'){
   const c=`f AS(SELECT * FROM \`${project}.shopify_data.order_financials\` QUALIFY ROW_NUMBER() OVER(PARTITION BY order_id ORDER BY synced_at DESC)=1),l AS(SELECT * FROM \`${project}.shopify_data.order_locations\` QUALIFY ROW_NUMBER() OVER(PARTITION BY order_id ORDER BY synced_at DESC)=1)`;
-  const eligibility=`(l.source_app_id IS NULL OR l.source_app_id!=@matrixify_app_id) AND LOWER(TRIM(l.order_source))='online store' AND f.cancelled_at IS NULL`;
-  if(measure==='sales')return `WITH ${c} SELECT 'Shopify Online Store' source,'Online' channel,UPPER(f.presentment_currency) currency,'sale' transaction_type,SUM(f.original_total_presentment) amount,COUNTIF(f.original_total_presentment IS NULL) missing_amounts,COUNT(*) transaction_count FROM f JOIN l USING(order_id) WHERE ${eligibility} AND ${inWindow('f.created_at')} AND EXISTS(SELECT 1 FROM UNNEST(IFNULL(JSON_QUERY_ARRAY(SAFE.PARSE_JSON(f.transactions_json)),[])) t WHERE JSON_VALUE(t,'$.status')='SUCCESS' AND JSON_VALUE(t,'$.kind') IN ('SALE','CAPTURE')) GROUP BY currency`;
-  if(measure==='refunds')return `WITH ${c},r AS(SELECT * FROM \`${project}.shopify_data.order_refunds\` QUALIFY ROW_NUMBER() OVER(PARTITION BY refund_id ORDER BY synced_at DESC)=1) SELECT 'Shopify Online Store' source,'Online' channel,UPPER(COALESCE(r.presentment_currency,f.presentment_currency)) currency,'refund' transaction_type,-SUM(ABS(r.refund_total_presentment)) amount,COUNTIF(r.refund_total_presentment IS NULL) missing_amounts,COUNT(*) refund_events FROM r JOIN f USING(order_id) JOIN l USING(order_id) WHERE ${eligibility} AND r.has_successful_refund_transaction AND ${inWindow('r.refund_created_at')} GROUP BY currency`;
+  const eligibility=`(l.source_app_id IS NULL OR l.source_app_id!=@matrixify_app_id) AND ${shopifyChannel?shopifyRecordedChannel+'=@sale_channel':"l.retail_location_id IS NULL AND LOWER(TRIM(l.order_source))='online store'"} AND f.cancelled_at IS NULL`;
+  const sourceLabel=shopifyChannel?shopifyRecordedSource:"'Shopify Online Store'",channelLabel=shopifyChannel?shopifyRecordedChannel:"'Online'",window=t=>shopifyChannel?shopifySaleTimeSql(t):inWindow(t),group=shopifyChannel?'source,channel,currency':'currency';
+  if(measure==='sales')return `WITH ${c} SELECT ${sourceLabel} source,${channelLabel} channel,UPPER(f.presentment_currency) currency,'sale' transaction_type,SUM(f.original_total_presentment) amount,COUNTIF(f.original_total_presentment IS NULL) missing_amounts,COUNT(*) transaction_count FROM f JOIN l USING(order_id) WHERE ${eligibility} AND ${window('f.created_at')} AND EXISTS(SELECT 1 FROM UNNEST(IFNULL(JSON_QUERY_ARRAY(SAFE.PARSE_JSON(f.transactions_json)),[])) t WHERE JSON_VALUE(t,'$.status')='SUCCESS' AND JSON_VALUE(t,'$.kind') IN ('SALE','CAPTURE')) GROUP BY ${group}`;
+  if(measure==='refunds')return `WITH ${c},r AS(SELECT * FROM \`${project}.shopify_data.order_refunds\` QUALIFY ROW_NUMBER() OVER(PARTITION BY refund_id ORDER BY synced_at DESC)=1) SELECT ${sourceLabel} source,${channelLabel} channel,UPPER(COALESCE(r.presentment_currency,f.presentment_currency)) currency,'refund' transaction_type,-SUM(ABS(r.refund_total_presentment)) amount,COUNTIF(r.refund_total_presentment IS NULL) missing_amounts,COUNT(*) refund_events FROM r JOIN f USING(order_id) JOIN l USING(order_id) WHERE ${eligibility} AND r.has_successful_refund_transaction AND ${window('r.refund_created_at')} GROUP BY ${group}`;
  }
  if(['ww','usd'].includes(source)){
   const ds=source==='ww'?'metorik_uk':'metorik_us',c=`o AS(SELECT * FROM \`${project}.${ds}.orders\` QUALIFY ROW_NUMBER() OVER(PARTITION BY order_id ORDER BY synced_at DESC)=1)`;
@@ -48,17 +50,17 @@ export function createEventTimestampProvider({bigquery,project,run}){
    if(!w.start_at||!w.end_exclusive)throw fail('EVENT_EXACT_HOURS_NOT_RECORDED',['knowledge start/end clock bounds']);
    if(!w.source_selection)throw fail('EVENT_SOURCE_SELECTION_MISSING');
    let location_id=null,location_evidence=null;
-   if(w.channel==='instore'){
+   if(w.channel==='instore'&&w.source_selection==='square'){
     if(!w.location_name)throw fail('EVENT_STORE_NOT_RECORDED');
     ({location_id,location_evidence}=await bindSquareLocation(execute,project,w));
    }
-   return {start_at:w.start_at,end_exclusive:w.end_exclusive,location_id,matrixify_app_id:MATRIXIFY_APP_ID,location_evidence};
+   return {start_at:w.start_at,end_exclusive:w.end_exclusive,location_id,matrixify_app_id:MATRIXIFY_APP_ID,location_evidence,...(w.shopify_channel?await bindShopifySaleSessions(execute,project,w):{})};
   },
   async totals(w){
    const binding=await this.bind(w),{location_evidence,...params}=binding;
    const sources=w.source_selection==='woo'?['ww','usd']:[w.source_selection];
-   const components=await Promise.all(sources.flatMap(source=>['sales','refunds'].map(async measure=>{try{const rows=await execute(timestampSalesSql(project,source,measure),params);return {source,measure,status:rows.length?'fulfilled':'unavailable',code:rows.length?null:'NO_OBSERVATIONS_COVERAGE_UNVERIFIED',rows:rows.map(r=>({...r,amount:r.missing_amounts?null:r.amount}))};}catch(e){return {source,measure,status:'failed',code:typeof e.code==='string'&&/^[A-Z0-9_]+$/.test(e.code)?e.code:'SOURCE_TIMESTAMP_OR_MEASURE_UNAVAILABLE',rows:[]};}})));
-   return {period:w,definition:'timestamped_source_net_gross',exact_hours:w.time_precision!=='date_only',rows:components.flatMap(c=>c.rows),components,requires_refund_evidence:true,location_evidence,coverage:{complete:null},discount_attribution:'unavailable; temporal membership is not campaign-discount proof',limitations:['Native successful payments/orders less refund events in the exact half-open window; ledger reconciliation and collection completeness are unverified.',...(w.source_selection==='square'?['Square card-present channel classification reuses the existing payment evidence rule; unknown/cash/mixed tender channels stay separate.']:w.source_selection==='woo'?['Woo timestamp bindings cover WW and USD stores; a timestamped JP source is not bound, so JP sales/refunds remain unavailable.']:['Only native Shopify Online Store orders are eligible; Matrixify imports are excluded.'])]};
+   const components=await Promise.all(sources.flatMap(source=>['sales','refunds'].map(async measure=>{try{const rows=await execute(timestampSalesSql(project,source,measure,{shopifyChannel:Boolean(w.shopify_channel)}),params);return {source,measure,status:rows.length?'fulfilled':'unavailable',code:rows.length?null:'NO_OBSERVATIONS_COVERAGE_UNVERIFIED',rows:rows.map(r=>({...r,amount:r.missing_amounts?null:r.amount}))};}catch(e){return {source,measure,status:'failed',code:typeof e.code==='string'&&/^[A-Z0-9_]+$/.test(e.code)?e.code:'SOURCE_TIMESTAMP_OR_MEASURE_UNAVAILABLE',rows:[]};}})));
+   return {period:w,definition:'timestamped_source_net_gross',exact_hours:w.time_precision!=='date_only',rows:components.flatMap(c=>c.rows),components,requires_refund_evidence:true,location_evidence,...(w.shopify_channel?{sale_binding:{channel:w.shopify_channel,sessions:JSON.parse(params.sale_sessions_json),pos_population:w.pos_population}}:{}),coverage:{complete:null},discount_attribution:'unavailable; temporal membership is not campaign-discount proof',limitations:['Native successful payments/orders less refund events in the exact half-open window; ledger reconciliation and collection completeness are unverified.',...(w.source_selection==='square'?['Square card-present channel classification reuses the existing payment evidence rule; unknown/cash/mixed tender channels stay separate.']:w.source_selection==='woo'?['Woo timestamp bindings cover WW and USD stores; a timestamped JP source is not bound, so JP sales/refunds remain unavailable.']:w.shopify_channel?['Recorded Shopify channel classification uses retail location IDs for POS, Online Store source for online and keeps other sources unknown. Known Matrixify imports are excluded.']:['Only native Shopify Online Store orders are eligible; Matrixify imports are excluded.'])]};
   }
  };
 }

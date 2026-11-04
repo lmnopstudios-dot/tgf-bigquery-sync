@@ -1,3 +1,4 @@
+import {resolveShopifySaleWindows} from './shopify-sale-windows.js';
 import {storedTemporal} from './event-presentation.js';
 const day=value=>storedTemporal(value)?.slice(0,10);
 const nextDay=d=>new Date(Date.parse(d+'T00:00:00Z')+86400000).toISOString().slice(0,10);
@@ -39,6 +40,7 @@ export function sessionBounds(r,{endpointChoice=null}={}){
  return {...base,start_at:a,end_exclusive:b,intraday:true,time_precision:'clock',time_basis:'explicit knowledge clock bounds; half-open [start,end)'};
 }
 export function resolveSaleSessions(items,scope,asOf){
+ if(scope.source_policy==='shopify-native-sale-v1')return resolveShopifySaleWindows(items,scope,asOf);
  const windows=[],issues=[],groups=new Map();
  for(const r of items){
   const start=day(r.effective_from??r.start_date),year=Number(start?.slice(0,4));

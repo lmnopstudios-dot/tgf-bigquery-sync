@@ -1,0 +1,27 @@
+[
+  {
+    "id": "ev_b2c31f15-e83f-4651-bc53-4f1f1aa96581",
+    "kind": "event",
+    "event_type": "promotion",
+    "title": "May Bank Holiday silver jewellery sale 2026",
+    "description": "The May Bank Holiday sale offered 20% off all silver jewellery, excluding collaborations and mixed-metal items. Mailing-list subscribers received VIP access on 1 May 2026. The sale opened to everyone on 2 May 2026 and ended at midnight GMT on 4 May 2026. It was available online and in stores.",
+    "effective_from": "2026-05-01",
+    "effective_to": "2026-05-04",
+    "date_precision": "range",
+    "recorded_at": "2026-09-30T11:25:49.492Z",
+    "source_type": "human_entered",
+    "source_reference": "User statement describing the May Bank Holiday 2026 sale",
+    "status": "confirmed",
+    "created_by": "Stuart",
+    "supersedes": null,
+    "superseded_by": null,
+    "tags": [
+      "May Bank Holiday",
+      "sale",
+      "silver jewellery",
+      "VIP access",
+      "online",
+      "in-store"
+    ]
+  }
+]

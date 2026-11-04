@@ -1366,6 +1366,10 @@
     {
       "file": "test/oracle-black-friday-clarification-416.test.js",
       "purpose": "Exact 2024 WooCommerce endpoint reply through interactive/durable chat; consume clarification without knowledge proposals or narrowing report, retain independent sections without replay; recovered native Square brand names and verified/missing/ambiguous/inactive bindings with exact session SQL and payment-coverage gaps."
+    },
+    {
+      "file": "test/oracle-bank-holiday-sale.test.js",
+      "purpose": "Exact 9e60ad05 Bank Holiday prompt through real chat/durable/direct entrypoints; native Shopify inclusive London/BST window, independent online/POS/unknown channels and currencies, top-20 products, import exclusion, executed timestamp SQL, KB clocks, partial failures, retained XLSX, strict scope mutations and bounded durable mismatch-field retention without replay."
     }
   ]
 }
