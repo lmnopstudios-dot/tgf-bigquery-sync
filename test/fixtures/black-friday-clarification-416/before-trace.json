@@ -1,0 +1,51 @@
+{
+  "base_revision": "2f82b52",
+  "validation": "local authenticated chat, synthetic finance and recovered native metadata; test helper proposal-generator spy, production router unchanged",
+  "opening_user": "Compare Black Friday sales and products sold in 2025 and 2024, broken down by online and in-store. Use the actual sale dates and hours from our knowledge base. Show VIP early access separately from the public sale. Keep currencies separate.",
+  "assistant_question": "For online record ev_d62be9ed-527e-403a-a661-cb2d11095ca5, does the documented midnight cutoff mean the start or end of 2024-11-10?",
+  "user_reply": "End of day on 10 November 2024. The 2024 online sale ran from 8 November at 08:00 GMT until 11 November at 00:00 GMT, exclusive. Please fill in the 2024 WooCommerce sales totals and products sold using that window.",
+  "knowledge_save_intent": false,
+  "clarification_consumed": null,
+  "proposals_suppressed": false,
+  "proposal_generator_called_for_reply": true,
+  "before_scope": {
+    "source_policy": "bf-2024-2025-v1",
+    "years": [
+      2025,
+      2024
+    ],
+    "channels": [
+      "instore",
+      "online"
+    ],
+    "products": true
+  },
+  "after_scope": {
+    "source_policy": "bf-2024-2025-v1",
+    "endpoint_choice": "end_of_day",
+    "years": [
+      2024
+    ],
+    "channels": [
+      "online"
+    ],
+    "products": true
+  },
+  "sections": [
+    {
+      "year": 2024,
+      "channel": "online",
+      "store": null
+    }
+  ],
+  "location_matches": [
+    {
+      "location_name": "Soho",
+      "code": "EVENT_LOCATION_NOT_VERIFIED"
+    },
+    {
+      "location_name": "TGF East",
+      "code": "EVENT_LOCATION_NOT_VERIFIED"
+    }
+  ]
+}

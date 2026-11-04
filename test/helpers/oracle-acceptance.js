@@ -100,7 +100,7 @@ export async function acceptanceServer(f,{durable=false,now=NOW,jobStore=null,re
     res.json({success:true,...r,analysis_context:r?.analysis_context||context});
   }catch(e){next(e);}});
   app.use('/api/oracle',createOracleUiRouter({bigquery:{},project:'fixture',knowledgeService:{},baselineOverview:f.baseline,
-    chat:async(message,options)=>{assert.equal(options?.toolsAllowed,false,'Unexpected analytical model fallback');return {answer:'Edited text: collaboration retention, country conversion and basket composition need attention.',tools:[]};},generateProposals:async()=>[],analysisJobStore:jobs,exportStore:f.exportStore,
+    chat:async(message,options)=>{assert.equal(options?.toolsAllowed,false,'Unexpected analytical model fallback');return {answer:'Edited text: collaboration retention, country conversion and basket composition need attention.',tools:[]};},generateProposals:f.generateProposals||(async()=>[]),analysisJobStore:jobs,exportStore:f.exportStore,
     env:{RENDER_GIT_COMMIT:revision,ORACLE_UI_PASSWORD:'fixture',ORACLE_UI_SESSION_SECRET:'fixture-session-secret-with-enough-bytes',ORACLE_UI_ADMIN_NAME:'staff',ORACLE_ANALYSIS_JOBS_ENABLED:String(durable)},now:()=>now}));
   const server=await new Promise((resolve,reject)=>{const s=app.listen(0,'127.0.0.1',()=>resolve(s));s.on('error',reject);});
   const origin=`http://127.0.0.1:${server.address().port}`,base=origin+'/api/oracle';

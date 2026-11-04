@@ -35,6 +35,7 @@ export function renderEventSaleReport(e){
   for(const r of w.knowledge_entries)lines.push(`Knowledge ${provenanceCode(r.id)} — ${esc(r.title)}: ${storedTemporal(r.effective_from??r.start_date)} to ${storedTemporal(r.effective_to??r.end_date)}; ${provenanceCode(r.source_reference)}; status ${r.status}; recorded ${storedTemporal(r.recorded_at)||'unavailable'}. ${esc(r.content||r.description||'')}`);
   if(w.start_at&&w.end_exclusive)lines.push(`${w.time_precision==='date_only'?'Calendar-date bounds (exact hours unavailable)':'Exact session'}: ${w.start_at} ≤ transaction time < ${w.end_exclusive}. ${esc(w.time_basis)}`);
   if(w.time_issue)lines.push(`Exact session unavailable: ${w.time_issue}; ${esc(w.endpoint_wording||'missing clock evidence')}. No whole-day replacement was used.`);
+  for(const result of [section.totals,section.products].filter(Boolean))if(result.missing?.length)lines.push('Missing evidence: '+result.missing.map(esc).join('; ')+'.');
   lines.push('Sales in this window are not proof of a campaign discount. Campaign-discount attribution remains unavailable without matched discount evidence.');
   if(section.totals.status==='fulfilled'){
    for(const c of section.totals.evidence.components||[])if(c.status!=='fulfilled')lines.push(`Missing ${c.source} ${c.measure}: ${c.code}.`);
@@ -47,7 +48,7 @@ export function renderEventSaleReport(e){
    const byCurrency=new Map();for(const r of rows.filter(r=>r.channel===w.channel)){const prior=byCurrency.get(r.currency);byCurrency.set(r.currency,prior===undefined?r.sales:prior==null||r.sales==null?null:prior+r.sales);}
    for(const [currency,total]of byCurrency)lines.push(`${w.channel} ${currency} ${section.totals.evidence.coverage?.complete===true?'total':'observed subtotal (coverage unverified)'}: ${value(total,currency)}. Unknown channels are excluded from this subtotal.`);
    if(!rows.length)lines.push('Total sales unavailable: no qualifying transaction observations were returned; this does not establish zero.');
-  }else lines.push(`Total sales unavailable: ${section.totals.code}.`);
+  }else lines.push(`Total sales unavailable: ${provenanceCode(section.totals.code)}.`);
   if(section.products){if(section.products.status==='fulfilled'){
    const report=section.products.evidence;
    if(report.location_evidence)lines.push(`Verified product location: ${esc(report.location_evidence.location_name)} — ${esc(report.location_evidence.location_id)}.`);
@@ -57,7 +58,7 @@ export function renderEventSaleReport(e){
    if(!rows.length)lines.push('Product evidence unavailable; no product observations were returned.');
    for(const c of report.components||[])if(c.status!=='fulfilled')lines.push(`Product source ${c.source} unavailable: ${c.code}.`);
    lines.push(...(report.limitations||[]),`Approved mapping evidence: ${report.mapping_status}. Unmapped source products remain separate.`);
-  }else lines.push(`Products unavailable: ${section.products.code}.`);}
+  }else lines.push(`Products unavailable: ${provenanceCode(section.products.code)}.`);}
  }
  for(const issue of e.resolved_scope.issues){
   lines.push(`\n${issue.year} ${issue.channel}: ${issue.reason||'Conflicting confirmed dates'}; ${issue.event_ids?.join(', ')||'no supporting entry'}.`);
@@ -76,26 +77,39 @@ export function renderEventSaleReport(e){
  const conflict=globalUnsupported?null:e.resolved_scope.issues.find(i=>i.type==='ambiguous'&&!(e.requested_scope.sale_scope.unsupported_sources||[]).some(s=>s.year===i.year&&s.channel===i.channel));if(conflict&&!midnight)lines.push(`Which of the conflicting confirmed ${conflict.year} ${conflict.channel} sale records (${conflict.event_ids.join(', ')}) should define that section?`);
  return lines.join('\n');
 }
+// A clarification may reuse only this same retained report with the endpoint
+// choice changed. Never reuse another population, source policy or date scope.
+export function compatibleEventClarificationEvidence(prior,context){
+ if(!prior?.analysis_context?.event_scope||prior.evidence?.version!=='event_sale_report.v2'||!context?.event_scope?.endpoint_choice)return null;
+ try{
+  assertEventSaleEvidence(prior.analysis_context,prior.evidence);
+  const project=c=>({route:c.tool_route,event:c.event_name,count:c.event_count,metrics:c.metrics,timezone:c.time_zone,scope:{...c.event_scope,endpoint_choice:null}});
+  if(stableAnalyticalJSON(project(prior.analysis_context))!==stableAnalyticalJSON(project(context)))return null;
+  return prior;
+ }catch{return null;}
+}
 export function createEventSaleReportService({knowledgeService,provider,now=Date.now}){
  return async(message,options={})=>{
   const context=options.analysisContext,scope=context?.event_scope;if(!scope)return null;
   const activeProvider=provider.forRequest?provider.forRequest(options):provider;
-  const stage=e=>options.onProviderStage?.(e),asOf=new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/London'}).format(new Date(now()));
+  const retained=compatibleEventClarificationEvidence(options.recentEvidence,context);
+  const stage=e=>options.onProviderStage?.(e),asOf=retained?.evidence.requested_scope.as_of||new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/London'}).format(new Date(now()));
   stage({stage:'event_knowledge_resolution',status:'started',years:scope.years,channels:scope.channels});
   const searches=[{text:null,tags:['black-friday'],status:null},{text:context.event_name,tags:[],status:'confirmed'}];
-  const reads=await Promise.allSettled(searches.map(s=>knowledgeService.searchKnowledge({...s,knowledge_type:'event',start_date:null,end_date:null,limit:50})));
-  const items=[...new Map(reads.flatMap(r=>r.status==='fulfilled'?(r.value.items||[]):[]).map(r=>[r.id,r])).values()];
+  const reads=retained?[]:await Promise.allSettled(searches.map(s=>knowledgeService.searchKnowledge({...s,knowledge_type:'event',start_date:null,end_date:null,limit:50})));
+  const items=retained?retained.evidence.knowledge_entries:[...new Map(reads.flatMap(r=>r.status==='fulfilled'?(r.value.items||[]):[]).map(r=>[r.id,r])).values()];
   const resolved=resolveEventSaleWindows(items,scope,asOf),sections=[];
-  stage({stage:'event_knowledge_resolution',status:reads.every(r=>r.status==='rejected')?'failed':'success',window_count:resolved.windows.length,issue_count:resolved.issues.length,failed_reads:reads.filter(r=>r.status==='rejected').length});
+  stage({stage:'event_knowledge_resolution',status:retained?'retained':reads.every(r=>r.status==='rejected')?'failed':'success',window_count:resolved.windows.length,issue_count:resolved.issues.length,failed_reads:reads.filter(r=>r.status==='rejected').length});
   stage({stage:'event_capability_selection',status:'resolved',metrics:context.metrics,source_grains:['canonical_transaction_date','source_product_line'],currency_policy:'separate'});
   const execute=async(operation,w)=>{
+   if(options.clarificationKind==='event_endpoint'&&!retained&&!(w.year===2024&&w.channel==='online'))return {status:'failed',code:'EVENT_RETAINED_SECTION_UNAVAILABLE',missing:['The prior section is not retained in this session; it was not automatically replayed.']};
    const unsupported=(scope.unsupported_fields||[]).filter(f=>f!=='behavioural_metrics');
    const sourceUnavailable=(scope.unsupported_sources||[]).some(s=>s.year===w.year&&s.channel===w.channel);
    if(unsupported.length||sourceUnavailable){stage({stage:'event_'+operation,status:'unsupported',window_id:w.id,fields:unsupported,...(sourceUnavailable?{source_selection:'unbound'}:{})});return {status:'failed',code:sourceUnavailable?'EVENT_REQUESTED_SOURCE_UNSUPPORTED':'EVENT_REQUESTED_POPULATION_UNSUPPORTED',unsupported_fields:unsupported};}
    if(w.time_issue){stage({stage:'event_'+operation,status:'unsupported',window_id:w.id,code:w.time_issue});return {status:'failed',code:w.time_issue};}
-   stage({stage:'event_'+operation,status:'started',window_id:w.id,start_date:w.start_date,end_date:w.end_date,channel:w.channel});try{const evidence=await activeProvider[operation](w);if(stableAnalyticalJSON(evidence.period)!==stableAnalyticalJSON(w))throw Object.assign(Error('Scope mismatch'),{code:'EVIDENCE_SCOPE_MISMATCH'});stage({stage:'event_'+operation,status:'success',window_id:w.id});return {status:'fulfilled',evidence};}catch(error){stage({stage:'event_'+operation,status:'failed',window_id:w.id,code:code(error)});return {status:'failed',code:code(error)};}};
-  for(const window of resolved.windows){const operations=await Promise.all([execute('totals',window),...(scope.products?[execute('products',window)]:[])]);sections.push({window,totals:operations[0],...(scope.products?{products:operations[1]}:{})});}
-  const evidence={kind:'historical_event_comparison',version:'event_sale_report.v2',subject:'sales',metrics:context.metrics,requested_scope:{event:context.event_name,count:context.event_count,sale_scope:scope,as_of:asOf,currencies:'separate'},knowledge_entries:items,knowledge_retrieval:reads.map((r,i)=>({scope:searches[i],status:r.status,...(r.status==='rejected'?{code:'EVENT_KNOWLEDGE_RETRIEVAL_FAILED'}:{returned_count:r.value.items?.length||0})})),resolved_scope:resolved,sections,periods:resolved.windows.map(w=>({event_id:w.id,start_date:w.start_date,end_date:w.end_date,channel:w.channel})),complete:false};
+   stage({stage:'event_'+operation,status:'started',window_id:w.id,start_date:w.start_date,end_date:w.end_date,channel:w.channel});try{const evidence=await activeProvider[operation](w);if(stableAnalyticalJSON(evidence.period)!==stableAnalyticalJSON(w))throw Object.assign(Error('Scope mismatch'),{code:'EVIDENCE_SCOPE_MISMATCH'});stage({stage:'event_'+operation,status:'success',window_id:w.id});return {status:'fulfilled',evidence};}catch(error){stage({stage:'event_'+operation,status:'failed',window_id:w.id,code:code(error)});return {status:'failed',code:code(error),...(error.missing?.length?{missing:error.missing}:{})};}};
+  for(const window of resolved.windows){const saved=retained?.evidence.sections.find(s=>stableAnalyticalJSON(s.window)===stableAnalyticalJSON(window));if(saved){sections.push(saved);stage({stage:'event_section_retained',status:'retained',window_id:window.id});continue;}const operations=await Promise.all([execute('totals',window),...(scope.products?[execute('products',window)]:[])]);sections.push({window,totals:operations[0],...(scope.products?{products:operations[1]}:{})});}
+  const evidence={kind:'historical_event_comparison',version:'event_sale_report.v2',subject:'sales',metrics:context.metrics,requested_scope:{event:context.event_name,count:context.event_count,sale_scope:scope,as_of:asOf,currencies:'separate'},knowledge_entries:items,knowledge_retrieval:retained?retained.evidence.knowledge_retrieval:reads.map((r,i)=>({scope:searches[i],status:r.status,...(r.status==='rejected'?{code:'EVENT_KNOWLEDGE_RETRIEVAL_FAILED'}:{returned_count:r.value.items?.length||0})})),resolved_scope:resolved,sections,periods:resolved.windows.map(w=>({event_id:w.id,start_date:w.start_date,end_date:w.end_date,channel:w.channel})),complete:false};
   stage({stage:'event_answer_completeness',status:'partial',successful_totals:sections.filter(s=>s.totals.status==='fulfilled').length,successful_products:sections.filter(s=>s.products?.status==='fulfilled').length,coverage_verified:false});
   return {answer:renderEventSaleReport(evidence),analysis_context:context,evidence,partial:true,tools:['search_knowledge','canonical_finance','event_product_lines']};
  };

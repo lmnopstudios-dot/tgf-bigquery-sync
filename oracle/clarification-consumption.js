@@ -40,6 +40,17 @@ function calendarRange(text,reference){
  * and explicit knowledge-save commands continue through their existing routes. */
 export function consumePendingClarification(c,text){
   if(explicitKnowledgeSaveIntent(text)||/^(?:new (?:question|analysis)|forget that|start over)\b/i.test(text))return null;
+  // Endpoint answers refine the pending event report, not its year/channel
+  // population. Mentioning the affected section must retain the comparison.
+  if(c.tool_route==='compare_historical_events'&&c.event_scope?.years.includes(2024)&&c.event_scope.channels.includes('online')){
+    const end=/\b(?:end of (?:the |that )?day(?: on)?\s+(?:10(?:th)?\s+november|november\s+(?:the\s+)?10(?:th)?)|end of (?:november|10|the 10)|11 november(?: 2024)?(?: at)?\s+00:00)/i.test(text);
+    const start=/\b(?:start|beginning) of (?:the |that )?day(?: on)?\s+10(?:th)?\s+november|\bstart of (?:november|10|the 10)/i.test(text);
+    const years=[...text.matchAll(/\b(20\d{2})\b/g)].map(m=>Number(m[1]));
+    if((end||start)&&years.every(y=>y===2024)&&! /\b(?:customers?|inventory|stock|conversion|shipping|country|countries|only|instead)\b/i.test(text)){
+      if(end&&start)return {kind:'event_endpoint',context:c,rejected:'The reply names both start and end of day. Please choose one midnight interpretation; the existing report sections are retained.'};
+      return {kind:'event_endpoint',context:{...c,event_scope:{...c.event_scope,endpoint_choice:end?'end_of_day':'start_of_day'}}};
+    }
+  }
   const kind=pendingClarificationKind(c)||(c.promotion_context?.calendar_instruction&&/\b(?:exclude|excluding|omit|remove|leave out|inclusive)\b/i.test(text)||c.promotion_context?.endpoint_zone&&/\b(?:use|timezone|time zone|in|as)\s+(?:GMT|UTC|BST)\b/i.test(text)?'promotion':null);
   if(kind==='promotion'){
     const p=c.promotion_context,reference=p.pending_endpoint_date||c.start_date;
@@ -67,5 +78,5 @@ export function suppressAnalyticalProposals(context,transition,message){
   const instruction=/^(?:please\s+)?(?:show|give|compare|graph|chart|export|download|retry|try again|use|choose|pick|select|include|exclude|excluding|omit|remove|leave out|sort|rank|by|only|just|account for|since|from|which|what|how|can you|could you)\b/i.test(text);
   const fieldAnswer=/^(?:20\d{2}-\d{2}-\d{2}|\d{1,2}\s+(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)|GBP|USD|EUR|JPY|online|in[ -]store|units sold|product sales|landing(?:-page)? sessions|organic clicks|organic impressions)\b/i.test(text);
   const consumed=transition?.clarification_consumed&&(transition.clarification_consumed!=='scope'||instruction||fieldAnswer);
-  return Boolean(context?.tool_route==='get_order_value_analysis'||consumed||transition?.applies_to_message&&context?.requested_subject&&context?.request_kind!=='knowledge_save'&&instruction);
+  return Boolean(context?.tool_route==='get_order_value_analysis'||context?.event_scope&&transition?.applies_to_message||consumed||transition?.applies_to_message&&context?.requested_subject&&context?.request_kind!=='knowledge_save'&&instruction);
 }
