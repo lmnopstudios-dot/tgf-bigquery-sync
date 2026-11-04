@@ -164,7 +164,7 @@ export function createOracleUiRouter({ knowledgeService, bigquery, project, chat
     const previous=req.body.new_question===true?emptyAnalysisContext():sessionContext(req);
     const result=requestTransition(req,previous,req.body.message,{now:now(),reportContext:req.body.report_context||null});
     const execution=resolveExecutionPlan(result.context);
-    res.json({success:true,route:execution.delivery||oracleRequestRoute(req.body.message),resolved_subject:result.context.requested_subject,tool_route:result.context.tool_route,inventory_report:result.context.inventory_report,deployed_revision:env.RENDER_GIT_COMMIT||null,providers_attempted:0});
+    res.json({success:true,route:execution.delivery||oracleRequestRoute(req.body.message),resolved_subject:result.context.requested_subject,tool_route:result.context.tool_route,...(result.context.event_scope?{event_scope:result.context.event_scope,operation:execution.plan.operation,capability_selection:{registered:Boolean(execution.capability),limitation:execution.limitation||null}}:{}),inventory_report:result.context.inventory_report,deployed_revision:env.RENDER_GIT_COMMIT||null,providers_attempted:0});
   });
   router.post('/analysis/clear',authenticate,protectWrite,json,(req,res)=>{clearAnalysis(req,res);res.json({success:true,analysis_scope:null,scope_generation:generation(req)})});
   // Durable jobs remain opt-in until the production-shaped enqueue/claim/finish/poll

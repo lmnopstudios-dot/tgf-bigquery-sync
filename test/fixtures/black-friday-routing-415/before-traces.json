@@ -1,0 +1,63 @@
+[
+  {
+    "name": "long",
+    "prompt": "Compare the actual 2025 and 2024 Black Friday sale windows in our knowledge base. Show total sales and products sold for each session. For 2025, use Shopify online and split VIP early access from the public sale; there was no in-store campaign. For 2024, use WooCommerce online and Square POS for Soho and TGF East during their documented sale hours. Keep currencies separate.",
+    "local_code_base": "1ea765961522d9e45fffb5b8aa5544538af26c9f",
+    "validation": "local real chat router with fixture providers; no production replay",
+    "helper_scope": null,
+    "knowledge_save": false,
+    "resolved": {
+      "route": null,
+      "subject": "klaviyo_email",
+      "request_kind": null,
+      "operations": [
+        "product_attribution"
+      ],
+      "start": "2025-01-01",
+      "end": "2025-12-31"
+    },
+    "capability": {
+      "outcome": "limitation",
+      "reason": "capability_unavailable"
+    },
+    "fallback": [],
+    "answer": "**Resolved dates:** 2025-01-01 to 2025-12-31, inclusive (Europe/London). Current day excluded.\n\nProduct attribution is unavailable from the current governed campaign bindings. Linked campaign/order/product identities and compatible attribution windows are required. Campaign revenue and purchase totals cannot identify products bought from a campaign; no prior performance report was substituted.",
+    "provider_calls": 0
+  },
+  {
+    "name": "short",
+    "prompt": "Compare Black Friday sales and products sold in 2025 and 2024, broken down by online and in-store. Use the actual sale dates and hours from our knowledge base. Show VIP early access separately from the public sale. Keep currencies separate.",
+    "local_code_base": "1ea765961522d9e45fffb5b8aa5544538af26c9f",
+    "validation": "local real chat router with fixture providers; no production replay",
+    "helper_scope": {
+      "source_policy": "bf-2024-2025-v1",
+      "years": [
+        2025,
+        2024
+      ],
+      "channels": [
+        "instore",
+        "online"
+      ],
+      "products": true
+    },
+    "knowledge_save": true,
+    "resolved": {
+      "route": null,
+      "subject": null,
+      "request_kind": "knowledge_save",
+      "operations": [],
+      "start": null,
+      "end": null
+    },
+    "capability": {
+      "outcome": "execution",
+      "reason": "scope_resolved"
+    },
+    "fallback": [
+      "export_product_priorities"
+    ],
+    "answer": "This product report supports current Online Store published Shopify products, online line sales, website landing sessions and organic search evidence in XLSX. Unsupported request: requested population/channel/dimension has no binding. Please choose a supported scope or format.",
+    "provider_calls": 0
+  }
+]

@@ -1,6 +1,20 @@
 const MONTHS=['january','february','march','april','may','june','july','august','september','october','november','december'];
 const valid=d=>/^\d{4}-\d{2}-\d{2}$/.test(d||'')&&Number.isFinite(Date.parse(d))&&new Date(d+'T00:00:00Z').toISOString().slice(0,10)===d;
-export const explicitKnowledgeSaveIntent=text=>/^(?:please\s+)?(?:save|remember|record|store)\b(?![\s\S]*\b(?:xlsx|spreadsheet|workbook|csv|pdf)\b)|\b(?:save|record|remember|store|add)\b[\s\S]*\b(?:definition|policy|rule|knowledge|record|fact|event)\b|\b(?:save|remember|record) (?:this|that|it)\b|\b(?:propose|create|write)\b[\s\S]*\b(?:timeless|operational|governed)\s+definition\b/i.test(String(text).replace(/\bonline store\b/gi,'online channel'));
+// A knowledge read or a sales-channel noun is not a persistence command.
+// Require an imperative/polite write clause, rather than any occurrence of
+// "store" or "record" before a later knowledge-related noun.
+export function explicitKnowledgeSaveIntent(value){
+ const text=String(value).replace(/\b(?:online|in)[ -]?store\b/gi,'sales channel');
+ const clauses=text.split(/(?:[.!?;\n]|\b(?:and then|then|and|also)\b)\s*/i);
+ const command=/^(?:please\s+)?(?:(?:(?:can|could|would|will)\s+you|i\s+(?:want|would like)\s+you\s+to)\s+(?:please\s+)?)?(save|remember|record|store|add|propose|create|write)\b([\s\S]*)$/i;
+ return clauses.some(clause=>{
+  const m=clause.trim().match(command);if(!m)return false;
+  const verb=m[1].toLowerCase(),object=m[2];
+  if(['save','remember','record','store'].includes(verb))return !/\b(?:xlsx|spreadsheet|workbook|csv|pdf)\b/i.test(object);
+  if(verb==='add')return /^\s+(?:(?:a|an|the|this|that|these|those|new|another)\s+)*(?:definition|policy|rule|knowledge|record|fact|event)\b/i.test(object);
+  return /\b(?:timeless|operational|governed)\s+definition\b/i.test(object);
+ });
+}
 export function pendingClarificationKind(c){
   if(c.promotion_context?.pending_dates||c.promotion_context?.pending_endpoint)return 'promotion';
   if(c.pending_product_candidates?.length&&!c.product_ref)return 'product_selection';

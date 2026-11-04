@@ -9,7 +9,7 @@ export function resolveAnalysisDecision(value, bindings) {
   const question=unsupported?null:clarificationFor(context);
   const fields=question?(context.period_issue?['start_date','end_date']:context.failed_subject_switch?['requested_subject']:context.product_report?.unresolved||context.unresolved_required_fields):[];
   const outcome=unsupported?'limitation':question?'clarification':'execution';
-  return {context,execution,outcome,answer:unsupported||question,fields,reason:unsupported?'capability_unavailable':context.period_issue?'invalid_period':question?'required_input':'scope_resolved',scope_method:context.campaign_request?'entity_metadata':context.date_cutoff?'runtime_calendar':context.start_date?'retained_or_explicit_calendar':'no_calendar_scope'};
+  return {context,execution,outcome,answer:unsupported||question,fields,reason:unsupported?'capability_unavailable':context.period_issue?'invalid_period':question?'required_input':'scope_resolved',scope_method:context.event_scope?'governed_event_knowledge':context.campaign_request?'entity_metadata':context.date_cutoff?'runtime_calendar':context.start_date?'retained_or_explicit_calendar':'no_calendar_scope'};
 }
 
 // Only bounded structural values, never user text, entity names or exceptions.
