@@ -108,7 +108,7 @@ test('real provider composition binds regional warehouse queries, exact store ID
 });
 test('a reversed explicit source recipe cannot silently become the approved split',()=>{
  const c=transitionAnalysisContext(null,'Compare Black Friday 2025 online WooCommerce, 2024 online Shopify, and Square POS in-store.').context;
- assert.notEqual(c.event_scope?.source_policy,'bf-2024-2025-v1');
+ assert.equal(c.tool_route,'compare_historical_events');assert.deepEqual(c.event_scope.unsupported_sources,[{year:2025,channel:'online',source:'woo'},{year:2024,channel:'online',source:'shopify'}]);
 });
 test('unspecified stores cannot create a false same-store conflict',()=>{
  const base={...items.find(r=>/Soho/.test(r.title)),title:'In-store Black Friday public session',content:'7 November 2024, 12:00 PM–8:00 PM.'};const r=resolveSaleSessions([base,{...base,id:'unknown-store',effective_from:'2024-11-08',effective_to:'2024-11-08'}],scope,'2026-11-03');assert.equal(r.issues.filter(i=>i.type==='ambiguous').length,0);assert.equal(r.windows.length,2);assert.ok(r.windows.every(w=>w.location_name===null));

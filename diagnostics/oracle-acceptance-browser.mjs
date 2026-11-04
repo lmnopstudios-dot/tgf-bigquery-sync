@@ -1,3 +1,4 @@
+import {verifyBlackFridayRoutingBrowser} from '../test/helpers/black-friday-routing-browser.js';
 import {verifyBlackFridayBrowser,verifyBlackFridaySessionsBrowser} from '../test/helpers/black-friday-browser.js';
 import {verifyRetainedSpreadsheetBrowser} from '../test/helpers/retained-spreadsheet-browser.js';
 import {verifyFilteredInventoryBrowser} from '../test/helpers/filtered-inventory-browser.js';
@@ -22,6 +23,7 @@ const output=process.env.ORACLE_BROWSER_OUTPUT||'/tmp/oracle-acceptance-browser'
 try{
   await verifyBlackFridayBrowser(browser);
   await verifyBlackFridaySessionsBrowser(browser);
+  await verifyBlackFridayRoutingBrowser(browser);
   await verifyRetainedSpreadsheetBrowser(browser);
   await verifyInventoryReportBrowser(browser);
   await verifyFilteredInventoryBrowser(browser);

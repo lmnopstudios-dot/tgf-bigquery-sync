@@ -1,0 +1,8 @@
+{
+  "verification": "User-provided read-only Render shell and GET / results, 4 November 2026",
+  "shell_revision": "1ea765961522d9e45fffb5b8aa5544538af26c9f",
+  "checkout": "1ea765961522d9e45fffb5b8aa5544538af26c9f",
+  "local": {"status":200,"revision":"1ea765961522d9e45fffb5b8aa5544538af26c9f","service":"TGF BigQuery Sync"},
+  "public": {"status":200,"revision":"1ea765961522d9e45fffb5b8aa5544538af26c9f","service":"TGF BigQuery Sync"},
+  "failed_request_revision": "No request IDs or request-time revision were supplied; both failures reproduce locally on this same revision without cached evidence."
+}
