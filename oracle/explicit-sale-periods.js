@@ -95,16 +95,18 @@ export function explicitSalePeriods(text) {
     const heading = clause.match(/^\d[.)]\s+([^:]+):/),
       year = heading?.[1].match(/20\d{2}/)?.[0];
     if (!heading || !year) return null;
-    const body = clause.slice(heading[0].length),
-      source = /\bWooCommerce\b/i.test(body)
-        ? 'woo'
-        : /\bShopify\b/i.test(body)
-          ? 'shopify'
-          : null;
+    const body = clause.slice(heading[0].length);
+    // Excluded sources do not select the period's provider.
+    const population = body.split(/\b(?:exclude|excluding|except|without)\b/i)[0];
+    const source = /\bWooCommerce\b/i.test(population)
+      ? 'woo'
+      : /\bShopify\b/i.test(population)
+        ? 'shopify'
+        : null;
     let start, end, start_at, end_exclusive;
     const exact = [
       ...body.matchAll(
-        /\b(\d{1,2})\s+([a-z]+)\s+(20\d{2})\s+(\d{2}:\d{2})\s*(GMT|UTC)\b/gi
+        /\b(\d{1,2})\s+([a-z]+)\s+(20\d{2})\s+(?:at\s+)?(\d{1,2}:\d{2})\s*(GMT|UTC)\b/gi
       )
     ];
     if (exact.length === 2 && /exclusive/i.test(body)) {
@@ -129,7 +131,7 @@ export function explicitSalePeriods(text) {
       end_exclusive = saleInstant(nextSaleDay(end));
     }
     const channels =
-      source === 'shopify' && /split\s+Online Store\s*\/\s*POS/i.test(body)
+      source === 'shopify' && /split\s+Online Store\s*(?:\/|and)\s*POS/i.test(body)
         ? ['online', 'instore', 'unknown']
         : ['online'];
     if (!source || (channels.length === 1 && !/online/i.test(body)))

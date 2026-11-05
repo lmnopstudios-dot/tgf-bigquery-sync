@@ -286,3 +286,159 @@ test(
     );
   }
 );
+
+const { liveMultiPeriodPrompt } =
+  await import('./helpers/multi-period-daily-fixture.js');
+const { eventSaleFixture } = await import('./helpers/event-sale-fixture.js');
+const { readFileSync } = await import('node:fs');
+test('retained live job proves fresh 9065a91 parser fallback, not an inferred stale result', () => {
+  const before = JSON.parse(
+    readFileSync(
+      new URL(
+        './fixtures/multi-period-daily-sales/live-before-scope.json',
+        import.meta.url
+      )
+    )
+  );
+  assert.equal(
+    before.submitted_revision,
+    '9065a91bba6ca53aba680e49a559919b5a29c273'
+  );
+  assert.equal(before.execution_revision, before.submitted_revision);
+  assert.equal(before.previous_scope.event_scope, null);
+  assert.equal(before.effective_message_differs, false);
+  assert.equal(before.submitted_scope.grain, null);
+  assert.equal(before.returned_scope.event_name, 'Black Friday');
+  assert.equal(before.answer_heading, '# Black Friday sale periods');
+  const c = transitionAnalysisContext(null, liveMultiPeriodPrompt, {
+    now
+  }).context;
+  assert.equal(c.event_scope.source_policy, 'explicit-sale-periods-v1');
+  assert.equal(c.grain, 'day');
+  assert.deepEqual(
+    c.event_scope.periods.map((p) => [p.source, p.channels]),
+    [
+      ['woo', ['online']],
+      ['shopify', ['online']],
+      ['shopify', ['online', 'instore', 'unknown']]
+    ]
+  );
+  assert.equal(c.event_scope.periods[0].start_at, '2024-11-08T08:00:00Z');
+  assert.equal(c.event_scope.periods[0].end_exclusive, '2024-11-11T00:00:00Z');
+  assert.equal(c.event_scope.periods[1].vip_date, '2025-11-27');
+});
+for (const durable of [false, true])
+  test(
+    'verbatim retained live prompt after old report and recovery, HTTP ' +
+      (durable ? 'jobs' : 'chat'),
+    async (t) => {
+      const f = multiPeriodFixture(),
+        old = eventSaleFixture(),
+        selected = [],
+        stages = [],
+        daily = f.baseline;
+      f.baseline = (message, options) => {
+        const path = options.analysisContext?.event_scope?.periods
+          ? 'daily'
+          : 'legacy';
+        selected.push(path);
+        return (path === 'daily' ? daily : old.baseline)(message, {
+          ...options,
+          onProviderStage: (event) => {
+            stages.push(event);
+            options.onProviderStage?.(event);
+          }
+        });
+      };
+      const h = await acceptanceServer(f, {
+        durable,
+        now,
+        revision: '9065a91bba6ca53aba680e49a559919b5a29c273'
+      });
+      t.after(h.close);
+      const prior = await h.submit(
+        'Compare Black Friday sales 2024 and 2025 online and in-store',
+        { fresh: true, id: 'legacy-before-live' }
+      );
+      if (durable) await h.get('/jobs/' + prior.job_id);
+      const before = f.queries.length;
+      const route = await fetch(h.base + '/analysis/route', {
+        method: 'POST',
+        headers: h.headers,
+        body: JSON.stringify({ message: liveMultiPeriodPrompt })
+      }).then((r) => r.json());
+      assert.equal(route.providers_attempted, 0);
+      assert.equal(route.event_scope.source_policy, 'explicit-sale-periods-v1');
+      assert.equal(f.queries.length, before);
+      const result = await h.submit(liveMultiPeriodPrompt, {
+        id: 'verbatim-live-after-419'
+      });
+      assert.deepEqual(selected, ['legacy', 'daily']);
+      assert.equal(f.queries.length - before, 24);
+      assert.equal(result.analysis_context.grain, 'day');
+      assert.equal(result.evidence.sections.length, 5);
+      assert.ok(
+        result.evidence.sections.every((s) => s.daily.status === 'fulfilled')
+      );
+      assert.deepEqual(
+        durable
+          ? h.jobs.jobs.get(result.job_id).result_json.tools
+          : result.tools,
+        ['search_knowledge', 'event_timestamp_sales', 'event_daily_sales']
+      );
+      assert.ok(
+        stages.some((s) => s.stage === 'event_daily' && s.status === 'success')
+      );
+      assert.match(result.answer, /## May Bank Holiday 2026/);
+      assert.match(result.answer, /2025-11-27 \| VIP/);
+      const shopifyQueries = f.queries.filter(
+        (q) => !q.params.start_at.startsWith('2024')
+      );
+      assert.ok(shopifyQueries.length);
+      assert.ok(shopifyQueries.every((q) => !q.query.includes('metorik_')));
+      if (durable) {
+        const saved = h.jobs.jobs.get(result.job_id);
+        assert.equal(
+          saved.payload_json.original_message,
+          liveMultiPeriodPrompt
+        );
+        assert.equal(
+          saved.payload_json.execution_revision,
+          '9065a91bba6ca53aba680e49a559919b5a29c273'
+        );
+        assert.equal(
+          saved.payload_json.analysis_context.event_scope.source_policy,
+          'explicit-sale-periods-v1'
+        );
+        const n = f.queries.length;
+        const retry = await h.submit(liveMultiPeriodPrompt, {
+          id: 'verbatim-live-after-419'
+        });
+        assert.equal(retry.job_id, result.job_id);
+        assert.equal(f.queries.length, n);
+        const recovered = await h.get('/jobs/' + result.job_id);
+        assert.deepEqual(recovered.evidence, result.evidence);
+        assert.equal(f.queries.length, n);
+      }
+    }
+  );
+test('ordinary at/until and source exclusion wording preserve equivalent independent scope', () => {
+  const scope = transitionAnalysisContext(null, liveMultiPeriodPrompt, { now })
+    .context.event_scope;
+  for (const wording of [
+    liveMultiPeriodPrompt.replace('until 11 November', 'to 11 November'),
+    liveMultiPeriodPrompt.replace('at 08:00', 'at 8:00'),
+    liveMultiPeriodPrompt.replace(
+      'Split Online Store and POS',
+      'Split Online Store/POS'
+    ),
+    liveMultiPeriodPrompt.replace(
+      'Exclude POS and migrated WooCommerce orders.',
+      'Excluding imported WooCommerce orders and POS.'
+    )
+  ])
+    assert.deepEqual(
+      transitionAnalysisContext(null, wording, { now }).context.event_scope,
+      scope
+    );
+});

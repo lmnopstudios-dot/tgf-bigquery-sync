@@ -1,0 +1,11 @@
+Report daily sales for these three sale periods:
+
+1. Black Friday 2024: WooCommerce online, from 8 November 2024 at 08:00 GMT until 11 November 2024 at 00:00 GMT, end exclusive. Exclude POS.
+2. Black Friday 2025: native Shopify Online Store, 27–30 November inclusive. Label 27 November VIP early access and 28–30 November public sale. Exclude POS and migrated WooCommerce orders.
+3. May Bank Holiday 2026: native Shopify, 1–4 May inclusive. Split Online Store and POS, combining POS locations. Keep unknown channels separate.
+
+Use Europe/London calendar days. Show one row per date, channel and currency, with gross sales including tax, refunds and sales after refunds where supported. Include a subtotal for each period, channel and currency. Keep currencies separate.
+
+Use the same sales definitions as the completed reports. Retrieve actual daily evidence; do not allocate period totals across days. Reconcile daily sums against the earlier period totals where retained evidence is available, and explain any differences. Missing data must remain unavailable, not zero.
+
+Retain successful sections if another fails. Do not collect new source data or modify anything.

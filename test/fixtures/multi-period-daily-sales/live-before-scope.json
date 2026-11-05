@@ -1,0 +1,98 @@
+{
+  "job_id": "cd331190-be38-44a4-a9fb-80d1f3ce8a40",
+  "request_id": "702bff19-2e8c-423c-82c2-e2bfc480a2f9",
+  "created_at": {
+    "value": "2026-11-05T11:33:02.508Z"
+  },
+  "submitted_revision": "9065a91bba6ca53aba680e49a559919b5a29c273",
+  "execution_revision": "9065a91bba6ca53aba680e49a559919b5a29c273",
+  "effective_message_differs": false,
+  "previous_scope": {
+    "subject": null,
+    "route": null,
+    "grain": null,
+    "dimensions": [],
+    "event_name": null,
+    "event_scope": null
+  },
+  "submitted_scope": {
+    "subject": "sales",
+    "route": "compare_historical_events",
+    "grain": null,
+    "dimensions": [],
+    "event_name": "Black Friday",
+    "event_scope": {
+      "channels": [
+        "instore",
+        "online"
+      ],
+      "products": false,
+      "years": [
+        2026,
+        2025,
+        2024
+      ]
+    }
+  },
+  "returned_scope": {
+    "subject": "sales",
+    "route": "compare_historical_events",
+    "grain": null,
+    "dimensions": [],
+    "event_name": "Black Friday",
+    "event_scope": {
+      "channels": [
+        "instore",
+        "online"
+      ],
+      "products": false,
+      "years": [
+        2026,
+        2025,
+        2024
+      ]
+    }
+  },
+  "reparsed": {
+    "subject": "sales",
+    "route": "compare_historical_events",
+    "grain": null,
+    "dimensions": [],
+    "event_name": "Black Friday",
+    "event_scope": {
+      "years": [
+        2026,
+        2025,
+        2024
+      ],
+      "channels": [
+        "instore",
+        "online"
+      ],
+      "products": false
+    },
+    "transition": {
+      "continuation": false,
+      "set": [
+        "event_scope",
+        "event_name",
+        "event_count",
+        "tool_route"
+      ],
+      "clear": [],
+      "retain": [],
+      "missing_required_fields": [],
+      "ready_to_execute": true,
+      "applies_to_message": true
+    },
+    "delivery": null,
+    "limitation": null,
+    "providers_attempted": 0
+  },
+  "tools": [
+    "search_knowledge",
+    "canonical_finance",
+    "event_product_lines"
+  ],
+  "answer_heading": "# Black Friday sale periods"
+}

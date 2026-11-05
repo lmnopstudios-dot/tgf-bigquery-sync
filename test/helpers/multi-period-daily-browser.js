@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { acceptanceServer } from './oracle-acceptance.js';
 import {
   multiPeriodFixture,
-  multiPeriodPrompt
+  liveMultiPeriodPrompt
 } from './multi-period-daily-fixture.js';
 export async function verifyMultiPeriodDailyBrowser(browser) {
   for (const width of [390, 1280]) {
@@ -17,7 +17,7 @@ export async function verifyMultiPeriodDailyBrowser(browser) {
       await page.locator('#password').fill('fixture');
       await page.locator('#login-form button').click();
       await page.locator('#app').waitFor({ state: 'visible' });
-      await page.locator('#message').fill(multiPeriodPrompt);
+      await page.locator('#message').fill(liveMultiPeriodPrompt);
       await page.locator('#send').click();
       await page.waitForFunction(
         () =>
