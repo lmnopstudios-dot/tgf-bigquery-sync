@@ -69,6 +69,9 @@ export function createEventSaleProvider({bigquery,project,deadlineAt=Infinity,si
  const timestamp=createEventTimestampProvider({bigquery,project,run});
  return {
   forRequest:options=>createEventSaleProvider({bigquery,project,deadlineAt:options.deadlineAt,signal:options.signal}),
+  async daily(window){
+   return timestamp.totals(window,'day');
+  },
   async totals(window){
    if(window.source_selection)return timestamp.totals(window);
    if(window.location_name)throw fail('EVENT_LOCATION_FINANCE_UNSUPPORTED');

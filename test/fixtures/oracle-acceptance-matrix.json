@@ -584,6 +584,10 @@
   ],
   "regression_suites": [
     {
+      "file": "test/oracle-multi-period-daily.test.js",
+      "reason": "Exact multi-period daily sales through real chat, independent sources, dates, partial failures and reconciliation."
+    },
+    {
       "file": "test/oracle-entity-relative-campaigns.test.js",
       "covers": [
         "last 3 campaigns",
