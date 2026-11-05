@@ -1,0 +1,186 @@
+{
+  "origin": "Local reproduction on main 6b3318f; not retained production state",
+  "attachment_status": "Supplied sediment pointer was not visible to file reader; actual retained jobs and totals unavailable.",
+  "exact_fix_request": {
+    "error_code": "INVALID_ANALYSIS_CONTEXT",
+    "error": "Invalid event sale scope"
+  },
+  "embedded_report_request": {
+    "context": {
+      "event_scope": {
+        "years": [
+          2026,
+          2025,
+          2024
+        ],
+        "channels": [
+          "instore",
+          "online"
+        ],
+        "products": false
+      },
+      "stock_scope": null,
+      "inventory_report": null,
+      "journey_scope": null,
+      "requested_formats": [],
+      "request_detail": null,
+      "population_scope": null,
+      "period_issue": null,
+      "requested_operations": [],
+      "numeric_operation": null,
+      "analysis_type": "ecommerce",
+      "metrics": [
+        "sales"
+      ],
+      "start_date": null,
+      "end_date": null,
+      "requested_end_period": null,
+      "grain": null,
+      "comparison_type": null,
+      "comparison_start_date": null,
+      "comparison_end_date": null,
+      "currencies": [],
+      "channel": null,
+      "channel_breakdown": true,
+      "location": null,
+      "platform": null,
+      "geography": null,
+      "customer_segment": null,
+      "product_ref": null,
+      "filters": [],
+      "sort": null,
+      "limit": null,
+      "report_section": null,
+      "output_preference": null,
+      "partial_period": false,
+      "date_cutoff": null,
+      "current_day_included": false,
+      "unresolved_required_fields": [],
+      "tool_route": "compare_historical_events",
+      "request_kind": null,
+      "advisory_topic": null,
+      "retention_windows": null,
+      "retention_baseline": false,
+      "retention_second_products": false,
+      "journey_intent": null,
+      "entry_product_classification": null,
+      "subsequent_product_classification": null,
+      "excluded_product_titles": [],
+      "include_unclassified_products": false,
+      "first_order_semantic": null,
+      "cohort_entry_start": null,
+      "cohort_entry_end": null,
+      "observation_end": null,
+      "minimum_order_sequence": null,
+      "maximum_order_sequence": null,
+      "within_days": null,
+      "journey_group_by": null,
+      "event_name": "Black Friday",
+      "event_count": 3,
+      "requested_subject": "sales",
+      "included_periods": [],
+      "exclusions": [],
+      "contextual_event_mentions": [],
+      "placement_context": null,
+      "entity_query": null,
+      "explanation_requested": false,
+      "pending_product_candidates": [],
+      "product_report": null,
+      "email_report_kind": null,
+      "social_scope": null,
+      "failed_subject_switch": null,
+      "campaign_request": null,
+      "native_metrics": [],
+      "dimensions": [],
+      "time_zone": "Europe/London",
+      "source_store": null,
+      "ranking_metric": null,
+      "ranking_direction": null,
+      "promotion_context": null
+    },
+    "plan": {
+      "version": 1,
+      "operation": "named_event_comparison",
+      "subject": "sales",
+      "entities": {
+        "selected": null,
+        "candidates": [],
+        "query": null
+      },
+      "population": {
+        "catalogue_filter": null,
+        "selection": null,
+        "filters": []
+      },
+      "scope": {
+        "platform": null,
+        "source_store": null,
+        "channel": null,
+        "channel_breakdown": true,
+        "currencies": [],
+        "currency": null
+      },
+      "metrics": [
+        "sales"
+      ],
+      "metric_definitions": {
+        "sales": "Source-native operational order total less source refund total, after each source's established eligible-order status rules.",
+        "orders": "Source-qualified eligible order count; source-native status rules; phases counted once."
+      },
+      "numeric_operation": null,
+      "requested_operations": [],
+      "dimensions": [],
+      "grain": null,
+      "dates": {
+        "start_date": null,
+        "end_date": null,
+        "timezone": "Europe/London",
+        "cutoff": null,
+        "partial_period": false,
+        "current_day_included": false,
+        "basis": null
+      },
+      "event_selection": {
+        "name": "Black Friday",
+        "count": 3,
+        "completion": "completed",
+        "period_structure": "disjoint_campaigns",
+        "phases": "nested",
+        "sale_scope": {
+          "years": [
+            2026,
+            2025,
+            2024
+          ],
+          "channels": [
+            "instore",
+            "online"
+          ],
+          "products": false
+        }
+      },
+      "comparison": {
+        "type": null,
+        "start_date": null,
+        "end_date": null,
+        "included_periods": []
+      },
+      "promotion": null,
+      "exclusions": [],
+      "ranking": {
+        "metric": null,
+        "direction": "desc"
+      },
+      "presentation": {
+        "formats": [],
+        "format": null,
+        "columns": [],
+        "limit": null
+      },
+      "pending": {
+        "fields": [],
+        "campaign": null
+      }
+    }
+  }
+}

@@ -1,3 +1,4 @@
+import {renderDailySales,reconcileDailySales,assertDailySales} from './event-daily-sales.js';
 import {resolveLegacyEventSaleWindows} from './event-sale-windows-v1.js';
 import {resolveSaleSessions} from './event-sale-sessions.js';
 import {resolveHistoricalEvents} from './historical-event-comparison.js';
@@ -12,10 +13,10 @@ const valid=d=>/^\d{4}-\d{2}-\d{2}$/.test(d||'')&&Number.isFinite(Date.parse(d+'
 export {resolveSaleSessions as resolveEventSaleWindows} from './event-sale-sessions.js';
 const resolveEventSaleWindows=resolveSaleSessions;
 
-function totalsRows(report,ch){
+function totalsRows(report,ch,daily=false){
  const groups=new Map();
  for(const r of report.rows||[]){if(channel(r)!==ch&&channel(r)!=='unknown')continue;
-  const key=JSON.stringify([r.source,r.channel,r.currency]),g=groups.get(key)||{source:r.source,channel:channel(r),currency:r.currency,sales:null,gross_sales:null,refunds:null,refund_events:null,observed:false};
+  const key=JSON.stringify([...(daily?[r.date?.value||r.date]:[]),r.source,r.channel,r.currency]),g=groups.get(key)||{...(daily?{date:r.date?.value||r.date}:{}),source:r.source,channel:channel(r),currency:r.currency,sales:null,gross_sales:null,refunds:null,refund_events:null,observed:false};
   const currencyKnown=/^[A-Z]{3}$/.test(r.currency||'');const amount=currencyKnown?num(r.amount):null;
   // A net total includes only observed sale/refund components; a missing
   // currency amount never turns into zero.
@@ -23,9 +24,10 @@ function totalsRows(report,ch){
   if(r.transaction_type==='sale')g.gross_sales=amount;
   if(r.transaction_type==='refund'){g.refunds=currencyKnown?num(r.amount):null;g.refund_events=num(r.refund_events);}
   groups.set(key,g);
- }return [...groups.values()].map(g=>({...g,sales:report.requires_refund_evidence&&(g.refunds==null||(report.components||[]).some(c=>c.measure==='refunds'&&c.status!=='fulfilled'&&(g.source==='Square'&&c.source==='square'||g.source==='Shopify Online Store'&&c.source==='shopify'||g.source==='WooCommerce '+c.source)))?null:g.sales}));
+ }return [...groups.values()].map(g=>({...g,sales:report.requires_refund_evidence&&(g.refunds==null||(report.components||[]).some(c=>c.measure==='refunds'&&c.status!=='fulfilled'&&(g.source==='Square'&&c.source==='square'||g.source.startsWith('Shopify')&&c.source==='shopify'||g.source==='WooCommerce '+c.source)))?null:g.sales}));
 }
 export function renderEventSaleReport(e){
+ if(e.requested_scope.sale_scope.periods)return renderIndependentDailyReport(e);
  const native=e.requested_scope.sale_scope.source_policy==='shopify-native-sale-v1';
  const label=c=>native?({online:'Online Store',instore:'POS (all participating recorded locations)',unknown:'Unknown channel'}[c]||c):c;
  const lines=[`# ${e.requested_scope.event} sale periods`,native?'Sales definition: original native Shopify order totals including tax and recorded order discounts, before refunds, less successful refund events dated within the same window and presentment currency. Eligible orders require a successful sale/capture and no cancellation. Product line sales exclude shipping and use recorded discounted line amounts; units are original line quantities. Coverage is unverified; currencies are separate.':'Sales definition: canonical finance gross sales less accounting refunds, including tax, within one currency. Refunds use the refund transaction date. Product line sales are separate source-native operational measures; they do not reconcile to finance totals. Currencies are never converted or combined.'];
@@ -81,6 +83,33 @@ export function renderEventSaleReport(e){
  const conflict=globalUnsupported?null:e.resolved_scope.issues.find(i=>i.type==='ambiguous'&&!(e.requested_scope.sale_scope.unsupported_sources||[]).some(s=>s.year===i.year&&s.channel===i.channel));if(conflict&&!midnight)lines.push(`Which of the conflicting confirmed ${conflict.year} ${conflict.channel} sale records (${conflict.event_ids.join(', ')}) should define that section?`);
  return lines.join('\n');
 }
+function renderIndependentDailyReport(e){
+ const lines=['# Daily sales by requested sale period','Observed successful source-native order gross including tax and recorded discounts, less successful refund events within the same half-open period and currency. Native Shopify excludes known Matrixify imports. Currency amounts are never converted or combined. Coverage is unverified.'];
+ for(const p of e.requested_scope.sale_scope.periods){
+  lines.push('\n## '+p.name);
+  for(const section of e.sections.filter(s=>s.window.period_id===p.id)){
+   const w=section.window;
+   lines.push('\n### '+({online:'Online Store',instore:'POS',unknown:'Unknown channel'}[w.channel]),w.start_at+' ≤ transaction time < '+w.end_exclusive+'; Europe/London daily grouping; source '+w.source_selection+'.');
+   lines.push(...renderDailySales(section,totalsRows));
+   lines.push('Period subtotal (independently queried, coverage unverified):');
+   if(section.totals.status==='fulfilled'){
+    lines.push('', '| Source | Channel | Currency | Gross incl. tax | Refund value (signed) | Sales after refunds |','|---|---|---|---:|---:|---:|');
+    const subtotalRows=totalsRows(section.totals.evidence,w.channel);
+    for(const r of subtotalRows)lines.push(`| ${r.source} | ${r.channel} | ${r.currency} | ${value(r.gross_sales)} | ${value(r.refunds)} | ${value(r.sales)} |`);
+    lines.push('');
+    for(const currency of new Set(subtotalRows.map(r=>r.currency))){
+     const rows=subtotalRows.filter(r=>r.currency===currency);
+     const subtotal=rows.every(r=>num(r.sales)!=null)?rows.reduce((sum,r)=>sum+r.sales,0):null;
+     lines.push(w.channel+' '+currency+' period subtotal after refunds: '+value(subtotal,currency)+'.');
+    }
+    lines.push('');
+    for(const c of section.totals.evidence.components||[])if(c.status!=='fulfilled')lines.push(`Period ${c.source} ${c.measure} unavailable: ${c.code}.`);
+   }else lines.push('Period subtotal unavailable: '+section.totals.code+'.');
+  }
+ }
+ lines.push('Prior canonical-finance or different-window totals cannot be reconciled to these source-native timestamp measures without identical retained definitions and bounds. They are not substituted or allocated. Woo JP has no timestamp binding; its evidence remains unavailable.');
+ return lines.join('\n');
+}
 // A clarification may reuse only this same retained report with the endpoint
 // choice changed. Never reuse another population, source policy or date scope.
 export function compatibleEventClarificationEvidence(prior,context){
@@ -99,12 +128,12 @@ export function createEventSaleReportService({knowledgeService,provider,now=Date
   const retained=compatibleEventClarificationEvidence(options.recentEvidence,context);
   const stage=e=>options.onProviderStage?.(e),asOf=retained?.evidence.requested_scope.as_of||new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/London'}).format(new Date(now()));
   stage({stage:'event_knowledge_resolution',status:'started',years:scope.years,channels:scope.channels});
-  const searches=scope.shopify_window?[{text:context.event_name,tags:[],status:'confirmed'},{text:null,tags:['bank-holiday'],status:'confirmed'}]:[{text:null,tags:['black-friday'],status:null},{text:context.event_name,tags:[],status:'confirmed'}];
+  const searches=scope.periods?[{text:null,tags:['black-friday'],status:'confirmed'},{text:null,tags:['bank-holiday'],status:'confirmed'}]:scope.shopify_window?[{text:context.event_name,tags:[],status:'confirmed'},{text:null,tags:['bank-holiday'],status:'confirmed'}]:[{text:null,tags:['black-friday'],status:null},{text:context.event_name,tags:[],status:'confirmed'}];
   const reads=retained?[]:await Promise.allSettled(searches.map(s=>knowledgeService.searchKnowledge({...s,knowledge_type:'event',start_date:null,end_date:null,limit:50})));
   const items=retained?retained.evidence.knowledge_entries:[...new Map(reads.flatMap(r=>r.status==='fulfilled'?(r.value.items||[]):[]).map(r=>[r.id,r])).values()];
   const resolved=resolveEventSaleWindows(items,scope,asOf),sections=[];
   stage({stage:'event_knowledge_resolution',status:retained?'retained':reads.every(r=>r.status==='rejected')?'failed':'success',window_count:resolved.windows.length,issue_count:resolved.issues.length,failed_reads:reads.filter(r=>r.status==='rejected').length});
-  stage({stage:'event_capability_selection',status:'resolved',metrics:context.metrics,source_grains:['canonical_transaction_date','source_product_line'],currency_policy:'separate'});
+  stage({stage:'event_capability_selection',status:'resolved',metrics:context.metrics,source_grains:scope.periods?['source_transaction_date','London_day']:['canonical_transaction_date','source_product_line'],currency_policy:'separate'});
   const execute=async(operation,w)=>{
    if(options.clarificationKind==='event_endpoint'&&!retained&&!(w.year===2024&&w.channel==='online'))return {status:'failed',code:'EVENT_RETAINED_SECTION_UNAVAILABLE',missing:['The prior section is not retained in this session; it was not automatically replayed.']};
    const unsupported=(scope.unsupported_fields||[]).filter(f=>f!=='behavioural_metrics');
@@ -112,10 +141,10 @@ export function createEventSaleReportService({knowledgeService,provider,now=Date
    if(unsupported.length||sourceUnavailable){stage({stage:'event_'+operation,status:'unsupported',window_id:w.id,fields:unsupported,...(sourceUnavailable?{source_selection:'unbound'}:{})});return {status:'failed',code:sourceUnavailable?'EVENT_REQUESTED_SOURCE_UNSUPPORTED':'EVENT_REQUESTED_POPULATION_UNSUPPORTED',unsupported_fields:unsupported};}
    if(w.time_issue){stage({stage:'event_'+operation,status:'unsupported',window_id:w.id,code:w.time_issue});return {status:'failed',code:w.time_issue};}
    stage({stage:'event_'+operation,status:'started',window_id:w.id,start_date:w.start_date,end_date:w.end_date,channel:w.channel});try{const evidence=await activeProvider[operation](w);if(stableAnalyticalJSON(evidence.period)!==stableAnalyticalJSON(w))throw Object.assign(Error('Scope mismatch'),{code:'EVIDENCE_SCOPE_MISMATCH'});stage({stage:'event_'+operation,status:'success',window_id:w.id});return {status:'fulfilled',evidence};}catch(error){stage({stage:'event_'+operation,status:'failed',window_id:w.id,code:code(error)});return {status:'failed',code:code(error),...(error.missing?.length?{missing:error.missing}:{})};}};
-  for(const window of resolved.windows){const saved=retained?.evidence.sections.find(s=>stableAnalyticalJSON(s.window)===stableAnalyticalJSON(window));if(saved){sections.push(saved);stage({stage:'event_section_retained',status:'retained',window_id:window.id});continue;}const operations=await Promise.all([execute('totals',window),...(scope.products?[execute('products',window)]:[])]);sections.push({window,totals:operations[0],...(scope.products?{products:operations[1]}:{})});}
+  for(const window of resolved.windows){const saved=retained?.evidence.sections.find(s=>stableAnalyticalJSON(s.window)===stableAnalyticalJSON(window));if(saved){sections.push(saved);stage({stage:'event_section_retained',status:'retained',window_id:window.id});continue;}const operations=await Promise.all([execute('totals',window),...(scope.periods?[execute('daily',window)]:[]),...(scope.products?[execute('products',window)]:[])]);const section={window,totals:operations[0],...(scope.products?{products:operations[1]}:{})};if(scope.periods){section.daily=operations[1];section.reconciliation=reconcileDailySales(section.daily,section.totals);}sections.push(section);}
   const evidence={kind:'historical_event_comparison',version:'event_sale_report.v2',subject:'sales',metrics:context.metrics,requested_scope:{event:context.event_name,count:context.event_count,sale_scope:scope,as_of:asOf,currencies:'separate'},knowledge_entries:items,knowledge_retrieval:retained?retained.evidence.knowledge_retrieval:reads.map((r,i)=>({scope:searches[i],status:r.status,...(r.status==='rejected'?{code:'EVENT_KNOWLEDGE_RETRIEVAL_FAILED'}:{returned_count:r.value.items?.length||0})})),resolved_scope:resolved,sections,periods:resolved.windows.map(w=>({event_id:w.id,start_date:w.start_date,end_date:w.end_date,channel:w.channel})),complete:false};
   stage({stage:'event_answer_completeness',status:'partial',successful_totals:sections.filter(s=>s.totals.status==='fulfilled').length,successful_products:sections.filter(s=>s.products?.status==='fulfilled').length,coverage_verified:false});
-  return {answer:renderEventSaleReport(evidence),analysis_context:context,evidence,partial:true,tools:['search_knowledge','canonical_finance','event_product_lines']};
+  return {answer:renderEventSaleReport(evidence),analysis_context:context,evidence,partial:true,tools:scope.periods?['search_knowledge','event_timestamp_sales','event_daily_sales']:['search_knowledge','canonical_finance','event_product_lines']};
  };
 }
 export function assertEventSaleEvidence(context,e){
@@ -133,6 +162,7 @@ export function assertEventSaleEvidence(context,e){
    if(s.totals.status==='fulfilled'&&s.totals.evidence.rows.some(r=>!matches(r.source)))fail();
    if(s.products?.status==='fulfilled'&&s.products.evidence.rows.some(r=>!matches(r.namespace)))fail();
   }
+  if(context.event_scope.periods)assertDailySales(s);
   if(w.shopify_channel){
    if(s.totals.status==='fulfilled'&&s.totals.evidence.rows.some(r=>channel(r)!==w.shopify_channel))fail();
    if(s.products?.status==='fulfilled'){

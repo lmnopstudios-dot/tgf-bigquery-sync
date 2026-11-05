@@ -1,0 +1,14 @@
+Fix this exact multi-period daily-sales request. Trace retained scope, planning, provider selection and rendering; do not assume the cause.
+
+The required independent report sections are:
+1. Black Friday 2024: WooCommerce online only, 8 Nov 2024 08:00 GMT to 11 Nov 2024 00:00 GMT exclusive. No POS.
+2. Black Friday 2025: native Shopify Online Store only, 27–30 Nov inclusive. Label 27 Nov VIP and 28–30 Nov public.
+3. May Bank Holiday 2026: native Shopify, 1–4 May inclusive Europe/London, split Online Store/POS; unknown channels separate.
+
+Return actual daily rows by London date, channel and currency, plus period subtotals. Do not allocate period totals across days.
+
+The failed response omitted daily grouping, treated 2026 as Black Friday, restored excluded POS sections, lost the explicit 2024 endpoint and included a WooCommerce refund in the Shopify-only 2025 subtotal. Fix source filtering consistently for orders, refunds and subtotals.
+
+Reconcile the daily sums with retained period evidence using identical definitions, explaining discrepancies. Preserve unsupported refunds as unavailable. Retain independent successes.
+
+Add this exact request as a real-chat regression covering all three periods, date boundaries, source exclusions, daily grouping and partial failures. Preserve existing reports and scope validation. Open a focused PR; no production writes or automatic report replay.
