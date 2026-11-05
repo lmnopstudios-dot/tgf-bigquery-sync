@@ -84,3 +84,11 @@ export function multiPeriodFixture({
     })
   };
 }
+
+export const liveMultiPeriodPrompt = readFileSync(
+  new URL(
+    '../fixtures/multi-period-daily-sales/live-request.txt',
+    import.meta.url
+  ),
+  'utf8'
+).trimEnd();

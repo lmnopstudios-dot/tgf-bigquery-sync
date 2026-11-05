@@ -1,0 +1,306 @@
+{
+  "fixture_only": true,
+  "sales_warehouse_replayed": false,
+  "traces": [
+    {
+      "revision": "9065a91bba6ca53aba680e49a559919b5a29c273",
+      "entrypoint": "POST /api/oracle/chat",
+      "prior_report": true,
+      "selected_paths": [
+        "legacy",
+        "legacy"
+      ],
+      "context": {
+        "grain": null,
+        "event_name": "Black Friday",
+        "event_scope": {
+          "endpoint_choice": "end_of_day",
+          "years": [
+            2026,
+            2025,
+            2024
+          ],
+          "channels": [
+            "instore",
+            "online"
+          ],
+          "products": false
+        }
+      },
+      "stored_scope": null,
+      "stored_revision": null,
+      "daily_section_count": 0,
+      "heading": "# Black Friday sale periods",
+      "fixture_queries": 0,
+      "stages": [
+        "event_knowledge_resolution",
+        "event_capability_selection",
+        "event_totals",
+        "event_answer_completeness"
+      ]
+    },
+    {
+      "revision": "9065a91bba6ca53aba680e49a559919b5a29c273",
+      "entrypoint": "POST /api/oracle/jobs",
+      "prior_report": true,
+      "selected_paths": [
+        "legacy",
+        "legacy"
+      ],
+      "context": {
+        "grain": null,
+        "event_name": "Black Friday",
+        "event_scope": {
+          "endpoint_choice": "end_of_day",
+          "years": [
+            2026,
+            2025,
+            2024
+          ],
+          "channels": [
+            "instore",
+            "online"
+          ],
+          "products": false
+        }
+      },
+      "stored_scope": {
+        "endpoint_choice": "end_of_day",
+        "years": [
+          2026,
+          2025,
+          2024
+        ],
+        "channels": [
+          "instore",
+          "online"
+        ],
+        "products": false
+      },
+      "stored_revision": "9065a91bba6ca53aba680e49a559919b5a29c273",
+      "daily_section_count": 0,
+      "heading": "# Black Friday sale periods",
+      "fixture_queries": 0,
+      "stages": [
+        "event_knowledge_resolution",
+        "event_capability_selection",
+        "event_totals",
+        "event_answer_completeness"
+      ]
+    },
+    {
+      "revision": "local-fix",
+      "entrypoint": "POST /api/oracle/chat",
+      "prior_report": true,
+      "selected_paths": [
+        "legacy",
+        "daily"
+      ],
+      "context": {
+        "grain": "day",
+        "event_name": "Requested sale periods",
+        "event_scope": {
+          "periods": [
+            {
+              "id": "period-1",
+              "name": "Black Friday 2024",
+              "start_date": "2024-11-08",
+              "end_date": "2024-11-10",
+              "start_at": "2024-11-08T08:00:00Z",
+              "end_exclusive": "2024-11-11T00:00:00Z",
+              "source": "woo",
+              "channels": [
+                "online"
+              ]
+            },
+            {
+              "id": "period-2",
+              "name": "Black Friday 2025",
+              "start_date": "2025-11-27",
+              "end_date": "2025-11-30",
+              "start_at": "2025-11-27T00:00:00Z",
+              "end_exclusive": "2025-12-01T00:00:00Z",
+              "source": "shopify",
+              "channels": [
+                "online"
+              ],
+              "vip_date": "2025-11-27"
+            },
+            {
+              "id": "period-3",
+              "name": "May Bank Holiday 2026",
+              "start_date": "2026-05-01",
+              "end_date": "2026-05-04",
+              "start_at": "2026-04-30T23:00:00Z",
+              "end_exclusive": "2026-05-04T23:00:00Z",
+              "source": "shopify",
+              "channels": [
+                "online",
+                "instore",
+                "unknown"
+              ]
+            }
+          ],
+          "source_policy": "explicit-sale-periods-v1",
+          "years": [
+            2026,
+            2025,
+            2024
+          ],
+          "channels": [
+            "instore",
+            "online",
+            "unknown"
+          ],
+          "products": false
+        }
+      },
+      "stored_scope": null,
+      "stored_revision": null,
+      "daily_section_count": 5,
+      "heading": "# Daily sales by requested sale period",
+      "fixture_queries": 24,
+      "stages": [
+        "event_knowledge_resolution",
+        "event_capability_selection",
+        "event_totals",
+        "event_answer_completeness",
+        "event_daily"
+      ]
+    },
+    {
+      "revision": "local-fix",
+      "entrypoint": "POST /api/oracle/jobs",
+      "prior_report": true,
+      "selected_paths": [
+        "legacy",
+        "daily"
+      ],
+      "context": {
+        "grain": "day",
+        "event_name": "Requested sale periods",
+        "event_scope": {
+          "periods": [
+            {
+              "id": "period-1",
+              "name": "Black Friday 2024",
+              "start_date": "2024-11-08",
+              "end_date": "2024-11-10",
+              "start_at": "2024-11-08T08:00:00Z",
+              "end_exclusive": "2024-11-11T00:00:00Z",
+              "source": "woo",
+              "channels": [
+                "online"
+              ]
+            },
+            {
+              "id": "period-2",
+              "name": "Black Friday 2025",
+              "start_date": "2025-11-27",
+              "end_date": "2025-11-30",
+              "start_at": "2025-11-27T00:00:00Z",
+              "end_exclusive": "2025-12-01T00:00:00Z",
+              "source": "shopify",
+              "channels": [
+                "online"
+              ],
+              "vip_date": "2025-11-27"
+            },
+            {
+              "id": "period-3",
+              "name": "May Bank Holiday 2026",
+              "start_date": "2026-05-01",
+              "end_date": "2026-05-04",
+              "start_at": "2026-04-30T23:00:00Z",
+              "end_exclusive": "2026-05-04T23:00:00Z",
+              "source": "shopify",
+              "channels": [
+                "online",
+                "instore",
+                "unknown"
+              ]
+            }
+          ],
+          "source_policy": "explicit-sale-periods-v1",
+          "years": [
+            2026,
+            2025,
+            2024
+          ],
+          "channels": [
+            "instore",
+            "online",
+            "unknown"
+          ],
+          "products": false
+        }
+      },
+      "stored_scope": {
+        "periods": [
+          {
+            "id": "period-1",
+            "name": "Black Friday 2024",
+            "start_date": "2024-11-08",
+            "end_date": "2024-11-10",
+            "start_at": "2024-11-08T08:00:00Z",
+            "end_exclusive": "2024-11-11T00:00:00Z",
+            "source": "woo",
+            "channels": [
+              "online"
+            ]
+          },
+          {
+            "id": "period-2",
+            "name": "Black Friday 2025",
+            "start_date": "2025-11-27",
+            "end_date": "2025-11-30",
+            "start_at": "2025-11-27T00:00:00Z",
+            "end_exclusive": "2025-12-01T00:00:00Z",
+            "source": "shopify",
+            "channels": [
+              "online"
+            ],
+            "vip_date": "2025-11-27"
+          },
+          {
+            "id": "period-3",
+            "name": "May Bank Holiday 2026",
+            "start_date": "2026-05-01",
+            "end_date": "2026-05-04",
+            "start_at": "2026-04-30T23:00:00Z",
+            "end_exclusive": "2026-05-04T23:00:00Z",
+            "source": "shopify",
+            "channels": [
+              "online",
+              "instore",
+              "unknown"
+            ]
+          }
+        ],
+        "source_policy": "explicit-sale-periods-v1",
+        "years": [
+          2026,
+          2025,
+          2024
+        ],
+        "channels": [
+          "instore",
+          "online",
+          "unknown"
+        ],
+        "products": false
+      },
+      "stored_revision": null,
+      "daily_section_count": 5,
+      "heading": "# Daily sales by requested sale period",
+      "fixture_queries": 24,
+      "stages": [
+        "event_knowledge_resolution",
+        "event_capability_selection",
+        "event_totals",
+        "event_answer_completeness",
+        "event_daily"
+      ]
+    }
+  ]
+}
