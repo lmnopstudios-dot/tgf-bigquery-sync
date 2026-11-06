@@ -1,3 +1,4 @@
+import {loyaltyMarkdown} from './loyalty-presentation.js';
 import {collaborationJourneyMarkdown} from './collaboration-product-journeys.js';
 import {productJourneyMarkdown} from './product-journeys.js';
 import { retentionMarkdown } from './cohort-retention.js';
@@ -108,6 +109,7 @@ function deviceTrend(e) {
 function businessView(e) {
   if(e.kind==='governed_basket_composition')return basketBusinessView(e);
   if(e.kind==='governed_order_values')return orderValueBusinessView(e);
+  if(e.kind==='governed_loyalty')return [loyaltyMarkdown(e).join('\n')];
   if(e.kind==='governed_weekday_sales')return weekdayBusinessView(e);
   if(e.kind==='governed_social')return socialBusinessView(e);
   if(['governed_product_sales','governed_channel_sales','governed_sales_explanation'].includes(e.kind)) return sales(e);
