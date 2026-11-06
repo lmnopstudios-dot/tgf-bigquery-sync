@@ -1,3 +1,4 @@
+import {assertLoyaltyEvidence} from './loyaltylion.js';
 import {isSpreadsheetFollowup} from './spreadsheet-intent.js';
 import {exportRetainedSpreadsheet,rememberSpreadsheetEvidence,spreadsheetEvidenceFor} from './retained-spreadsheet.js';
 import {inventoryReportConfigKey,filteredInventoryScope} from './inventory-report-config.js';
@@ -37,7 +38,7 @@ const governedBaseline = async ({message,baselineOverview,baselineOptions}) => {
 // route names, so a deterministic transition cannot silently become orphaned.
 export const ANALYSIS_ROUTE_DISPATCHERS = Object.freeze(Object.fromEntries(ANALYSIS_TOOL_ROUTES.map(route=>[
   route,
-  ['compare_historical_events','analyze_customer_journey','get_population_conversion','get_order_value_analysis','get_shopify_inventory_by_location','get_meta_performance','get_instagram_performance','get_woocommerce_device_conversion','get_governed_device_conversion','get_general_sales_analysis','get_daily_sales_analysis','export_product_priorities','get_klaviyo_email_performance','get_klaviyo_click_purchase_opportunities','compare_klaviyo_email_with_shopify_referrer'].includes(route)
+  ['get_loyalty_report','compare_historical_events','analyze_customer_journey','get_population_conversion','get_order_value_analysis','get_shopify_inventory_by_location','get_meta_performance','get_instagram_performance','get_woocommerce_device_conversion','get_governed_device_conversion','get_general_sales_analysis','get_daily_sales_analysis','export_product_priorities','get_klaviyo_email_performance','get_klaviyo_click_purchase_opportunities','compare_klaviyo_email_with_shopify_referrer'].includes(route)
     ? governedBaseline
     : baselineThenAgent
 ])));
@@ -69,6 +70,7 @@ export function assertResolvedAnalysisContext(submittedValue,resolvedValue){
 export function assertEvidenceAgreement(contextValue,evidence,requestMessage=null){
 
   const context=contextValue==null?null:validateAnalysisContext(contextValue);
+  if(context?.requested_subject==='loyalty'&&evidence)assertLoyaltyEvidence(context,evidence);
   if(context?.inventory_report&&evidence){if(inventoryReportConfigKey(context.inventory_report)!==inventoryReportConfigKey(evidence.inventory_report)||requestMessage&&filteredInventoryScope(requestMessage)?.inventory_report&&inventoryReportConfigKey(filteredInventoryScope(requestMessage).inventory_report)!==inventoryReportConfigKey(context.inventory_report))throw Object.assign(new Error('Inventory filters differ from resolved request'),{code:'EVIDENCE_SCOPE_MISMATCH',failed_stage:'evidence_validation'});}
   if(context?.stock_scope&&evidence&&(context.entity_query!==evidence.entity_query||JSON.stringify(context.stock_scope)!==JSON.stringify(evidence.stock_scope)))throw Object.assign(new Error('Stock scope differs from evidence'),{code:'EVIDENCE_SCOPE_MISMATCH'});
   assertPlanAgreement(context,evidence);
