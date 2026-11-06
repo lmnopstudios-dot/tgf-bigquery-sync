@@ -1382,6 +1382,10 @@
     {
       "file": "test/oracle-loyalty.test.js",
       "purpose": "Real interactive/durable/direct chat, retained membership/current tiers versus historical limitations, dated point movements, claims versus actual use, exact Shopify linkage SQL, partial failures, scope refinements and authenticated retained XLSX without replay."
+    },
+    {
+      "file": "test/oracle-markdown.test.js",
+      "purpose": "Shared visible rendering preserves intraword underscores in LoyaltyLion partial-failure codes, governed sales identifiers, table fields and retained details while retaining explicit emphasis and safe HTML/link handling."
     }
   ]
 }

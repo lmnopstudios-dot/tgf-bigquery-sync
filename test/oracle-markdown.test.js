@@ -19,3 +19,12 @@ test('supporting evidence renders as collapsed safe details with full daily tabl
   const html=render('Finding\n\n<details>\n<summary>Daily provenance and supporting evidence</summary>\n\n| Date | Source |\n|---|---|\n| 2025-11-18 | Shopify |\n\n<script>bad()</script>\n</details>');assert.match(html,/<details><summary>Daily provenance/);assert.doesNotMatch(html,/<details[^>]*open|<script>/);assert.match(html,/<table>/);assert.match(html,/2025-11-18/);
   const malformed=render('<details>\n<summary onclick=bad()>Unsafe</summary>\n</details>');assert.doesNotMatch(malformed,/<details>|<summary onclick/);
 });
+
+
+test('report identifiers preserve underscores across partial failures, tables and retained detail',()=>{
+  const html=render('Unavailable: LOYALTY_SECTION_ACCESS_UNAVAILABLE.\n\n| approved_points | source_order_id |\n|---|---|\n| 90 | gid://shopify/Order/1 |\n\n<details>\n<summary>Evidence</summary>\n\nORDER_VALUE_RETRIEVAL_FAILED; café_déjà_vu and member__tier__name.\n</details>');
+  for(const value of ['LOYALTY_SECTION_ACCESS_UNAVAILABLE','approved_points','source_order_id','ORDER_VALUE_RETRIEVAL_FAILED','café_déjà_vu','member__tier__name'])assert(html.includes(value),value);
+  assert.doesNotMatch(html,/<em>|<strong>/);
+  const emphasis=render('_Limited_ and __Important__ and *kept* and **bold**');
+  assert.match(emphasis,/<em>Limited<\/em>/);assert.match(emphasis,/<strong>Important<\/strong>/);assert.match(emphasis,/<em>kept<\/em>/);assert.match(emphasis,/<strong>bold<\/strong>/);
+});
