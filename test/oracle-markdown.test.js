@@ -28,3 +28,12 @@ test('report identifiers preserve underscores across partial failures, tables an
   const emphasis=render('_Limited_ and __Important__ and *kept* and **bold**');
   assert.match(emphasis,/<em>Limited<\/em>/);assert.match(emphasis,/<strong>Important<\/strong>/);assert.match(emphasis,/<em>kept<\/em>/);assert.match(emphasis,/<strong>bold<\/strong>/);
 });
+
+
+test('report tables directly after status or definition prose remain tables',()=>{
+  const html=render('## Membership\nEvidence status: fulfilled.\n| approved_points | profiles |\n| --- | --- |\n| 90 | 4 |\n\n## Sales\nRetained order evidence.\n| source_order_id | amount |\n| --- | --- |\n| 123 | 20 |');
+  assert.equal((html.match(/<table>/g)||[]).length,2);
+  assert.match(html,/<p>Evidence status: fulfilled.<\/p>/);
+  assert.match(html,/<th scope="col">approved_points<\/th>/);
+  assert.match(html,/<th scope="col">source_order_id<\/th>/);
+});
