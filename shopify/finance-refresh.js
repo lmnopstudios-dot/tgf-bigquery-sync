@@ -117,16 +117,24 @@ async function insertBatches(table,data,destination){
     catch(error){
       // PartialFailureError can have an empty message. Never serialize row,
       // message, location, or the original exception: they may contain PII.
-      const reasons=new Set();
+      const reasons=new Set(), fields=new Set(), categories=new Set();
+      const allowedFields=new Set((DESTINATION_SCHEMAS[destination]||[]).map(f=>f.name));
       const inspect=entry=>{
         if(entry?.reason!=null)reasons.add(safeInsertReasons.has(entry.reason)?entry.reason:'unrecognised');
+        if(allowedFields.has(entry?.location))fields.add(entry.location);
+        const message=typeof entry?.message==='string'?entry.message.slice(0,1000):'';
+        if(/no such field|unknown field|unrecognized field/i.test(message))categories.add('unknown_field');
+        else if(/required field|missing required|null value.*required/i.test(message))categories.add('required_field');
+        else if(/too large|too long|exceeds.{0,40}(size|length|bytes)/i.test(message))categories.add('size_limit');
+        else if(/precision|scale|out of range/i.test(message))categories.add('numeric_range_or_precision');
+        else if(/cannot parse|invalid (?:value|numeric|timestamp)|type mismatch|could not convert/i.test(message))categories.add('invalid_value_or_type');
       };
       for(const entry of Array.isArray(error?.errors)?error.errors:[]){
         inspect(entry);
         for(const detail of Array.isArray(entry?.errors)?entry.errors:[])inspect(detail);
       }
       inspect(error);
-      throw new Error(`Shopify finance staging_insert failed; table=${destination}; batch=${i/500+1}; reasons=${[...reasons].sort().join(',')||'unavailable'}`);
+      throw new Error(`Shopify finance staging_insert failed; table=${destination}; batch=${i/500+1}; reasons=${[...reasons].sort().join(',')||'unavailable'}; fields=${[...fields].sort().slice(0,10).join(',')||'unavailable'}; categories=${[...categories].sort().join(',')||'unavailable'}`);
     }
   }
 }
