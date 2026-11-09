@@ -157,3 +157,28 @@ test('preflight retains bounded stage-specific destination write-readiness failu
     assert.equal(error.code,'DESTINATION_NOT_WRITE_READY');assert.match(error.message,/active streaming buffer/);assert.ok(error.message.length<400);return true;
   });
 });
+
+test('empty-message partial refund insert failure records only safe reasons and never promotes',async()=>{
+  const calls=[],deleted=[],inserted=[];
+  const error=Object.assign(new Error(''),{name:'PartialFailureError',errors:[
+    {row:{customer:'private-customer'},errors:[{reason:'invalid',message:'private refund payload',location:'private-field'}]},
+    {row:{},errors:[{reason:'stopped'},{reason:'private-unknown-reason'}]}
+  ]});
+  const bigquery={
+    query:async options=>{calls.push(options);return [[]]},
+    dataset:()=>({table:name=>({
+      insert:async()=>{inserted.push(name);if(name.startsWith('_order_refunds_'))throw error},
+      delete:async()=>{deleted.push(name)}
+    })})
+  };
+  const message='Shopify finance staging_insert failed; table=order_refunds; batch=1; reasons=invalid,stopped,unrecognised';
+  await assert.rejects(promote({
+    bigquery,project:'p',dataset:'d',runId:'run-1',start:'2026-10-19T12:17:24Z',
+    end:'2026-11-09T14:17:25Z',data:{orders:[{}],financials:[{}],refunds:[{},{}]},pages:49,mode:'scheduled',runRecorded:true
+  }),{message});
+  assert.deepEqual(inserted,['_order_locations_run_1','_order_financials_run_1','_order_refunds_run_1']);
+  assert.deepEqual(deleted,inserted);
+  assert.equal(calls.find(x=>x.query.includes("SET status='failed'")).params.error,message);
+  assert.ok(!calls.some(x=>x.query.startsWith('BEGIN TRANSACTION')));
+  assert.doesNotMatch(JSON.stringify(calls),/private-/);
+});
