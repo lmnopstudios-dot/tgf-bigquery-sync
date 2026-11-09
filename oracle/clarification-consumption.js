@@ -3,7 +3,11 @@ const valid=d=>/^\d{4}-\d{2}-\d{2}$/.test(d||'')&&Number.isFinite(Date.parse(d))
 // A knowledge read or a sales-channel noun is not a persistence command.
 // Require an imperative/polite write clause, rather than any occurrence of
 // "store" or "record" before a later knowledge-related noun.
+export function knowledgeReviewIntent(value){
+ return /^(?:please\s+)?(?:(?:can|could|would)\s+you\s+)?(?:prepare|draft|propose|create|show)\s+(?:(?:me|a|an|the|new|proposed)\s+)*(?:knowledge[- ]base\s+(?:entry|record|proposal)|knowledge\s+(?:entry|record|proposal))\b[^.?!;\n]*\b(?:for (?:my |human )?review|for (?:me to )?(?:save|approve)|to review)\b/i.test(String(value).trim());
+}
 export function explicitKnowledgeSaveIntent(value){
+ if(knowledgeReviewIntent(value))return true;
  const text=String(value).replace(/\b(?:online|in)[ -]?store\b/gi,'sales channel');
  const clauses=text.split(/(?:[.!?;\n]|\b(?:and then|then|and|also)\b)\s*/i);
  const command=/^(?:please\s+)?(?:(?:(?:can|could|would|will)\s+you|i\s+(?:want|would like)\s+you\s+to)\s+(?:please\s+)?)?(save|remember|record|store|add|propose|create|write)\b([\s\S]*)$/i;

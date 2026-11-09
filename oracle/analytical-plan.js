@@ -1,3 +1,4 @@
+import {isPhasedSale} from './explicit-sale-periods.js';
 import { ONLINE_COUNTRY_SALES_SEMANTICS } from './online-country-sales.js';
 import { scopeAgreementError } from './scope-diagnostics.js';
 import { normalizeCatalogueFilter } from './product-catalogue-filter.js';
@@ -24,14 +25,21 @@ export function planOperation(c) {
 // A projection over existing validated context, not another competing intent store.
 // Delivery preferences are deliberately independent of the analytical subject.
 export function resolveAnalyticalPlan(c) {
-  const report=c?.product_report, campaign=c?.campaign_request;
+  const report=c?.product_report, campaign=c?.campaign_request, phased=isPhasedSale(c?.event_scope?.periods);
   return {
     ...(c?.inventory_report?{inventory_report:c.inventory_report}:{}),version:1, operation:planOperation(c), subject:c?.requested_subject||null,
     entities:{...(campaign?{scope:{entity_type:campaign.entity_type,source:campaign.source,rule:campaign.selector,count:campaign.count,offset:campaign.offset,ordering_basis:campaign.ordering_basis,account:campaign.account,channel:campaign.channel,selection_cutoff:campaign.cutoff,compare_previous:campaign.compare_previous},selected_entities:campaign.selected_entities,comparison_entities:campaign.comparison_entities,reporting_windows:campaign.reporting_windows}:{}),selected:campaign?.selected||c?.product_ref||null,candidates:campaign?.candidates||c?.pending_product_candidates||[],query:c?.entity_query||campaign?.name||null},
     population:{catalogue_filter:normalizeCatalogueFilter(report?.catalogue_filter),selection:report?.population||null,filters:c?.filters||[],...(c?.population_scope?{geography_role:c.population_scope.geography_role,country:c.population_scope.country,...(c.population_scope.comparison_country?{comparison_country:c.population_scope.comparison_country}:{})}: {})},
     scope:{...(c?.journey_scope?{journey_scope:c.journey_scope}:{}),...(c?.tool_route==='get_order_value_analysis'?{shipping_destination:c?.geography||null}:{}),platform:c?.platform||null,source_store:c?.source_store||null,channel:c?.channel||null,channel_breakdown:Boolean(c?.channel_breakdown),currencies:c?.currencies||[],currency:report?.currency||null},
     metrics:c?.inventory_report?['available_inventory']:report?.metrics||campaign?.requested_metrics||(c?.native_metrics?.length?c.native_metrics:c?.metrics)||[],
-    metric_definitions:c?.event_scope?.shopify_window?{sales:'Native Shopify successful order gross including tax less successful refund events, each in its transaction window and presentment currency; no currency conversion.',products:'Recorded discounted product line sales and original units, before refund allocation; top products per channel and currency.'}:c?.tool_route==='compare_historical_events'?{sales:ONLINE_COUNTRY_SALES_SEMANTICS.metric,orders:'Source-qualified eligible order count; source-native status rules; phases counted once.'}:report?Object.fromEntries(report.metrics.map(m=>[m,PRODUCT_REPORT_CAPABILITIES[m]?.definition||'Unavailable'])):c?.tool_route==='get_daily_sales_analysis'?DAILY_SALES_CONTRACT.definitions:null,
+    metric_definitions:phased?{
+      sales:'Original eligible native Shopify order gross including tax and recorded discounts, less successful refunds; presentment currency.',
+      refunds:'Successful refund amounts by refund event date, in presentment currency.',
+      orders:'Unique eligible orders by London order date, after excluding cancelled orders and known Matrixify imports.',
+      aov:'Original eligible gross divided by the matching order count, before refunds.',
+      products:'Original sold units and recorded discounted line sales before refund allocation.',
+      ...(c.event_scope.sessions?{conversion:'Native Online Store human sessions with a completed checkout divided by native human sessions over compatible London calendar days.'}:{})
+    }:c?.event_scope?.shopify_window?{sales:'Native Shopify successful order gross including tax less successful refund events, each in its transaction window and presentment currency; no currency conversion.',products:'Recorded discounted product line sales and original units, before refund allocation; top products per channel and currency.'}:c?.tool_route==='compare_historical_events'?{sales:ONLINE_COUNTRY_SALES_SEMANTICS.metric,orders:'Source-qualified eligible order count; source-native status rules; phases counted once.'}:report?Object.fromEntries(report.metrics.map(m=>[m,PRODUCT_REPORT_CAPABILITIES[m]?.definition||'Unavailable'])):c?.tool_route==='get_daily_sales_analysis'?DAILY_SALES_CONTRACT.definitions:null,
     ...(c?.analysis_type==='customer_journey'?{cohort:{entry_start:c.cohort_entry_start,entry_end:c.cohort_entry_end,observation_end:c.observation_end,first_order_semantic:c.first_order_semantic,entry_classification:c.entry_product_classification,group_by:c.journey_group_by,within_days:c.within_days,windows:c.retention_windows||null,baseline:Boolean(c.retention_baseline),second_products:Boolean(c.retention_second_products),sort:c.sort||null}}:{}),
     ...(c?.request_detail?{request_detail:c.request_detail}:{}),numeric_operation:c?.numeric_operation||null,requested_operations:c?.requested_operations||[],
     dimensions:c?.dimensions||[],grain:c?.inventory_report?'variant':c?.grain||null,
