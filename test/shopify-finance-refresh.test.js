@@ -161,8 +161,8 @@ test('preflight retains bounded stage-specific destination write-readiness failu
 test('empty-message partial refund insert failure records only safe reasons and never promotes',async()=>{
   const calls=[],deleted=[],inserted=[];
   const error=Object.assign(new Error(''),{name:'PartialFailureError',errors:[
-    {row:{customer:'private-customer'},errors:[{reason:'invalid',message:'private refund payload',location:'private-field'}]},
-    {row:{},errors:[{reason:'stopped'},{reason:'private-unknown-reason'}]}
+    {row:{customer:'private-customer'},errors:[{reason:'invalid',message:'Invalid numeric value: private refund payload',location:'refund_total_shop'}]},
+    {row:{},errors:[{reason:'stopped'},{reason:'private-unknown-reason',location:'private-field'}]}
   ]});
   const bigquery={
     query:async options=>{calls.push(options);return [[]]},
@@ -171,7 +171,7 @@ test('empty-message partial refund insert failure records only safe reasons and 
       delete:async()=>{deleted.push(name)}
     })})
   };
-  const message='Shopify finance staging_insert failed; table=order_refunds; batch=1; reasons=invalid,stopped,unrecognised';
+  const message='Shopify finance staging_insert failed; table=order_refunds; batch=1; reasons=invalid,stopped,unrecognised; fields=refund_total_shop; categories=invalid_value_or_type';
   await assert.rejects(promote({
     bigquery,project:'p',dataset:'d',runId:'run-1',start:'2026-10-19T12:17:24Z',
     end:'2026-11-09T14:17:25Z',data:{orders:[{}],financials:[{}],refunds:[{},{}]},pages:49,mode:'scheduled',runRecorded:true
