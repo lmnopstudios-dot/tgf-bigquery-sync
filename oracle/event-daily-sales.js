@@ -145,7 +145,7 @@ export function renderDailySales(section, groupRows) {
   lines.push('');
   return lines;
 }
-export function assertDailySales(section) {
+export function assertDailySales(section, {daily=true}={}) {
   const fail = () => {
     throw Object.assign(Error('Daily sale evidence mismatch'), {
       code: 'EVIDENCE_SCOPE_MISMATCH'
@@ -155,6 +155,10 @@ export function assertDailySales(section) {
     w = section.window;
   if (section.totals.status === 'fulfilled')
     assertReportRows(section.totals.evidence, w, fail);
+  if (!daily) {
+    if (d || section.reconciliation) fail();
+    return;
+  }
   if (!d || !['fulfilled', 'failed'].includes(d.status)) fail();
   if (
     stableAnalyticalJSON(section.reconciliation) !==

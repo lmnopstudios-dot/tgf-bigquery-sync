@@ -1,3 +1,4 @@
+import {isPhasedSale} from './explicit-sale-periods.js';
 import {eventSaleScopePatch,validateEventSaleScope} from './event-sale-scope.js';
 import {isSpreadsheetFollowup} from './spreadsheet-intent.js';
 import {parseCurrentStock,validateStockScope} from './current-stock-scope.js';
@@ -146,7 +147,8 @@ function transitionContext(existing, message, {now=Date.now(),reportContext=null
   if(reportContext) base=initializeFromReportContext(base,reportContext);
   const eventScope=eventSaleScopePatch(text,base,now);
   if(eventScope){
-    const context=validateAnalysisContext({...emptyAnalysisContext(),requested_subject:'sales',analysis_type:'ecommerce',metrics:['sales',...(eventScope.products?['products']:[])],tool_route:'compare_historical_events',event_name:eventScope.periods?'Requested sale periods':eventScope.shopify_window?.name||'Black Friday',event_count:eventScope.years.length,event_scope:eventScope,...(eventScope.periods?{grain:'day',dimensions:['day','channel']}:{}),...(eventScope.shopify_window?{platform:'shopify',start_date:eventScope.shopify_window.start_date,end_date:eventScope.shopify_window.end_date,limit:eventScope.shopify_window.product_limit,filters:['exclude_matrixify']}:{}),channel:eventScope.channels.length===1?eventScope.channels[0]:null,channel_breakdown:eventScope.channels.length>1,time_zone:'Europe/London'});
+    const phased=isPhasedSale(eventScope.periods);
+    const context=validateAnalysisContext({...emptyAnalysisContext(),requested_subject:'sales',analysis_type:'ecommerce',metrics:['sales',...(eventScope.products?['products']:[]),...(phased?['refunds','orders',...(eventScope.sessions?['conversion']:[])]:[])],tool_route:'compare_historical_events',event_name:phased?'Black Friday':eventScope.periods?'Requested sale periods':eventScope.shopify_window?.name||'Black Friday',event_count:eventScope.years.length,event_scope:eventScope,...(eventScope.periods?{grain:'day',dimensions:['day','channel']}:{}),...(phased?{platform:'shopify',filters:['exclude_matrixify']}:{}),...(eventScope.shopify_window?{platform:'shopify',start_date:eventScope.shopify_window.start_date,end_date:eventScope.shopify_window.end_date,limit:eventScope.shopify_window.product_limit,filters:['exclude_matrixify']}:{}),channel:eventScope.channels.length===1?eventScope.channels[0]:null,channel_breakdown:eventScope.channels.length>1,time_zone:'Europe/London'});
     return {context,transition:{continuation:Boolean(base.event_scope),set:['event_scope','event_name','event_count','tool_route'],clear:[],retain:[],missing_required_fields:[],ready_to_execute:true,applies_to_message:true}};
   }
   const scoped=requestedJourneyScope(text,base.journey_scope);

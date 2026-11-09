@@ -73,7 +73,7 @@ Titles must be concise descriptions, never raw instructions/questions. Use only 
 export function needsProposalGeneration(message) {
   const text = String(message || '').trim();
   if (!text) return false;
-  const intent=messageIntent(text);if(intent.document)return intent.knowledge;
+  const intent=messageIntent(text);if(intent.knowledge||intent.document)return intent.knowledge;
   if (/\b(?:save|remember|record|store|add)\b/i.test(text)) return true;
   // This deliberately recognizes only obvious, wholly non-assertive requests. It
   // does not attempt extraction; everything ambiguous is left to the model.

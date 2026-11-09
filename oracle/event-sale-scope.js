@@ -1,25 +1,28 @@
-import {explicitSalePeriods,validateSalePeriods} from './explicit-sale-periods.js';
+import {explicitSalePeriods,explicitPhasedSale,isPhasedSale,validatePhasedSale,validateSalePeriods} from './explicit-sale-periods.js';
 import {explicitShopifySaleScope,validateShopifySaleWindow} from './sale-window-scope.js';
 import {messageIntent} from './message-intent.js';
 export function validateEventSaleScope(v){
  if(v==null)return null;
- if(!v||Object.keys(v).some(k=>!['years','channels','products','source_policy','endpoint_choice','unsupported_fields','unsupported_sources','shopify_window','periods'].includes(k))||!Array.isArray(v.years)||!v.years.length||v.years.length>5||v.years.some(y=>!Number.isInteger(y)||y<2000||y>2100)||!Array.isArray(v.channels)||!v.channels.length||v.channels.some(c=>!['online','instore',...(['shopify-native-sale-v1','explicit-sale-periods-v1'].includes(v.source_policy)?['unknown']:[])].includes(c))||typeof v.products!=='boolean')throw Object.assign(Error('Invalid event sale scope'),{code:'INVALID_ANALYSIS_CONTEXT'});
+ if(!v||Object.keys(v).some(k=>!['years','channels','products','source_policy','endpoint_choice','unsupported_fields','unsupported_sources','shopify_window','periods','sessions'].includes(k))||!Array.isArray(v.years)||!v.years.length||v.years.length>5||v.years.some(y=>!Number.isInteger(y)||y<2000||y>2100)||!Array.isArray(v.channels)||!v.channels.length||v.channels.some(c=>!['online','instore',...(['shopify-native-sale-v1','explicit-sale-periods-v1'].includes(v.source_policy)?['unknown']:[])].includes(c))||typeof v.products!=='boolean')throw Object.assign(Error('Invalid event sale scope'),{code:'INVALID_ANALYSIS_CONTEXT'});
  if(v.source_policy!=null&&!['bf-2024-2025-v1','shopify-native-sale-v1','explicit-sale-periods-v1'].includes(v.source_policy)||v.endpoint_choice!=null&&!['start_of_day','end_of_day'].includes(v.endpoint_choice))throw Object.assign(Error('Invalid event source or endpoint selection'),{code:'INVALID_ANALYSIS_CONTEXT'});
  if(v.source_policy==='shopify-native-sale-v1')validateShopifySaleWindow(v.shopify_window);else if(v.shopify_window!=null)throw Object.assign(Error('Unbound sale window'),{code:'INVALID_ANALYSIS_CONTEXT'});
  if(v.source_policy==='explicit-sale-periods-v1'){
   const periods=validateSalePeriods(v.periods);
-  if(v.products||JSON.stringify([...new Set(periods.map(p=>Number(p.start_date.slice(0,4))))].sort())!==JSON.stringify([...v.years].sort())||JSON.stringify([...new Set(periods.flatMap(p=>p.channels))].sort())!==JSON.stringify([...v.channels].sort()))throw Object.assign(Error('Unbound period populations'),{code:'INVALID_ANALYSIS_CONTEXT'});
- }else if(v.periods!=null)throw Object.assign(Error('Unbound explicit periods'),{code:'INVALID_ANALYSIS_CONTEXT'});
+  const phased=isPhasedSale(periods);
+  if(phased)validatePhasedSale(periods);
+  if(v.sessions!=null&&(!phased||v.sessions!==true))throw Object.assign(Error('Unbound session metrics'),{code:'INVALID_ANALYSIS_CONTEXT'});
+  if(v.products!==phased||JSON.stringify([...new Set(periods.map(p=>Number(p.start_date.slice(0,4))))].sort())!==JSON.stringify([...v.years].sort())||JSON.stringify([...new Set(periods.flatMap(p=>p.channels))].sort())!==JSON.stringify([...v.channels].sort()))throw Object.assign(Error('Unbound period populations'),{code:'INVALID_ANALYSIS_CONTEXT'});
+ }else if(v.periods!=null||v.sessions!=null)throw Object.assign(Error('Unbound explicit periods'),{code:'INVALID_ANALYSIS_CONTEXT'});
  const fields=['geography','currency','product_population','behavioural_metrics'];
  if(v.unsupported_fields!=null&&(!Array.isArray(v.unsupported_fields)||v.unsupported_fields.some(f=>!fields.includes(f))))throw Object.assign(Error('Invalid event capability fields'),{code:'INVALID_ANALYSIS_CONTEXT'});
  if(v.unsupported_sources!=null&&(!Array.isArray(v.unsupported_sources)||v.unsupported_sources.length>10||v.unsupported_sources.some(s=>!s||Object.keys(s).some(k=>!['year','channel','source'].includes(k))||!v.years.includes(s.year)||!['online','instore'].includes(s.channel)||!['shopify','woo','square'].includes(s.source))))throw Object.assign(Error('Invalid event source request'),{code:'INVALID_ANALYSIS_CONTEXT'});
- return {...(v.periods?{periods:validateSalePeriods(v.periods)}:{}),...(v.shopify_window?{shopify_window:validateShopifySaleWindow(v.shopify_window)}:{}),...(v.unsupported_fields?.length?{unsupported_fields:[...new Set(v.unsupported_fields)]}:{}),...(v.unsupported_sources?.length?{unsupported_sources:v.unsupported_sources.map(s=>({...s}))}:{}),...(v.source_policy?{source_policy:v.source_policy}:{}),...(v.endpoint_choice?{endpoint_choice:v.endpoint_choice}:{}),years:[...new Set(v.years)].sort((a,b)=>b-a),channels:[...new Set(v.channels)].sort(),products:v.products};
+ return {...(v.sessions?{sessions:true}:{}),...(v.periods?{periods:validateSalePeriods(v.periods)}:{}),...(v.shopify_window?{shopify_window:validateShopifySaleWindow(v.shopify_window)}:{}),...(v.unsupported_fields?.length?{unsupported_fields:[...new Set(v.unsupported_fields)]}:{}),...(v.unsupported_sources?.length?{unsupported_sources:v.unsupported_sources.map(s=>({...s}))}:{}),...(v.source_policy?{source_policy:v.source_policy}:{}),...(v.endpoint_choice?{endpoint_choice:v.endpoint_choice}:{}),years:[...new Set(v.years)].sort((a,b)=>b-a),channels:[...new Set(v.channels)].sort(),products:v.products};
 }
 export function eventSaleScopePatch(message,base,now){
  const intent=messageIntent(message),t=intent.instruction;
  if(intent.blocked||/\b(?:exclude|excluding|except|outside|not)\s+(?:a\s+|the\s+)?black\s+friday\b|context only|as context/i.test(t))return null;
- const periods=explicitSalePeriods(t);
- if(periods)return validateEventSaleScope({source_policy:'explicit-sale-periods-v1',periods,years:[...new Set(periods.map(p=>Number(p.start_date.slice(0,4))))],channels:[...new Set(periods.flatMap(p=>p.channels))],products:false});
+ const periods=explicitPhasedSale(t)||explicitSalePeriods(t);
+ if(periods)return validateEventSaleScope({source_policy:'explicit-sale-periods-v1',periods,years:[...new Set(periods.map(p=>Number(p.start_date.slice(0,4))))],channels:[...new Set(periods.flatMap(p=>p.channels))],products:isPhasedSale(periods),...(isPhasedSale(periods)&&/\b(?:sessions?|conversion)\b/i.test(t)?{sessions:true}:{})});
  const explicit=explicitShopifySaleScope(t,base);if(explicit)return validateEventSaleScope(explicit);
  const top=base?.event_scope?.shopify_window&&t.match(/^(?:please\s+)?(?:(?:show|list)\s+)?(?:the\s+)?top\s+(\d{1,3})\s+products?(?:\s+per\s+(?:channel|currency)|[.!\s])*$/i);
  if(top)return validateEventSaleScope({...base.event_scope,shopify_window:{...base.event_scope.shopify_window,product_limit:Number(top[1])},products:true});

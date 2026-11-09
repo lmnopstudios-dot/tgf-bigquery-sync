@@ -1,3 +1,5 @@
+import {isPhasedSale} from './explicit-sale-periods.js';
+import {renderPhasedSale,assertPhasedSaleProducts,phasedSaleSessions,assertPhasedSaleSessions} from './phased-sale-report.js';
 import {renderDailySales,reconcileDailySales,assertDailySales} from './event-daily-sales.js';
 import {resolveLegacyEventSaleWindows} from './event-sale-windows-v1.js';
 import {resolveSaleSessions} from './event-sale-sessions.js';
@@ -21,12 +23,13 @@ function totalsRows(report,ch,daily=false){
   // A net total includes only observed sale/refund components; a missing
   // currency amount never turns into zero.
   g.sales=!g.observed?amount:g.sales==null||amount==null?null:g.sales+amount;g.observed=true;
-  if(r.transaction_type==='sale')g.gross_sales=amount;
+  if(r.transaction_type==='sale'){g.gross_sales=amount;g.orders=num(r.transaction_count);}
   if(r.transaction_type==='refund'){g.refunds=currencyKnown?num(r.amount):null;g.refund_events=num(r.refund_events);}
   groups.set(key,g);
  }return [...groups.values()].map(g=>({...g,sales:report.requires_refund_evidence&&(g.refunds==null||(report.components||[]).some(c=>c.measure==='refunds'&&c.status!=='fulfilled'&&(g.source==='Square'&&c.source==='square'||g.source.startsWith('Shopify')&&c.source==='shopify'||g.source==='WooCommerce '+c.source)))?null:g.sales}));
 }
 export function renderEventSaleReport(e){
+ if(isPhasedSale(e.requested_scope.sale_scope.periods))return renderPhasedSale(e,totalsRows);
  if(e.requested_scope.sale_scope.periods)return renderIndependentDailyReport(e);
  const native=e.requested_scope.sale_scope.source_policy==='shopify-native-sale-v1';
  const label=c=>native?({online:'Online Store',instore:'POS (all participating recorded locations)',unknown:'Unknown channel'}[c]||c):c;
@@ -121,18 +124,19 @@ export function compatibleEventClarificationEvidence(prior,context){
   return prior;
  }catch{return null;}
 }
-export function createEventSaleReportService({knowledgeService,provider,now=Date.now}){
+export function createEventSaleReportService({knowledgeService,provider,onlineSessions,now=Date.now}){
  return async(message,options={})=>{
   const context=options.analysisContext,scope=context?.event_scope;if(!scope)return null;
+  const phased=isPhasedSale(scope.periods);
   const activeProvider=provider.forRequest?provider.forRequest(options):provider;
   const retained=compatibleEventClarificationEvidence(options.recentEvidence,context);
   const stage=e=>options.onProviderStage?.(e),asOf=retained?.evidence.requested_scope.as_of||new Intl.DateTimeFormat('en-CA',{timeZone:'Europe/London'}).format(new Date(now()));
   stage({stage:'event_knowledge_resolution',status:'started',years:scope.years,channels:scope.channels});
-  const searches=scope.periods?[{text:null,tags:['black-friday'],status:'confirmed'},{text:null,tags:['bank-holiday'],status:'confirmed'}]:scope.shopify_window?[{text:context.event_name,tags:[],status:'confirmed'},{text:null,tags:['bank-holiday'],status:'confirmed'}]:[{text:null,tags:['black-friday'],status:null},{text:context.event_name,tags:[],status:'confirmed'}];
+  const searches=phased?[]:scope.periods?[{text:null,tags:['black-friday'],status:'confirmed'},{text:null,tags:['bank-holiday'],status:'confirmed'}]:scope.shopify_window?[{text:context.event_name,tags:[],status:'confirmed'},{text:null,tags:['bank-holiday'],status:'confirmed'}]:[{text:null,tags:['black-friday'],status:null},{text:context.event_name,tags:[],status:'confirmed'}];
   const reads=retained?[]:await Promise.allSettled(searches.map(s=>knowledgeService.searchKnowledge({...s,knowledge_type:'event',start_date:null,end_date:null,limit:50})));
   const items=retained?retained.evidence.knowledge_entries:[...new Map(reads.flatMap(r=>r.status==='fulfilled'?(r.value.items||[]):[]).map(r=>[r.id,r])).values()];
   const resolved=resolveEventSaleWindows(items,scope,asOf),sections=[];
-  stage({stage:'event_knowledge_resolution',status:retained?'retained':reads.every(r=>r.status==='rejected')?'failed':'success',window_count:resolved.windows.length,issue_count:resolved.issues.length,failed_reads:reads.filter(r=>r.status==='rejected').length});
+  stage({stage:'event_knowledge_resolution',status:retained?'retained':!searches.length?'request_supplied':reads.every(r=>r.status==='rejected')?'failed':'success',window_count:resolved.windows.length,issue_count:resolved.issues.length,failed_reads:reads.filter(r=>r.status==='rejected').length});
   stage({stage:'event_capability_selection',status:'resolved',metrics:context.metrics,source_grains:scope.periods?['source_transaction_date','London_day']:['canonical_transaction_date','source_product_line'],currency_policy:'separate'});
   const execute=async(operation,w)=>{
    if(options.clarificationKind==='event_endpoint'&&!retained&&!(w.year===2024&&w.channel==='online'))return {status:'failed',code:'EVENT_RETAINED_SECTION_UNAVAILABLE',missing:['The prior section is not retained in this session; it was not automatically replayed.']};
@@ -141,10 +145,23 @@ export function createEventSaleReportService({knowledgeService,provider,now=Date
    if(unsupported.length||sourceUnavailable){stage({stage:'event_'+operation,status:'unsupported',window_id:w.id,fields:unsupported,...(sourceUnavailable?{source_selection:'unbound'}:{})});return {status:'failed',code:sourceUnavailable?'EVENT_REQUESTED_SOURCE_UNSUPPORTED':'EVENT_REQUESTED_POPULATION_UNSUPPORTED',unsupported_fields:unsupported};}
    if(w.time_issue){stage({stage:'event_'+operation,status:'unsupported',window_id:w.id,code:w.time_issue});return {status:'failed',code:w.time_issue};}
    stage({stage:'event_'+operation,status:'started',window_id:w.id,start_date:w.start_date,end_date:w.end_date,channel:w.channel});try{const evidence=await activeProvider[operation](w);if(stableAnalyticalJSON(evidence.period)!==stableAnalyticalJSON(w))throw Object.assign(Error('Scope mismatch'),{code:'EVIDENCE_SCOPE_MISMATCH'});stage({stage:'event_'+operation,status:'success',window_id:w.id});return {status:'fulfilled',evidence};}catch(error){stage({stage:'event_'+operation,status:'failed',window_id:w.id,code:code(error)});return {status:'failed',code:code(error),...(error.missing?.length?{missing:error.missing}:{})};}};
-  for(const window of resolved.windows){const saved=retained?.evidence.sections.find(s=>stableAnalyticalJSON(s.window)===stableAnalyticalJSON(window));if(saved){sections.push(saved);stage({stage:'event_section_retained',status:'retained',window_id:window.id});continue;}const operations=await Promise.all([execute('totals',window),...(scope.periods?[execute('daily',window)]:[]),...(scope.products?[execute('products',window)]:[])]);const section={window,totals:operations[0],...(scope.products?{products:operations[1]}:{})};if(scope.periods){section.daily=operations[1];section.reconciliation=reconcileDailySales(section.daily,section.totals);}sections.push(section);}
-  const evidence={kind:'historical_event_comparison',version:'event_sale_report.v2',subject:'sales',metrics:context.metrics,requested_scope:{event:context.event_name,count:context.event_count,sale_scope:scope,as_of:asOf,currencies:'separate'},knowledge_entries:items,knowledge_retrieval:retained?retained.evidence.knowledge_retrieval:reads.map((r,i)=>({scope:searches[i],status:r.status,...(r.status==='rejected'?{code:'EVENT_KNOWLEDGE_RETRIEVAL_FAILED'}:{returned_count:r.value.items?.length||0})})),resolved_scope:resolved,sections,periods:resolved.windows.map(w=>({event_id:w.id,start_date:w.start_date,end_date:w.end_date,channel:w.channel})),complete:false};
+  const sessions=scope.sessions?phasedSaleSessions(onlineSessions,scope.periods.find(p=>p.phase==='full'),options):null;
+  const collect=async window=>{
+   const saved=retained?.evidence.sections.find(s=>stableAnalyticalJSON(s.window)===stableAnalyticalJSON(window));
+   if(saved){stage({stage:'event_section_retained',status:'retained',window_id:window.id});return saved;}
+   const daily=Boolean(scope.periods&&(!phased||window.phase==='vip'||window.phase==='public'));
+   const [totals,day,products]=await Promise.all([
+    execute('totals',window),daily?execute('daily',window):null,scope.products?execute('products',window):null
+   ]);
+   return {window,totals,...(products?{products}:{}),...(daily?{daily:day,reconciliation:reconcileDailySales(day,totals)}:{})};
+  };
+  if(phased){
+   // Keep the current sale ahead of optional baselines, with bounded reads.
+   for(let i=0;i<resolved.windows.length;i+=2)sections.push(...await Promise.all(resolved.windows.slice(i,i+2).map(collect)));
+  }else for(const window of resolved.windows)sections.push(await collect(window));
+  const evidence={kind:'historical_event_comparison',version:'event_sale_report.v2',subject:'sales',metrics:context.metrics,requested_scope:{event:context.event_name,count:context.event_count,sale_scope:scope,as_of:asOf,currencies:'separate'},knowledge_entries:items,knowledge_retrieval:retained?retained.evidence.knowledge_retrieval:reads.map((r,i)=>({scope:searches[i],status:r.status,...(r.status==='rejected'?{code:'EVENT_KNOWLEDGE_RETRIEVAL_FAILED'}:{returned_count:r.value.items?.length||0})})),resolved_scope:resolved,sections,...(sessions?{online_sessions:await sessions}:{}),periods:resolved.windows.map(w=>({event_id:w.id,start_date:w.start_date,end_date:w.end_date,channel:w.channel})),complete:false};
   stage({stage:'event_answer_completeness',status:'partial',successful_totals:sections.filter(s=>s.totals.status==='fulfilled').length,successful_products:sections.filter(s=>s.products?.status==='fulfilled').length,coverage_verified:false});
-  return {answer:renderEventSaleReport(evidence),analysis_context:context,evidence,partial:true,tools:scope.periods?['search_knowledge','event_timestamp_sales','event_daily_sales']:['search_knowledge','canonical_finance','event_product_lines']};
+  return {answer:renderEventSaleReport(evidence),analysis_context:context,evidence,partial:true,tools:phased?['event_timestamp_sales','event_daily_sales','event_product_lines']:scope.periods?['search_knowledge','event_timestamp_sales','event_daily_sales']:['search_knowledge','canonical_finance','event_product_lines']};
  };
 }
 export function assertEventSaleEvidence(context,e){
@@ -153,6 +170,7 @@ export function assertEventSaleEvidence(context,e){
  if(e.requested_scope.count!==context.event_count||stableAnalyticalJSON(e.metrics)!==stableAnalyticalJSON(context.metrics)||stableAnalyticalJSON((e.version==='event_sale_report.v1'?resolveLegacyEventSaleWindows:resolveEventSaleWindows)(e.knowledge_entries||[],context.event_scope,e.requested_scope.as_of))!==stableAnalyticalJSON(e.resolved_scope))fail();
  if(e.sections?.length!==e.resolved_scope.windows.length||e.requested_scope.currencies!=='separate'||stableAnalyticalJSON(e.periods)!==stableAnalyticalJSON(e.resolved_scope.windows.map(w=>({event_id:w.id,start_date:w.start_date,end_date:w.end_date,channel:w.channel}))))fail();
  const ids=new Set();
+ assertPhasedSaleSessions(context.event_scope,e.online_sessions,fail);
  for(const s of e.sections||[]){const w=s.window;if(!w||ids.has(w.id)||!context.event_scope.years.includes(w.year)||!context.event_scope.channels.includes(w.channel)||!valid(w.start_date)||!valid(w.end_date)||w.start_date>w.end_date||!w.knowledge_entries?.length||w.knowledge_entries.some(k=>k.status!=='confirmed'))fail();if(!e.resolved_scope.windows.some(r=>stableAnalyticalJSON(r)===stableAnalyticalJSON(w)))fail();ids.add(w.id);
   if(s.totals.status==='fulfilled'&&(!['canonical_net_gross','timestamped_source_net_gross'].includes(s.totals.evidence.definition)||!Array.isArray(s.totals.evidence.rows)))fail();
   if(context.event_scope.products&&!s.products)fail();
@@ -162,7 +180,12 @@ export function assertEventSaleEvidence(context,e){
    if(s.totals.status==='fulfilled'&&s.totals.evidence.rows.some(r=>!matches(r.source)))fail();
    if(s.products?.status==='fulfilled'&&s.products.evidence.rows.some(r=>!matches(r.namespace)))fail();
   }
-  if(context.event_scope.periods)assertDailySales(s);
+  if(context.event_scope.periods){
+   const phased=isPhasedSale(context.event_scope.periods);
+   const daily=!phased||w.phase==='vip'||w.phase==='public';
+   assertDailySales(s,{daily});
+   if(phased)assertPhasedSaleProducts(s,daily,fail);
+  }
   if(w.shopify_channel){
    if(s.totals.status==='fulfilled'&&s.totals.evidence.rows.some(r=>channel(r)!==w.shopify_channel))fail();
    if(s.products?.status==='fulfilled'){

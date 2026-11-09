@@ -39,7 +39,8 @@ export function validateSalePeriods(periods) {
             'end_exclusive',
             'source',
             'channels',
-            'vip_date'
+            'vip_date',
+            'phase'
           ].includes(k)
       ) ||
       typeof p.id !== 'string' ||
@@ -55,6 +56,7 @@ export function validateSalePeriods(periods) {
       !p.channels.length ||
       new Set(p.channels).size !== p.channels.length ||
       p.channels.some((c) => !['online', 'instore', 'unknown'].includes(c)) ||
+      (p.phase != null && !['vip', 'public', 'full'].includes(p.phase)) ||
       (p.source === 'woo' && p.channels.some((c) => c !== 'online')) ||
       !Number.isFinite(Date.parse(p.start_at)) ||
       !Number.isFinite(Date.parse(p.end_exclusive)) ||
@@ -151,12 +153,87 @@ export function explicitSalePeriods(text) {
   }
   return validateSalePeriods(periods);
 }
+// The prior comparison request supplied these full calendar days. Use the
+// same native timestamp population on both sides of each channel comparison.
+const comparisonPeriods = [
+  ['black-friday-online', 'Black Friday 2025', '2025-11-27', '2025-11-30', 'online'],
+  ['may-bank-holiday-pos', 'May Bank Holiday 2026', '2026-05-01', '2026-05-04', 'instore']
+];
+
+export function isPhasedSale(periods) {
+  return Boolean(periods?.some(p => p.phase));
+}
+
+export function explicitPhasedSale(text) {
+  const year = text.match(/\b(?:(20\d{2}) Black Friday|Black Friday(?: sale(?: report)?)? (20\d{2}))\b/i)?.slice(1).find(Boolean);
+  if (!year || !/\bShopify\b/i.test(text) || !/\bonline\b/i.test(text) ||
+      !/\b(?:POS|in[ -]store)\b/i.test(text) || !/end[ -]exclusive/i.test(text)) return null;
+  const phaseLines = [...text.matchAll(/^\s*(?:[-*]\s+)?(VIP|Public)(?: sale)?:\s*([^\n]+)/gim)];
+  if (phaseLines.length !== 2) return null;
+  const zone = /Europe\/London/i.test(text) ? 'Europe/London' : /\bGMT\b/i.test(text) ? 'GMT' : null;
+  if (!zone) return null;
+
+  const periods = phaseLines.map(([, name, bounds]) => {
+    const phase = name.toLowerCase();
+    const stamps = [...bounds.matchAll(/\b(\d{1,2})\s+([a-z]+)(?:\s+(20\d{2}))?,?\s+(?:at\s+)?(\d{1,2}:\d{2})(?:\s*(GMT|UTC))?\b/gi)];
+    if (stamps.length !== 2) invalid();
+    const [start_at, end_exclusive] = stamps.map(([, day, month, y, clock, offset]) =>
+      saleInstant(date(day, month, y || year), clock, offset?.toUpperCase() || zone)
+    );
+    const localDay = t => new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/London' }).format(new Date(t));
+    return {
+      id: phase, phase, name: 'Black Friday ' + year + ' ' + (phase === 'vip' ? 'VIP' : 'Public'),
+      start_date: localDay(start_at), end_date: localDay(Date.parse(end_exclusive) - 1),
+      start_at, end_exclusive, source: 'shopify', channels: ['online', 'instore']
+    };
+  });
+  const [vip, publicSale] = ['vip', 'public'].map(phase => periods.find(p => p.phase === phase));
+  if (!vip || !publicSale || vip.end_exclusive !== publicSale.start_at) invalid();
+  periods.push({
+    ...vip, id: 'full-sale', phase: 'full', name: 'Black Friday ' + year + ' full sale',
+    end_date: publicSale.end_date, end_exclusive: publicSale.end_exclusive
+  });
+  if (/\bcompar(?:e|ison)\b/i.test(text)) {
+    for (const [id, name, start_date, end_date, channel] of comparisonPeriods) {
+      const requested = id === 'black-friday-online'
+        ? /\b2025 Black Friday|Black Friday 2025\b/i.test(text)
+        : /\bMay (?:Bank Holiday )?2026\b/i.test(text);
+      if (!requested) continue;
+      periods.push({
+        id, name, start_date, end_date, source: 'shopify', channels: [channel],
+        start_at: saleInstant(start_date), end_exclusive: saleInstant(nextSaleDay(end_date)),
+        ...(id === 'black-friday-online' ? { vip_date: start_date } : {})
+      });
+    }
+  }
+  return validateSalePeriods(periods);
+}
+
+export function validatePhasedSale(periods) {
+  const vip = periods.find(p => p.phase === 'vip');
+  const publicSale = periods.find(p => p.phase === 'public');
+  const full = periods.find(p => p.phase === 'full');
+  if (!vip || !publicSale || !full || periods.filter(p => p.phase).length !== 3 ||
+      periods.some(p => p.source !== 'shopify') ||
+      [vip, publicSale, full].some(p => p.channels.length !== 2 || p.channels.includes('unknown')) ||
+      vip.end_exclusive !== publicSale.start_at ||
+      full.start_at !== vip.start_at || full.end_exclusive !== publicSale.end_exclusive) invalid();
+  for (const p of periods.filter(p => !p.phase)) {
+    if (!comparisonPeriods.some(([id, name, start, end, channel]) =>
+      p.id === id && p.name === name && p.start_date === start && p.end_date === end &&
+      p.start_at === saleInstant(start) && p.end_exclusive === saleInstant(nextSaleDay(end)) &&
+      p.channels.length === 1 && p.channels[0] === channel)) invalid();
+  }
+}
+
 export function resolveExplicitSalePeriods(scope, asOf) {
   return {
     windows: scope.periods.flatMap((p) =>
       p.channels.map((channel) => ({
         id: `${p.id}:${channel}`,
         period_id: p.id,
+        ...(p.phase ? { phase: p.phase } : {}),
+        ...(isPhasedSale(scope.periods) ? { product_limit: 20 } : {}),
         name: p.name,
         year: Number(p.start_date.slice(0, 4)),
         channel,
@@ -171,7 +248,7 @@ export function resolveExplicitSalePeriods(scope, asOf) {
         end_exclusive: p.end_exclusive,
         timezone: 'Europe/London',
         timezone_provenance: 'explicit user request',
-        time_precision: 'clock',
+        time_precision: p.phase === 'vip' ? 'requested_calendar' : 'clock',
         intraday: true,
         time_basis:
           'explicit half-open requested period; grouped by London transaction date',
@@ -188,7 +265,7 @@ export function resolveExplicitSalePeriods(scope, asOf) {
             recorded_at: asOf
           }
         ],
-        limitations: []
+        limitations: p.phase === 'vip' ? ['VIP uses the supplied reporting day. The exact VIP opening hour is unknown.'] : []
       }))
     ),
     issues: []
