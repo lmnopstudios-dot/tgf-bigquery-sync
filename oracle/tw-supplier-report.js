@@ -1,4 +1,4 @@
-import {calendarMonthOffset,twBuyPlan,twMayDeadline,TW_LEAD_MONTHS} from './tw-supplier-planning.js';
+import {calendarMonthOffset,twBuyPlan,twMayDeadline,TW_LEAD_MONTHS,TW_COVER_MONTHS} from './tw-supplier-planning.js';
 import ExcelJS from 'exceljs';
 import {createHash} from 'node:crypto';
 import {priorityArtifactId} from './product-priority-storage.js';
@@ -102,7 +102,7 @@ export function buildTwWorkbookRows({context,today,inventory,snapshot=null,sales
     {section:'Start here',how_to_use:'Review the ordinary supplier buy first, then the separate trial shortlist. Trial quantities are for manual review and are never added to the supplier buy total.'},
     {section:'Order recommendations',how_to_use:'A number above zero is a provisional ordinary buy. Zero means the formula calculated no buy. Blank means there was insufficient demand or stock evidence; it is not zero.'},
     {section:'Before delivery',how_to_use:'Three calendar months to expected arrival. Check likely short units for possible expedited stock. Forecast lost sales are not added to the supplier buy.'},
-    {section:'Supplier buy',how_to_use:'Three months of ordinary demand after arrival, less projected remaining stock and confirmed dated inbound, plus confirmed backorders not already reflected in available stock.'},
+    {section:'Supplier buy',how_to_use:'One calendar month of ordinary demand from arrival, less projected remaining stock and confirmed inbound due in that month, plus confirmed backorders not already reflected in available stock.'},
     {section:'Trial buy',how_to_use:'Only variants with a blank ordinary buy, known pooled stock and at least two identified units in the last six months qualify. Out-of-stock variants can qualify on sale evidence alone. For positive stock, observed ordinary sales must indicate likely depletion before delivery; sale spikes are not extrapolated.'},
     {section:'Trial quantity',how_to_use:'Small review-only quantity: up to three units, capped by observed units and reduced by expected remaining stock and dated inbound during ordinary cover. Unknown inbound is not deducted. No trial is added to the main buy.'},
     {section:'Monthly sales',how_to_use:'Identified Online Store and POS units by variant. Facebook & Instagram is separate. Blank sales are not zero. '+salesAsOf},
@@ -131,7 +131,7 @@ export function buildTwWorkbookRows({context,today,inventory,snapshot=null,sales
     {status:'Catalogue tags reflect report run time. Historical stock requires a verified snapshot for the selected date. Available stock is not reduced by committed stock a second time.'},
     {status:'Facebook & Instagram observed units are shown separately and excluded from the Online Store + POS forecast and totals. Missing variant IDs on confirmed non-TW catalogue products are counted separately. Other unresolved lines still block verification.'},
     {status:'Provisional demand requires reconciled observations on at least 80% of ordinary days in each of the last three completed months per channel. Current-day sales are shown but excluded from the run rate. Unresolved sales are omitted; unverified absence is not zero demand.'},
-    {status:'Lead time is fixed at three calendar months. The current buy covers ordinary demand for three months from arrival. May uplift is separate. Inbound dates, unreflected customer backorders, pack sizes and May shelf date require reviewed inputs.'});
+    {status:'Lead time is fixed at three calendar months. The current buy covers ordinary demand for one calendar month from arrival. May uplift is separate. Inbound dates, unreflected customer backorders, pack sizes and May shelf date require reviewed inputs.'});
   const mayEvent=(settings.futureEvents||[]).filter(e=>e.name==='May Bank Holiday'&&e.start>cutoff)
     .sort((a,b)=>a.start.localeCompare(b.start))[0];
   const mayShelf=settings.mayPlan?.requiredShelfDate;
@@ -263,6 +263,7 @@ export function buildTwWorkbookRows({context,today,inventory,snapshot=null,sales
       'Before delivery · Confirmed inbound':buy.inboundBefore,
       'Before delivery · Projected stock at arrival':rounded(buy.remaining),
       'Before delivery · Likely short units':rounded(buy.short),
+      'Supplier buy · Cover months':TW_COVER_MONTHS,
       'Supplier buy · Ordinary cover through':buy.coverThrough,
       'Supplier buy · Ordinary units after arrival':rounded(buy.target),
       'Supplier buy · Confirmed inbound':buy.inboundAfter,
@@ -326,7 +327,7 @@ export function createTwSupplierReportService({readInventory,readSales,readSnaps
       const envelope={kind:'tw_supplier_report',planning_version:3,subject:'tw_supplier_stock',...period,periods:[period],
         variant_count:report.variants,recommended_count:report.recommended,trial_count:report.trialCount,unverified_channel_periods:incomplete,
         catalogue_complete:report.catalogueComplete,failures,as_of:report.stockAsOf,latest_reconciled_sales_date:report.latestCovered,sales_gap_days:report.coverageGapDays};
-      const answer=`TW supplier stock report: ${period.start_date} to ${period.end_date}, inclusive (London). ${live?'Today is partial.':'Historical stock is blank unless a verified snapshot is available.'} Latest completed date with reconciled Online Store and POS observations: ${report.latestCovered||'unavailable'}; completed days after that through cutoff: ${report.coverageGapDays??'unknown'}. ${report.variants} variants; ${report.recommended} with a provisional or supported order quantity. Supplier lead time: three calendar months. May promotional uplift is shown separately. ${report.trialCount} variants shortlisted for a separate trial buy. See Read me for guidance. ${incomplete} channel periods have incomplete or unverified sales coverage. Receipts, stockout days, returns and sell-through are unavailable from the verified bindings. ${failures.join(' ')} See Coverage in the workbook.`;
+      const answer=`TW supplier stock report: ${period.start_date} to ${period.end_date}, inclusive (London). ${live?'Today is partial.':'Historical stock is blank unless a verified snapshot is available.'} Latest completed date with reconciled Online Store and POS observations: ${report.latestCovered||'unavailable'}; completed days after that through cutoff: ${report.coverageGapDays??'unknown'}. ${report.variants} variants; ${report.recommended} with a provisional or supported order quantity. Supplier lead time: three calendar months; ordinary buy: one calendar month from arrival. May promotional uplift is shown separately. ${report.trialCount} variants shortlisted for a separate trial buy. See Read me for guidance. ${incomplete} channel periods have incomplete or unverified sales coverage. Receipts, stockout days, returns and sell-through are unavailable from the verified bindings. ${failures.join(' ')} See Coverage in the workbook.`;
       saved={request:message,envelope,answer,filename:'oracle-tw-supplier-stock.xlsx',sha256:createHash('sha256').update(bytes).digest('hex'),xlsx_base64:bytes.toString('base64')};
       await assertTwArtifact(saved);
       signal?.throwIfAborted();await options.assertLease?.();

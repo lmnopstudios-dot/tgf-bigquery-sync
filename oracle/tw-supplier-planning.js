@@ -8,6 +8,7 @@ const dayCount=(a,b)=>(Date.parse(b)-Date.parse(a))/DAY;
 export const twDateValid=d=>typeof d==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(d)&&Number.isFinite(Date.parse(d))&&calendarDayOffset(d,0)===d;
 export const twUnits=n=>Number.isSafeInteger(n)&&n>=0;
 export const TW_LEAD_MONTHS=3;
+export const TW_COVER_MONTHS=1;
 export function calendarMonthOffset(date,count){
   const month=offsetMonth(date.slice(0,7),count);
   const last=calendarDayOffset(offsetMonth(month,1)+'-01',-1).slice(8);
@@ -16,7 +17,7 @@ export function calendarMonthOffset(date,count){
 
 export function twPlanningDates(orderDate){
   const arrival=calendarMonthOffset(orderDate,TW_LEAD_MONTHS);
-  const coverEnd=calendarMonthOffset(arrival,3);
+  const coverEnd=calendarMonthOffset(arrival,TW_COVER_MONTHS);
   return {arrival,coverEnd,coverThrough:calendarDayOffset(coverEnd,-1)};
 }
 

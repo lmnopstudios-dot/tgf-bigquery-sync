@@ -53,6 +53,10 @@ test('TW short, explicit-month and failed long-form requests reach durable deliv
     assert.equal(wb.worksheets[0].name,'Read me');
     assert.ok(wb.getWorksheet('Trial buy'));
     const historical=prompt.includes('for October');
+    const buy=wb.getWorksheet('Order recommendations');
+    const buyHeaders=buy.getRow(1).values;
+    assert.equal(buy.getRow(2).getCell(buyHeaders.indexOf('Supplier buy · Cover months')).value,1);
+    assert.equal(buy.getRow(2).getCell(buyHeaders.indexOf('Supplier buy · Ordinary cover through')).value,historical?'2027-02-27':'2027-03-09');
     assert.equal(r.analysis_context.end_date,historical?'2026-10-31':'2026-11-10');
     const stock=wb.getWorksheet('Stock by location');
     const headers=stock.getRow(1).values;
@@ -176,22 +180,25 @@ test('historical catalogue-only read never asks Shopify for live inventory level
 
 
 test('three calendar months fixes arrival, and shortages do not become backorders',()=>{
-  assert.deepEqual(twPlanningDates('2026-11-10'),{arrival:'2027-02-10',coverEnd:'2027-05-10',coverThrough:'2027-05-09'});
+  assert.deepEqual(twPlanningDates('2026-11-10'),{arrival:'2027-02-10',coverEnd:'2027-03-10',coverThrough:'2027-03-09'});
   assert.equal(twPlanningDates('2026-11-30').arrival,'2027-02-28');
   assert.equal(twMayDeadline('2027-02-28',0),'2026-11-30');
   const args={cutoff:'2026-11-10',dailyDemand:1,usable:2};
   const plan=twBuyPlan(args);
   assert.equal(plan.short,90);
   assert.equal(plan.remaining,0);
-  assert.equal(plan.suggested,89);
+  assert.equal(plan.suggested,28);
   const dated=twBuyPlan({...args,inputs:{inboundReviewedOn:args.cutoff,
-    confirmedInbound:[{dueDate:'2027-02-08',units:10},{dueDate:'2027-02-10',units:5},{dueDate:'2027-05-10',units:30}],
+    confirmedInbound:[{dueDate:'2027-02-08',units:10},{dueDate:'2027-02-10',units:5},{dueDate:'2027-03-10',units:30}],
     backordersReviewedOn:args.cutoff,confirmedBackordersNotInAvailable:4}});
   assert.equal(dated.short,88);
   assert.equal(dated.remaining,8);
   assert.equal(dated.inboundAfter,5);
-  assert.equal(dated.suggested,80);
-  assert.equal(twBuyPlan({...args,inputs:{leadDays:0,confirmedBackordersNotInAvailable:100}}).suggested,89);
+  const boundary=(dueDate)=>twBuyPlan({...args,inputs:{inboundReviewedOn:args.cutoff,confirmedInbound:[{dueDate,units:3}]}});
+  assert.equal(boundary('2027-03-09').suggested,25);
+  assert.equal(boundary('2027-03-10').suggested,28);
+  assert.equal(dated.suggested,19);
+  assert.equal(twBuyPlan({...args,inputs:{leadDays:0,confirmedBackordersNotInAvailable:100}}).suggested,28);
   assert.equal(twBuyPlan({...args,usable:null}).suggested,null);
 });
 
