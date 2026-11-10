@@ -26,7 +26,7 @@ export const UNAVAILABLE_ANALYTICAL_CAPABILITIES=Object.freeze({
 export function resolveExecutionPlan(context,bindings) {
   const plan=resolveAnalyticalPlan(context),capability=ANALYTICAL_CAPABILITIES[context?.tool_route]||null;
   let limitation=UNAVAILABLE_ANALYTICAL_CAPABILITIES[context?.requested_subject]||null;
-  if(context?.tool_route==='get_tw_supplier_stock_report'&&!context.end_date)limitation='Specify a completed month, for example TW supplier stock report for October 2026.';
+  if(context?.tool_route==='get_tw_supplier_stock_report'&&!context.end_date)limitation='Specify a valid date no later than today, or a completed month. For example: TW supplier stock report as of 10 November 2026.';
   if(context?.tool_route==='export_product_priorities'&&context.grain)limitation='Product reports group by root product over the requested period. Calendar regrouping has no executed binding; no unchanged product table was substituted.';
   if(context?.tool_route==='get_klaviyo_email_performance'&&context.grain&&context.grain!=='month')limitation='Campaign evidence supports complete calendar-month reporting windows. The requested calendar grouping has no compatible executed binding; no unchanged campaign summary was substituted.';
   if(context?.tool_route==='analyze_customer_journey'){

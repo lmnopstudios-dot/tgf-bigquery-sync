@@ -6,7 +6,7 @@ export function twSalesSql(project){
   const t=name=>'`'+project+'.shopify_data.'+name+'`';
   const latest=(name,key,predicate)=>`SELECT * FROM ${t(name)} t WHERE ${predicate}
     QUALIFY ROW_NUMBER() OVER(PARTITION BY ${key} ORDER BY synced_at DESC,TO_JSON_STRING(t) DESC)=1`;
-  return `WITH finance AS (${latest('order_financials','order_id',"created_at>=TIMESTAMP(@start,'Europe/London') AND created_at<TIMESTAMP(@end_exclusive,'Europe/London') AND (created_at<TIMESTAMP(@completed_end_exclusive,'Europe/London') OR created_at>=TIMESTAMP(@mtd_start,'Europe/London'))")}),
+  return `WITH finance AS (${latest('order_financials','order_id',"created_at>=TIMESTAMP(@start,'Europe/London') AND created_at<TIMESTAMP(@end_exclusive,'Europe/London') AND created_at<=TIMESTAMP(@observed_through)")}),
     locations AS (${latest('order_locations','order_id','order_id IN (SELECT order_id FROM finance)')}),
     orders AS (SELECT f.order_id, DATE(f.created_at,'Europe/London') day,
       CASE LOWER(TRIM(l.order_source)) WHEN 'online store' THEN 'Online Store'
@@ -38,14 +38,14 @@ export function twSalesSql(project){
 }
 
 export function createTwSalesReader({bigquery,project}){
-  return async({start,endExclusive,completedEndExclusive,mtdStart,variantIds,nonTwProductIds=[],twProductIds=[],signal,deadlineAt})=>{
+  return async({start,endExclusive,observedThrough,variantIds,nonTwProductIds=[],twProductIds=[],signal,deadlineAt})=>{
     signal?.throwIfAborted();
     const location=await datasetLocation(bigquery,project,'shopify_data');
     const timeout=Math.min(60000,deadlineAt==null?60000:deadlineAt-Date.now());
     if(timeout<=0)throw Error('TW_READ_DEADLINE');
     const [rows]=await bigquery.query({query:twSalesSql(project),location,useLegacySql:false,jobTimeoutMs:timeout,
       timeoutMs:timeout,maximumBytesBilled:'5000000000',
-      params:{start,end_exclusive:endExclusive,completed_end_exclusive:completedEndExclusive,mtd_start:mtdStart,matrixify:MATRIXIFY_APP_ID,variants:JSON.stringify(variantIds),non_tw_products:JSON.stringify(nonTwProductIds),tw_products:JSON.stringify(twProductIds)},
+      params:{start,end_exclusive:endExclusive,observed_through:observedThrough,matrixify:MATRIXIFY_APP_ID,variants:JSON.stringify(variantIds),non_tw_products:JSON.stringify(nonTwProductIds),tw_products:JSON.stringify(twProductIds)},
       labels:{component:'oracle_tw_supplier'}});
     signal?.throwIfAborted();
     return rows;
