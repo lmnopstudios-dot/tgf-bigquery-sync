@@ -211,7 +211,15 @@ export function createEyewearReportService({readStock,readSource,readMappings,re
       let mappings={...eyewearMappings(inventory?.products||[],mappingRows.rows),complete:mappingRows.complete};
       const sourceKeys=Object.keys(EYEWEAR_SOURCES);
       const settled=await Promise.allSettled(sourceKeys.map(source=>readSource(source,{...opts,period,eligibleRefs:[...mappings.eligible]})));
-      const components=settled.map((result,i)=>({source:sourceKeys[i],...(result.status==='fulfilled'?{data:result.value}:{error:'Source read failed; sales unavailable'})}));
+      const safeFailure = error => {
+        const code=Number(error?.code), reason=error?.errors?.[0]?.reason;
+        return {
+          ...( [400,401,403,404,408,429,500,502,503,504].includes(code) ? {bigquery_code:code} : {}),
+          failure_category:['accessDenied','notFound','invalidQuery','quotaExceeded','rateLimitExceeded','backendError','jobTimeout','billingTierLimitExceeded'].includes(reason)
+            ? reason : ['EYEWEAR_READ_DEADLINE','EYEWEAR_LINE_LIMIT','EYEWEAR_INVALID_SOURCE'].includes(error?.message) ? error.message : 'unclassified'
+        };
+      };
+      const components=settled.map((result,i)=>({source:sourceKeys[i],...(result.status==='fulfilled'?{data:result.value}:{error:'Source read failed; sales unavailable',diagnostic:safeFailure(result.reason)})}));
       // A historical branded line can anchor an approved alias even when the
       // catalogue no longer contains it and the reviewed edge has no title.
       const expanded=eyewearMappings(inventory?.products||[],mappingRows.rows,components.flatMap(c=>c.data?.lines||[]));
@@ -224,7 +232,7 @@ export function createEyewearReportService({readStock,readSource,readMappings,re
         }));
       mappings={...expanded,complete:mappingRows.complete&&!components.some(c=>c.aliasError)};
       for(const c of components)options.onProviderStage?.({stage:'eyewear_sales_source',source:c.source,
-        status:c.error?'failed':'success',...(c.data?{line_count:c.data.lines.length}:{} )});
+        ...c.diagnostic,status:c.error?'failed':'success',...(c.data?{line_count:c.data.lines.length}:{} )});
       const returns=new Map(),shopify=components.find(c=>c.source==='shopify');
       let returnReadFailed=false;
       if(shopify?.data?.lines.length)try{
