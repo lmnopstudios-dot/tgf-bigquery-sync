@@ -32,6 +32,7 @@ test('every deterministic transition route is registered with an executable disp
     'What is the current stock levels for eye rings?',
     'Show online sales by weekday this year.',
     'TW supplier stock report',
+    'Cutler and Gross stock and sales report',
     'How did Meta ads perform last month?',
     'Which Instagram posts got the most saves this year?',
     'Show TikTok follower trends in September 2026.',
