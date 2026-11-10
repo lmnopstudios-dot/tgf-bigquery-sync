@@ -44,9 +44,9 @@ const LOCATIONS=`query InventoryReportLocations($cursor:String){locations(first:
 const LEVELS=`query InventoryReportLevels($ids:[ID!]!,$location:ID!){nodes(ids:$ids){... on InventoryItem{id inventoryLevel(locationId:$location){quantities(names:["available","on_hand","committed"]){name quantity}}}}}`;
 export const INVENTORY_EXPORT_LIMITS={max_requests:20000,max_variants:100000,max_location_rows:1000000,max_duration_ms:600000,storage_bytes:8000000,max_columns:16384,max_cell_characters:32767};
 const fail=code=>Object.assign(new Error(code),{code});
-export async function readInventoryReport({graphql,getToken,signal,deadlineAt=Date.now()+INVENTORY_EXPORT_LIMITS.max_duration_ms,now=Date.now,limits=INVENTORY_EXPORT_LIMITS,entityQuery='all products without made-to-order tag',reportConfig=null}){
-  const config=validateInventoryReportConfig(reportConfig);if(config)entityQuery=FILTERED_INVENTORY_ENTITY;const excludedTags=config?.excluded_tags||['made-to-order'];
-  const eligibleStatuses=config?.statuses||INVENTORY_POPULATIONS[entityQuery];if(!eligibleStatuses)throw fail('INVENTORY_POPULATION_INVALID');
+export async function readInventoryReport({graphql,getToken,signal,deadlineAt=Date.now()+INVENTORY_EXPORT_LIMITS.max_duration_ms,now=Date.now,limits=INVENTORY_EXPORT_LIMITS,entityQuery='all products without made-to-order tag',reportConfig=null,requiredExactTag=null}){
+  const config=validateInventoryReportConfig(reportConfig);if(config)entityQuery=FILTERED_INVENTORY_ENTITY;const excludedTags=requiredExactTag?[]:config?.excluded_tags||['made-to-order'];
+  const eligibleStatuses=requiredExactTag?INVENTORY_PRODUCT_STATUSES:config?.statuses||INVENTORY_POPULATIONS[entityQuery];if(!eligibleStatuses)throw fail('INVENTORY_POPULATION_INVALID');
   deadlineAt=Math.min(deadlineAt,now()+limits.max_duration_ms);
   const started=new Date(now()).toISOString(),failures=[],products=[],locations=[],tags=new Map();let token,requests=0;
   const call=async(query,args)=>{
@@ -68,15 +68,17 @@ export async function readInventoryReport({graphql,getToken,signal,deadlineAt=Da
     // Inspect every observed tag before selecting products. A partial scan remains explicit.
     await paginate(CATALOGUE_QUERY,{},d=>d.products,(rows,{page})=>{for(const [index,p] of rows.entries()){validateInventoryProduct(p,{page,index});products.push({...p,variants:[]});for(const tag of p.tags)tags.set(tag,(tags.get(tag)||0)+1);}});catalogueComplete=true;
   }catch(error){failures.push({...inventoryDiagnostic(error,'catalogue'),...(error.catalogue_validation?{validation:error.catalogue_validation}:{})});}
-  const catalogueAudit=products.map(p=>({product_id:p.id,status:p.status,eligible:eligibleStatuses.includes(p.status)&&!p.tags.some(t=>excludedTags.includes(t.trim().toLowerCase())),exclusion:!eligibleStatuses.includes(p.status)?'outside_requested_statuses':p.tags.some(t=>excludedTags.includes(t.trim().toLowerCase()))?(config?'excluded_product_tag':'made-to-order_tag'):null}));
+  const requiredTagMatches=p=>!requiredExactTag||p.tags.some(t=>t.toLowerCase()===requiredExactTag.toLowerCase());
+  const catalogueAudit=products.map(p=>({product_id:p.id,status:p.status,eligible:requiredTagMatches(p)&&eligibleStatuses.includes(p.status)&&!p.tags.some(t=>excludedTags.includes(t.trim().toLowerCase())),exclusion:!requiredTagMatches(p)?'required_tag_missing':!eligibleStatuses.includes(p.status)?'outside_requested_statuses':p.tags.some(t=>excludedTags.includes(t.trim().toLowerCase()))?(config?'excluded_product_tag':'made-to-order_tag'):null}));
   const eligibleIds=new Set(catalogueAudit.filter(p=>p.eligible).map(p=>p.product_id)),selected=products.filter(p=>eligibleIds.has(p.id));
   try{await paginate(LOCATIONS,{},d=>d.locations,rows=>{for(const l of rows){if(!l.id||typeof l.isActive!=='boolean')throw fail('INVENTORY_INVALID_LOCATION');if(l.isActive)locations.push(l);}});locationsComplete=true;if(config){const resolved=resolveInventoryGroups(config,locations);failures.push(...resolved.failures);const ids=new Set([...resolved.groups.pos,...resolved.groups.online].map(l=>l.id));locations.splice(0,locations.length,...locations.filter(l=>ids.has(l.id)));}}catch(error){failures.push(inventoryDiagnostic(error,'locations'));}
   for(const p of selected){
     try{await paginate(VARIANTS,{id:p.id},d=>d.product?.variants,rows=>{if(retained+rows.length>limits.max_variants)throw fail('INVENTORY_VARIANT_LIMIT');p.variants.push(...rows);retained+=rows.length;});}catch(error){failures.push({...inventoryDiagnostic(error,'variants'),product_id:p.id});if(['INVENTORY_REQUEST_LIMIT','INVENTORY_DEADLINE_EXCEEDED','INVENTORY_VARIANT_LIMIT','REQUEST_CANCELLED'].includes(error.code))break;}
   }
-  if(retained*locations.length>limits.max_location_rows)throw fail('INVENTORY_EXPORT_ROW_LIMIT');
+  const levelsBounded=retained*locations.length<=limits.max_location_rows;
+  if(!levelsBounded){if(!requiredExactTag)throw fail('INVENTORY_EXPORT_ROW_LIMIT');failures.push({stage:'levels',code:'INVENTORY_EXPORT_ROW_LIMIT'});}
   const variants=selected.flatMap(p=>p.variants),items=[...new Set(variants.filter(v=>v.inventoryItem?.tracked===true).map(v=>v.inventoryItem.id))],observed=new Map();
-  for(const l of locations)for(let i=0;i<items.length;i+=50){const ids=items.slice(i,i+50);try{
+  if(levelsBounded)for(const l of locations)for(let i=0;i<items.length;i+=50){const ids=items.slice(i,i+50);try{
     const data=await call(LEVELS,{ids,location:l.id});if(!Array.isArray(data?.nodes))throw fail('INVENTORY_INVALID_RESPONSE');
     const at=new Date(now()).toISOString();for(const item of data.nodes.filter(Boolean))if(ids.includes(item.id)&&Object.hasOwn(item,'inventoryLevel'))observed.set(`${item.id}|${l.id}`,{level:item.inventoryLevel,at});
   }catch(error){failures.push({...inventoryDiagnostic(error,'levels'),location_id:l.id,inventory_item_ids:ids});}}
@@ -88,7 +90,7 @@ export async function readInventoryReport({graphql,getToken,signal,deadlineAt=Da
     if(['failed','incomplete','tracking_unknown'].includes(state))failures.push({stage:'level_coverage',code:`INVENTORY_${state.toUpperCase()}`,variant_id:v.id,location_id:l.id});
     return{location_id:l.id,location_name:l.name,...quantities,evidence_state:state,observed_at:value?.at||null};
   });
-  return{kind:'inventory_report',subject:'current_stock',entity_query:entityQuery,...(config?{inventory_report:config}:{}),population:{eligible_statuses:eligibleStatuses,catalogue_complete:catalogueComplete,status_counts:Object.fromEntries(INVENTORY_PRODUCT_STATUSES.map(status=>[status,products.filter(p=>p.status===status).length])),audit:catalogueAudit},source:'live_shopify_admin',products:selected,locations,complete:catalogueComplete&&locationsComplete&&!failures.length,failures,started_at:started,as_of:new Date(now()).toISOString(),tag_convention:{predicate:config?'case-insensitive exact excluded product tags: '+config.excluded_tags.join(', '):'trimmed case-insensitive exact product tag made-to-order',observed_tags:[...tags].sort().map(([tag,product_count])=>({tag,product_count})),catalogue_complete:catalogueComplete},limits,request_count:requests};
+  return{kind:'inventory_report',subject:'current_stock',entity_query:entityQuery,...(config?{inventory_report:config}:{}),population:{eligible_statuses:eligibleStatuses,catalogue_complete:catalogueComplete,locations_complete:locationsComplete,status_counts:Object.fromEntries(INVENTORY_PRODUCT_STATUSES.map(status=>[status,products.filter(p=>p.status===status).length])),audit:catalogueAudit},source:'live_shopify_admin',products:selected,locations,complete:catalogueComplete&&locationsComplete&&!failures.length,failures,started_at:started,as_of:new Date(now()).toISOString(),tag_convention:{predicate:requiredExactTag?'case-insensitive exact required product tag: '+requiredExactTag:config?'case-insensitive exact excluded product tags: '+config.excluded_tags.join(', '):'trimmed case-insensitive exact product tag made-to-order',observed_tags:[...tags].sort().map(([tag,product_count])=>({tag,product_count})),catalogue_complete:catalogueComplete},limits,request_count:requests};
 }
 const canonicalJson=value=>JSON.stringify((function canonical(v){return Array.isArray(v)?v.map(canonical):v&&typeof v==='object'?Object.fromEntries(Object.keys(v).sort().map(k=>[k,canonical(v[k])])):v;})(value));
 // Filter before constructing the workbook/package. Omitted rows are accounted for

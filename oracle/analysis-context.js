@@ -1,3 +1,4 @@
+import {twSupplierScope} from '../public/oracle/tw-supplier-intent.js';
 import {isPhasedSale} from './explicit-sale-periods.js';
 import {eventSaleScopePatch,validateEventSaleScope} from './event-sale-scope.js';
 import {isSpreadsheetFollowup} from './spreadsheet-intent.js';
@@ -41,7 +42,7 @@ const FIELDS = new Set(['journey_scope',
 const GRAINS = new Set(['day','week','month','quarter','year']);
 const CURRENCIES = new Set(['GBP','USD','JPY','EUR']);
 const METRICS = new Set(['orders','sales','refunds','customers','products','search_console','shipping_countries','ecommerce_performance','customer_journey','customer_order_interval','product_views_before_purchase','conversion','email_attribution','meta_ads','instagram','tiktok']);
-export const ANALYSIS_TOOL_ROUTES = Object.freeze(['analyze_customer_journey','get_population_conversion','get_order_value_analysis','get_shopify_inventory_by_location','get_meta_performance','get_instagram_performance','get_tiktok_performance','get_shopify_online_country_products','get_online_country_sales','get_shopify_customer_kpis','get_search_console_evidence','get_average_customer_order_interval','get_governed_category_sales','get_product_views_before_purchase','compare_historical_events','get_shopify_operational_sales_baseline','get_woocommerce_device_conversion','get_governed_device_conversion','get_general_sales_analysis','get_daily_sales_analysis','get_product_sales_analysis','export_product_priorities','get_klaviyo_email_performance','get_klaviyo_click_purchase_opportunities','compare_klaviyo_email_with_shopify_referrer']);
+export const ANALYSIS_TOOL_ROUTES = Object.freeze(['get_tw_supplier_stock_report','analyze_customer_journey','get_population_conversion','get_order_value_analysis','get_shopify_inventory_by_location','get_meta_performance','get_instagram_performance','get_tiktok_performance','get_shopify_online_country_products','get_online_country_sales','get_shopify_customer_kpis','get_search_console_evidence','get_average_customer_order_interval','get_governed_category_sales','get_product_views_before_purchase','compare_historical_events','get_shopify_operational_sales_baseline','get_woocommerce_device_conversion','get_governed_device_conversion','get_general_sales_analysis','get_daily_sales_analysis','get_product_sales_analysis','export_product_priorities','get_klaviyo_email_performance','get_klaviyo_click_purchase_opportunities','compare_klaviyo_email_with_shopify_referrer']);
 const TOOL_ROUTES = new Set(ANALYSIS_TOOL_ROUTES);
 const MONTHS = {jan:1,january:1,feb:2,february:2,mar:3,march:3,apr:4,april:4,may:5,jun:6,june:6,jul:7,july:7,aug:8,august:8,sep:9,sept:9,september:9,oct:10,october:10,nov:11,november:11,dec:12,december:12};
 
@@ -143,6 +144,14 @@ function transitionContext(existing, message, {now=Date.now(),reportContext=null
   let base=validateAnalysisContext(existing||{}); const text=String(message||'').trim(), lower=text.toLowerCase();
   if(isSpreadsheetFollowup(text))return {context:validateAnalysisContext({...base,output_preference:'xlsx',requested_formats:[...new Set([...base.requested_formats,'xlsx'])]}),transition:{continuation:true,set:['output_preference','requested_formats'],clear:[],retain:ANALYSIS_CONTEXT_FIELDS,missing_required_fields:[],ready_to_execute:true,applies_to_message:true}};
   if(/^(?:new (?:question|analysis)|forget that|start over)\b/i.test(text))return transitionAnalysisContext(emptyAnalysisContext(),text.replace(/^(?:new (?:question|analysis)|forget that|start over)\s*[:,.]?\s*/i,''),{now});
+  const tw=twSupplierScope(text,now);
+  if(tw){
+    const context=validateAnalysisContext({...emptyAnalysisContext(),tool_route:'get_tw_supplier_stock_report',
+      requested_subject:'tw_supplier_stock',platform:'shopify',time_zone:'Europe/London',
+      output_preference:'xlsx',requested_formats:['xlsx'],...(!tw.invalid?tw:{unresolved_required_fields:['end_date']})});
+    return {context,transition:{continuation:false,set:['requested_subject','tool_route','start_date','end_date'],
+      clear:[],retain:[],missing_required_fields:context.unresolved_required_fields,ready_to_execute:!tw.invalid,applies_to_message:true}};
+  }
   if(individualOrderQuestion(text)){const context=emptyAnalysisContext();return {context,transition:{continuation:false,set:[],clear:ANALYSIS_CONTEXT_FIELDS,retain:[],missing_required_fields:[],ready_to_execute:false,applies_to_message:true}};}
   if(reportContext) base=initializeFromReportContext(base,reportContext);
   const eventScope=eventSaleScopePatch(text,base,now);
