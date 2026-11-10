@@ -20,8 +20,8 @@ Use the backfilled Shopify order lines. Show current available stock by location
 
 Put variants with recent sales and low or zero available stock at the top. Show one row per variant. Keep any unmatched sales lines separate. If stock lookup is unsupported, return the sales rows anyway and explain what was unavailable. Use existing data only. Do not create knowledge records, change stock or place orders.`;
 const vid=n=>'gid://shopify/ProductVariant/'+n, lid=n=>'gid://shopify/Location/'+n;
-const context={start_date:'2025-11-01',end_date:'2026-10-31'};
-const inventory={population:{catalogue_complete:true,locations_complete:true},locations:[{id:lid(1)},{id:lid(2)}],failures:[],
+const context={start_date:'2025-11-01',end_date:'2026-11-10'};
+const inventory={as_of:'2026-11-10T12:01:00Z',population:{catalogue_complete:true,locations_complete:true},locations:[{id:lid(1)},{id:lid(2)}],failures:[],
   products:[{title:'Fixture ring',variants:[1,2].map(n=>({id:vid(n),title:'Size '+n,sku:'SKU'+n,
     locations:[{location_id:lid(1),location_name:'Online Ready to Ship',available:3},{location_id:lid(2),location_name:'Workshop',available:20}]}))}]};
 const sales=[
@@ -30,14 +30,14 @@ const sales=[
 ];
 const settings={sellableLocationIds:[lid(1)],verifiedWindows:[{start:'2026-10-19',end:'2026-11-09',channels:['Online Store','POS']}]};
 test('TW short, explicit-month and failed long-form requests reach durable delivery',async t=>{
-  const exportStore=createMemoryExportStore(), stages=[], calls=[];
-  const twSupplierReport=createTwSupplierReportService({artifactStore:exportStore,settings,readInventory:async()=>inventory,
+  const exportStore=createMemoryExportStore(), stages=[], calls=[], inventoryCalls=[];
+  const twSupplierReport=createTwSupplierReportService({artifactStore:exportStore,settings,readInventory:async args=>{inventoryCalls.push(args);return inventory;},
     readSales:async args=>{calls.push(args);return sales;}});
   const baseline=createOracleBaselineDispatcher({twSupplierReport:(m,o)=>{stages.push(o.analysisContext.tool_route);return twSupplierReport(m,o);},
     generalAnalytics:()=>assert.fail('general-sales fallback'),historicalEventComparison:()=>assert.fail('campaign fallback')});
   const h=await acceptanceServer({baseline,exportStore,generateProposals:async()=>assert.fail('knowledge proposals')},{durable:true,now});
   t.after(h.close);
-  for(const prompt of ['TW supplier stock report','TW supplier stock report for October 2026',long]){
+  for(const prompt of ['TW supplier stock report','TW supplier stock report as of 10 November 2026','TW supplier stock report for October 2026',long]){
     assert.equal(oracleRequestRoute(prompt,{hasCompletedJob:true}),'job');
     const r=await h.submit(prompt);
     assert.equal(r.analysis_context.tool_route,'get_tw_supplier_stock_report');
@@ -49,10 +49,17 @@ test('TW short, explicit-month and failed long-form requests reach durable deliv
     assert.equal(download.status,200);
     const wb=new ExcelJS.Workbook();await wb.xlsx.load(Buffer.from(await download.arrayBuffer()));
     assert.equal(wb.getWorksheet('Order recommendations').rowCount,3);
-    assert.equal(wb.getWorksheet('Monthly sales').rowCount,33);
+    const historical=prompt.includes('for October');
+    assert.equal(r.analysis_context.end_date,historical?'2026-10-31':'2026-11-10');
+    const stock=wb.getWorksheet('Stock by location');
+    const headers=stock.getRow(1).values;
+    assert.equal(stock.getRow(2).getCell(headers.indexOf('usable_available')).value,historical?null:3);
+    assert.equal(r.evidence.as_of,historical?null:inventory.as_of);
   }
-  assert.deepEqual(stages,Array(3).fill('get_tw_supplier_stock_report'));
-  assert.equal(calls[0].endExclusive,'2026-11-10');
+  assert.deepEqual(stages,Array(4).fill('get_tw_supplier_stock_report'));
+  assert.equal(calls[0].endExclusive,'2026-11-11');
+  assert.equal(calls[2].endExclusive,'2026-11-01');
+  assert.equal(inventoryCalls[2].catalogueOnly,true);
   assert.deepEqual(calls[0].variantIds,[vid(1),vid(2)]);
 });
 test('partial October preserves observed units, does not fabricate zeros or recommendations',()=>{
@@ -76,7 +83,7 @@ test('verified demand adds only incremental units for an upcoming participating 
     {kind:'sales',day:'2026-11-05',channel:'Online Store',variant_id:vid(1),units:20}];
   const base={sellableLocationIds:[lid(1)],verifiedWindows:[{start:'2026-08-01',end:'2026-11-09',channels:['Online Store','POS']}]};
   const make=parts=>buildTwWorkbookRows({context,today:'2026-11-10',inventory,sales:historicalSales,settings:{...base,...parts}}).tabs['Order recommendations'][0];
-  assert.equal(make({}).suggested_units,27);
+  assert.equal(make({}).suggested_units,26);
   const upcoming={name:'Black Friday',start:'2027-11-05',end:'2027-11-09'};
   const inputs={leadDays:320,participates:['Black Friday'],packSize:6};
   const boosted=make({futureEvents:[upcoming],variants:{[vid(1)]:inputs}});
@@ -96,9 +103,73 @@ test('known social sales and confirmed non-TW exceptions do not block TW demand'
   const report=build(rows),oct=report.tabs['Monthly sales'].find(r=>r.period==='2026-10'&&r.variant_id===vid(1));
   assert.equal(oct.facebook_instagram_observed_units,2);
   assert.equal(oct.observed_total_units,4);
-  assert.equal(report.recommended,2);
+  assert.equal(report.recommended,1);
   assert.equal(report.coverage.find(r=>r.period==='2026-10'&&r.channel==='POS').confirmed_non_tw_lines_without_variant,1);
-  assert.equal(build([{...rows[0],unattributed_lines:1,tw_lines_without_variant:1},...rows.slice(1)]).recommended,0);
+  assert.equal(build([{...rows[0],unattributed_lines:1,tw_lines_without_variant:1},...rows.slice(1)]).recommended,1);
   assert.match(twSalesSql('fixture'),/WHEN 'facebook & instagram' THEN 'Facebook & Instagram'/);
   assert.match(twSalesSql('fixture'),/variant_id IS NULL AND NOT confirmed_non_tw_product/);
+});
+test('today includes post-sale activity without baking the past sale into ordinary demand',()=>{
+  const completeSettings={verifiedWindows:[{start:'2026-08-01',end:'2026-11-09',channels:['Online Store','POS']}]};
+  const locationNames=['Kings Cross','Shoreditch','Soho','Online Ready to Ship','Shoreditch Workshop'];
+  const stocked={...inventory,locations:locationNames.map((name,i)=>({id:lid(i+1),name})),
+    products:[{...inventory.products[0],variants:inventory.products[0].variants.map(v=>({...v,
+      locations:locationNames.map((location_name,i)=>({location_id:lid(i+1),location_name,
+        available:i===4?100:0,committed:10}))}))}]};
+  const data=[
+    ...sales,
+    {kind:'coverage',day:'2026-10-20',channel:'POS',eligible_orders:2,orders_with_lines:2,unattributed_lines:1},
+    {kind:'sales',day:'2026-11-05',channel:'Online Store',variant_id:vid(2),units:70},
+    {kind:'sales',day:'2026-10-21',channel:'Online Store',variant_id:vid(2),units:10},
+    {kind:'sales',day:'2026-11-10',channel:'Online Store',variant_id:vid(2),units:2}
+  ];
+  const run=sales=>buildTwWorkbookRows({context,today:'2026-11-10',inventory:stocked,sales,settings:completeSettings});
+  const report=run(data),top=report.tabs['Order recommendations'][0];
+  assert.equal(top.variant_id,vid(2));
+  assert.equal(top.black_friday_observed_units,70);
+  assert.equal(top.post_sale_observed_units,2);
+  assert.equal(top.ordinary_observed_units_excluding_post_sale,10);
+  assert.equal(top.usable_stock,0);
+  assert.equal(top.incremental_event_units,0);
+  assert.equal(top.suggested_units,run(data.filter(r=>r.day!=='2026-11-05'&&r.day!=='2026-11-10')).tabs['Order recommendations'].find(r=>r.variant_id===vid(2)).suggested_units);
+  assert.ok(top.suggested_units>0);
+  assert.equal(report.latestCovered,'2026-11-08');
+  assert.equal(report.coverageGapDays,1);
+  assert.equal(report.tabs['Stock by location'].find(r=>r.variant_id===vid(2)).workshop_available,100);
+  assert.equal(report.tabs['Monthly sales'].find(r=>r.period==='2026-11 MTD').partial_current_day,true);
+});
+
+test('only a verified stock snapshot on the historical cutoff may support an order quantity',()=>{
+  const historyContext={...context,end_date:'2026-10-31'};
+  const args={context:historyContext,today:'2026-11-10',inventory,sales,
+    settings:{sellableLocationIds:[lid(1)],verifiedWindows:[{start:'2026-08-01',end:'2026-11-01',channels:['Online Store','POS']}]}};
+  const get=snapshot=>buildTwWorkbookRows({...args,snapshot}).tabs['Order recommendations'][0];
+  assert.equal(get().usable_stock,null);
+  assert.equal(get({verified:true,date:'2026-10-31',inventory}).suggested_units,null);
+  assert.equal(get({verified:false,date:'2026-10-31',inventory:{...inventory,as_of:'2026-10-31T21:00:00Z'}}).suggested_units,null);
+  assert.equal(get({verified:true,date:'2026-10-31',inventory:{...inventory,as_of:'2026-10-31T21:00:00Z'}}).usable_stock,3);
+});
+
+test('London cutoff uses local midnight and rejects future or impossible dates',async()=>{
+  const {twSupplierScope}=await import('../public/oracle/tw-supplier-intent.js');
+  const summer=Date.parse('2026-07-31T23:30:00Z');
+  assert.equal(twSupplierScope('TW supplier stock report',summer).end_date,'2026-08-01');
+  assert.equal(twSupplierScope('TW supplier stock report as of 31 July 2026',summer).start_date,'2025-08-01');
+  assert.equal(twSupplierScope('TW supplier stock report as of 31 June 2026',summer).invalid,true);
+  assert.equal(twSupplierScope('TW supplier stock report as of 2026-08-02',summer).invalid,true);
+});
+
+test('historical catalogue-only read never asks Shopify for live inventory levels',async()=>{
+  const {readInventoryReport}=await import('../oracle/inventory-report.js');
+  const conn=nodes=>({nodes,pageInfo:{hasNextPage:false}});
+  const calls=[];
+  const result=await readInventoryReport({requiredExactTag:'tw',catalogueOnly:true,getToken:async()=>'fixture',
+    graphql:async(_token,q)=>{
+      calls.push(q.match(/query (\w+)/)?.[1]);
+      if(q.includes('InventoryCatalogue'))return {products:conn([{id:'gid://shopify/Product/1',title:'TW ring',tags:['TW'],status:'ACTIVE'}])};
+      if(q.includes('InventoryReportVariants'))return {product:{variants:conn([{id:vid(1),inventoryItem:{id:'fixture',tracked:true}}])}};
+      assert.fail('Historical catalogue queried live inventory');
+    }});
+  assert.deepEqual(calls,['InventoryCatalogue','InventoryReportVariants']);
+  assert.deepEqual(result.products[0].variants[0].locations,[]);
 });

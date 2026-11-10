@@ -447,6 +447,7 @@ function transitionAnalysisContextBase(existing,message,options={}){
     const context=validateAnalysisContext(consumed.context),changed=ANALYSIS_CONTEXT_FIELDS.filter(k=>JSON.stringify(base[k])!==JSON.stringify(context[k]));return {context,transition:{continuation:true,set:changed,clear:[],retain:ANALYSIS_CONTEXT_FIELDS.filter(k=>!changed.includes(k)),missing_required_fields:context.unresolved_required_fields,ready_to_execute:!context.unresolved_required_fields.length,applies_to_message:true,clarification_consumed:consumed.kind}};}
   const result=transitionContext(existing,text,options),pending=pendingClarificationKind(base);
   const calendar=reportPeriodResolution(text,options.now??Date.now());
+  if(result.context.tool_route==='get_tw_supplier_stock_report')return result;
   if(calendar.invalid&&!result.context.request_kind&&!result.context.promotion_context){
     result.context=validateAnalysisContext({...result.context,period_issue:'invalid_period',start_date:null,end_date:null,unresolved_required_fields:['start_date','end_date']});
     result.transition.ready_to_execute=false;result.transition.missing_required_fields=['start_date','end_date'];

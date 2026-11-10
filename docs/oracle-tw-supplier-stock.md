@@ -1,10 +1,9 @@
 # TW supplier stock report
 
 In authenticated Oracle chat, type **TW supplier stock report** or **TW supplier
-stock report for October 2026**. The default is the last completed London
-calendar month. A workbook includes the 12 months ending in that month and a
-separate current month-to-date through yesterday. A historical month selection
-does not turn live inventory into a historical snapshot.
+stock report for October 2026**. The default is today in London. The workbook
+includes 12 completed months and, where applicable, the cutoff month-to-date.
+Historical requests never use live inventory.
 
 ## Evidence and planning inputs
 
@@ -43,3 +42,26 @@ Unknown lead time gives a three-month baseline. Unknown inbound is not
 deducted and is flagged. Unverified demand or usable stock withholds the
 recommendation. Review gaps before placing a purchase order. No schedule or
 supplier action is added.
+
+## As-of ordering
+
+Use `TW supplier stock report` for today, or `TW supplier stock report as of
+10 November 2026` (ISO dates also work). The completed-month form ends at that
+month's London month-end. Sales stop at the selected cutoff; today's sales
+are partial and do not enter the run rate. The coverage tab distinguishes
+latest reconciled completed day, trailing gaps and verified days.
+
+Today's report uses the uniquely resolved Kings Cross, Shoreditch, Soho and
+Online Ready to Ship locations, or the reviewed location-ID setting if the
+names cannot be resolved. Workshop stock is excluded. Available units already
+exclude commitments. Earlier cutoffs run a catalogue-only read. A verified
+same-date stock snapshot may be supplied by a provider, but no historical
+stock source is currently wired in production.
+
+The provisional baseline uses identifiable ordinary sales over reconciled
+completed observation days, requiring at least 80% per channel in each of
+the last three completed months. Completed current-month ordinary days can
+also contribute. Unresolved lines are disclosed and excluded from variant
+units. Unverified absence never establishes zero demand. Black Friday and
+post-sale units are reported separately; only reviewed future events can
+increase the target.

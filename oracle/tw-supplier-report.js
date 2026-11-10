@@ -4,6 +4,7 @@ import {priorityArtifactId} from './product-priority-storage.js';
 import {londonDay,offsetMonth} from '../public/oracle/tw-supplier-intent.js';
 
 const CHANNELS=['Online Store','POS'];
+const POOL=['Kings Cross','Shoreditch','Soho','Online Ready to Ship'];
 const SOCIAL='Facebook & Instagram';
 const DAY=86400000;
 const days=(start,end)=>Array.from({length:Math.max(0,Math.round((Date.parse(end)-Date.parse(start))/DAY))},(_,i)=>new Date(Date.parse(start)+i*DAY).toISOString().slice(0,10));
@@ -34,11 +35,17 @@ export function twSupplierSettings(raw){
   }catch{return {invalid:true};}
 }
 
-export function buildTwWorkbookRows({context,today,inventory,sales,settings={},failures=[]}){
-  const last=context.end_date.slice(0,7),mtd=today.slice(0,7)+'-01';
+export function buildTwWorkbookRows({context,today,inventory,snapshot=null,sales,settings={},failures=[]}){
+  const cutoff=context.end_date, end=addDays(cutoff,1), live=cutoff===today;
+  const validSnapshot=snapshot?.verified===true&&snapshot.date===cutoff&&
+    Number.isFinite(Date.parse(snapshot.inventory?.as_of))&&londonDay(snapshot.inventory.as_of)===cutoff;
+  const stock=live?inventory:validSnapshot?snapshot.inventory:null;
+  const month=cutoff.slice(0,7),last=live?offsetMonth(month,-1):offsetMonth(end.slice(0,7),-1);
   const months=Array.from({length:12},(_,i)=>{const m=offsetMonth(last,i-11);return {label:m,start:m+'-01',end:offsetMonth(m,1)+'-01'};});
-  const periods=[...months,{label:mtd.slice(0,7)+' MTD',start:mtd,end:today}];
-  const historical=EVENTS.filter(e=>periods.some(p=>overlap(p.start,p.end,e.start,e.end)));
+  // The current day is never counted as a completed trading day.
+  const periods=[...months,...(last!==month?[{label:month+' MTD',start:month+'-01',end}]:[])];
+  const historical=EVENTS.filter(e=>e.start<end&&e.end>context.start_date).map(e=>({...e,end:e.end>end?end:e.end}));
+  const newestBlackFriday=historical.filter(e=>e.name==='Black Friday'&&e.end>offsetMonth(month,-1)+'-01').at(-1);
   const actualDays=new Map(),units=new Map();
   for(const r of sales||[]){
     if(r.kind==='coverage')actualDays.set(r.day+'|'+r.channel,r);
@@ -51,9 +58,27 @@ export function buildTwWorkbookRows({context,today,inventory,sales,settings={},f
   const certified=(day,channel)=>(settings.verifiedWindows||[]).some(w=>w.start<=day&&day<w.end&&w.channels?.includes(channel));
   const dayComplete=(day,channel)=>{
     const r=actualDays.get(day+'|'+channel);
-    return sales!=null&&certified(day,channel)&&!Number(actualDays.get(day+'|Unknown')?.eligible_orders||0)&&(!r||
+    return day<today&&sales!=null&&certified(day,channel)&&!Number(actualDays.get(day+'|Unknown')?.eligible_orders||0)&&(!r||
       Number(r.eligible_orders)===Number(r.orders_with_lines)&&!Number(r.unattributed_lines)&&!Number(r.invalid_quantity_lines));
   };
+  // Reconciled observations can support a provisional run rate, but only
+  // reviewed days can prove zero. Unresolved quantities stay out of units.
+  const observedDay=(d,c)=>{
+    const r=actualDays.get(d+'|'+c);
+    return d<today&&sales!=null&&(r?Number(r.eligible_orders)>0&&Number(r.eligible_orders)===Number(r.orders_with_lines):certified(d,c));
+  };
+  const forecastStart=months.at(-3).start;
+  const forecastEnd=live?today:end;
+  const ordinaryDays=c=>days(forecastStart,forecastEnd).filter(d=>!EVENTS.some(e=>e.channels.includes(c)&&e.start<=d&&d<e.end));
+  const sampleDays=Object.fromEntries(CHANNELS.map(c=>[c,ordinaryDays(c).filter(d=>observedDay(d,c))]));
+  const minimumEvidence=CHANNELS.every(c=>months.slice(-3).every(m=>{
+    const expected=ordinaryDays(c).filter(d=>m.start<=d&&d<m.end).length;
+    return expected>0&&sampleDays[c].filter(d=>m.start<=d&&d<m.end).length>=Math.ceil(expected*.8);
+  }));
+  const verifiedForecast=CHANNELS.every(c=>ordinaryDays(c).every(d=>dayComplete(d,c)));
+  const coveredDays=days(context.start_date,end).filter(d=>CHANNELS.every(c=>observedDay(d,c)));
+  const latestCovered=coveredDays.at(-1)||null;
+  const coverageGapDays=latestCovered==null?null:days(addDays(latestCovered,1),live?today:end).length;
   const selected=[];
   const identities=new Set();
   for(const p of inventory?.products||[])for(const v of p.variants){
@@ -67,24 +92,33 @@ export function buildTwWorkbookRows({context,today,inventory,sales,settings={},f
     const total=k=>sales==null?null:observed.reduce((s,r)=>s+Number(r[k]??0),0);
     const orders=total('eligible_orders'),withLines=total('orders_with_lines');
     coverage.push({period:p.label,channel,start:p.start,end_exclusive:p.end,days:dates.length,
-      verified_days:dates.filter(d=>dayComplete(d,channel)).length,eligible_orders_observed:orders,orders_with_lines:withLines,
+      partial_current_day:live&&dates.includes(today),reconciled_observation_days:dates.filter(d=>observedDay(d,channel)).length,verified_days:dates.filter(d=>dayComplete(d,channel)).length,eligible_orders_observed:orders,orders_with_lines:withLines,
       orders_without_lines:orders==null?null:orders-withLines,unattributed_lines:total('unattributed_lines'),
       confirmed_non_tw_lines_without_variant:total('non_tw_lines_without_variant'),
       confirmed_tw_lines_without_variant:total('tw_lines_without_variant'),
       lines_outside_current_tw:total('outside_selection_lines'),invalid_quantity_lines:total('invalid_quantity_lines')});
   }
+  coverage.push({status:'Sales cutoff and latest reconciled completed date',cutoff_date:cutoff,
+    latest_reconciled_date:latestCovered,completed_days_after_latest_reconciled_date:coverageGapDays,partial_current_day:live,
+    stock_observed_at:stock?.as_of??null});
   if(settings.invalid)coverage.push({status:'Reviewed supplier settings could not be parsed; planning inputs withheld.'});
   for(const note of failures)coverage.push({status:note});
-  coverage.push({status:'Zeros require a reviewed source coverage window and reconciliation with eligible finance orders. Observed units in incomplete periods are lower bounds.'},
+  coverage.push({status:'Zeros require a reviewed source coverage window and reconciliation with eligible finance orders. Observed units in incomplete periods are lower bounds. Latest reconciled date is not a certificate of source completeness or uninterrupted history.'},
     {status:'Sales are original line units on native successful orders; cancelled orders and known Matrixify imports excluded. Returns, historical stock, receipts, stockout days and sell-through have no verified binding.'},
-    {status:'Current tag and location stock reflect report run time, including for a historical report month. Available stock is not reduced by committed stock a second time.'},
+    {status:'Catalogue tags reflect report run time. Historical stock requires a verified snapshot for the selected date. Available stock is not reduced by committed stock a second time.'},
     {status:'Facebook & Instagram observed units are shown separately and excluded from the Online Store + POS forecast and totals. Missing variant IDs on confirmed non-TW catalogue products are counted separately. Other unresolved lines still block verification.'},
+    {status:'Provisional demand requires reconciled observations on at least 80% of ordinary days in each of the last three completed months per channel. Current-day sales are shown but excluded from the run rate. Unresolved sales are omitted; unverified absence is not zero demand.'},
     {status:'Inbound, future promotions, lead times, supplier pack sizes and sellable location IDs require reviewed planning inputs.'});
-  const locations=inventory?.locations||[];
-  const locationComplete=inventory?.population?.locations_complete===true;
+  const locations=stock?.locations||[];
+  const stockVariants=new Map((stock?.products||[]).flatMap(p=>p.variants.map(v=>[v.id,v])));
+  const locationComplete=stock?.population?.locations_complete===true;
   const catalogueComplete=inventory?.population?.catalogue_complete===true&&!inventory.failures?.some(f=>f.stage==='variants');
   const sumStock=(ls,required=true)=>required&&ls.length&&ls.every(l=>Number.isSafeInteger(l.available))?ls.reduce((n,l)=>n+l.available,0):null;
-  const stockId=new Set(settings.sellableLocationIds||[]);
+  const poolMatches=POOL.map(name=>locations.filter(l=>l.name?.trim().toLowerCase()===name.toLowerCase()));
+  const stockId=new Set(poolMatches.every(group=>group.length===1)?poolMatches.map(group=>group[0].id):[]);
+  // An explicit reviewed pool remains supported, but cannot supply a missing snapshot.
+  if(!stockId.size&&settings.sellableLocationIds?.length)
+    for(const id of settings.sellableLocationIds)stockId.add(id);
   const signalFor=(p,channel,id,excludeEvents=false)=>{
     const dates=days(p.start,p.end).filter(d=>!excludeEvents||!EVENTS.some(e=>e.channels.includes(channel)&&e.start<=d&&d<e.end));
     const observed=dates.map(d=>units.get([d,channel,id].join('|'))).filter(n=>n!==undefined);
@@ -96,21 +130,22 @@ export function buildTwWorkbookRows({context,today,inventory,sales,settings={},f
     const saleSlices=[
       {label:'Pre-sale October (19–31 Oct 2026)',start:'2026-10-19',end:'2026-11-01'},
       {label:'Pre-sale November (1–4 Nov 2026)',start:'2026-11-01',end:'2026-11-05'},
-      {label:'Black Friday (5–8 Nov 2026)',start:'2026-11-05',end:'2026-11-09'}
-    ].filter(p=>periods.some(r=>r.start<=p.start&&p.end<=r.end));
+      {label:'Black Friday (5–8 Nov 2026)',start:'2026-11-05',end:'2026-11-09'},
+      ...(newestBlackFriday&&newestBlackFriday.end<end?[{label:'Post-sale through cutoff',start:newestBlackFriday.end,end}]:[])
+    ].filter(p=>p.start<end&&p.end>context.start_date).map(p=>({...p,end:p.end>end?end:p.end}));
     const variantMonths=[];
     for(const period of [...periods,...saleSlices]){
       const [online,pos,social]=[...CHANNELS,SOCIAL].map(c=>signalFor(period,c,id));
       variantMonths.push({...label,period:period.label,online_units:online.units,pos_units:pos.units,facebook_instagram_observed_units:social.units,
         observed_total_units:online.units==null&&pos.units==null?null:(online.units??0)+(pos.units??0),
-        returns:null,coverage:online.complete&&pos.complete?'verified':'partial or unavailable'});
+        returns:null,partial_current_day:live&&period.start<=today&&today<period.end,coverage:online.complete&&pos.complete?'verified':'partial or unavailable'});
     }
     tabs['Monthly sales'].push(...variantMonths);
-    const level=(v.locations||[]).map(l=>({...l,workshop:/\bworkshops?\b/i.test(l.location_name||'')}));
+    const level=(stockVariants.get(id)?.locations||[]).map(l=>({...l,workshop:/\bworkshops?\b/i.test(l.location_name||'')}));
     const combined=sumStock(level,locationComplete&&level.length===locations.length);
     const usableLevels=level.filter(l=>!l.workshop&&stockId.has(l.location_id));
     const usable=sumStock(usableLevels,locationComplete&&stockId.size===usableLevels.length);
-    const stockRow={...label,period:'Current',combined_available:combined,usable_available:usable,
+    const stockRow={...label,period:live?'Current':cutoff,stock_observed_at:stock?.as_of??null,combined_available:combined,usable_available:usable,
       workshop_available:sumStock(level.filter(l=>l.workshop),locationComplete),opening_available:null,closing_available:null,receipts:null,stockout_days:null,sell_through:null};
     for(const l of level)stockRow['Available · '+l.location_name+' · '+l.location_id.split('/').at(-1)]=l.available??null;
     tabs['Stock by location'].push(stockRow);
@@ -118,22 +153,25 @@ export function buildTwWorkbookRows({context,today,inventory,sales,settings={},f
       opening_available:null,closing_available:null,receipts:null,stockout_days:null,sell_through:null,
       coverage:'Historical inventory and receipts unavailable'});
     const recent=months.slice(-3);
-    const ordinary=recent.map(period=>CHANNELS.map(c=>signalFor(period,c,id,true)));
     const inputs=settings.variants?.[id]||{};
-    const demand=ordinary.every(ch=>ch.every(s=>s.complete))
-      ?ordinary.reduce((sum,ch,i)=>sum+ch.reduce((n,s)=>n+s.units/s.days*days(recent[i].start,recent[i].end).length,0),0)/3:null;
+    const unitsFor=(c,ds)=>ds.reduce((n,d)=>n+(units.get([d,c,id].join('|'))??0),0);
+    const sampleTotal=CHANNELS.reduce((n,c)=>n+unitsFor(c,sampleDays[c]),0);
+    const dailyRates=Object.fromEntries(CHANNELS.map(c=>[c,sampleDays[c].length?unitsFor(c,sampleDays[c])/sampleDays[c].length:null]));
+    const demand=minimumEvidence&&(sampleTotal>0||verifiedForecast)
+      ?CHANNELS.reduce((n,c)=>n+dailyRates[c]*30.4375,0):null;
+    const ordinaryBeforeSale=CHANNELS.map(c=>signalFor({start:forecastStart,end:newestBlackFriday?.start??end},c,id,true).units);
+    const soldDuring=newestBlackFriday?CHANNELS.filter(c=>newestBlackFriday.channels.includes(c)).map(c=>signalFor(newestBlackFriday,c,id).units):[];
+    const postSale=newestBlackFriday&&newestBlackFriday.end<end
+      ?CHANNELS.map(c=>signalFor({start:newestBlackFriday.end,end},c,id).units):[];
+    const observedTotal=xs=>xs.some(n=>n!=null)?xs.reduce((n,x)=>n+(x??0),0):null;
     const lead=known(inputs.leadDays)?inputs.leadDays:null;
-    const arrival=addDays(today,lead??0),horizonMonth=offsetMonth(arrival.slice(0,7),3);
+    const arrival=addDays(cutoff,lead??0),horizonMonth=offsetMonth(arrival.slice(0,7),3);
     const monthEnd=addDays(offsetMonth(horizonMonth,1)+'-01',-1);
     const horizonEnd=horizonMonth+'-'+(arrival.slice(8)>monthEnd.slice(8)?monthEnd.slice(8):arrival.slice(8));
     const historicalRows=historical.map(e=>{
       const breakdown=e.channels.map(c=>signalFor(e,c,id)), complete=breakdown.every(s=>s.complete);
       const eventUnits=breakdown.some(s=>s.units!=null)?breakdown.reduce((n,s)=>n+(s.units??0),0):null;
-      const dailyRates=e.channels.map(c=>{
-        const s=ordinary.map(ch=>ch[CHANNELS.indexOf(c)]);
-        return s.every(x=>x.complete)?s.reduce((n,x)=>n+x.units,0)/s.reduce((n,x)=>n+x.days,0):null;
-      });
-      const ordinaryUnits=dailyRates.every(n=>n!=null)?dailyRates.reduce((a,b)=>a+b,0)*days(e.start,e.end).length:null;
+      const ordinaryUnits=demand==null?null:e.channels.reduce((n,c)=>n+dailyRates[c],0)*days(e.start,e.end).length;
       return {...label,event:e.name,start:e.start,end_exclusive:e.end,observed_units:eventUnits,
         ordinary_monthly_units:demand==null?null:round(demand),
         ordinary_units_for_window:ordinaryUnits==null?null:round(ordinaryUnits),
@@ -141,7 +179,7 @@ export function buildTwWorkbookRows({context,today,inventory,sales,settings={},f
         coverage:complete?'verified lines; stockouts unknown':'partial; review last observed volume'};
     });
     tabs['Seasonal demand'].push(...historicalRows);
-    const upcoming=(settings.futureEvents||[]).filter(e=>overlap(today,horizonEnd,e.start,e.end)&&inputs.participates?.includes(e.name));
+    const upcoming=(settings.futureEvents||[]).filter(e=>e.start>cutoff&&overlap(cutoff,horizonEnd,e.start,e.end)&&inputs.participates?.includes(e.name));
     let uplift=0,unresolvedEvent=false;
     for(const e of upcoming){
       const prev=historicalRows.filter(r=>r.event===e.name&&r.estimated_incremental_units!=null).at(-1);
@@ -153,35 +191,37 @@ export function buildTwWorkbookRows({context,today,inventory,sales,settings={},f
         coverage:extra==null?'insufficient history; review':'provisional uplift; stockouts unknown',
         lead_time_risk:lead==null?null:addDays(today,lead)>e.start});
     }
-    const flags=['Historical stockouts and variant launch dates unverified'];
+    const flags=['Provisional: based on identifiable ordinary sales','Historical stockouts and variant launch dates unverified'];
+    if(!verifiedForecast)flags.push('Unverified days or unresolved lines; no zero demand inferred');
+    if(coverageGapDays>0||latestCovered==null)flags.push('Completed-day sales coverage has a trailing gap');
+    if(live)flags.push('Current-day sales are partial');
+    if(!live&&!stock)flags.push('No verified inventory snapshot for cutoff');
     if(demand==null)flags.push('Demand coverage insufficient');
     if(usable==null)flags.push('Usable stock unverified');
     if(lead==null)flags.push('No lead-time allowance');
-    const inbound=known(inputs.confirmedInboundDueInTime)&&inputs.inboundReviewedOn===today&&inputs.inboundHorizonEnd===horizonEnd?inputs.confirmedInboundDueInTime:null;
+    const inbound=known(inputs.confirmedInboundDueInTime)&&inputs.inboundReviewedOn===cutoff&&inputs.inboundHorizonEnd===horizonEnd?inputs.confirmedInboundDueInTime:null;
     if(inbound==null)flags.push('Check inbound; none deducted');
     if(!settings.futureEvents?.length||!Array.isArray(inputs.participates))flags.push('Future event participation or dates unverified; baseline only');
-    if(unresolvedEvent)flags.push('Upcoming event uplift unavailable; review');
+    if(unresolvedEvent)flags.push('Upcoming event uplift unavailable; baseline excludes it');
     if(!catalogueComplete)flags.push('Catalogue incomplete');
     const target=demand==null?null:demand*(3+(lead??0)/30.4375);
-    const recommended=target==null||usable==null||unresolvedEvent||!catalogueComplete?null:
+    const recommended=target==null||usable==null||!catalogueComplete?null:
       Math.ceil(Math.max(0,target+uplift-Math.max(0,usable)-(inbound??0))/(known(inputs.packSize)&&inputs.packSize>0?inputs.packSize:1))*(known(inputs.packSize)&&inputs.packSize>0?inputs.packSize:1);
     tabs['Order recommendations'].push({...label,...Object.fromEntries(recent.map(m=>{
       const found=variantMonths.find(r=>r.period===m.label);
       return [m.label+' observed units',found?.observed_total_units??null];
-    })),average_monthly_ordinary_demand:demand==null?null:round(demand),three_month_target:demand==null?null:round(3*demand),
+    })),ordinary_observed_units_excluding_post_sale:observedTotal(ordinaryBeforeSale),
+      black_friday_observed_units:observedTotal(soldDuring),post_sale_observed_units:observedTotal(postSale),
+      forecast_online_observed_days:sampleDays['Online Store'].length,forecast_pos_observed_days:sampleDays.POS.length,
+      stock_observed_at:stock?.as_of??null,average_monthly_ordinary_demand:demand==null?null:round(demand),three_month_target:demand==null?null:round(3*demand),
       supplier_lead_days:lead,horizon_end_exclusive:horizonEnd,incremental_event_units:unresolvedEvent?null:round(uplift),usable_stock:usable,
       confirmed_inbound_due_in_time:inbound,months_of_cover:demand>0&&usable!=null?round(Math.max(0,usable)/demand):null,
       suggested_units:recommended,review:flags.join('; ')});
   }
-  const recentActivity=new Map(tabs['Monthly sales'].filter(r=>r.period===last||r.period.endsWith(' MTD'))
-    .map(r=>r.variant_id).map(id=>[id,0]));
-  for(const r of tabs['Monthly sales'])if(r.period===last||r.period.endsWith(' MTD'))
-    recentActivity.set(r.variant_id,(recentActivity.get(r.variant_id)||0)+(r.observed_total_units||0));
-  tabs['Order recommendations'].sort((a,b)=>
-    Number((recentActivity.get(b.variant_id)||0)>0&&b.usable_stock!=null&&b.usable_stock<=3)-
-    Number((recentActivity.get(a.variant_id)||0)>0&&a.usable_stock!=null&&a.usable_stock<=3)||
-    (recentActivity.get(b.variant_id)||0)-(recentActivity.get(a.variant_id)||0)||a.variant_id.localeCompare(b.variant_id));
-  return {tabs,variants:selected.length,catalogueComplete,coverage,
+  const priority=r=>(r.black_friday_observed_units??0)>0&&r.usable_stock!=null&&r.usable_stock<=3;
+  tabs['Order recommendations'].sort((a,b)=>Number(priority(b))-Number(priority(a))||
+    (b.black_friday_observed_units??0)-(a.black_friday_observed_units??0)||a.variant_id.localeCompare(b.variant_id));
+  return {tabs,variants:selected.length,catalogueComplete,coverage,latestCovered,coverageGapDays,stockAsOf:stock?.as_of??null,
     recommended:tabs['Order recommendations'].filter(r=>r.suggested_units!=null).length};
 }
 
@@ -191,7 +231,7 @@ export async function assertTwArtifact(a){
   const wb=new ExcelJS.Workbook();await wb.xlsx.load(bytes);
   if(SHEETS.some(name=>!wb.getWorksheet(name))||wb.getWorksheet(SHEETS[0]).rowCount!==a.envelope.variant_count+1)throw Error('TW_INVALID_WORKBOOK');
 }
-export function createTwSupplierReportService({readInventory,readSales,artifactStore,settings={},now=Date.now}){
+export function createTwSupplierReportService({readInventory,readSales,readSnapshot,artifactStore,settings={},now=Date.now}){
   return async(message,options)=>{
     const {analysisContext:context,exportOwner,requestId,signal,deadlineAt}=options;
     if(!exportOwner||!requestId)return {answer:'The TW report needs an authenticated Oracle chat export.',tools:[],analysis_unavailable:true};
@@ -199,19 +239,21 @@ export function createTwSupplierReportService({readInventory,readSales,artifactS
     let saved=await artifactStore.get(id,exportOwner);
     if(saved&&(saved.request!==message||saved.envelope?.start_date!==context.start_date||saved.envelope?.end_date!==context.end_date))throw Error('TW_EXPORT_REQUEST_CONFLICT');
     if(!saved){
-      const today=londonDay(options.now??now()),failures=[];
-      let inventory=null,sales=null;
-      try{inventory=await readInventory({signal,deadlineAt:deadlineAt?Math.min(deadlineAt,Date.now()+120000):Date.now()+120000});}
-      catch{failures.push('Live catalogue and inventory read failed.');}
+      const runTime=options.now??now(),today=londonDay(runTime),live=context.end_date===today,failures=[];
+      let inventory=null,sales=null,snapshot=null;
+      try{inventory=await readInventory({signal,catalogueOnly:!live,deadlineAt:deadlineAt?Math.min(deadlineAt,Date.now()+120000):Date.now()+120000});}
+      catch{failures.push('Shopify catalogue or inventory read failed.');}
       if(inventory?.failures?.length)failures.push('Catalogue or inventory is partial: '+[...new Set(inventory.failures.map(f=>f.stage))].join(', '));
       const variantIds=(inventory?.products||[]).flatMap(p=>p.variants.map(v=>v.id));
       const catalogueAudit=inventory?.population?.audit||[];
       const twProductIds=catalogueAudit.filter(p=>p.eligible===true).map(p=>p.product_id);
       const nonTwProductIds=catalogueAudit.filter(p=>p.exclusion==='required_tag_missing').map(p=>p.product_id);
-      const pastEnd=offsetMonth(context.end_date.slice(0,7),1)+'-01';
-      try{sales=await readSales({start:context.start_date,endExclusive:today>pastEnd?today:pastEnd,completedEndExclusive:pastEnd,mtdStart:today.slice(0,7)+'-01',variantIds,twProductIds,nonTwProductIds,signal,deadlineAt});}
+      if(!live&&readSnapshot)try{snapshot=await readSnapshot({date:context.end_date,variantIds,signal,deadlineAt});}
+      catch{failures.push('Historical inventory snapshot read failed.');}
+      const endExclusive=addDays(context.end_date,1);
+      try{sales=await readSales({start:context.start_date,endExclusive,observedThrough:new Date(runTime).toISOString(),variantIds,twProductIds,nonTwProductIds,signal,deadlineAt});}
       catch{failures.push('Shopify finance or retained line-item query failed.');}
-      const report=buildTwWorkbookRows({context,today,inventory,sales,settings,failures});
+      const report=buildTwWorkbookRows({context,today,inventory,snapshot,sales,settings,failures});
       const wb=new ExcelJS.Workbook();
       for(const name of SHEETS){
         const sheet=wb.addWorksheet(name),rows=report.tabs[name],columns=[...new Set(rows.flatMap(Object.keys))];
@@ -226,8 +268,8 @@ export function createTwSupplierReportService({readInventory,readSales,artifactS
       const incomplete=periods.filter(r=>r.verified_days<r.days).length;
       const envelope={kind:'tw_supplier_report',subject:'tw_supplier_stock',...period,periods:[period],
         variant_count:report.variants,recommended_count:report.recommended,unverified_channel_periods:incomplete,
-        catalogue_complete:report.catalogueComplete,failures,as_of:inventory?.as_of||null};
-      const answer=`TW supplier stock report: ${period.start_date} to ${period.end_date}, plus current month through yesterday (London). ${report.variants} variants; ${report.recommended} with a provisional or supported order quantity. ${incomplete} channel periods have incomplete or unverified sales coverage. Historical stock, receipts, stockout days, returns and sell-through are unavailable from the verified bindings. ${failures.join(' ')} See Coverage in the workbook.`;
+        catalogue_complete:report.catalogueComplete,failures,as_of:report.stockAsOf,latest_reconciled_sales_date:report.latestCovered,sales_gap_days:report.coverageGapDays};
+      const answer=`TW supplier stock report: ${period.start_date} to ${period.end_date}, inclusive (London). ${live?'Today is partial.':'Historical stock is blank unless a verified snapshot is available.'} Latest completed date with reconciled Online Store and POS observations: ${report.latestCovered||'unavailable'}; completed days after that through cutoff: ${report.coverageGapDays??'unknown'}. ${report.variants} variants; ${report.recommended} with a provisional or supported order quantity. ${incomplete} channel periods have incomplete or unverified sales coverage. Receipts, stockout days, returns and sell-through are unavailable from the verified bindings. ${failures.join(' ')} See Coverage in the workbook.`;
       saved={request:message,envelope,answer,filename:'oracle-tw-supplier-stock.xlsx',sha256:createHash('sha256').update(bytes).digest('hex'),xlsx_base64:bytes.toString('base64')};
       await assertTwArtifact(saved);
       signal?.throwIfAborted();await options.assertLease?.();
