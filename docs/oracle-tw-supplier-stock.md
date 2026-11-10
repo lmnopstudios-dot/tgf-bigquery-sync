@@ -78,3 +78,17 @@ the last three completed months. Completed current-month ordinary days can
 also contribute. Unresolved lines are disclosed and excluded from variant
 units. Unverified absence never establishes zero demand. Black Friday and
 post-sale units are reported separately; May uplift is a separate planning line and never changes the ordinary buy.
+
+## Trial buy and Read me
+
+The Trial buy tab is a review queue, never part of the ordinary buy. It
+screens variants without an ordinary recommendation using the last six
+calendar months of observed Online Store and POS units. At least two
+identified units and known pooled stock are required. Variants with stock
+remaining must show a risk of running out before delivery based on their
+observed ordinary sales pace; promotional spikes do not drive that pace.
+Same-day partial sales do not count. Trial quantities are capped at three
+and reduced by projected remaining stock and confirmed dated inbound in
+the cover period. Verify inbound and supplier pack sizes before placing a PO.
+The first workbook tab explains the evidence and the difference between a
+blank quantity and a calculated zero.
