@@ -38,7 +38,7 @@ const governedBaseline = async ({message,baselineOverview,baselineOptions}) => {
 // route names, so a deterministic transition cannot silently become orphaned.
 export const ANALYSIS_ROUTE_DISPATCHERS = Object.freeze(Object.fromEntries(ANALYSIS_TOOL_ROUTES.map(route=>[
   route,
-  ['get_tw_supplier_stock_report','compare_historical_events','analyze_customer_journey','get_population_conversion','get_order_value_analysis','get_shopify_inventory_by_location','get_meta_performance','get_instagram_performance','get_woocommerce_device_conversion','get_governed_device_conversion','get_general_sales_analysis','get_daily_sales_analysis','export_product_priorities','get_klaviyo_email_performance','get_klaviyo_click_purchase_opportunities','compare_klaviyo_email_with_shopify_referrer'].includes(route)
+  ['get_eyewear_sales_stock','get_tw_supplier_stock_report','compare_historical_events','analyze_customer_journey','get_population_conversion','get_order_value_analysis','get_shopify_inventory_by_location','get_meta_performance','get_instagram_performance','get_woocommerce_device_conversion','get_governed_device_conversion','get_general_sales_analysis','get_daily_sales_analysis','export_product_priorities','get_klaviyo_email_performance','get_klaviyo_click_purchase_opportunities','compare_klaviyo_email_with_shopify_referrer'].includes(route)
     ? governedBaseline
     : baselineThenAgent
 ])));
@@ -140,7 +140,7 @@ function disclosePeriod(result,context){
   return {...result,answer:`**Resolved dates:** ${context.start_date} to ${context.end_date}${context.comparison_start_date?` versus ${context.comparison_start_date} to ${context.comparison_end_date}`:''}, inclusive (Europe/London). Current day ${context.current_day_included?'included; evidence through the runtime cutoff may be partial':'excluded'}. Runtime cutoff: ${context.date_cutoff}.\n\n${result.answer}`};
 }
 function unsupportedValueOperation(request,context,message){
-  if(!request||['get_order_value_analysis','get_tw_supplier_stock_report'].includes(context?.tool_route))return false;
+  if(!request||['get_order_value_analysis','get_tw_supplier_stock_report','get_eyewear_sales_stock'].includes(context?.tool_route))return false;
   return !(isPhasedSale(context?.event_scope?.periods)&&!request.charge_domain&&
     request.operations.includes('merchandise_mean')&&
     request.operations.every(op=>['merchandise_mean','optional_product_enrichment'].includes(op))&&

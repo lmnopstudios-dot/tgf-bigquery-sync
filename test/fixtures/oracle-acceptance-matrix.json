@@ -1382,6 +1382,10 @@
     {
       "file": "test/oracle-tw-supplier-report.test.js",
       "purpose": "TW supplier short and original requests through durable chat, authenticated workbook, partial October and missing-evidence recommendation safeguards."
+    },
+    {
+      "file": "test/oracle-eyewear-report.test.js",
+      "purpose": "Dedicated eyewear command and original durable request, scoped order totals, approved and conflicting mappings, stock pagination, independent source failures and authenticated workbook."
     }
   ]
 }

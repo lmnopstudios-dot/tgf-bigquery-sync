@@ -1,3 +1,5 @@
+import {createEyewearReportService,createEyewearStockReader} from './oracle/eyewear-report.js';
+import {createEyewearSalesReader} from './oracle/eyewear-sales.js';
 import {createTwSupplierReportService,twSupplierSettings} from './oracle/tw-supplier-report.js';
 import {createTwSalesReader} from './oracle/tw-supplier-sales.js';
 import {readInventoryReport,INVENTORY_EXPORT_LIMITS} from './oracle/inventory-report.js';
@@ -4218,7 +4220,9 @@ const twSupplierReport=createTwSupplierReportService({
   readSales:createTwSalesReader({bigquery,project:GOOGLE_PROJECT_ID}),artifactStore:priorityExportStore,
   settings:twSupplierSettings(process.env.ORACLE_TW_SUPPLIER_SETTINGS)
 });
-baselineOverview=createOracleBaselineDispatcher({twSupplierReport,currentStock,productPriorityExport,generalAnalytics,historicalEventComparison,ecommerceBaselineOverview,productEvidenceReport});
+const eyewearReport=createEyewearReportService({...createEyewearSalesReader({bigquery,project:GOOGLE_PROJECT_ID}),
+  readStock:createEyewearStockReader({graphql:shopifyGraphQL,getToken:getShopifyAccessToken}),artifactStore:priorityExportStore});
+baselineOverview=createOracleBaselineDispatcher({eyewearReport,twSupplierReport,currentStock,productPriorityExport,generalAnalytics,historicalEventComparison,ecommerceBaselineOverview,productEvidenceReport});
 
 async function getSalesByLocation({
   start_date,
