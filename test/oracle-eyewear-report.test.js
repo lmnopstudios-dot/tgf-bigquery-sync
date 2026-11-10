@@ -158,3 +158,14 @@ test('a clear historical title anchors approved older aliases without a current 
   assert.ok(mappings.eligible.has('square:square:alias'));
   assert.equal(mappings.resolution.get('woo:ww:9').canonical,mappings.resolution.get('square:square:alias').canonical);
 });
+
+test('Square eyewear binds only retained order and line views and withholds unsupported fields',()=>{
+  const sql=eyewearSalesSql('fixture','square');
+  assert.deepEqual([...new Set([...sql.matchAll(/fixture\.square_data\.(\w+)/g)].map(m=>m[1]))],
+    ['retail_orders','retail_order_items']);
+  assert.match(sql,/PARTITION BY order_id ORDER BY updated_at/);
+  assert.match(sql,/PARTITION BY order_id, COALESCE/);
+  assert.match(sql,/JOIN eligible e USING\(oid\)/);
+  assert.match(sql,/'Unknown' channel/);
+  assert.match(sql,/CAST\(NULL AS NUMERIC\) sales/);
+});

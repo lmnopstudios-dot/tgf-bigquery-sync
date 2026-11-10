@@ -1,6 +1,5 @@
 import {assertDatasetIdentifier,datasetLocation} from '../bigquery/dataset-location.js';
 import {MATRIXIFY_APP_ID} from '../finance/canonical.js';
-import {squareSessionCtes} from './event-timestamp-provider.js';
 import {governedDecisionCtes,productFamilyCtes} from './product-mapping.js';
 
 export const EYEWEAR_SOURCES=Object.freeze({shopify:'shopify_data',square:'square_data',ww:'metorik_uk',usd:'metorik_us'});
@@ -34,17 +33,19 @@ export function eyewearSalesSql(project,source){
         SAFE_CAST(discounted_total_presentment AS NUMERIC) sales,UPPER(presentment_currency) currency FROM retained)`;
   }else if(source==='square'){
     namespace='square:square';
-    ctes=`${squareSessionCtes(project)},
-      eligible AS (SELECT o.oid,DATE(SAFE_CAST(JSON_VALUE(o.j,'$.created_at') AS TIMESTAMP),'Europe/London') day,
-        COALESCE(c.channel,'Unknown') channel FROM sx_square o LEFT JOIN sx_channels c USING(oid)
-        WHERE o.state IN ('COMPLETE','COMPLETED') AND ${window("SAFE_CAST(JSON_VALUE(o.j,'$.created_at') AS TIMESTAMP)")}),
-      line AS (SELECT CAST(order_id AS STRING) oid,COALESCE(line_item_uid,CAST(source_line_offset AS STRING)) lid,
+    // Retained payments omit card entry method. Neither tender nor location
+    // alone proves an in-store sale. The views also retain unverified money units.
+    ctes=`square_latest AS (SELECT * FROM ${t('retail_orders')} o
+        WHERE NULLIF(order_id,'') IS NOT NULL
+        QUALIFY ROW_NUMBER() OVER(PARTITION BY order_id ORDER BY updated_at DESC,TO_JSON_STRING(o) DESC)=1),
+      eligible AS (SELECT order_id oid,DATE(created_at,'Europe/London') day,'Unknown' channel
+        FROM square_latest WHERE UPPER(order_state) IN ('COMPLETE','COMPLETED') AND ${window('created_at')}),
+      line AS (SELECT order_id oid,COALESCE(CONCAT('uid:',NULLIF(line_item_uid,'')),CONCAT('offset:',CAST(source_line_offset AS STRING))) lid,
         COALESCE(catalog_item_id,catalog_object_id) product_id,COALESCE(catalog_variation_id,catalog_object_id) variant_id,
         transaction_item_name title,transaction_variation_name colour,SAFE_CAST(quantity AS NUMERIC) units,
-        CASE WHEN UPPER(currency) IN ('JPY','KRW') THEN SAFE_CAST(total_amount AS NUMERIC)
-          WHEN UPPER(currency) IN ('GBP','USD','EUR','CAD','AUD') THEN SAFE_CAST(total_amount AS NUMERIC)/100 ELSE NULL END sales,
-        UPPER(currency) currency FROM ${t('retail_order_items')} t WHERE CAST(order_id AS STRING) IN (SELECT oid FROM eligible)
-        QUALIFY ROW_NUMBER() OVER(PARTITION BY order_id,COALESCE(line_item_uid,CAST(source_line_offset AS STRING)) ORDER BY TO_JSON_STRING(t) DESC)=1)`;
+        CAST(NULL AS NUMERIC) sales,UPPER(currency) currency FROM ${t('retail_order_items')} t
+        WHERE order_id IN (SELECT oid FROM eligible)
+        QUALIFY ROW_NUMBER() OVER(PARTITION BY order_id, COALESCE(CONCAT('uid:',NULLIF(line_item_uid,'')),CONCAT('offset:',CAST(source_line_offset AS STRING))) ORDER BY TO_JSON_STRING(t) DESC)=1)`;
   }else{
     namespace='woo:'+source;
     ctes=`orders AS (${latest('orders','order_id',window('order_created_at'))}),
