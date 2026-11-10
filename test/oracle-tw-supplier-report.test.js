@@ -85,3 +85,20 @@ test('verified demand adds only incremental units for an upcoming participating 
   assert.ok(boosted.suggested_units>ordinary.suggested_units);
   assert.equal(boosted.suggested_units%6,0);
 });
+test('known social sales and confirmed non-TW exceptions do not block TW demand',()=>{
+  const base={sellableLocationIds:[lid(1)],verifiedWindows:[{start:'2026-08-01',end:'2026-11-01',channels:['Online Store','POS']}]};
+  const rows=[
+    {kind:'coverage',day:'2026-10-19',channel:'POS',eligible_orders:1,orders_with_lines:1,unattributed_lines:0,non_tw_lines_without_variant:1},
+    {kind:'sales',day:'2026-10-19',channel:'Online Store',variant_id:vid(1),units:4},
+    {kind:'sales',day:'2026-10-19',channel:'Facebook & Instagram',variant_id:vid(1),units:2}
+  ];
+  const build=sales=>buildTwWorkbookRows({context,today:'2026-11-10',inventory,sales,settings:base});
+  const report=build(rows),oct=report.tabs['Monthly sales'].find(r=>r.period==='2026-10'&&r.variant_id===vid(1));
+  assert.equal(oct.facebook_instagram_observed_units,2);
+  assert.equal(oct.observed_total_units,4);
+  assert.equal(report.recommended,2);
+  assert.equal(report.coverage.find(r=>r.period==='2026-10'&&r.channel==='POS').confirmed_non_tw_lines_without_variant,1);
+  assert.equal(build([{...rows[0],unattributed_lines:1,tw_lines_without_variant:1},...rows.slice(1)]).recommended,0);
+  assert.match(twSalesSql('fixture'),/WHEN 'facebook & instagram' THEN 'Facebook & Instagram'/);
+  assert.match(twSalesSql('fixture'),/variant_id IS NULL AND NOT confirmed_non_tw_product/);
+});

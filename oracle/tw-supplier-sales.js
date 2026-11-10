@@ -10,38 +10,42 @@ export function twSalesSql(project){
     locations AS (${latest('order_locations','order_id','order_id IN (SELECT order_id FROM finance)')}),
     orders AS (SELECT f.order_id, DATE(f.created_at,'Europe/London') day,
       CASE LOWER(TRIM(l.order_source)) WHEN 'online store' THEN 'Online Store'
-        WHEN 'point of sale' THEN 'POS' WHEN 'shop' THEN 'Other' WHEN 'draft orders' THEN 'Other' ELSE 'Unknown' END channel
+        WHEN 'point of sale' THEN 'POS' WHEN 'facebook & instagram' THEN 'Facebook & Instagram' WHEN 'shop' THEN 'Other' WHEN 'draft orders' THEN 'Other' ELSE 'Unknown' END channel
       FROM finance f LEFT JOIN locations l USING(order_id)
       WHERE f.cancelled_at IS NULL AND COALESCE(l.source_app_id,'')!=@matrixify
       AND EXISTS(SELECT 1 FROM UNNEST(JSON_QUERY_ARRAY(SAFE.PARSE_JSON(f.transactions_json))) tx
         WHERE JSON_VALUE(tx,'$.status')='SUCCESS' AND JSON_VALUE(tx,'$.kind') IN ('SALE','CAPTURE'))),
     lines AS (${latest('order_line_items','order_id,line_item_id','order_id IN (SELECT order_id FROM orders)')}),
     detail AS (SELECT o.*,li.line_item_id, NULLIF(TRIM(li.variant_id),'') variant_id,li.quantity,
+        COALESCE(li.product_id IN UNNEST(JSON_VALUE_ARRAY(@non_tw_products)),FALSE) confirmed_non_tw_product,
+        COALESCE(li.product_id IN UNNEST(JSON_VALUE_ARRAY(@tw_products)),FALSE) confirmed_tw_product,
         COALESCE(li.variant_id IN UNNEST(JSON_VALUE_ARRAY(@variants)),FALSE) matched
       FROM orders o LEFT JOIN lines li USING(order_id)),
     coverage AS (SELECT day,channel,COUNT(DISTINCT order_id) eligible_orders,
       COUNT(DISTINCT IF(line_item_id IS NOT NULL,order_id,NULL)) orders_with_lines,
-      COUNTIF(line_item_id IS NOT NULL AND variant_id IS NULL) unattributed_lines,
-      COUNTIF(line_item_id IS NOT NULL AND (quantity IS NULL OR quantity<0)) invalid_quantity_lines,
+      COUNTIF(line_item_id IS NOT NULL AND variant_id IS NULL AND NOT confirmed_non_tw_product) unattributed_lines,
+      COUNTIF(line_item_id IS NOT NULL AND variant_id IS NULL AND confirmed_non_tw_product) non_tw_lines_without_variant,
+      COUNTIF(line_item_id IS NOT NULL AND variant_id IS NULL AND confirmed_tw_product) tw_lines_without_variant,
+      COUNTIF(line_item_id IS NOT NULL AND (quantity IS NULL OR quantity<0) AND (matched OR (variant_id IS NULL AND NOT confirmed_non_tw_product))) invalid_quantity_lines,
       COUNTIF(line_item_id IS NOT NULL AND variant_id IS NOT NULL AND NOT matched) outside_selection_lines
       FROM detail GROUP BY day,channel)
     SELECT 'coverage' kind,CAST(day AS STRING) day,channel,CAST(NULL AS STRING) variant_id,
-      CAST(NULL AS INT64) units,eligible_orders,orders_with_lines,unattributed_lines,invalid_quantity_lines,outside_selection_lines FROM coverage
+      CAST(NULL AS INT64) units,eligible_orders,orders_with_lines,unattributed_lines,non_tw_lines_without_variant,tw_lines_without_variant,invalid_quantity_lines,outside_selection_lines FROM coverage
     UNION ALL
-    SELECT 'sales',CAST(day AS STRING),channel,variant_id,SUM(quantity),NULL,NULL,NULL,NULL,NULL FROM detail
-    WHERE matched AND quantity>=0 AND channel IN ('Online Store','POS')
+    SELECT 'sales',CAST(day AS STRING),channel,variant_id,SUM(quantity),NULL,NULL,NULL,NULL,NULL,NULL,NULL FROM detail
+    WHERE matched AND quantity>=0 AND channel IN ('Online Store','POS','Facebook & Instagram')
     GROUP BY day,channel,variant_id`;
 }
 
 export function createTwSalesReader({bigquery,project}){
-  return async({start,endExclusive,completedEndExclusive,mtdStart,variantIds,signal,deadlineAt})=>{
+  return async({start,endExclusive,completedEndExclusive,mtdStart,variantIds,nonTwProductIds=[],twProductIds=[],signal,deadlineAt})=>{
     signal?.throwIfAborted();
     const location=await datasetLocation(bigquery,project,'shopify_data');
     const timeout=Math.min(60000,deadlineAt==null?60000:deadlineAt-Date.now());
     if(timeout<=0)throw Error('TW_READ_DEADLINE');
     const [rows]=await bigquery.query({query:twSalesSql(project),location,useLegacySql:false,jobTimeoutMs:timeout,
       timeoutMs:timeout,maximumBytesBilled:'5000000000',
-      params:{start,end_exclusive:endExclusive,completed_end_exclusive:completedEndExclusive,mtd_start:mtdStart,matrixify:MATRIXIFY_APP_ID,variants:JSON.stringify(variantIds)},
+      params:{start,end_exclusive:endExclusive,completed_end_exclusive:completedEndExclusive,mtd_start:mtdStart,matrixify:MATRIXIFY_APP_ID,variants:JSON.stringify(variantIds),non_tw_products:JSON.stringify(nonTwProductIds),tw_products:JSON.stringify(twProductIds)},
       labels:{component:'oracle_tw_supplier'}});
     signal?.throwIfAborted();
     return rows;
