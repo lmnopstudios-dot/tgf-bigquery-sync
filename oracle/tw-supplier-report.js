@@ -4,6 +4,7 @@ import {priorityArtifactId} from './product-priority-storage.js';
 import {londonDay,offsetMonth} from '../public/oracle/tw-supplier-intent.js';
 
 const CHANNELS=['Online Store','POS'];
+const SOCIAL='Facebook & Instagram';
 const DAY=86400000;
 const days=(start,end)=>Array.from({length:Math.max(0,Math.round((Date.parse(end)-Date.parse(start))/DAY))},(_,i)=>new Date(Date.parse(start)+i*DAY).toISOString().slice(0,10));
 const addDays=(date,n)=>new Date(Date.parse(date)+n*DAY).toISOString().slice(0,10);
@@ -61,13 +62,15 @@ export function buildTwWorkbookRows({context,today,inventory,sales,settings={},f
   }
   const tabs=Object.fromEntries(SHEETS.map(k=>[k,[]]));
   const coverage=tabs.Coverage;
-  for(const p of periods)for(const channel of [...CHANNELS,'Other','Unknown']){
+  for(const p of periods)for(const channel of [...CHANNELS,SOCIAL,'Other','Unknown']){
     const dates=days(p.start,p.end),observed=dates.map(d=>actualDays.get(d+'|'+channel)).filter(Boolean);
-    const total=k=>sales==null?null:observed.reduce((s,r)=>s+Number(r[k]),0);
+    const total=k=>sales==null?null:observed.reduce((s,r)=>s+Number(r[k]??0),0);
     const orders=total('eligible_orders'),withLines=total('orders_with_lines');
     coverage.push({period:p.label,channel,start:p.start,end_exclusive:p.end,days:dates.length,
       verified_days:dates.filter(d=>dayComplete(d,channel)).length,eligible_orders_observed:orders,orders_with_lines:withLines,
       orders_without_lines:orders==null?null:orders-withLines,unattributed_lines:total('unattributed_lines'),
+      confirmed_non_tw_lines_without_variant:total('non_tw_lines_without_variant'),
+      confirmed_tw_lines_without_variant:total('tw_lines_without_variant'),
       lines_outside_current_tw:total('outside_selection_lines'),invalid_quantity_lines:total('invalid_quantity_lines')});
   }
   if(settings.invalid)coverage.push({status:'Reviewed supplier settings could not be parsed; planning inputs withheld.'});
@@ -75,6 +78,7 @@ export function buildTwWorkbookRows({context,today,inventory,sales,settings={},f
   coverage.push({status:'Zeros require a reviewed source coverage window and reconciliation with eligible finance orders. Observed units in incomplete periods are lower bounds.'},
     {status:'Sales are original line units on native successful orders; cancelled orders and known Matrixify imports excluded. Returns, historical stock, receipts, stockout days and sell-through have no verified binding.'},
     {status:'Current tag and location stock reflect report run time, including for a historical report month. Available stock is not reduced by committed stock a second time.'},
+    {status:'Facebook & Instagram observed units are shown separately and excluded from the Online Store + POS forecast and totals. Missing variant IDs on confirmed non-TW catalogue products are counted separately. Other unresolved lines still block verification.'},
     {status:'Inbound, future promotions, lead times, supplier pack sizes and sellable location IDs require reviewed planning inputs.'});
   const locations=inventory?.locations||[];
   const locationComplete=inventory?.population?.locations_complete===true;
@@ -96,8 +100,8 @@ export function buildTwWorkbookRows({context,today,inventory,sales,settings={},f
     ].filter(p=>periods.some(r=>r.start<=p.start&&p.end<=r.end));
     const variantMonths=[];
     for(const period of [...periods,...saleSlices]){
-      const [online,pos]=CHANNELS.map(c=>signalFor(period,c,id));
-      variantMonths.push({...label,period:period.label,online_units:online.units,pos_units:pos.units,
+      const [online,pos,social]=[...CHANNELS,SOCIAL].map(c=>signalFor(period,c,id));
+      variantMonths.push({...label,period:period.label,online_units:online.units,pos_units:pos.units,facebook_instagram_observed_units:social.units,
         observed_total_units:online.units==null&&pos.units==null?null:(online.units??0)+(pos.units??0),
         returns:null,coverage:online.complete&&pos.complete?'verified':'partial or unavailable'});
     }
@@ -201,8 +205,11 @@ export function createTwSupplierReportService({readInventory,readSales,artifactS
       catch{failures.push('Live catalogue and inventory read failed.');}
       if(inventory?.failures?.length)failures.push('Catalogue or inventory is partial: '+[...new Set(inventory.failures.map(f=>f.stage))].join(', '));
       const variantIds=(inventory?.products||[]).flatMap(p=>p.variants.map(v=>v.id));
+      const catalogueAudit=inventory?.population?.audit||[];
+      const twProductIds=catalogueAudit.filter(p=>p.eligible===true).map(p=>p.product_id);
+      const nonTwProductIds=catalogueAudit.filter(p=>p.exclusion==='required_tag_missing').map(p=>p.product_id);
       const pastEnd=offsetMonth(context.end_date.slice(0,7),1)+'-01';
-      try{sales=await readSales({start:context.start_date,endExclusive:today>pastEnd?today:pastEnd,completedEndExclusive:pastEnd,mtdStart:today.slice(0,7)+'-01',variantIds,signal,deadlineAt});}
+      try{sales=await readSales({start:context.start_date,endExclusive:today>pastEnd?today:pastEnd,completedEndExclusive:pastEnd,mtdStart:today.slice(0,7)+'-01',variantIds,twProductIds,nonTwProductIds,signal,deadlineAt});}
       catch{failures.push('Shopify finance or retained line-item query failed.');}
       const report=buildTwWorkbookRows({context,today,inventory,sales,settings,failures});
       const wb=new ExcelJS.Workbook();
