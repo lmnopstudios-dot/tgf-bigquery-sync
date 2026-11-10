@@ -36,12 +36,26 @@ Optional private runtime JSON in `ORACLE_TW_SUPPLIER_SETTINGS`:
 | `verifiedWindows` | Array of reviewed source-complete London dates, with `start`, exclusive `end`, and `channels` containing `Online Store` and/or `POS`. These are evidence declarations, not report filters. Certify only after reconciling sales and line ingestion against the source. |
 | `sellableLocationIds` | Reviewed native Shopify location GIDs usable for the supplier stock pool. No assumed retail/warehouse allocation. Workshops are never usable. |
 | `futureEvents` | Reviewed `name` (`Black Friday` or `May Bank Holiday`), `start` and exclusive `end` in London calendar dates. |
-| `variants` | Map by exact variant GID. Optional `leadDays`, `packSize`, `participates` (event-name array) and `confirmedInboundDueInTime` paired with `inboundReviewedOn` and `inboundHorizonEnd`. Inbound must be reviewed on the run date for that horizon. |
+| `mayPlan` | Reviewed `requiredShelfDate` and optional `receivingBufferDays`. Shelf date must be no later than the sale start when known. |
+| `variants` | Map by exact variant GID. Optional `packSize`, `participates`, dated `confirmedInbound` entries (`dueDate`, `units`) with `inboundReviewedOn`, and `confirmedBackordersNotInAvailable` with `backordersReviewedOn`. Supply reviews must match the cutoff. Use an empty inbound list or explicit zero backorders only when confirmed. |
 
-Unknown lead time gives a three-month baseline. Unknown inbound is not
-deducted and is flagged. Unverified demand or usable stock withholds the
-recommendation. Review gaps before placing a purchase order. No schedule or
-supplier action is added.
+The supplier lead time is always three **calendar** months. For an order dated
+10 November, arrival is 10 February and ordinary cover runs through 9 May.
+The pre-delivery projection applies confirmed receipts on their due dates and
+floors stock at zero; forecast shortfalls don't roll into the buy. The buy
+covers ordinary demand from arrival, less projected remaining stock and
+confirmed receipts due during that cover, plus only confirmed customer
+backorders not already reflected in available stock. Check whether receipts
+due after arrival land soon enough. Unknown dated inbound is not deducted;
+unknown customer backorders are not added. Legacy day-based lead time and
+undated inbound aggregates are no longer used.
+
+The May top-up is separate from the current buy. The order deadline works
+backward from the shelf date, subtracting any known receiving buffer before
+the three-month supplier lead time. Without a confirmed shelf date the
+deadline stays blank. Uplift is provisional and requires a reviewed event,
+participation and comparable historical sales. No schedule or supplier action
+is added.
 
 ## As-of ordering
 
@@ -63,5 +77,4 @@ completed observation days, requiring at least 80% per channel in each of
 the last three completed months. Completed current-month ordinary days can
 also contribute. Unresolved lines are disclosed and excluded from variant
 units. Unverified absence never establishes zero demand. Black Friday and
-post-sale units are reported separately; only reviewed future events can
-increase the target.
+post-sale units are reported separately; May uplift is a separate planning line and never changes the ordinary buy.

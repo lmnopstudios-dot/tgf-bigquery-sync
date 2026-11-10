@@ -1,3 +1,4 @@
+import {twBuyPlan,twMayDeadline,TW_LEAD_MONTHS} from './tw-supplier-planning.js';
 import ExcelJS from 'exceljs';
 import {createHash} from 'node:crypto';
 import {priorityArtifactId} from './product-priority-storage.js';
@@ -12,13 +13,12 @@ const addDays=(date,n)=>new Date(Date.parse(date)+n*DAY).toISOString().slice(0,1
 const dateOk=s=>typeof s==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(s)&&Number.isFinite(Date.parse(s))&&new Date(s).toISOString().slice(0,10)===s;
 const known=n=>Number.isSafeInteger(n)&&n>=0;
 const round=n=>Math.round(n*100)/100;
-const overlap=(a,b,c,d)=>a<d&&c<b;
 const EVENTS=[
   {name:'Black Friday',start:'2025-11-27',end:'2025-12-01',channels:['Online Store']},
   {name:'May Bank Holiday',start:'2026-05-01',end:'2026-05-05',channels:CHANNELS},
   {name:'Black Friday',start:'2026-11-05',end:'2026-11-09',channels:CHANNELS}
 ];
-const SHEETS=['Order recommendations','Monthly sales','Stock by location','Seasonal demand','Coverage'];
+const SHEETS=['Order recommendations','Monthly sales','Stock by location','Seasonal demand','May top-up','Coverage'];
 
 export function twSupplierSettings(raw){
   if(!raw)return {};
@@ -27,11 +27,15 @@ export function twSupplierSettings(raw){
     const windows=(s.verifiedWindows||[]).filter(w=>dateOk(w.start)&&dateOk(w.end)&&w.start<w.end&&Array.isArray(w.channels)&&w.channels.every(c=>CHANNELS.includes(c)));
     const futureEvents=(s.futureEvents||[]).filter(w=>dateOk(w.start)&&dateOk(w.end)&&w.start<w.end&&days(w.start,w.end).length<=14&&EVENTS.some(e=>e.name===w.name));
     const ids=(s.sellableLocationIds||[]).filter(v=>typeof v==='string'&&/^gid:\/\/shopify\/Location\/\d+$/.test(v));
+    const mayPlan=s.mayPlan&&dateOk(s.mayPlan.requiredShelfDate)?{
+      requiredShelfDate:s.mayPlan.requiredShelfDate,
+      receivingBufferDays:known(s.mayPlan.receivingBufferDays)&&s.mayPlan.receivingBufferDays<=90?s.mayPlan.receivingBufferDays:null
+    }:null;
     const variants=Object.fromEntries(Object.entries(s.variants||{}).filter(([id,v])=>/^gid:\/\/shopify\/ProductVariant\/\d+$/.test(id)&&v&&typeof v==='object')
-      .map(([id,v])=>[id,{leadDays:known(v.leadDays)&&v.leadDays<=365?v.leadDays:null,
-        confirmedInboundDueInTime:known(v.confirmedInboundDueInTime)&&dateOk(v.inboundReviewedOn)?v.confirmedInboundDueInTime:null,
-        inboundReviewedOn:v.inboundReviewedOn,inboundHorizonEnd:v.inboundHorizonEnd,packSize:v.packSize,participates:Array.isArray(v.participates)?v.participates:null}]));
-    return {verifiedWindows:windows,futureEvents,sellableLocationIds:ids,variants};
+      .map(([id,v])=>[id,{confirmedInbound:Array.isArray(v.confirmedInbound)?v.confirmedInbound.map(r=>({dueDate:r?.dueDate,units:r?.units})):null,
+        inboundReviewedOn:v.inboundReviewedOn,confirmedBackordersNotInAvailable:v.confirmedBackordersNotInAvailable,
+        backordersReviewedOn:v.backordersReviewedOn,packSize:v.packSize,participates:Array.isArray(v.participates)?v.participates:null}]));
+    return {verifiedWindows:windows,futureEvents,sellableLocationIds:ids,mayPlan,variants};
   }catch{return {invalid:true};}
 }
 
@@ -108,7 +112,12 @@ export function buildTwWorkbookRows({context,today,inventory,snapshot=null,sales
     {status:'Catalogue tags reflect report run time. Historical stock requires a verified snapshot for the selected date. Available stock is not reduced by committed stock a second time.'},
     {status:'Facebook & Instagram observed units are shown separately and excluded from the Online Store + POS forecast and totals. Missing variant IDs on confirmed non-TW catalogue products are counted separately. Other unresolved lines still block verification.'},
     {status:'Provisional demand requires reconciled observations on at least 80% of ordinary days in each of the last three completed months per channel. Current-day sales are shown but excluded from the run rate. Unresolved sales are omitted; unverified absence is not zero demand.'},
-    {status:'Inbound, future promotions, lead times, supplier pack sizes and sellable location IDs require reviewed planning inputs.'});
+    {status:'Lead time is fixed at three calendar months. The current buy covers ordinary demand for three months from arrival. May uplift is separate. Inbound dates, unreflected customer backorders, pack sizes and May shelf date require reviewed inputs.'});
+  const mayEvent=(settings.futureEvents||[]).filter(e=>e.name==='May Bank Holiday'&&e.start>cutoff)
+    .sort((a,b)=>a.start.localeCompare(b.start))[0];
+  const mayShelf=settings.mayPlan?.requiredShelfDate;
+  const mayBuffer=settings.mayPlan?.receivingBufferDays??null;
+  const mayOrderBy=mayShelf&&(!mayEvent||mayShelf<=mayEvent.start)?twMayDeadline(mayShelf,mayBuffer):null;
   const locations=stock?.locations||[];
   const stockVariants=new Map((stock?.products||[]).flatMap(p=>p.variants.map(v=>[v.id,v])));
   const locationComplete=stock?.population?.locations_complete===true;
@@ -164,10 +173,7 @@ export function buildTwWorkbookRows({context,today,inventory,snapshot=null,sales
     const postSale=newestBlackFriday&&newestBlackFriday.end<end
       ?CHANNELS.map(c=>signalFor({start:newestBlackFriday.end,end},c,id).units):[];
     const observedTotal=xs=>xs.some(n=>n!=null)?xs.reduce((n,x)=>n+(x??0),0):null;
-    const lead=known(inputs.leadDays)?inputs.leadDays:null;
-    const arrival=addDays(cutoff,lead??0),horizonMonth=offsetMonth(arrival.slice(0,7),3);
-    const monthEnd=addDays(offsetMonth(horizonMonth,1)+'-01',-1);
-    const horizonEnd=horizonMonth+'-'+(arrival.slice(8)>monthEnd.slice(8)?monthEnd.slice(8):arrival.slice(8));
+    const buy=twBuyPlan({cutoff,dailyDemand:demand==null?null:demand/30.4375,usable,inputs,catalogueComplete});
     const historicalRows=historical.map(e=>{
       const breakdown=e.channels.map(c=>signalFor(e,c,id)), complete=breakdown.every(s=>s.complete);
       const eventUnits=breakdown.some(s=>s.units!=null)?breakdown.reduce((n,s)=>n+(s.units??0),0):null;
@@ -179,18 +185,18 @@ export function buildTwWorkbookRows({context,today,inventory,snapshot=null,sales
         coverage:complete?'verified lines; stockouts unknown':'partial; review last observed volume'};
     });
     tabs['Seasonal demand'].push(...historicalRows);
-    const upcoming=(settings.futureEvents||[]).filter(e=>e.start>cutoff&&overlap(cutoff,horizonEnd,e.start,e.end)&&inputs.participates?.includes(e.name));
-    let uplift=0,unresolvedEvent=false;
-    for(const e of upcoming){
-      const prev=historicalRows.filter(r=>r.event===e.name&&r.estimated_incremental_units!=null).at(-1);
-      const eventDays=days(e.start,e.end).length;
-      const includedDays=days(e.start>today?e.start:today,e.end<horizonEnd?e.end:horizonEnd).length;
-      const extra=prev&&eventDays?prev.estimated_incremental_units*includedDays/eventDays:null;
-      if(extra==null)unresolvedEvent=true;else uplift+=extra;
-      tabs['Seasonal demand'].push({...label,event:e.name,start:e.start,end_exclusive:e.end,estimated_incremental_units:extra==null?null:round(extra),
-        coverage:extra==null?'insufficient history; review':'provisional uplift; stockouts unknown',
-        lead_time_risk:lead==null?null:addDays(today,lead)>e.start});
-    }
+    const previousMay=historicalRows.filter(r=>r.event==='May Bank Holiday').at(-1);
+    const participation=Array.isArray(inputs.participates)?inputs.participates.includes('May Bank Holiday'):null;
+    const uplift=participation===true&&mayEvent&&previousMay?.estimated_incremental_units!=null
+      ?previousMay.estimated_incremental_units*days(mayEvent.start,mayEvent.end).length/days(previousMay.start,previousMay.end_exclusive).length:null;
+    tabs['May top-up'].push({...label,prior_may_observed_units:previousMay?.observed_units??null,
+      participation_confirmed:participation,required_shelf_date:mayShelf??null,receiving_buffer_days:mayBuffer,
+      order_by:mayOrderBy,deadline_passed:mayOrderBy?mayOrderBy<cutoff:null,
+      provisional_incremental_units:uplift==null?null:Math.ceil(uplift),
+      review:[!mayShelf?'Set the required shelf date':!mayOrderBy?'Shelf date must be no later than the sale start':null,
+        mayBuffer==null?'Receiving buffer unknown; deadline has no buffer':null,
+        !mayEvent?'May sale dates unconfirmed':null,participation==null?'Variant participation unconfirmed':null,
+        participation===true&&uplift==null?'Comparable May uplift unavailable':null,'Separate top-up; excluded from current buy'].filter(Boolean).join('; ')});
     const flags=['Provisional: based on identifiable ordinary sales','Historical stockouts and variant launch dates unverified'];
     if(!verifiedForecast)flags.push('Unverified days or unresolved lines; no zero demand inferred');
     if(coverageGapDays>0||latestCovered==null)flags.push('Completed-day sales coverage has a trailing gap');
@@ -198,25 +204,31 @@ export function buildTwWorkbookRows({context,today,inventory,snapshot=null,sales
     if(!live&&!stock)flags.push('No verified inventory snapshot for cutoff');
     if(demand==null)flags.push('Demand coverage insufficient');
     if(usable==null)flags.push('Usable stock unverified');
-    if(lead==null)flags.push('No lead-time allowance');
-    const inbound=known(inputs.confirmedInboundDueInTime)&&inputs.inboundReviewedOn===cutoff&&inputs.inboundHorizonEnd===horizonEnd?inputs.confirmedInboundDueInTime:null;
-    if(inbound==null)flags.push('Check inbound; none deducted');
-    if(!settings.futureEvents?.length||!Array.isArray(inputs.participates))flags.push('Future event participation or dates unverified; baseline only');
-    if(unresolvedEvent)flags.push('Upcoming event uplift unavailable; baseline excludes it');
+    if(buy.inboundBefore==null)flags.push('Dated inbound unverified; none deducted');
+    if(buy.confirmedBackorders==null)flags.push('Customer backorders unverified; none added');
+    if(buy.laterCoverInbound)flags.push('Check timing of inbound after arrival');
+    if(buy.short>0)flags.push('Likely shortage before delivery; excluded from buy');
+    if(usable<0)flags.push('Negative stock treated as zero; check actual customer commitments');
     if(!catalogueComplete)flags.push('Catalogue incomplete');
-    const target=demand==null?null:demand*(3+(lead??0)/30.4375);
-    const recommended=target==null||usable==null||!catalogueComplete?null:
-      Math.ceil(Math.max(0,target+uplift-Math.max(0,usable)-(inbound??0))/(known(inputs.packSize)&&inputs.packSize>0?inputs.packSize:1))*(known(inputs.packSize)&&inputs.packSize>0?inputs.packSize:1);
+    const rounded=n=>n==null?null:round(n);
     tabs['Order recommendations'].push({...label,...Object.fromEntries(recent.map(m=>{
       const found=variantMonths.find(r=>r.period===m.label);
       return [m.label+' observed units',found?.observed_total_units??null];
     })),ordinary_observed_units_excluding_post_sale:observedTotal(ordinaryBeforeSale),
       black_friday_observed_units:observedTotal(soldDuring),post_sale_observed_units:observedTotal(postSale),
       forecast_online_observed_days:sampleDays['Online Store'].length,forecast_pos_observed_days:sampleDays.POS.length,
-      stock_observed_at:stock?.as_of??null,average_monthly_ordinary_demand:demand==null?null:round(demand),three_month_target:demand==null?null:round(3*demand),
-      supplier_lead_days:lead,horizon_end_exclusive:horizonEnd,incremental_event_units:unresolvedEvent?null:round(uplift),usable_stock:usable,
-      confirmed_inbound_due_in_time:inbound,months_of_cover:demand>0&&usable!=null?round(Math.max(0,usable)/demand):null,
-      suggested_units:recommended,review:flags.join('; ')});
+      stock_observed_at:stock?.as_of??null,average_monthly_ordinary_demand:rounded(demand),usable_stock:usable,
+      supplier_lead_months:TW_LEAD_MONTHS,
+      'Before delivery · Expected arrival':buy.arrival,
+      'Before delivery · Ordinary demand':rounded(buy.preDemand),
+      'Before delivery · Confirmed inbound':buy.inboundBefore,
+      'Before delivery · Projected stock at arrival':rounded(buy.remaining),
+      'Before delivery · Likely short units':rounded(buy.short),
+      'Supplier buy · Ordinary cover through':buy.coverThrough,
+      'Supplier buy · Ordinary units after arrival':rounded(buy.target),
+      'Supplier buy · Confirmed inbound':buy.inboundAfter,
+      'Supplier buy · Confirmed customer backorders':buy.confirmedBackorders,
+      suggested_units:buy.suggested,review:flags.join('; ')});
   }
   const priority=r=>(r.black_friday_observed_units??0)>0&&r.usable_stock!=null&&r.usable_stock<=3;
   tabs['Order recommendations'].sort((a,b)=>Number(priority(b))-Number(priority(a))||
@@ -229,7 +241,8 @@ export async function assertTwArtifact(a){
   const bytes=Buffer.from(a.xlsx_base64||'','base64');
   if(a.envelope?.kind!=='tw_supplier_report'||createHash('sha256').update(bytes).digest('hex')!==a.sha256)throw Error('TW_INVALID_ARTIFACT');
   const wb=new ExcelJS.Workbook();await wb.xlsx.load(bytes);
-  if(SHEETS.some(name=>!wb.getWorksheet(name))||wb.getWorksheet(SHEETS[0]).rowCount!==a.envelope.variant_count+1)throw Error('TW_INVALID_WORKBOOK');
+  const required=a.envelope.planning_version===2?SHEETS:SHEETS.filter(name=>name!=='May top-up');
+  if(required.some(name=>!wb.getWorksheet(name))||wb.getWorksheet(SHEETS[0]).rowCount!==a.envelope.variant_count+1)throw Error('TW_INVALID_WORKBOOK');
 }
 export function createTwSupplierReportService({readInventory,readSales,readSnapshot,artifactStore,settings={},now=Date.now}){
   return async(message,options)=>{
@@ -266,10 +279,10 @@ export function createTwSupplierReportService({readInventory,readSales,readSnaps
       const period={start_date:context.start_date,end_date:context.end_date};
       const periods=report.coverage.filter(r=>CHANNELS.includes(r.channel));
       const incomplete=periods.filter(r=>r.verified_days<r.days).length;
-      const envelope={kind:'tw_supplier_report',subject:'tw_supplier_stock',...period,periods:[period],
+      const envelope={kind:'tw_supplier_report',planning_version:2,subject:'tw_supplier_stock',...period,periods:[period],
         variant_count:report.variants,recommended_count:report.recommended,unverified_channel_periods:incomplete,
         catalogue_complete:report.catalogueComplete,failures,as_of:report.stockAsOf,latest_reconciled_sales_date:report.latestCovered,sales_gap_days:report.coverageGapDays};
-      const answer=`TW supplier stock report: ${period.start_date} to ${period.end_date}, inclusive (London). ${live?'Today is partial.':'Historical stock is blank unless a verified snapshot is available.'} Latest completed date with reconciled Online Store and POS observations: ${report.latestCovered||'unavailable'}; completed days after that through cutoff: ${report.coverageGapDays??'unknown'}. ${report.variants} variants; ${report.recommended} with a provisional or supported order quantity. ${incomplete} channel periods have incomplete or unverified sales coverage. Receipts, stockout days, returns and sell-through are unavailable from the verified bindings. ${failures.join(' ')} See Coverage in the workbook.`;
+      const answer=`TW supplier stock report: ${period.start_date} to ${period.end_date}, inclusive (London). ${live?'Today is partial.':'Historical stock is blank unless a verified snapshot is available.'} Latest completed date with reconciled Online Store and POS observations: ${report.latestCovered||'unavailable'}; completed days after that through cutoff: ${report.coverageGapDays??'unknown'}. ${report.variants} variants; ${report.recommended} with a provisional or supported order quantity. Supplier lead time: three calendar months. May promotional uplift is shown separately. ${incomplete} channel periods have incomplete or unverified sales coverage. Receipts, stockout days, returns and sell-through are unavailable from the verified bindings. ${failures.join(' ')} See Coverage in the workbook.`;
       saved={request:message,envelope,answer,filename:'oracle-tw-supplier-stock.xlsx',sha256:createHash('sha256').update(bytes).digest('hex'),xlsx_base64:bytes.toString('base64')};
       await assertTwArtifact(saved);
       signal?.throwIfAborted();await options.assertLease?.();
