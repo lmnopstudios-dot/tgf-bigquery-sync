@@ -1,3 +1,4 @@
+import {twSupplierIntent} from "./tw-supplier-intent.js";
 // Routing is deliberately local and deterministic: choosing a transport must
 // never consume an agent turn or run a commerce-data tool.
 export function oracleRequestRoute(message,{hasCompletedJob=false}={}) {
@@ -5,6 +6,7 @@ export function oracleRequestRoute(message,{hasCompletedJob=false}={}) {
   const lower=text.toLowerCase();
   const words=text.split(/\s+/).filter(Boolean).length;
   if(!text)return 'chat';
+  if(twSupplierIntent(text))return 'job';
   if(/\b(?:shopify|pendants?|rings?|earrings?|ready[ -]to[ -]ship)\b/i.test(text)&&/\b(?:export|download|spreadsheet|xlsx)\b/i.test(text))return 'job';
   if(/\bproducts?\b/i.test(text)&&/\b(?:export|download|report|ranked|top selling|top \d+)\b/i.test(text)||/\b(?:photography|content)\b.*\bpriority list\b/i.test(text))return 'job';
   if(/\bproducts?\b/i.test(text)&&(/\b(?:export|download)\b/i.test(text)&&/\b(?:priority|photograph(?:y|s)?|product[ -]page|improvements?)\b/i.test(text)||/\bpriority\b/i.test(text)&&/\b(?:photography|product[ -]page)\b/i.test(text)))return 'job';

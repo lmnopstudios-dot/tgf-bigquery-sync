@@ -7,6 +7,7 @@ import { PRODUCT_REPORT_CAPABILITIES } from './product-report-config.js';
 import { createHash } from 'node:crypto';
 
 export function planOperation(c) {
+  if(c?.tool_route==='get_tw_supplier_stock_report')return 'tw_supplier_stock_report';
   if(c?.inventory_report)return 'filtered_variant_inventory';
   if(c?.tool_route==='compare_historical_events')return 'named_event_comparison';
   if(c?.journey_intent==='collaboration_purchase_products')return 'collaboration_purchase_products';

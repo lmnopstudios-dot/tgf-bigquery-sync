@@ -1378,6 +1378,10 @@
     {
       "file": "test/oracle-black-friday-2026.test.js",
       "purpose": "Verbatim save-only incident through actual chat and durable jobs, review without persistence or reads, explicit 2026 native Shopify phase boundaries and comparison populations, daily units/orders/AOV, partial refunds and lines, validated native session denominators and retained-scope integrity."
+    },
+    {
+      "file": "test/oracle-tw-supplier-report.test.js",
+      "purpose": "TW supplier short and original requests through durable chat, authenticated workbook, partial October and missing-evidence recommendation safeguards."
     }
   ]
 }

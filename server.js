@@ -1,3 +1,6 @@
+import {createTwSupplierReportService,twSupplierSettings} from './oracle/tw-supplier-report.js';
+import {createTwSalesReader} from './oracle/tw-supplier-sales.js';
+import {readInventoryReport,INVENTORY_EXPORT_LIMITS} from './oracle/inventory-report.js';
 import {assertLegacyInventoryAllowed} from './oracle/inventory-export-intent.js';
 let stopOracleAnalysisWorker=()=>Promise.resolve();
 import { messageIntent } from './oracle/message-intent.js';
@@ -4209,7 +4212,13 @@ const productEvidenceReport=createProductEvidenceReportService({
 const generalAnalytics=createGeneralAnalyticsService({loadReport:ecommerceReportV2,inspectProductHistory:createReadOnlyProductHistory({bigquery,project:GOOGLE_PROJECT_ID})});
 const {artifactStore:priorityExportStore,service:productPriorityExport}=createProductionPriorityDependencies({bigquery,project:GOOGLE_PROJECT_ID});
 const currentStock=createCurrentStockService({artifactStore:priorityExportStore,graphql:shopifyGraphQL,getToken:getShopifyAccessToken,lookupGroup:createStockGroupLookup({bigquery,project:GOOGLE_PROJECT_ID}),locationSelector:oracleInventoryLocationSelector,log:diagnostic=>console.info('Oracle inventory read:',diagnostic)});
-baselineOverview=createOracleBaselineDispatcher({currentStock,productPriorityExport,generalAnalytics,historicalEventComparison,ecommerceBaselineOverview,productEvidenceReport});
+const twSupplierReport=createTwSupplierReportService({
+  readInventory:options=>readInventoryReport({...options,graphql:shopifyGraphQL,getToken:getShopifyAccessToken,
+    requiredExactTag:'tw',limits:{...INVENTORY_EXPORT_LIMITS,max_variants:1500,max_location_rows:20000,max_requests:1500}}),
+  readSales:createTwSalesReader({bigquery,project:GOOGLE_PROJECT_ID}),artifactStore:priorityExportStore,
+  settings:twSupplierSettings(process.env.ORACLE_TW_SUPPLIER_SETTINGS)
+});
+baselineOverview=createOracleBaselineDispatcher({twSupplierReport,currentStock,productPriorityExport,generalAnalytics,historicalEventComparison,ecommerceBaselineOverview,productEvidenceReport});
 
 async function getSalesByLocation({
   start_date,
