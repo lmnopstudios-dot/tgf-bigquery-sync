@@ -40,10 +40,10 @@ Optional private runtime JSON in `ORACLE_TW_SUPPLIER_SETTINGS`:
 | `variants` | Map by exact variant GID. Optional `packSize`, `participates`, dated `confirmedInbound` entries (`dueDate`, `units`) with `inboundReviewedOn`, and `confirmedBackordersNotInAvailable` with `backordersReviewedOn`. Supply reviews must match the cutoff. Use an empty inbound list or explicit zero backorders only when confirmed. |
 
 The supplier lead time is always three **calendar** months. For an order dated
-10 November, arrival is 10 February and ordinary cover runs through 9 May.
+10 November, arrival is 10 February and ordinary cover runs through 9 March.
 The pre-delivery projection applies confirmed receipts on their due dates and
 floors stock at zero; forecast shortfalls don't roll into the buy. The buy
-covers ordinary demand from arrival, less projected remaining stock and
+covers one calendar month of ordinary demand from arrival, less projected remaining stock and
 confirmed receipts due during that cover, plus only confirmed customer
 backorders not already reflected in available stock. Check whether receipts
 due after arrival land soon enough. Unknown dated inbound is not deducted;
