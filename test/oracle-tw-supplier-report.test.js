@@ -1,3 +1,4 @@
+import {twPlanningDates,twBuyPlan,twMayDeadline} from '../oracle/tw-supplier-planning.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import ExcelJS from 'exceljs';
@@ -75,22 +76,19 @@ test('partial October preserves observed units, does not fabricate zeros or reco
   assert.equal(unavailable.tabs['Monthly sales'][0].observed_total_units,null);
   assert.match(twSalesSql('fixture'),/variant_id IN UNNEST\(JSON_VALUE_ARRAY\(@variants\)\)/);
 });
-test('verified demand adds only incremental units for an upcoming participating event',()=>{
+test('May uplift is a separate top-up and does not change the ordinary buy',()=>{
   const historicalSales=[...sales,
-    {kind:'sales',day:'2026-08-03',channel:'Online Store',variant_id:vid(1),units:10},
-    {kind:'sales',day:'2026-09-03',channel:'Online Store',variant_id:vid(1),units:10},
-    {kind:'sales',day:'2026-10-03',channel:'Online Store',variant_id:vid(1),units:6},
-    {kind:'sales',day:'2026-11-05',channel:'Online Store',variant_id:vid(1),units:20}];
-  const base={sellableLocationIds:[lid(1)],verifiedWindows:[{start:'2026-08-01',end:'2026-11-09',channels:['Online Store','POS']}]};
-  const make=parts=>buildTwWorkbookRows({context,today:'2026-11-10',inventory,sales:historicalSales,settings:{...base,...parts}}).tabs['Order recommendations'][0];
-  assert.equal(make({}).suggested_units,26);
-  const upcoming={name:'Black Friday',start:'2027-11-05',end:'2027-11-09'};
-  const inputs={leadDays:320,participates:['Black Friday'],packSize:6};
-  const boosted=make({futureEvents:[upcoming],variants:{[vid(1)]:inputs}});
-  const ordinary=make({futureEvents:[upcoming],variants:{[vid(1)]:{...inputs,participates:[]}}});
-  assert.ok(boosted.incremental_event_units>0);
-  assert.ok(boosted.suggested_units>ordinary.suggested_units);
-  assert.equal(boosted.suggested_units%6,0);
+    {kind:'sales',day:'2026-05-01',channel:'Online Store',variant_id:vid(1),units:20},
+    {kind:'sales',day:'2026-08-03',channel:'Online Store',variant_id:vid(1),units:10}];
+  const base={sellableLocationIds:[lid(1)],verifiedWindows:[{start:'2026-05-01',end:'2026-11-09',channels:['Online Store','POS']}]};
+  const make=parts=>buildTwWorkbookRows({context,today:'2026-11-10',inventory,sales:historicalSales,settings:{...base,...parts}}).tabs;
+  const noMay=make({}), withMay=make({futureEvents:[{name:'May Bank Holiday',start:'2027-05-01',end:'2027-05-05'}],
+    mayPlan:{requiredShelfDate:'2027-04-30',receivingBufferDays:7},
+    variants:{[vid(1)]:{participates:['May Bank Holiday']}}});
+  assert.equal(noMay['Order recommendations'][0].suggested_units,withMay['Order recommendations'][0].suggested_units);
+  assert.ok(withMay['May top-up'][0].provisional_incremental_units>0);
+  assert.equal(withMay['May top-up'][0].order_by,'2027-01-23');
+  assert.equal(noMay['May top-up'][0].order_by,null);
 });
 test('known social sales and confirmed non-TW exceptions do not block TW demand',()=>{
   const base={sellableLocationIds:[lid(1)],verifiedWindows:[{start:'2026-08-01',end:'2026-11-01',channels:['Online Store','POS']}]};
@@ -130,7 +128,7 @@ test('today includes post-sale activity without baking the past sale into ordina
   assert.equal(top.post_sale_observed_units,2);
   assert.equal(top.ordinary_observed_units_excluding_post_sale,10);
   assert.equal(top.usable_stock,0);
-  assert.equal(top.incremental_event_units,0);
+  assert.equal(top['Before delivery · Expected arrival'],'2027-02-10');
   assert.equal(top.suggested_units,run(data.filter(r=>r.day!=='2026-11-05'&&r.day!=='2026-11-10')).tabs['Order recommendations'].find(r=>r.variant_id===vid(2)).suggested_units);
   assert.ok(top.suggested_units>0);
   assert.equal(report.latestCovered,'2026-11-08');
@@ -172,4 +170,25 @@ test('historical catalogue-only read never asks Shopify for live inventory level
     }});
   assert.deepEqual(calls,['InventoryCatalogue','InventoryReportVariants']);
   assert.deepEqual(result.products[0].variants[0].locations,[]);
+});
+
+
+test('three calendar months fixes arrival, and shortages do not become backorders',()=>{
+  assert.deepEqual(twPlanningDates('2026-11-10'),{arrival:'2027-02-10',coverEnd:'2027-05-10',coverThrough:'2027-05-09'});
+  assert.equal(twPlanningDates('2026-11-30').arrival,'2027-02-28');
+  assert.equal(twMayDeadline('2027-02-28',0),'2026-11-30');
+  const args={cutoff:'2026-11-10',dailyDemand:1,usable:2};
+  const plan=twBuyPlan(args);
+  assert.equal(plan.short,90);
+  assert.equal(plan.remaining,0);
+  assert.equal(plan.suggested,89);
+  const dated=twBuyPlan({...args,inputs:{inboundReviewedOn:args.cutoff,
+    confirmedInbound:[{dueDate:'2027-02-08',units:10},{dueDate:'2027-02-10',units:5},{dueDate:'2027-05-10',units:30}],
+    backordersReviewedOn:args.cutoff,confirmedBackordersNotInAvailable:4}});
+  assert.equal(dated.short,88);
+  assert.equal(dated.remaining,8);
+  assert.equal(dated.inboundAfter,5);
+  assert.equal(dated.suggested,80);
+  assert.equal(twBuyPlan({...args,inputs:{leadDays:0,confirmedBackordersNotInAvailable:100}}).suggested,89);
+  assert.equal(twBuyPlan({...args,usable:null}).suggested,null);
 });
