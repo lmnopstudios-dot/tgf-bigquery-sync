@@ -50,6 +50,8 @@ test('TW short, explicit-month and failed long-form requests reach durable deliv
     assert.equal(download.status,200);
     const wb=new ExcelJS.Workbook();await wb.xlsx.load(Buffer.from(await download.arrayBuffer()));
     assert.equal(wb.getWorksheet('Order recommendations').rowCount,3);
+    assert.equal(wb.worksheets[0].name,'Read me');
+    assert.ok(wb.getWorksheet('Trial buy'));
     const historical=prompt.includes('for October');
     assert.equal(r.analysis_context.end_date,historical?'2026-10-31':'2026-11-10');
     const stock=wb.getWorksheet('Stock by location');
@@ -191,4 +193,21 @@ test('three calendar months fixes arrival, and shortages do not become backorder
   assert.equal(dated.suggested,80);
   assert.equal(twBuyPlan({...args,inputs:{leadDays:0,confirmedBackordersNotInAvailable:100}}).suggested,89);
   assert.equal(twBuyPlan({...args,usable:null}).suggested,null);
+});
+
+test('trial buy separates low-stock candidates from ordinary buys and excludes sale spikes from the depletion pace',()=>{
+  const v=(n,available)=>({...inventory.products[0].variants[0],id:vid(n),
+    locations:[{location_id:lid(1),location_name:'Online Ready to Ship',available},{location_id:lid(2),location_name:'Workshop',available:20}]});
+  const catalogue={...inventory,products:[{...inventory.products[0],variants:[v(1,0),v(2,4),v(3,1),v(4,0),v(5,null)]}]};
+  const row=(id,units,day)=>({kind:'sales',day,channel:'Online Store',variant_id:vid(id),units});
+  const data=[row(1,8,'2026-11-05'),row(2,20,'2026-11-05'),row(3,6,'2026-06-01'),row(5,12,'2026-11-06'),row(4,10,'2026-11-10')];
+  const report=buildTwWorkbookRows({context,today:'2026-11-10',inventory:catalogue,sales:data,settings});
+  assert.equal(report.recommended,0);
+  assert.equal(report.trialCount,2);
+  assert.deepEqual(report.tabs['Trial buy'].map(r=>[r.variant_id,r.reason,r.trial_units_for_review]),
+    [[vid(1),'Out of stock',3],[vid(3),'Likely to run out before delivery',3]]);
+  const alreadyInbound=buildTwWorkbookRows({context,today:'2026-11-10',inventory:catalogue,sales:data,settings:{...settings,
+    variants:{[vid(1)]:{inboundReviewedOn:'2026-11-10',confirmedInbound:[{dueDate:'2027-02-10',units:3}]}}}});
+  assert.equal(alreadyInbound.trialCount,1);
+  assert.ok(report.tabs['Read me'].some(r=>r.section==='Trial buy'));
 });

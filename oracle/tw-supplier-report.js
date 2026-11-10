@@ -1,4 +1,4 @@
-import {twBuyPlan,twMayDeadline,TW_LEAD_MONTHS} from './tw-supplier-planning.js';
+import {calendarMonthOffset,twBuyPlan,twMayDeadline,TW_LEAD_MONTHS} from './tw-supplier-planning.js';
 import ExcelJS from 'exceljs';
 import {createHash} from 'node:crypto';
 import {priorityArtifactId} from './product-priority-storage.js';
@@ -18,7 +18,10 @@ const EVENTS=[
   {name:'May Bank Holiday',start:'2026-05-01',end:'2026-05-05',channels:CHANNELS},
   {name:'Black Friday',start:'2026-11-05',end:'2026-11-09',channels:CHANNELS}
 ];
-const SHEETS=['Order recommendations','Monthly sales','Stock by location','Seasonal demand','May top-up','Coverage'];
+const LEGACY_SHEETS=['Order recommendations','Monthly sales','Stock by location','Seasonal demand','May top-up','Coverage'];
+const SHEETS=['Read me',LEGACY_SHEETS[0],'Trial buy',...LEGACY_SHEETS.slice(1)];
+const TRIAL_MIN_OBSERVED_UNITS=2;
+const TRIAL_MAX_UNITS=3;
 
 export function twSupplierSettings(raw){
   if(!raw)return {};
@@ -91,6 +94,22 @@ export function buildTwWorkbookRows({context,today,inventory,snapshot=null,sales
   }
   const tabs=Object.fromEntries(SHEETS.map(k=>[k,[]]));
   const coverage=tabs.Coverage;
+  const trialStart=calendarMonthOffset(cutoff,-6);
+  const trialDays=Object.fromEntries(CHANNELS.map(c=>[c,days(trialStart,live?today:end)
+    .filter(d=>!EVENTS.some(e=>e.channels.includes(c)&&e.start<=d&&d<e.end))]));
+  const salesAsOf=live?'Today is partial; same-day sales do not count toward trial evidence.':'Sales through the selected historical cutoff.';
+  tabs['Read me'].push(
+    {section:'Start here',how_to_use:'Review the ordinary supplier buy first, then the separate trial shortlist. Trial quantities are for manual review and are never added to the supplier buy total.'},
+    {section:'Order recommendations',how_to_use:'A number above zero is a provisional ordinary buy. Zero means the formula calculated no buy. Blank means there was insufficient demand or stock evidence; it is not zero.'},
+    {section:'Before delivery',how_to_use:'Three calendar months to expected arrival. Check likely short units for possible expedited stock. Forecast lost sales are not added to the supplier buy.'},
+    {section:'Supplier buy',how_to_use:'Three months of ordinary demand after arrival, less projected remaining stock and confirmed dated inbound, plus confirmed backorders not already reflected in available stock.'},
+    {section:'Trial buy',how_to_use:'Only variants with a blank ordinary buy, known pooled stock and at least two identified units in the last six months qualify. Out-of-stock variants can qualify on sale evidence alone. For positive stock, observed ordinary sales must indicate likely depletion before delivery; sale spikes are not extrapolated.'},
+    {section:'Trial quantity',how_to_use:'Small review-only quantity: up to three units, capped by observed units and reduced by expected remaining stock and dated inbound during ordinary cover. Unknown inbound is not deducted. No trial is added to the main buy.'},
+    {section:'Monthly sales',how_to_use:'Identified Online Store and POS units by variant. Facebook & Instagram is separate. Blank sales are not zero. '+salesAsOf},
+    {section:'Stock by location',how_to_use:'Available stock at the selected cutoff. Selling locations are pooled for the buy; workshops are excluded. Historical stock requires an actual verified snapshot.'},
+    {section:'Seasonal demand / May top-up',how_to_use:'Review observed promotion sales separately. May uplift is excluded from the ordinary buy and has its own deadline when a shelf date is configured.'},
+    {section:'Coverage',how_to_use:'Check the last reconciled day, trailing gaps, missing order joins and unresolved lines. Reconciled warehouse rows are not proof of complete source history.'}
+  );
   for(const p of periods)for(const channel of [...CHANNELS,SOCIAL,'Other','Unknown']){
     const dates=days(p.start,p.end),observed=dates.map(d=>actualDays.get(d+'|'+channel)).filter(Boolean);
     const total=k=>sales==null?null:observed.reduce((s,r)=>s+Number(r[k]??0),0);
@@ -211,6 +230,26 @@ export function buildTwWorkbookRows({context,today,inventory,snapshot=null,sales
     if(usable<0)flags.push('Negative stock treated as zero; check actual customer commitments');
     if(!catalogueComplete)flags.push('Catalogue incomplete');
     const rounded=n=>n==null?null:round(n);
+    if(buy.suggested==null&&catalogueComplete&&usable!=null){
+      const evidenceEnd=live?today:end;
+      const allObserved=observedTotal(CHANNELS.map(c=>signalFor({start:trialStart,end:evidenceEnd},c,id).units));
+      const ordinaryObserved=CHANNELS.reduce((n,c)=>n+unitsFor(c,trialDays[c]),0);
+      // Divide by all elapsed ordinary days, including unverified ones. This is
+      // a conservative observed pace for screening, never a zero-sales claim.
+      const pace=CHANNELS.reduce((n,c)=>n+(trialDays[c].length?unitsFor(c,trialDays[c])/trialDays[c].length:0),0);
+      const trial=twBuyPlan({cutoff,dailyDemand:pace,usable,inputs});
+      const outNow=usable<=0;
+      const projectedOut=ordinaryObserved>=TRIAL_MIN_OBSERVED_UNITS&&trial.remaining<1;
+      const quantity=allObserved==null?null:Math.max(0,Math.floor(Math.min(TRIAL_MAX_UNITS,allObserved)-trial.remaining-(trial.inboundAfter??0)));
+      if(allObserved>=TRIAL_MIN_OBSERVED_UNITS&&(outNow||projectedOut)&&quantity>0){
+        tabs['Trial buy'].push({...label,reason:outNow?'Out of stock':'Likely to run out before delivery',usable_stock:usable,
+          six_month_observed_units:allObserved,six_month_ordinary_observed_units:ordinaryObserved,
+          black_friday_observed_units:observedTotal(soldDuring),evidence_start:trialStart,evidence_end_exclusive:evidenceEnd,
+          expected_arrival:trial.arrival,projected_stock_at_arrival:rounded(trial.remaining),
+          confirmed_inbound_before_arrival:trial.inboundBefore,confirmed_inbound_during_cover:trial.inboundAfter,
+          trial_units_for_review:quantity,review:'Not part of the ordinary buy. Check stock, lead-time shortage, inbound and supplier pack size before adding to the PO.'});
+      }
+    }
     tabs['Order recommendations'].push({...label,...Object.fromEntries(recent.map(m=>{
       const found=variantMonths.find(r=>r.period===m.label);
       return [m.label+' observed units',found?.observed_total_units??null];
@@ -233,7 +272,11 @@ export function buildTwWorkbookRows({context,today,inventory,snapshot=null,sales
   const priority=r=>(r.black_friday_observed_units??0)>0&&r.usable_stock!=null&&r.usable_stock<=3;
   tabs['Order recommendations'].sort((a,b)=>Number(priority(b))-Number(priority(a))||
     (b.black_friday_observed_units??0)-(a.black_friday_observed_units??0)||a.variant_id.localeCompare(b.variant_id));
-  return {tabs,variants:selected.length,catalogueComplete,coverage,latestCovered,coverageGapDays,stockAsOf:stock?.as_of??null,
+  tabs['Trial buy'].sort((a,b)=>Number(b.usable_stock<=0)-Number(a.usable_stock<=0)||
+    b.six_month_observed_units-a.six_month_observed_units||a.variant_id.localeCompare(b.variant_id));
+  const trialCount=tabs['Trial buy'].length;
+  if(!trialCount)tabs['Trial buy'].push({review:'No variants met the trial criteria with the available evidence. See Read me and Coverage.'});
+  return {tabs,trialCount,variants:selected.length,catalogueComplete,coverage,latestCovered,coverageGapDays,stockAsOf:stock?.as_of??null,
     recommended:tabs['Order recommendations'].filter(r=>r.suggested_units!=null).length};
 }
 
@@ -241,8 +284,8 @@ export async function assertTwArtifact(a){
   const bytes=Buffer.from(a.xlsx_base64||'','base64');
   if(a.envelope?.kind!=='tw_supplier_report'||createHash('sha256').update(bytes).digest('hex')!==a.sha256)throw Error('TW_INVALID_ARTIFACT');
   const wb=new ExcelJS.Workbook();await wb.xlsx.load(bytes);
-  const required=a.envelope.planning_version===2?SHEETS:SHEETS.filter(name=>name!=='May top-up');
-  if(required.some(name=>!wb.getWorksheet(name))||wb.getWorksheet(SHEETS[0]).rowCount!==a.envelope.variant_count+1)throw Error('TW_INVALID_WORKBOOK');
+  const required=a.envelope.planning_version===3?SHEETS:a.envelope.planning_version===2?LEGACY_SHEETS:LEGACY_SHEETS.filter(name=>name!=='May top-up');
+  if(required.some(name=>!wb.getWorksheet(name))||wb.getWorksheet('Order recommendations').rowCount!==a.envelope.variant_count+1)throw Error('TW_INVALID_WORKBOOK');
 }
 export function createTwSupplierReportService({readInventory,readSales,readSnapshot,artifactStore,settings={},now=Date.now}){
   return async(message,options)=>{
@@ -270,8 +313,9 @@ export function createTwSupplierReportService({readInventory,readSales,readSnaps
       const wb=new ExcelJS.Workbook();
       for(const name of SHEETS){
         const sheet=wb.addWorksheet(name),rows=report.tabs[name],columns=[...new Set(rows.flatMap(Object.keys))];
-        sheet.columns=(columns.length?columns:['status']).map(k=>({key:k,header:k,width:k==='review'||k==='status'?62:22}));
+        sheet.columns=(columns.length?columns:['status']).map(k=>({key:k,header:k,width:k==='how_to_use'?110:k==='review'||k==='status'?62:22}));
         for(const row of rows)sheet.addRow(row);
+        if(name==='Read me'){sheet.getColumn('how_to_use').alignment={wrapText:true,vertical:'top'};for(let i=2;i<=sheet.rowCount;i++)sheet.getRow(i).height=42;}
         sheet.getRow(1).font={bold:true};sheet.views=[{state:'frozen',ySplit:1}];
         if(rows.length)sheet.autoFilter={from:'A1',to:sheet.getRow(1).getCell(sheet.columnCount).address};
       }
@@ -279,10 +323,10 @@ export function createTwSupplierReportService({readInventory,readSales,readSnaps
       const period={start_date:context.start_date,end_date:context.end_date};
       const periods=report.coverage.filter(r=>CHANNELS.includes(r.channel));
       const incomplete=periods.filter(r=>r.verified_days<r.days).length;
-      const envelope={kind:'tw_supplier_report',planning_version:2,subject:'tw_supplier_stock',...period,periods:[period],
-        variant_count:report.variants,recommended_count:report.recommended,unverified_channel_periods:incomplete,
+      const envelope={kind:'tw_supplier_report',planning_version:3,subject:'tw_supplier_stock',...period,periods:[period],
+        variant_count:report.variants,recommended_count:report.recommended,trial_count:report.trialCount,unverified_channel_periods:incomplete,
         catalogue_complete:report.catalogueComplete,failures,as_of:report.stockAsOf,latest_reconciled_sales_date:report.latestCovered,sales_gap_days:report.coverageGapDays};
-      const answer=`TW supplier stock report: ${period.start_date} to ${period.end_date}, inclusive (London). ${live?'Today is partial.':'Historical stock is blank unless a verified snapshot is available.'} Latest completed date with reconciled Online Store and POS observations: ${report.latestCovered||'unavailable'}; completed days after that through cutoff: ${report.coverageGapDays??'unknown'}. ${report.variants} variants; ${report.recommended} with a provisional or supported order quantity. Supplier lead time: three calendar months. May promotional uplift is shown separately. ${incomplete} channel periods have incomplete or unverified sales coverage. Receipts, stockout days, returns and sell-through are unavailable from the verified bindings. ${failures.join(' ')} See Coverage in the workbook.`;
+      const answer=`TW supplier stock report: ${period.start_date} to ${period.end_date}, inclusive (London). ${live?'Today is partial.':'Historical stock is blank unless a verified snapshot is available.'} Latest completed date with reconciled Online Store and POS observations: ${report.latestCovered||'unavailable'}; completed days after that through cutoff: ${report.coverageGapDays??'unknown'}. ${report.variants} variants; ${report.recommended} with a provisional or supported order quantity. Supplier lead time: three calendar months. May promotional uplift is shown separately. ${report.trialCount} variants shortlisted for a separate trial buy. See Read me for guidance. ${incomplete} channel periods have incomplete or unverified sales coverage. Receipts, stockout days, returns and sell-through are unavailable from the verified bindings. ${failures.join(' ')} See Coverage in the workbook.`;
       saved={request:message,envelope,answer,filename:'oracle-tw-supplier-stock.xlsx',sha256:createHash('sha256').update(bytes).digest('hex'),xlsx_base64:bytes.toString('base64')};
       await assertTwArtifact(saved);
       signal?.throwIfAborted();await options.assertLease?.();
