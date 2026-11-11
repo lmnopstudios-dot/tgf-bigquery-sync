@@ -1,6 +1,3 @@
-Warning: truncated output (original token count: 71117)
-Total output lines: 8494
-
 import {createEyewearReportService,createEyewearStockReader} from './oracle/eyewear-report.js';
 import {createEyewearSalesReader} from './oracle/eyewear-sales.js';
 import {createTwSupplierReportService,twSupplierSettings} from './oracle/tw-supplier-report.js';
@@ -2499,7 +2496,4289 @@ async function ensureRefundsTable() {
       { name: 'order_adjustments_json', type: 'STRING' },
       { name: 'transactions_json', type: 'STRING' },
 
-      { name: 'synced_at', ty…31117 tokens truncated…rders.map(
+      { name: 'synced_at', type: 'TIMESTAMP' }
+    ]
+  });
+
+  return dataset.table(REFUNDS_TABLE);
+}
+
+
+function moneyAmount(moneyBag, side = 'shopMoney') {
+  const value = moneyBag?.[side]?.amount;
+
+  if (
+    value === undefined ||
+    value === null ||
+    value === ''
+  ) {
+    return 0;
+  }
+
+  return Number(value);
+}
+
+
+function transformFinancials(orders) {
+  const syncedAt = new Date().toISOString();
+
+  return orders.map(order => ({
+    order_id: order.id,
+    order_name: order.name || null,
+
+    created_at: order.createdAt || null,
+    processed_at: order.processedAt || null,
+    updated_at: order.updatedAt || null,
+    cancelled_at: order.cancelledAt || null,
+
+    order_source: order.app?.name || null,
+
+    shop_currency:
+      order.totalPriceSet?.shopMoney?.currencyCode ||
+      order.currencyCode ||
+      null,
+
+    presentment_currency:
+      order.totalPriceSet?.presentmentMoney?.currencyCode ||
+      order.presentmentCurrencyCode ||
+      null,
+
+    original_total_shop:
+      moneyAmount(order.totalPriceSet, 'shopMoney'),
+
+    original_total_presentment:
+      moneyAmount(order.totalPriceSet, 'presentmentMoney'),
+
+    original_subtotal_shop:
+      moneyAmount(order.subtotalPriceSet, 'shopMoney'),
+
+    original_subtotal_presentment:
+      moneyAmount(order.subtotalPriceSet, 'presentmentMoney'),
+
+    original_tax_shop:
+      moneyAmount(order.totalTaxSet, 'shopMoney'),
+
+    original_tax_presentment:
+      moneyAmount(order.totalTaxSet, 'presentmentMoney'),
+
+    original_discounts_shop:
+      moneyAmount(order.totalDiscountsSet, 'shopMoney'),
+
+    original_discounts_presentment:
+      moneyAmount(order.totalDiscountsSet, 'presentmentMoney'),
+
+    original_shipping_shop:
+      moneyAmount(order.totalShippingPriceSet, 'shopMoney'),
+
+    original_shipping_presentment:
+      moneyAmount(order.totalShippingPriceSet, 'presentmentMoney'),
+
+    total_refunded_shop:
+      moneyAmount(order.totalRefundedSet, 'shopMoney'),
+
+    total_refunded_presentment:
+      moneyAmount(order.totalRefundedSet, 'presentmentMoney'),
+
+    total_received_shop:
+      moneyAmount(order.totalReceivedSet, 'shopMoney'),
+
+    total_received_presentment:
+      moneyAmount(order.totalReceivedSet, 'presentmentMoney'),
+
+    payment_gateway_names_json:
+      JSON.stringify(order.paymentGatewayNames || []),
+
+    transactions_json:
+      JSON.stringify(order.transactions || []),
+
+    synced_at: syncedAt
+  }));
+}
+
+
+function transformRefunds(orders) {
+  const syncedAt = new Date().toISOString();
+  const rows = [];
+
+  for (const order of orders) {
+    const refunds = order.refunds || [];
+
+    for (const refund of refunds) {
+      const lineItems =
+        refund.refundLineItems?.nodes || [];
+
+      const shippingLines =
+        refund.refundShippingLines?.nodes || [];
+
+      const adjustments =
+        refund.orderAdjustments?.nodes || [];
+
+      const transactions =
+        refund.transactions?.nodes || [];
+
+      const lineSubtotalShop =
+        lineItems.reduce(
+          (sum, item) =>
+            sum + moneyAmount(item.subtotalSet, 'shopMoney'),
+          0
+        );
+
+      const lineSubtotalPresentment =
+        lineItems.reduce(
+          (sum, item) =>
+            sum + moneyAmount(item.subtotalSet, 'presentmentMoney'),
+          0
+        );
+
+      const shippingSubtotalShop =
+        shippingLines.reduce(
+          (sum, item) =>
+            sum + moneyAmount(item.subtotalAmountSet, 'shopMoney'),
+          0
+        );
+
+      const shippingSubtotalPresentment =
+        shippingLines.reduce(
+          (sum, item) =>
+            sum + moneyAmount(item.subtotalAmountSet, 'presentmentMoney'),
+          0
+        );
+
+      const lineTaxShop =
+        lineItems.reduce(
+          (sum, item) =>
+            sum + moneyAmount(item.totalTaxSet, 'shopMoney'),
+          0
+        );
+
+      const lineTaxPresentment =
+        lineItems.reduce(
+          (sum, item) =>
+            sum + moneyAmount(item.totalTaxSet, 'presentmentMoney'),
+          0
+        );
+
+      const shippingTaxShop =
+        shippingLines.reduce(
+          (sum, item) =>
+            sum + moneyAmount(item.taxAmountSet, 'shopMoney'),
+          0
+        );
+
+      const shippingTaxPresentment =
+        shippingLines.reduce(
+          (sum, item) =>
+            sum + moneyAmount(item.taxAmountSet, 'presentmentMoney'),
+          0
+        );
+
+      const adjustmentTaxShop =
+        adjustments.reduce(
+          (sum, item) =>
+            sum + moneyAmount(item.taxAmountSet, 'shopMoney'),
+          0
+        );
+
+      const adjustmentTaxPresentment =
+        adjustments.reduce(
+          (sum, item) =>
+            sum + moneyAmount(item.taxAmountSet, 'presentmentMoney'),
+          0
+        );
+
+      const successfulRefundTransactions =
+        transactions.filter(
+          transaction =>
+            transaction.kind === 'REFUND' &&
+            transaction.status === 'SUCCESS'
+        );
+
+      const successfulTransactionShop =
+        successfulRefundTransactions.reduce(
+          (sum, transaction) =>
+            sum + moneyAmount(transaction.amountSet, 'shopMoney'),
+          0
+        );
+
+      const successfulTransactionPresentment =
+        successfulRefundTransactions.reduce(
+          (sum, transaction) =>
+            sum + moneyAmount(transaction.amountSet, 'presentmentMoney'),
+          0
+        );
+
+      rows.push({
+        refund_id: refund.id,
+        order_id: order.id,
+        order_name: order.name || null,
+
+        refund_created_at:
+          refund.createdAt || null,
+
+        refund_processed_at:
+          refund.processedAt || null,
+
+        refund_updated_at:
+          refund.updatedAt || null,
+
+        shop_currency:
+          refund.totalRefundedSet?.shopMoney?.currencyCode ||
+          order.currencyCode ||
+          null,
+
+        presentment_currency:
+          refund.totalRefundedSet?.presentmentMoney?.currencyCode ||
+          order.presentmentCurrencyCode ||
+          null,
+
+        refund_total_shop:
+          moneyAmount(refund.totalRefundedSet, 'shopMoney'),
+
+        refund_total_presentment:
+          moneyAmount(refund.totalRefundedSet, 'presentmentMoney'),
+
+        refund_line_subtotal_shop:
+          Number(lineSubtotalShop.toFixed(2)),
+
+        refund_line_subtotal_presentment:
+          Number(lineSubtotalPresentment.toFixed(2)),
+
+        refund_shipping_subtotal_shop:
+          Number(shippingSubtotalShop.toFixed(2)),
+
+        refund_shipping_subtotal_presentment:
+          Number(shippingSubtotalPresentment.toFixed(2)),
+
+        refund_line_tax_shop:
+          Number(lineTaxShop.toFixed(2)),
+
+        refund_line_tax_presentment:
+          Number(lineTaxPresentment.toFixed(2)),
+
+        refund_shipping_tax_shop:
+          Number(shippingTaxShop.toFixed(2)),
+
+        refund_shipping_tax_presentment:
+          Number(shippingTaxPresentment.toFixed(2)),
+
+        refund_adjustment_tax_shop:
+          Number(adjustmentTaxShop.toFixed(2)),
+
+        refund_adjustment_tax_presentment:
+          Number(adjustmentTaxPresentment.toFixed(2)),
+
+        refund_tax_shop:
+          Number(
+            (
+              lineTaxShop +
+              shippingTaxShop +
+              adjustmentTaxShop
+            ).toFixed(2)
+          ),
+
+        refund_tax_presentment:
+          Number(
+            (
+              lineTaxPresentment +
+              shippingTaxPresentment +
+              adjustmentTaxPresentment
+            ).toFixed(2)
+          ),
+
+        successful_transaction_shop:
+          Number(successfulTransactionShop.toFixed(2)),
+
+        successful_transaction_presentment:
+          Number(successfulTransactionPresentment.toFixed(2)),
+
+        has_successful_refund_transaction:
+          successfulRefundTransactions.length > 0,
+
+        note: refund.note || null,
+
+        refund_line_items_json:
+          JSON.stringify(lineItems),
+
+        refund_shipping_lines_json:
+          JSON.stringify(shippingLines),
+
+        order_adjustments_json:
+          JSON.stringify(adjustments),
+
+        transactions_json:
+          JSON.stringify(transactions),
+
+        synced_at: syncedAt
+      });
+    }
+  }
+
+  return rows;
+}
+
+function transformOrders(orders) {
+  const syncedAt =
+    new Date().toISOString();
+
+  return orders.map(order => ({
+    order_id:
+      order.id,
+
+    order_name:
+      order.name || null,
+
+    created_at:
+      order.createdAt || null,
+
+    updated_at:
+      order.updatedAt || null,
+
+    order_source:
+      order.app?.name || null,
+
+    source_app_id:
+      order.app?.id || null,
+
+    retail_location_id:
+      order.retailLocation?.id || null,
+
+    retail_location_name:
+      order.retailLocation?.name || null,
+
+    synced_at:
+      syncedAt
+  }));
+}
+
+function transformLineItems(orders) {
+  const syncedAt =
+    new Date().toISOString();
+
+  const rows = [];
+
+  for (const order of orders) {
+    const lineItems =
+      order.lineItems?.nodes || [];
+
+    for (const item of lineItems) {
+      const taxLines =
+        item.taxLines || [];
+
+      const taxShop =
+        taxLines.reduce(
+          (sum, tax) =>
+            sum +
+            Number(
+              tax.priceSet
+                ?.shopMoney
+                ?.amount || 0
+            ),
+          0
+        );
+
+      const taxPresentment =
+        taxLines.reduce(
+          (sum, tax) =>
+            sum +
+            Number(
+              tax.priceSet
+                ?.presentmentMoney
+                ?.amount || 0
+            ),
+          0
+        );
+
+      rows.push({
+        order_id:
+          order.id,
+
+        order_name:
+          order.name || null,
+
+        order_created_at:
+          order.createdAt || null,
+
+        line_item_id:
+          item.id,
+
+        product_id:
+          item.product?.id || null,
+
+        variant_id:
+          item.variant?.id || null,
+
+        name:
+          item.name || null,
+
+        title:
+          item.title || null,
+
+        variant_title:
+          item.variantTitle || null,
+
+        sku:
+          item.sku || null,
+
+        quantity:
+          item.quantity ?? 0,
+
+        current_quantity:
+          item.currentQuantity ?? 0,
+
+        is_gift_card:
+          item.isGiftCard === true,
+
+        taxable:
+          item.taxable === true,
+
+        requires_shipping:
+          item.requiresShipping === true,
+
+        vendor:
+          item.vendor ||
+          item.product?.vendor ||
+          null,
+
+        product_type:
+          item.product?.productType ||
+          null,
+
+        shop_currency:
+          item.originalTotalSet
+            ?.shopMoney
+            ?.currencyCode || null,
+
+        presentment_currency:
+          item.originalTotalSet
+            ?.presentmentMoney
+            ?.currencyCode || null,
+
+        original_unit_price_shop:
+          Number(
+            item.originalUnitPriceSet
+              ?.shopMoney
+              ?.amount || 0
+          ),
+
+        original_unit_price_presentment:
+          Number(
+            item.originalUnitPriceSet
+              ?.presentmentMoney
+              ?.amount || 0
+          ),
+
+        original_total_shop:
+          Number(
+            item.originalTotalSet
+              ?.shopMoney
+              ?.amount || 0
+          ),
+
+        original_total_presentment:
+          Number(
+            item.originalTotalSet
+              ?.presentmentMoney
+              ?.amount || 0
+          ),
+
+        discounted_total_shop:
+          Number(
+            item.discountedTotalSet
+              ?.shopMoney
+              ?.amount || 0
+          ),
+
+        discounted_total_presentment:
+          Number(
+            item.discountedTotalSet
+              ?.presentmentMoney
+              ?.amount || 0
+          ),
+
+        total_discount_shop:
+          Number(
+            item.totalDiscountSet
+              ?.shopMoney
+              ?.amount || 0
+          ),
+
+        total_discount_presentment:
+          Number(
+            item.totalDiscountSet
+              ?.presentmentMoney
+              ?.amount || 0
+          ),
+
+        tax_shop:
+          Number(
+            taxShop.toFixed(2)
+          ),
+
+        tax_presentment:
+          Number(
+            taxPresentment.toFixed(2)
+          ),
+
+        custom_attributes_json:
+          JSON.stringify(
+            item.customAttributes || []
+          ),
+
+        tax_lines_json:
+          JSON.stringify(
+            item.taxLines || []
+          ),
+
+        discount_allocations_json:
+          JSON.stringify(
+            item.discountAllocations || []
+          ),
+
+        synced_at:
+          syncedAt
+      });
+    }
+  }
+
+  return rows;
+}
+
+function transformOrderCustomers(orders) {
+  const syncedAt = new Date().toISOString();
+
+  return orders.map(order => ({
+    order_id: order.id,
+    order_name: order.name || null,
+    order_created_at: order.createdAt || null,
+    customer_id: order.customer?.id || null,
+    customer_name: order.customer?.displayName || null,
+    is_guest: !order.customer?.id,
+    cancelled_at: order.cancelledAt || null,
+    display_financial_status:
+      order.displayFinancialStatus || null,
+    source_app_id: order.app?.id || null,
+    source_app_name: order.app?.name || null,
+    synced_at: syncedAt
+  }));
+}
+
+async function replaceBigQueryData(
+  rows
+) {
+  await ensureBigQueryTable();
+
+  console.log(
+    'Clearing existing order location data...'
+  );
+
+  await bigquery.query({
+    query: `
+      TRUNCATE TABLE
+      \`${GOOGLE_PROJECT_ID}.${DATASET}.${TABLE}\`
+    `
+  });
+
+  console.log(
+    `Writing ${rows.length} rows to BigQuery...`
+  );
+
+  const table = bigquery
+    .dataset(DATASET)
+    .table(TABLE);
+
+  const batchSize = 500;
+
+  for (
+    let i = 0;
+    i < rows.length;
+    i += batchSize
+  ) {
+    const batch = rows.slice(
+      i,
+      i + batchSize
+    );
+
+    await table.insert(batch);
+
+    console.log(
+      `Inserted ${Math.min(
+        i + batch.length,
+        rows.length
+      )}/${rows.length}`
+    );
+  }
+}
+
+async function replaceLineItemsData(
+  rows
+) {
+  const table =
+    await ensureLineItemsTable();
+
+  console.log(
+    'Clearing existing Shopify line item data...'
+  );
+
+  await bigquery.query({
+    query: `
+      TRUNCATE TABLE
+      \`${GOOGLE_PROJECT_ID}.${DATASET}.${LINE_ITEMS_TABLE}\`
+    `
+  });
+
+  console.log(
+    `Writing ${rows.length} Shopify line items to BigQuery...`
+  );
+
+  const batchSize = 500;
+
+  for (
+    let i = 0;
+    i < rows.length;
+    i += batchSize
+  ) {
+    const batch = rows.slice(
+      i,
+      i + batchSize
+    );
+
+    await table.insert(batch);
+
+    console.log(
+      `Inserted ${Math.min(
+        i + batch.length,
+        rows.length
+      )}/${rows.length} Shopify line items`
+    );
+  }
+}
+
+async function replaceOrderCustomersData(rows) {
+  const table = await ensureOrderCustomersTable();
+
+  console.log(
+    'Clearing existing Shopify order customer data...'
+  );
+
+  await bigquery.query({
+    query: `
+      TRUNCATE TABLE
+      \`${GOOGLE_PROJECT_ID}.${DATASET}.${ORDER_CUSTOMERS_TABLE}\`
+    `
+  });
+
+  console.log(
+    `Writing ${rows.length} Shopify order customer rows to BigQuery...`
+  );
+
+  const batchSize = 500;
+
+  for (let i = 0; i < rows.length; i += batchSize) {
+    const batch = rows.slice(i, i + batchSize);
+
+    await table.insert(batch);
+
+    console.log(
+      `Inserted ${Math.min(
+        i + batch.length,
+        rows.length
+      )}/${rows.length} Shopify order customer rows`
+    );
+  }
+}
+
+async function replaceFinancialsData(rows) {
+  const table = await ensureFinancialsTable();
+
+  console.log(
+    'Clearing existing Shopify financial data...'
+  );
+
+  await bigquery.query({
+    query: `
+      TRUNCATE TABLE
+      \`${GOOGLE_PROJECT_ID}.${DATASET}.${FINANCIALS_TABLE}\`
+    `
+  });
+
+  console.log(
+    `Writing ${rows.length} Shopify financial rows to BigQuery...`
+  );
+
+  const batchSize = 500;
+
+  for (
+    let i = 0;
+    i < rows.length;
+    i += batchSize
+  ) {
+    const batch = rows.slice(i, i + batchSize);
+
+    await table.insert(batch);
+
+    console.log(
+      `Inserted ${Math.min(
+        i + batch.length,
+        rows.length
+      )}/${rows.length} Shopify financial rows`
+    );
+  }
+}
+
+
+async function replaceRefundsData(rows) {
+  const table = await ensureRefundsTable();
+
+  console.log(
+    'Clearing existing Shopify refund data...'
+  );
+
+  await bigquery.query({
+    query: `
+      TRUNCATE TABLE
+      \`${GOOGLE_PROJECT_ID}.${DATASET}.${REFUNDS_TABLE}\`
+    `
+  });
+
+  console.log(
+    `Writing ${rows.length} Shopify refunds to BigQuery...`
+  );
+
+  const batchSize = 500;
+
+  for (
+    let i = 0;
+    i < rows.length;
+    i += batchSize
+  ) {
+    const batch = rows.slice(i, i + batchSize);
+
+    await table.insert(batch);
+
+    console.log(
+      `Inserted ${Math.min(
+        i + batch.length,
+        rows.length
+      )}/${rows.length} Shopify refunds`
+    );
+  }
+}
+
+async function syncShopify() {
+  console.log(
+    'Starting Shopify sync'
+  );
+
+  const orders =
+    await getAllOrders();
+
+  console.log(
+    `Shopify returned ${orders.length} orders for metadata/line items`
+  );
+
+  const financialOrders =
+    await getAllOrderFinancialsAndRefunds();
+
+  console.log(
+    `Shopify returned ${financialOrders.length} orders for financials/refunds`
+  );
+
+  const orderRows =
+    transformOrders(orders);
+
+  const shippingGeographyRows =
+    orders.filter(order => order.app?.id !== MATRIXIFY_SOURCE_APP_ID)
+      .map(order => normalizeShippingGeography(order));
+
+  const lineItemRows =
+    transformLineItems(orders);
+
+  const orderCustomerRows =
+    transformOrderCustomers(orders);
+
+  const financialRows =
+    transformFinancials(financialOrders);
+
+  const refundRows =
+    transformRefunds(financialOrders);
+
+  console.log(
+    `Extracted ${lineItemRows.length} Shopify line items`
+  );
+
+  console.log(
+    `Extracted ${orderCustomerRows.length} Shopify order customer rows`
+  );
+
+  console.log(
+    `Extracted ${financialRows.length} Shopify financial rows`
+  );
+
+  console.log(
+    `Extracted ${refundRows.length} Shopify refunds`
+  );
+
+  await replaceBigQueryData(
+    orderRows
+  );
+
+  await replaceLineItemsData(
+    lineItemRows
+  );
+
+  await replaceOrderCustomersData(
+    orderCustomerRows
+  );
+
+  await replaceFinancialsData(
+    financialRows
+  );
+
+  await replaceRefundsData(
+    refundRows
+  );
+
+  await persistShippingGeography({ bigquery, project: GOOGLE_PROJECT_ID,
+    rows: shippingGeographyRows, mode: 'backfill' });
+
+  console.log(
+    'Shopify sync complete'
+  );
+
+  return {
+    ordersFetched:
+      orders.length,
+
+    financialOrdersFetched:
+      financialOrders.length,
+
+    orderRowsWritten:
+      orderRows.length,
+
+    lineItemsWritten:
+      lineItemRows.length,
+
+    orderCustomerRowsWritten:
+      orderCustomerRows.length,
+
+    financialRowsWritten:
+      financialRows.length,
+
+    refundsWritten:
+      refundRows.length,
+
+    shippingGeographyRowsWritten:
+      shippingGeographyRows.length
+  };
+}
+
+/* =========================================================
+   AUTH
+========================================================= */
+
+function requireSyncSecret(
+  req,
+  res,
+  next
+) {
+  if (!SYNC_SECRET) {
+    return res
+      .status(500)
+      .json({
+        success: false,
+        error:
+          'SYNC_SECRET is not configured'
+      });
+  }
+
+  const auth =
+    req.headers.authorization;
+
+  if (
+    auth !==
+    `Bearer ${SYNC_SECRET}`
+  ) {
+    return res
+      .status(401)
+      .json({
+        success: false,
+        error: 'Unauthorized'
+      });
+  }
+
+  next();
+}
+
+/* =========================================================
+   WOO REFUNDS
+========================================================= */
+
+async function syncWooRefunds({
+  storeName,
+  datasetName,
+  wooUrlRaw,
+  consumerKey,
+  consumerSecret
+}) {
+  if (
+    !wooUrlRaw ||
+    !consumerKey ||
+    !consumerSecret
+  ) {
+    throw new Error(
+      `Missing WooCommerce ${storeName} environment variables`
+    );
+  }
+
+  const wooUrl =
+    wooUrlRaw.replace(
+      /\/$/,
+      ''
+    );
+
+  console.log(
+    `Starting WooCommerce ${storeName} refund sync`
+  );
+
+  /*
+   * Coupler flattens Woo orders by line item,
+   * so DISTINCT order IDs are essential.
+   *
+   * We only need to hit the API for orders where
+   * the Coupler orders table tells us refund data exists.
+   */
+  const [orders] =
+    await bigquery.query({
+      query: `
+        SELECT DISTINCT
+          CAST(id AS STRING) AS order_id
+        FROM
+          \`${GOOGLE_PROJECT_ID}.${datasetName}.orders\`
+        WHERE
+          refunds IS NOT NULL
+          AND TRIM(refunds) NOT IN (
+            '',
+            '[]',
+            '{}'
+          )
+        ORDER BY
+          order_id
+      `
+    });
+
+  console.log(
+    `Found ${orders.length} Woo ${storeName} orders containing refunds`
+  );
+
+  const auth =
+    Buffer.from(
+      `${consumerKey}:${consumerSecret}`
+    ).toString('base64');
+
+  const refundRows = [];
+
+  let failedOrders = 0;
+
+  for (const order of orders) {
+    const orderId =
+      order.order_id;
+
+    const endpoint =
+      `${wooUrl}/wp-json/wc/v3/orders/${orderId}/refunds?per_page=100`;
+
+    const response =
+      await fetch(
+        endpoint,
+        {
+          headers: {
+            Authorization:
+              `Basic ${auth}`,
+
+            Accept:
+              'application/json'
+          }
+        }
+      );
+
+    if (!response.ok) {
+      failedOrders++;
+
+      const body =
+        await response.text();
+
+      console.error(
+        `Woo ${storeName} refund fetch failed for order ${orderId}:`,
+        response.status,
+        body
+      );
+
+      continue;
+    }
+
+    const refunds =
+      await response.json();
+
+    if (
+      !Array.isArray(refunds)
+    ) {
+      console.error(
+        `Unexpected Woo ${storeName} refund response for order ${orderId}:`,
+        refunds
+      );
+
+      failedOrders++;
+      continue;
+    }
+
+    for (
+      const refund of refunds
+    ) {
+      refundRows.push({
+        refund_id:
+          String(refund.id),
+
+        order_id:
+          String(orderId),
+
+        refund_date:
+          refund.date_created_gmt
+            ? new Date(
+                `${refund.date_created_gmt}Z`
+              ).toISOString()
+            : null,
+
+        refund_amount:
+          refund.amount !==
+            undefined &&
+          refund.amount !== null &&
+          refund.amount !== ''
+            ? Number(refund.amount)
+            : 0,
+
+        reason:
+          refund.reason || null,
+
+        refunded_by:
+          refund.refunded_by !==
+            undefined &&
+          refund.refunded_by !== null
+            ? String(
+                refund.refunded_by
+              )
+            : null,
+
+        api_refunded:
+          refund.api_refund ===
+          true,
+
+        line_items_json:
+          refund.line_items
+            ? JSON.stringify(
+                refund.line_items
+              )
+            : null,
+
+        synced_at:
+          new Date().toISOString()
+      });
+    }
+  }
+
+  console.log(
+    `Found ${refundRows.length} individual Woo ${storeName} refunds`
+  );
+
+  if (failedOrders > 0) {
+    console.warn(
+      `${failedOrders} Woo ${storeName} orders failed during refund sync`
+    );
+  }
+
+  const dataset =
+    bigquery.dataset(
+      datasetName
+    );
+
+  const tableName =
+    'refunds_api';
+
+  const table =
+    dataset.table(
+      tableName
+    );
+
+  const [exists] =
+    await table.exists();
+
+  if (!exists) {
+    console.log(
+      `Creating ${GOOGLE_PROJECT_ID}.${datasetName}.${tableName}`
+    );
+
+    await dataset.createTable(
+      tableName,
+      {
+        schema: [
+          {
+            name: 'refund_id',
+            type: 'STRING',
+            mode: 'REQUIRED'
+          },
+          {
+            name: 'order_id',
+            type: 'STRING',
+            mode: 'REQUIRED'
+          },
+          {
+            name: 'refund_date',
+            type: 'TIMESTAMP'
+          },
+          {
+            name: 'refund_amount',
+            type: 'NUMERIC'
+          },
+          {
+            name: 'reason',
+            type: 'STRING'
+          },
+          {
+            name: 'refunded_by',
+            type: 'STRING'
+          },
+          {
+            name: 'api_refunded',
+            type: 'BOOL'
+          },
+          {
+            name: 'line_items_json',
+            type: 'STRING'
+          },
+          {
+            name: 'synced_at',
+            type: 'TIMESTAMP'
+          }
+        ]
+      }
+    );
+  } else {
+    console.log(
+      `Clearing ${GOOGLE_PROJECT_ID}.${datasetName}.${tableName}`
+    );
+
+    await bigquery.query({
+      query: `
+        TRUNCATE TABLE
+        \`${GOOGLE_PROJECT_ID}.${datasetName}.${tableName}\`
+      `
+    });
+  }
+
+  if (
+    refundRows.length > 0
+  ) {
+    const freshTable =
+      dataset.table(
+        tableName
+      );
+
+    const batchSize = 500;
+
+    for (
+      let i = 0;
+      i < refundRows.length;
+      i += batchSize
+    ) {
+      const batch =
+        refundRows.slice(
+          i,
+          i + batchSize
+        );
+
+      await freshTable.insert(
+        batch
+      );
+
+      console.log(
+        `Woo ${storeName}: inserted ${Math.min(
+          i + batch.length,
+          refundRows.length
+        )}/${refundRows.length} refunds`
+      );
+    }
+  }
+
+  console.log(
+    `WooCommerce ${storeName} refund sync complete`
+  );
+
+  return {
+    store: storeName,
+    dataset: datasetName,
+
+    refund_orders_checked:
+      orders.length,
+
+    refunds_imported:
+      refundRows.length,
+
+    failed_orders:
+      failedOrders
+  };
+}
+
+/* =========================================================
+   ACCOUNTANT EXPORT HELPERS
+========================================================= */
+
+function getAccountantColumnWidth(header) {
+  const name = header.toLowerCase();
+
+  if (name.includes('transaction_id') || name === 'order_id') {
+    return 30;
+  }
+
+  if (name.includes('timestamp')) {
+    return 22;
+  }
+
+  if ([
+    'location',
+    'sales_location',
+    'payment_method',
+    'country',
+    'order_status',
+    'tax_method',
+    'source_transaction_kind'
+  ].includes(name)) {
+    return 24;
+  }
+
+  if (name === 'date' || name === 'month') {
+    return 14;
+  }
+
+  return 17;
+}
+
+function styleHeaderRow(row) {
+  row.height = 24;
+  row.font = {
+    bold: true,
+    color: { argb: 'FFFFFFFF' }
+  };
+  row.fill = {
+    type: 'pattern',
+    pattern: 'solid',
+    fgColor: { argb: 'FF202124' }
+  };
+  row.alignment = { vertical: 'middle' };
+}
+
+function cleanBigQueryValue(value) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+
+  if (
+    typeof value === 'object' &&
+    value !== null &&
+    'value' in value
+  ) {
+    return value.value;
+  }
+
+  if (
+    typeof value === 'object' &&
+    value !== null &&
+    value.constructor?.name !== 'Date' &&
+    typeof value.toString === 'function'
+  ) {
+    const stringValue = value.toString();
+
+    if (stringValue !== '[object Object]') {
+      const numberValue = Number(stringValue);
+
+      if (!Number.isNaN(numberValue)) {
+        return numberValue;
+      }
+
+      return stringValue;
+    }
+  }
+
+  return value;
+}
+
+function formatDataRow(row, headers) {
+  headers.forEach((header, index) => {
+    const name = header.toLowerCase();
+    const cell = row.getCell(index + 1);
+
+    if ([
+      'gross',
+      'tax',
+      'net',
+      'discount',
+      'shipping',
+      'refund',
+      'gift_card'
+    ].some(word => name.includes(word))) {
+      cell.numFmt = '#,##0.00;[Red](#,##0.00);-';
+    }
+  });
+}
+
+async function exportBigQueryViewToWorksheet(
+  workbook,
+  sheetName,
+  tableName
+) {
+  const worksheet = workbook.addWorksheet(sheetName);
+
+  const query = `
+    SELECT *
+    FROM \`${tableName}\`
+  `;
+
+  const [job] = await bigquery.createQueryJob({ query });
+
+  console.log(`${sheetName}: BigQuery job ${job.id}`);
+
+  let [rows, nextQuery] = await job.getQueryResults({
+    maxResults: 2000,
+    autoPaginate: false
+  });
+
+  if (!rows.length) {
+    worksheet.addRow(['No data']).commit();
+    worksheet.commit();
+    return;
+  }
+
+  const headers = Object.keys(rows[0]);
+
+  worksheet.columns = headers.map(header => ({
+    header,
+    key: header,
+    width: getAccountantColumnWidth(header)
+  }));
+
+  styleHeaderRow(worksheet.getRow(1));
+  worksheet.getRow(1).commit();
+
+  worksheet.autoFilter = {
+    from: { row: 1, column: 1 },
+    to: { row: 1, column: headers.length }
+  };
+
+  let rowCount = 0;
+
+  while (true) {
+    for (const sourceRow of rows) {
+      const cleanRow = {};
+
+      for (const header of headers) {
+        cleanRow[header] = cleanBigQueryValue(sourceRow[header]);
+      }
+
+      const excelRow = worksheet.addRow(cleanRow);
+      formatDataRow(excelRow, headers);
+      excelRow.commit();
+      rowCount++;
+    }
+
+    console.log(`${sheetName}: ${rowCount} rows written`);
+
+    if (!nextQuery || !nextQuery.pageToken) {
+      break;
+    }
+
+    [rows, nextQuery] = await job.getQueryResults({
+      maxResults: 2000,
+      pageToken: nextQuery.pageToken,
+      autoPaginate: false
+    });
+  }
+
+  worksheet.commit();
+
+  console.log(`${sheetName}: complete — ${rowCount} rows`);
+}
+
+async function getSalesByMonth({
+  start_date,
+  end_date,
+  currency = 'GBP',
+  location = null,
+  channel = null,
+  source = null
+}) {
+  const filters = [
+    'date >= @start_date',
+    'date <= @end_date',
+    'currency = @currency'
+  ];
+
+  const params = {
+    start_date,
+    end_date,
+    currency
+  };
+
+  if (location) {
+    filters.push('LOWER(location) = LOWER(@location)');
+    params.location = location;
+  }
+
+  if (channel) {
+    filters.push('LOWER(channel) = LOWER(@channel)');
+    params.channel = channel;
+  }
+
+  if (source) {
+    filters.push('LOWER(source) = LOWER(@source)');
+    params.source = source;
+  }
+
+  const query = `
+    SELECT
+      FORMAT_DATE('%Y-%m', date) AS month,
+
+      COUNT(*) AS transaction_count,
+
+      SUM(
+        CASE
+          WHEN transaction_type = 'sale'
+          THEN gross
+          ELSE 0
+        END
+      ) AS sales_gross,
+
+      SUM(
+        CASE
+          WHEN transaction_type = 'refund'
+          THEN gross
+          ELSE 0
+        END
+      ) AS refunds_gross,
+
+      SUM(gross) AS net_gross,
+
+      SUM(tax) AS net_tax,
+
+      SUM(net_ex_tax) AS net_ex_tax
+
+    FROM \`${GOOGLE_PROJECT_ID}.finance.accountant_transactions\`
+
+    WHERE ${filters.join('\nAND ')}
+
+    GROUP BY month
+    ORDER BY month
+  `;
+
+  const [rows] = await bigquery.query({
+    query,
+    params
+  });
+
+  return rows;
+}
+
+async function getSalesSummary({
+  start_date,
+  end_date,
+  currency = 'GBP',
+  location = null,
+  channel = null,
+  source = null
+}) {
+  const filters = [
+    'date >= @start_date',
+    'date <= @end_date',
+    'currency = @currency'
+  ];
+
+  const params = {
+    start_date,
+    end_date,
+    currency
+  };
+
+  if (location) {
+    filters.push('LOWER(location) = LOWER(@location)');
+    params.location = location;
+  }
+
+  if (channel) {
+    filters.push('LOWER(channel) = LOWER(@channel)');
+    params.channel = channel;
+  }
+
+  if (source) {
+    filters.push('LOWER(source) = LOWER(@source)');
+    params.source = source;
+  }
+
+  const query = `
+    SELECT
+      COUNT(*) AS transaction_count,
+      SUM(CASE WHEN transaction_type = 'sale' THEN gross ELSE 0 END) AS sales_gross,
+      SUM(CASE WHEN transaction_type = 'refund' THEN gross ELSE 0 END) AS refunds_gross,
+      SUM(gross) AS net_gross,
+      SUM(tax) AS net_tax,
+      SUM(net_ex_tax) AS net_ex_tax
+    FROM \`${GOOGLE_PROJECT_ID}.finance.accountant_transactions\`
+    WHERE ${filters.join('\nAND ')}
+  `;
+
+  const [rows] = await bigquery.query({
+    query,
+    params
+  });
+
+  return rows[0] || {};
+}
+
+async function getEcommerceFinanceReport({ start_date, end_date }) {
+  const query = `
+    SELECT
+      currency,
+      COUNTIF(transaction_type = 'sale') AS sales_transaction_count,
+      COUNTIF(transaction_type = 'refund') AS refund_transaction_count,
+      CAST(SUM(IF(transaction_type = 'sale', gross, 0)) AS FLOAT64) AS gross_sales,
+      CAST(SUM(IF(transaction_type = 'refund', gross, 0)) AS FLOAT64) AS refunds,
+      CAST(SUM(gross) AS FLOAT64) AS net_gross,
+      CAST(SUM(tax) AS FLOAT64) AS tax,
+      CAST(SUM(net_ex_tax) AS FLOAT64) AS net_ex_tax
+    FROM \`${GOOGLE_PROJECT_ID}.finance.accountant_transactions\`
+    WHERE date >= @start_date AND date <= @end_date
+    GROUP BY currency
+    ORDER BY currency
+  `;
+  const [rows] = await bigquery.query({
+    query,
+    params: { start_date, end_date }
+  });
+  return rows;
+}
+
+async function getMetorikEcommerceEvidence({ start_date, end_date }) {
+  validateShopifyReportDate(start_date, 'start_date');
+  validateShopifyReportDate(end_date, 'end_date');
+  if (start_date > end_date) {
+    throw new Error('start_date must be on or before end_date');
+  }
+
+  const period = { start_date, end_date };
+  const stores = Object.values(METORIK_STORES);
+  const sources = await Promise.all(stores.map(async store => {
+    // Dataset names come only from the fixed METORIK_STORES configuration, never
+    // from report input. Currency remains a grouping key and is never converted.
+    const customerQuery = `
+      WITH order_metrics AS (
+        SELECT
+          currency,
+          COUNT(*) AS orders,
+          COUNT(DISTINCT customer_id) AS registered_purchasing_customers,
+          COUNTIF(customer_id IS NULL) AS guest_orders
+        FROM \`${GOOGLE_PROJECT_ID}.${store.dataset}.${METORIK_ORDERS_TABLE}\`
+        WHERE DATE(order_created_at) BETWEEN @start_date AND @end_date
+        GROUP BY currency
+      ),
+      new_customer_metrics AS (
+        SELECT
+          currency,
+          COUNT(DISTINCT metorik_customer_id) AS canonical_new_customers
+        FROM \`${GOOGLE_PROJECT_ID}.${store.dataset}.${METORIK_CUSTOMERS_TABLE}\`
+        WHERE DATE(first_order_date) BETWEEN @start_date AND @end_date
+        GROUP BY currency
+      )
+      SELECT
+        COALESCE(o.currency, n.currency) AS currency,
+        CAST(COALESCE(o.orders, 0) AS FLOAT64) AS orders,
+        CAST(COALESCE(o.registered_purchasing_customers, 0) AS FLOAT64)
+          AS registered_purchasing_customers,
+        CAST(COALESCE(o.guest_orders, 0) AS FLOAT64) AS guest_orders,
+        CAST(COALESCE(n.canonical_new_customers, 0) AS FLOAT64)
+          AS canonical_new_customers,
+        SAFE_DIVIDE(o.orders, o.registered_purchasing_customers)
+          AS orders_per_registered_customer
+      FROM order_metrics o
+      FULL OUTER JOIN new_customer_metrics n USING (currency)
+      ORDER BY currency`;
+    const productQuery = `
+      WITH products AS (
+        SELECT
+          currency,
+          product_id,
+          variation_id,
+          sku,
+          ANY_VALUE(name HAVING MAX order_created_at) AS product_name,
+          CAST(SUM(quantity) AS FLOAT64) AS quantity_sold,
+          CAST(COUNT(DISTINCT order_id) AS FLOAT64) AS order_count,
+          CAST(SUM(subtotal) AS FLOAT64) AS gross_line_sales,
+          CAST(SUM(total) AS FLOAT64) AS net_line_sales
+        FROM \`${GOOGLE_PROJECT_ID}.${store.dataset}.${METORIK_ORDER_LINE_ITEMS_TABLE}\`
+        WHERE DATE(order_created_at) BETWEEN @start_date AND @end_date
+        GROUP BY currency, product_id, variation_id, sku
+      )
+      SELECT *
+      FROM products
+      QUALIFY ROW_NUMBER() OVER (
+        PARTITION BY currency ORDER BY net_line_sales DESC, product_id, variation_id
+      ) <= 10
+      ORDER BY currency, net_line_sales DESC`;
+    const params = { start_date, end_date };
+    const [[customerRows], [productRows]] = await Promise.all([
+      bigquery.query({ query: customerQuery, params }),
+      bigquery.query({ query: productQuery, params })
+    ]);
+    const available = customerRows.length > 0 || productRows.length > 0;
+    return {
+      source: store.dataset,
+      system: 'Metorik / WooCommerce',
+      dataset: store.dataset,
+      period,
+      available,
+      customers: {
+        by_currency: customerRows,
+        identity_models: {
+          registered_purchasing_customers: 'Distinct non-null orders.customer_id (Woo identity); guests excluded.',
+          canonical_new_customers: 'Distinct customers.metorik_customer_id with first_order_date in period; not joined to orders.'
+        }
+      },
+      products: productRows,
+      product_metrics: {
+        quantity_sold: 'Sum of Metorik line-item quantity.',
+        order_count: 'Distinct Woo order_id count containing the source-native product/variation/SKU grouping.',
+        gross_line_sales: 'Sum of Metorik line-item subtotal, separated by source currency.',
+        net_line_sales: 'Sum of Metorik line-item total, separated by source currency.'
+      },
+      product_identity: 'Source-native Woo product_id and variation_id; SKU is descriptive only and is not a cross-platform key.',
+      attribution: {
+        available_in_source: available,
+        exposed_by_report: false,
+        fields: ['landing_path', 'referer', 'utm_source', 'utm_medium', 'utm_campaign', 'utm_content', 'utm_term', 'utm_id']
+      }
+    };
+  }));
+
+  return { period, sources };
+}
+
+const getEcommerceManagementReport = createEcommerceManagementReportService({
+  getFinanceReport: getEcommerceFinanceReport,
+  getConversionKpis: getShopifyConversionKpis,
+  getCustomerKpis: getShopifyCustomerKpis,
+  getProductPerformance: getShopifyProductPerformance,
+  getHistoricalEcommerce: getMetorikEcommerceEvidence
+});
+
+// The deterministic baseline is constructed only after every governed service
+// it uses exists.  Its bounded plan deliberately has no inventory dependency.
+const ecommerceBaselineOverview=createBaselineOverviewService({
+  managementReport:getEcommerceManagementReport,
+  onlineCountrySales:onlineCountrySalesService,
+  platformSales:platformSalesService,
+  customerReport:getShopifyCustomerKpis,
+  customerJourney:governedCustomerJourneyService,
+  populationConversion:populationConversionService,
+  shopifyDevice:deviceSourceConversionService,
+  wooConversion:deviceSourceConversionService,
+  knowledgeService,
+  loyalty:loyaltyReportService,
+  klaviyo:klaviyoEmailService,
+  social:(name,args)=>metaInstagramService(name,args),
+  socialExportStore:{get:(...args)=>priorityExportStore.get(...args),put:(...args)=>priorityExportStore.put(...args)},
+  organicReport:periods=>ecommerceReportV2('organic',{
+    start_date:periods.current.start_date,end_date:periods.current.end_date,
+    comparison:'custom',comparison_start:(periods.comparison_period||periods.prior_year).start_date,
+    comparison_end:(periods.comparison_period||periods.prior_year).end_date
+  }),
+  salesReport:periods=>ecommerceReportV2('sales',{
+    start_date:periods.current.start_date,end_date:periods.current.end_date,
+    comparison:'custom',comparison_start:periods.prior_year.start_date,
+    comparison_end:periods.prior_year.end_date
+  }),
+  shopifySales:getShopifySalesKpis,
+  dailySales:dailySalesService,
+  orderValues:orderValueService,basketComposition:basketCompositionService,productPrices:productPriceService,
+  locationFinance:getSalesByLocation
+});
+const {historicalEventComparison}=createHistoricalEventDependencies({bigquery,project:GOOGLE_PROJECT_ID,knowledgeService});
+const productEvidenceReport=createProductEvidenceReportService({
+  getProductPerformance:getShopifyProductPerformance,
+  getShopCurrency:async()=>{
+    const data=await shopifyGraphQL(await getShopifyAccessToken(),'{ shop { currencyCode } }');
+    return data?.shop?.currencyCode||null;
+  }
+});
+const generalAnalytics=createGeneralAnalyticsService({loadReport:ecommerceReportV2,inspectProductHistory:createReadOnlyProductHistory({bigquery,project:GOOGLE_PROJECT_ID})});
+const {artifactStore:priorityExportStore,service:productPriorityExport}=createProductionPriorityDependencies({bigquery,project:GOOGLE_PROJECT_ID});
+const currentStock=createCurrentStockService({artifactStore:priorityExportStore,graphql:shopifyGraphQL,getToken:getShopifyAccessToken,lookupGroup:createStockGroupLookup({bigquery,project:GOOGLE_PROJECT_ID}),locationSelector:oracleInventoryLocationSelector,log:diagnostic=>console.info('Oracle inventory read:',diagnostic)});
+const twSupplierReport=createTwSupplierReportService({
+  readInventory:options=>readInventoryReport({...options,graphql:shopifyGraphQL,getToken:getShopifyAccessToken,
+    requiredExactTag:'tw',limits:{...INVENTORY_EXPORT_LIMITS,max_variants:1500,max_location_rows:20000,max_requests:1500}}),
+  readSales:createTwSalesReader({bigquery,project:GOOGLE_PROJECT_ID}),artifactStore:priorityExportStore,
+  settings:twSupplierSettings(process.env.ORACLE_TW_SUPPLIER_SETTINGS)
+});
+const eyewearReport=createEyewearReportService({...createEyewearSalesReader({bigquery,project:GOOGLE_PROJECT_ID}),
+  readStock:createEyewearStockReader({graphql:shopifyGraphQL,getToken:getShopifyAccessToken}),artifactStore:priorityExportStore});
+baselineOverview=createOracleBaselineDispatcher({eyewearReport,twSupplierReport,currentStock,productPriorityExport,generalAnalytics,historicalEventComparison,ecommerceBaselineOverview,productEvidenceReport});
+
+async function getSalesByLocation({
+  start_date,
+  end_date,
+  currency = 'GBP'
+}) {
+  const query = `
+    SELECT
+      COALESCE(location, 'Unknown') AS location,
+      COUNT(*) AS transaction_count,
+      SUM(CASE WHEN transaction_type = 'sale' THEN gross ELSE 0 END) AS sales_gross,
+      SUM(CASE WHEN transaction_type = 'refund' THEN gross ELSE 0 END) AS refunds_gross,
+      SUM(gross) AS net_gross,
+      SUM(gross) AS net_amount_including_recorded_tax,
+      SUM(IF(transaction_type = 'sale', tax, NULL)) AS recorded_tax_on_sales,
+      SUM(IF(transaction_type = 'refund', tax, NULL)) AS recorded_tax_reversed_on_refunds,
+      IF(COUNTIF(tax IS NULL) = 0, SUM(tax), NULL) AS net_recorded_tax_after_refunds,
+      SUM(tax) AS observed_net_recorded_tax_after_refunds,
+      IF(COUNTIF(net_ex_tax IS NULL) = 0, SUM(net_ex_tax), NULL) AS net_sales_excluding_recorded_tax,
+      COUNTIF(tax IS NULL) AS missing_tax_records
+    FROM \`${GOOGLE_PROJECT_ID}.finance.accountant_transactions\`
+    WHERE date >= @start_date
+      AND date <= @end_date
+      AND currency = @currency
+    GROUP BY location
+    ORDER BY net_gross DESC
+  `;
+
+  const [rows] = await bigquery.query({
+    query,
+    params: {
+      start_date,
+      end_date,
+      currency
+    }
+  });
+
+  return rows;
+}
+
+async function compareSalesPeriods({
+  period_1_start,
+  period_1_end,
+  period_2_start,
+  period_2_end,
+  currency = 'GBP',
+  location = null,
+  channel = null,
+  source = null
+}) {
+  const period1 = await getSalesSummary({
+    start_date: period_1_start,
+    end_date: period_1_end,
+    currency,
+    location,
+    channel,
+    source
+  });
+
+  const period2 = await getSalesSummary({
+    start_date: period_2_start,
+    end_date: period_2_end,
+    currency,
+    location,
+    channel,
+    source
+  });
+
+  const a = Number(period1.net_gross || 0);
+  const b = Number(period2.net_gross || 0);
+
+  return {
+    period_1: period1,
+    period_2: period2,
+    difference: a - b,
+    percentage_change:
+      b !== 0 ? ((a - b) / Math.abs(b)) * 100 : null
+  };
+}
+async function getSalesByChannel({
+  start_date,
+  end_date,
+  currency = 'GBP',
+  location = null,
+  source = null
+}) {
+  const filters = [
+    'date >= @start_date',
+    'date <= @end_date',
+    'currency = @currency'
+  ];
+
+  const params = {
+    start_date,
+    end_date,
+    currency
+  };
+
+  if (location) {
+    filters.push('LOWER(location) = LOWER(@location)');
+    params.location = location;
+  }
+
+  if (source) {
+    filters.push('LOWER(source) = LOWER(@source)');
+    params.source = source;
+  }
+
+  const query = `
+    SELECT
+      COALESCE(channel, 'Unknown') AS channel,
+      COUNT(*) AS transaction_count,
+
+      SUM(
+        CASE
+          WHEN transaction_type = 'sale'
+          THEN gross
+          ELSE 0
+        END
+      ) AS sales_gross,
+
+      SUM(
+        CASE
+          WHEN transaction_type = 'refund'
+          THEN gross
+          ELSE 0
+        END
+      ) AS refunds_gross,
+
+      SUM(gross) AS net_gross,
+
+      SUM(tax) AS net_tax,
+
+      SUM(net_ex_tax) AS net_ex_tax
+
+    FROM \`${GOOGLE_PROJECT_ID}.finance.accountant_transactions\`
+
+    WHERE ${filters.join('\nAND ')}
+
+    GROUP BY channel
+    ORDER BY net_gross DESC
+  `;
+
+  const [rows] = await bigquery.query({
+    query,
+    params
+  });
+
+  return rows;
+}
+
+
+async function getRefunds({
+  start_date,
+  end_date,
+  currency = 'GBP',
+  location = null,
+  channel = null,
+  source = null,
+  group_by = 'summary'
+}) {
+  return oracleFinance.getRefunds({start_date,end_date,currency,location,channel,source,group_by});
+}
+
+
+async function getGiftCardIssuance({
+  start_date,
+  end_date,
+  currency = 'GBP',
+  location = null,
+  channel = null,
+  source = null,
+  group_by = 'summary'
+}) {
+  const filters = [
+    'date >= @start_date',
+    'date <= @end_date',
+    'currency = @currency'
+  ];
+
+  const params = {
+    start_date,
+    end_date,
+    currency
+  };
+
+  if (location) {
+    filters.push('LOWER(location) = LOWER(@location)');
+    params.location = location;
+  }
+
+  if (channel) {
+    filters.push('LOWER(channel) = LOWER(@channel)');
+    params.channel = channel;
+  }
+
+  if (source) {
+    filters.push('LOWER(source) = LOWER(@source)');
+    params.source = source;
+  }
+
+  let groupExpression = null;
+  let groupAlias = null;
+
+  if (group_by === 'month') {
+    groupExpression = "FORMAT_DATE('%Y-%m', date)";
+    groupAlias = 'month';
+  }
+
+  if (group_by === 'location') {
+    groupExpression = "COALESCE(location, 'Unknown')";
+    groupAlias = 'location';
+  }
+
+  if (group_by === 'channel') {
+    groupExpression = "COALESCE(channel, 'Unknown')";
+    groupAlias = 'channel';
+  }
+
+  if (group_by === 'source') {
+    groupExpression = "COALESCE(source, 'Unknown')";
+    groupAlias = 'source';
+  }
+
+  const query = groupExpression
+    ? `
+      SELECT
+        ${groupExpression} AS ${groupAlias},
+        COUNT(*) AS gift_card_transactions,
+        SUM(gift_card_issuance) AS gift_card_issuance,
+        SUM(transaction_gross) AS transaction_gross
+
+      FROM \`${GOOGLE_PROJECT_ID}.finance.accountant_gift_cards\`
+
+      WHERE ${filters.join('\nAND ')}
+
+      GROUP BY ${groupAlias}
+      ORDER BY gift_card_issuance DESC
+    `
+    : `
+      SELECT
+        COUNT(*) AS gift_card_transactions,
+        SUM(gift_card_issuance) AS gift_card_issuance,
+        SUM(transaction_gross) AS transaction_gross
+
+      FROM \`${GOOGLE_PROJECT_ID}.finance.accountant_gift_cards\`
+
+      WHERE ${filters.join('\nAND ')}
+    `;
+
+  const [rows] = await bigquery.query({
+    query,
+    params
+  });
+
+  return groupExpression ? rows : (rows[0] || {});
+}
+
+/* =========================================================
+   ROUTES
+========================================================= */
+
+app.get(
+  '/export-accountant',
+  requireSyncSecret,
+  async (req, res) => {
+    let tempFile = null;
+
+    try {
+      const filename =
+        `TGF_Accountant_Finance_Export_${new Date()
+          .toISOString()
+          .slice(0, 10)}.xlsx`;
+
+      tempFile = path.join(os.tmpdir(), filename);
+
+      console.log('Starting accountant export:', tempFile);
+
+      const workbook = new ExcelJS.stream.xlsx.WorkbookWriter({
+        filename: tempFile,
+        useStyles: true,
+        useSharedStrings: false
+      });
+
+      const notesSheet = workbook.addWorksheet('Notes & Methodology');
+
+      notesSheet.columns = [
+        {
+          header: 'Item',
+          key: 'item',
+          width: 28
+        },
+        {
+          header: 'Methodology / note',
+          key: 'note',
+          width: 90
+        }
+      ];
+
+      styleHeaderRow(notesSheet.getRow(1));
+      notesSheet.getRow(1).commit();
+
+      const notes = [
+        [
+          'Purpose',
+          'Unified historical transaction dataset for finance/accounting review, combining Shopify, Square and historical WooCommerce stores.'
+        ],
+        [
+          'Source of truth',
+          'BigQuery finance.sales_master and accountant-facing views.'
+        ],
+        [
+          'Currencies',
+          'GBP, USD and JPY are preserved in their original transaction currency. No FX conversion to GBP is included.'
+        ],
+        [
+          'Sales / refunds',
+          'Sales and refunds are separate transaction rows. Refund amounts are negative.'
+        ],
+        [
+          'Shopify',
+          'Successful SALE and CAPTURE transactions represent money received. Successful REFUND transactions represent money returned. AUTHORIZATION, FAILURE/ERROR and PENDING transactions are excluded.'
+        ],
+        [
+          'Migrated Shopify orders',
+          'Matrixify-migrated WooCommerce orders are excluded from Shopify finance data to prevent double counting.'
+        ],
+        [
+          'Square VAT',
+          'VAT is derived from VAT-inclusive taxable sales where Square source tax was unreliable. Identified gift-card issuance is excluded from taxable/ex-VAT Square sales.'
+        ],
+        [
+          'Square gift cards',
+          'Identified Square gift-card issuance is reported separately and explains the expected difference between Square gross and tax plus ex-tax sales.'
+        ],
+        [
+          'Shopify gift cards',
+          'Shopify gift-card product sales are shown separately. Shopify tax/net figures are not reduced again by this gift-card amount.'
+        ],
+        [
+          'WooCommerce gift cards',
+          'Historical WooCommerce voucher/gift-card issuance is not separately identified in the current accountant views, so Gift Cards is not complete historical issuance across all systems.'
+        ],
+        [
+          'WooCommerce UK',
+          'Historical UK/Worldwide WooCommerce sales preserve recorded source tax. Refund records were deduplicated before inclusion.'
+        ],
+        [
+          'WooCommerce US / JP',
+          'USD and JPY remain in source currency. Recorded tax is retained where available.'
+        ],
+        [
+          'Migration pattern',
+          'WooCommerce online sales transition to Shopify in November 2025 with trailing WooCommerce refunds afterward. POS migration from Square to Shopify is staggered through early 2026. Legitimate residual Square Wedding, Gold and legacy activity remains included.'
+        ],
+        [
+          'Tax treatment',
+          'This workbook is a reporting dataset rather than a legal VAT determination. Gift-card/voucher treatment and unusual historical transactions should be confirmed by the accountant.'
+        ],
+        [
+          'Generated',
+          new Date().toISOString()
+        ]
+      ];
+
+      for (const [item, note] of notes) {
+        const row = notesSheet.addRow({ item, note });
+        row.getCell(1).font = { bold: true };
+        row.commit();
+      }
+
+      notesSheet.commit();
+
+      const sheets = [
+        {
+          name: 'All Transactions',
+          view: 'accountant_transactions'
+        },
+        {
+          name: 'Monthly Summary',
+          view: 'accountant_monthly_summary'
+        },
+        {
+          name: 'Annual Summary',
+          view: 'accountant_annual_summary'
+        },
+        {
+          name: 'Source & Location',
+          view: 'accountant_location_summary'
+        },
+        {
+          name: 'Gift Cards',
+          view: 'accountant_gift_cards'
+        }
+      ];
+
+      for (const config of sheets) {
+        console.log(`Exporting ${config.name}`);
+
+        await exportBigQueryViewToWorksheet(
+          workbook,
+          config.name,
+          `${GOOGLE_PROJECT_ID}.finance.${config.view}`
+        );
+      }
+
+      console.log('Committing workbook...');
+      await workbook.commit();
+      console.log('Workbook complete');
+
+      res.download(tempFile, filename, error => {
+        if (error) {
+          console.error('Download error:', error);
+        }
+
+        fs.unlink(tempFile, () => {});
+      });
+    } catch (error) {
+      console.error('Accountant export error:', error);
+
+      if (tempFile && fs.existsSync(tempFile)) {
+        fs.unlinkSync(tempFile);
+      }
+
+      if (!res.headersSent) {
+        res.status(500).json({
+          success: false,
+          error: error.message
+        });
+      }
+    }
+  }
+);
+
+app.get(
+  '/',
+  (req, res) => {
+    res.json({
+      status: 'ok',
+      service:
+        'TGF BigQuery Sync',
+      revision: DEPLOYED_GIT_REVISION,
+      oracle_capabilities: {order_values:orderValueRuntimeBinding({orderValues:orderValueService,basketComposition:basketCompositionService,baselineOverview})}
+    });
+  }
+);
+
+/* ---------------------------------------------------------
+   METORIK DISCOVERY TESTS
+--------------------------------------------------------- */
+
+const METORIK_API_BASE_URL =
+  'https://app.metorik.com/api/v1/store/';
+const METORIK_DISCOVERY_START_DATE = '2025-01-01';
+const METORIK_DISCOVERY_END_DATE = '2025-09-30';
+const METORIK_DISCOVERY_PER_PAGE = '10';
+const METORIK_PAGINATION_TEST_PER_PAGE = '3';
+const METORIK_REQUEST_RETRY_COUNT = 2;
+const METORIK_RETRY_BASE_DELAY_MS = 500;
+const METORIK_MAX_RETRY_DELAY_MS = 30000;
+const METORIK_DISCOVERY_RESOURCES = [
+  'products',
+  'orders',
+  'customers'
+];
+const METORIK_DATE_FILTER_SEMANTICS = {
+  startDateAndEndDate:
+    'Analytical date range used for calculated values; it does not filter the resources returned.',
+  resourceDateFilters: {
+    orders: ['filter[created_at_min]', 'filter[created_at_max]'],
+    customers: ['filter[created_at_min]', 'filter[created_at_max]']
+  }
+};
+
+function sanitizeMetorikValue(value) {
+  if (Array.isArray(value)) {
+    return value.map(sanitizeMetorikValue);
+  }
+
+  if (
+    value === null ||
+    typeof value !== 'object'
+  ) {
+    if (typeof value === 'string') {
+      const secretsRedacted = [
+        METORIK_UK_API_KEY,
+        METORIK_US_API_KEY,
+        SYNC_SECRET
+      ]
+        .filter(Boolean)
+        .reduce(
+          (sanitized, secret) =>
+            sanitized.split(secret).join('[REDACTED]'),
+          value
+        );
+      return secretsRedacted
+        .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, '[REDACTED]')
+        .replace(/(?:\+?\d[\d ().-]{7,}\d)/g, '[REDACTED]');
+    }
+
+    return value;
+  }
+
+  const sanitized = {};
+
+  for (const [key, childValue] of Object.entries(value)) {
+    const normalizedKey = key
+      .toLowerCase()
+      .replace(/[^a-z0-9]/g, '');
+
+    if (
+      normalizedKey.includes('email') ||
+      normalizedKey.includes('phone') ||
+      normalizedKey.includes('address') ||
+      normalizedKey.includes('firstname') ||
+      normalizedKey.includes('lastname') ||
+      normalizedKey.includes('displayname') ||
+      normalizedKey.includes('username') ||
+      normalizedKey.includes('ipaddress') ||
+      normalizedKey.includes('authorization') ||
+      normalizedKey.includes('credential') ||
+      normalizedKey.includes('apikey') ||
+      normalizedKey.includes('secret') ||
+      normalizedKey.includes('token') ||
+      normalizedKey === 'company' ||
+      normalizedKey === 'postcode' ||
+      normalizedKey === 'zipcode' ||
+      normalizedKey === 'city' ||
+      normalizedKey === 'state'
+    ) {
+      sanitized[key] = '[REDACTED]';
+      continue;
+    }
+
+    sanitized[key] = sanitizeMetorikValue(childValue);
+  }
+
+  return sanitized;
+}
+
+function getMetorikResponseRecords(data, resource) {
+  if (Array.isArray(data)) {
+    return data;
+  }
+
+  if (Array.isArray(data?.data)) {
+    return data.data;
+  }
+
+  if (Array.isArray(data?.[resource])) {
+    return data[resource];
+  }
+
+  return [];
+}
+
+function hasMetorikRecordCollection(data, resource) {
+  return Array.isArray(data) ||
+    Array.isArray(data?.data) ||
+    Array.isArray(data?.[resource]);
+}
+
+function getMetorikErrorFields(data) {
+  if (!data || Array.isArray(data) || typeof data !== 'object') return null;
+
+  const fields = ['error', 'errors', 'message', 'messages'];
+  const summarize = value => {
+    if (typeof value === 'string') {
+      return sanitizeMetorikValue(value).slice(0, 500);
+    }
+    if (typeof value === 'number' || typeof value === 'boolean' || value === null) {
+      return value;
+    }
+    if (Array.isArray(value)) return value.slice(0, 10).map(summarize);
+    if (typeof value !== 'object') return String(value).slice(0, 500);
+
+    const safeNestedFields = ['code', 'type', 'title', 'status', 'error', 'message', 'detail'];
+    return Object.fromEntries(
+      safeNestedFields
+        .filter(field => value[field] !== undefined)
+        .map(field => [field, summarize(value[field])])
+    );
+  };
+  const errors = Object.fromEntries(
+    fields
+      .filter(field => data[field] !== undefined)
+      .map(field => [field, summarize(data[field])])
+  );
+  return Object.keys(errors).length > 0 ? errors : null;
+}
+
+function getMetorikPagination(data) {
+  if (!data || Array.isArray(data) || typeof data !== 'object') return null;
+
+  const pagination = data.pagination || data.meta || data.links;
+  if (!pagination || Array.isArray(pagination) || typeof pagination !== 'object') {
+    return null;
+  }
+
+  const fields = [
+    'current_page', 'per_page', 'has_more_pages', 'total', 'total_pages',
+    'last_page', 'from', 'to', 'next_page', 'previous_page'
+  ];
+  const relevantPagination = Object.fromEntries(
+    fields
+      .filter(field => pagination[field] !== undefined)
+      .map(field => [field, sanitizeMetorikValue(pagination[field])])
+  );
+  return Object.keys(relevantPagination).length > 0
+    ? relevantPagination
+    : null;
+}
+
+function metorikRetryDelay(response, retryNumber) {
+  const retryAfter = response.headers.get('retry-after');
+  if (retryAfter) {
+    const seconds = Number(retryAfter);
+    const retryAt = Date.parse(retryAfter);
+    const delay = Number.isFinite(seconds)
+      ? seconds * 1000
+      : retryAt - Date.now();
+    if (Number.isFinite(delay) && delay >= 0) {
+      return Math.min(delay, METORIK_MAX_RETRY_DELAY_MS);
+    }
+  }
+  if (response.status === 429) {
+    return [5000, 15000][retryNumber - 1] ??
+      METORIK_MAX_RETRY_DELAY_MS;
+  }
+  return Math.min(
+    METORIK_RETRY_BASE_DELAY_MS * (2 ** (retryNumber - 1)),
+    METORIK_MAX_RETRY_DELAY_MS
+  );
+}
+
+function waitForMetorikRetry(delayMs) {
+  return new Promise(resolve => setTimeout(resolve, delayMs));
+}
+
+async function requestMetorikResource(
+  resource,
+  { apiKey, storeName },
+  queryParameters = {},
+  { includeDiscoveryDateRange = true, retryCount = 0 } = {}
+) {
+  const resourceUrl = new URL(
+    resource,
+    METORIK_API_BASE_URL
+  );
+  if (includeDiscoveryDateRange) {
+    resourceUrl.searchParams.set(
+      'start_date',
+      METORIK_DISCOVERY_START_DATE
+    );
+    resourceUrl.searchParams.set(
+      'end_date',
+      METORIK_DISCOVERY_END_DATE
+    );
+  }
+  resourceUrl.searchParams.set(
+    'per_page',
+    METORIK_DISCOVERY_PER_PAGE
+  );
+
+  for (const [key, value] of Object.entries(queryParameters)) {
+    resourceUrl.searchParams.set(key, value);
+  }
+
+  for (let attempt = 1; attempt <= retryCount + 1; attempt++) {
+    try {
+      const response = await fetch(resourceUrl, {
+        headers: {
+          Accept: 'application/json',
+          Authorization: `Bearer ${apiKey}`
+        }
+      });
+      const responseText = await response.text();
+      let data;
+
+      try {
+        data = JSON.parse(responseText);
+      } catch {
+        if ((response.status === 429 || response.status >= 500) &&
+            attempt <= retryCount) {
+          await waitForMetorikRetry(metorikRetryDelay(response, attempt));
+          continue;
+        }
+        return {
+          success: false,
+          apiStatus: response.status,
+          responseWasJson: false,
+          failureCategory: response.ok ? 'non_json_response' : 'http_error',
+          attempts: attempt,
+          records: [],
+          pagination: null,
+          metorikErrors: null,
+          topLevelKeys: [],
+          error: 'Metorik returned a non-JSON response'
+        };
+      }
+
+      const records = getMetorikResponseRecords(data, resource);
+      const pagination = getMetorikPagination(data);
+      const metorikErrors = getMetorikErrorFields(data);
+      if ((response.status === 429 || response.status >= 500) && attempt <= retryCount) {
+        await waitForMetorikRetry(metorikRetryDelay(response, attempt));
+        continue;
+      }
+      return {
+        success: response.ok,
+        apiStatus: response.status,
+        responseWasJson: true,
+        failureCategory: response.ok ? null : 'http_error',
+        attempts: attempt,
+        records,
+        recordsShapeValid: hasMetorikRecordCollection(data, resource),
+        pagination,
+        metorikErrors,
+        topLevelKeys: data && !Array.isArray(data) ? Object.keys(data) : ['array'],
+        ...(response.ok ? {} : { error: 'Metorik returned an unsuccessful response' })
+      };
+    } catch (error) {
+      if (attempt <= retryCount) {
+        await waitForMetorikRetry(Math.min(
+          METORIK_RETRY_BASE_DELAY_MS * (2 ** (attempt - 1)),
+          METORIK_MAX_RETRY_DELAY_MS
+        ));
+        continue;
+      }
+      console.error(`Metorik ${storeName} ${resource} request failed:`, error.name);
+
+      return {
+        success: false,
+        apiStatus: null,
+        responseWasJson: false,
+        failureCategory: 'network_error',
+        attempts: attempt,
+        records: [],
+        pagination: null,
+        metorikErrors: null,
+        topLevelKeys: [],
+        error: 'Unable to reach the Metorik API'
+      };
+    }
+  }
+}
+
+async function discoverMetorikResource(resource, store) {
+  const result = await requestMetorikResource(
+    resource,
+    store
+  );
+  const { records, ...diagnostics } = result;
+
+  return {
+    ...diagnostics,
+    recordsReturned: records.length,
+    sample: sanitizeMetorikValue(records.slice(0, 3))
+  };
+}
+
+function getMetorikRecordIdentity(record) {
+  const identityFields = [
+    'id',
+    'order_id',
+    'customer_id',
+    'metorik_customer_id',
+    'created_at',
+    'date_created',
+    'date',
+    'updated_at'
+  ];
+
+  return Object.fromEntries(
+    identityFields
+      .filter(field => record?.[field] !== undefined)
+      .map(field => [field, record[field]])
+  );
+}
+
+async function discoverMetorikOrderPagination(store) {
+  const pages = await Promise.all(
+    [1, 2].map(async page => {
+      const result = await requestMetorikResource(
+        'orders',
+        store,
+        {
+          page: String(page),
+          per_page: METORIK_PAGINATION_TEST_PER_PAGE
+        }
+      );
+      const { records, ...diagnostics } = result;
+
+      return {
+        page,
+        ...diagnostics,
+        records: sanitizeMetorikValue(
+          records.map(getMetorikRecordIdentity)
+        )
+      };
+    })
+  );
+  const pageIds = pages.map(page =>
+    page.records.map(record => record.order_id ?? record.id)
+  );
+
+  return {
+    perPageRequested: Number(METORIK_PAGINATION_TEST_PER_PAGE),
+    pages,
+    differentRecords:
+      pageIds[0].length > 0 &&
+      pageIds[1].length > 0 &&
+      !pageIds[0].some(id => pageIds[1].includes(id)),
+    paginationBehavesAsExpected:
+      pages[0].pagination?.current_page === 1 &&
+      pages[1].pagination?.current_page === 2 &&
+      pages[0].pagination?.per_page ===
+        Number(METORIK_PAGINATION_TEST_PER_PAGE) &&
+      pages[1].pagination?.per_page ===
+        Number(METORIK_PAGINATION_TEST_PER_PAGE) &&
+      pages[0].pagination?.has_more_pages === true
+  };
+}
+
+async function runMetorikDiscovery(store) {
+  const discoveryResults = await Promise.all([
+    ...METORIK_DISCOVERY_RESOURCES.map(async resource => [
+      resource,
+      await discoverMetorikResource(resource, store)
+    ]),
+    [
+      'refunds',
+      await discoverMetorikResource('refunds', store)
+    ],
+    [
+      'orderPaginationTest',
+      await discoverMetorikOrderPagination(store)
+    ]
+  ]);
+
+  return {
+    store: store.storeName,
+    dateFilterSemantics: METORIK_DATE_FILTER_SEMANTICS,
+    ...Object.fromEntries(discoveryResults)
+  };
+}
+
+function addMetorikDiscoveryRoute({
+  path,
+  storeName,
+  apiKey,
+  apiKeyEnvironmentVariable
+}) {
+  app.get(
+    path,
+    requireSyncSecret,
+    async (req, res) => {
+      if (!apiKey) {
+        return res.status(500).json({
+          success: false,
+          store: storeName,
+          error:
+            `${apiKeyEnvironmentVariable} is not configured`
+        });
+      }
+
+      return res.json(await runMetorikDiscovery({
+        storeName,
+        apiKey
+      }));
+    }
+  );
+}
+
+addMetorikDiscoveryRoute({
+  path: '/test-metorik-uk',
+  storeName: 'UK',
+  apiKey: METORIK_UK_API_KEY,
+  apiKeyEnvironmentVariable: 'METORIK_UK_API_KEY'
+});
+
+addMetorikDiscoveryRoute({
+  path: '/test-metorik-us',
+  storeName: 'US',
+  apiKey: METORIK_US_API_KEY,
+  apiKeyEnvironmentVariable: 'METORIK_US_API_KEY'
+});
+
+/* ---------------------------------------------------------
+   METORIK UK - HISTORIC ORDERS
+--------------------------------------------------------- */
+
+const METORIK_UK_DATASET = 'metorik_uk';
+const METORIK_US_DATASET = 'metorik_us';
+const METORIK_ORDERS_TABLE = 'orders';
+const METORIK_ORDER_LINE_ITEMS_TABLE = 'order_line_items';
+const METORIK_CUSTOMERS_TABLE = 'customers';
+const METORIK_PRODUCTS_TABLE = 'products';
+const METORIK_PRODUCT_VARIATIONS_TABLE = 'product_variations';
+const METORIK_ORDERS_PER_PAGE = 100;
+const METORIK_CUSTOMERS_PER_PAGE = 100;
+const METORIK_CATALOGUE_PER_PAGE = 100;
+const METORIK_MAX_ORDER_PAGES = 100000;
+const METORIK_MAX_CUSTOMER_PAGES = 100000;
+const METORIK_MAX_CATALOGUE_PAGES = 100000;
+const METORIK_DEFAULT_PAGE_DELAY_MS = 1250;
+const METORIK_MAX_PAGE_DELAY_MS = 60000;
+
+const METORIK_STORES = Object.freeze({
+  UK: Object.freeze({
+    storeName: 'UK',
+    apiKey: METORIK_UK_API_KEY,
+    apiKeyEnvironmentVariable: 'METORIK_UK_API_KEY',
+    dataset: METORIK_UK_DATASET,
+    expectedOrderCurrencies: Object.freeze(['GBP'])
+  }),
+  US: Object.freeze({
+    storeName: 'US',
+    apiKey: METORIK_US_API_KEY,
+    apiKeyEnvironmentVariable: 'METORIK_US_API_KEY',
+    dataset: METORIK_US_DATASET,
+    expectedOrderCurrencies: Object.freeze(['USD'])
+  })
+});
+
+function getMetorikPageDelayMs(value) {
+  if (value === undefined || value === '') {
+    return METORIK_DEFAULT_PAGE_DELAY_MS;
+  }
+  if (!/^\d+$/.test(value)) {
+    throw new Error('METORIK_PAGE_DELAY_MS must be a non-negative integer');
+  }
+
+  const delayMs = Number(value);
+  if (!Number.isSafeInteger(delayMs) || delayMs > METORIK_MAX_PAGE_DELAY_MS) {
+    throw new Error(
+      `METORIK_PAGE_DELAY_MS must be between 0 and ${METORIK_MAX_PAGE_DELAY_MS}`
+    );
+  }
+  return delayMs;
+}
+
+const METORIK_PAGE_DELAY_MS = getMetorikPageDelayMs(
+  process.env.METORIK_PAGE_DELAY_MS
+);
+
+const METORIK_ORDERS_SCHEMA = [
+  { name: 'order_id', type: 'INT64', mode: 'REQUIRED' },
+  { name: 'customer_id', type: 'INT64' },
+  { name: 'order_number', type: 'STRING' },
+  { name: 'order_name', type: 'STRING' },
+  { name: 'status', type: 'STRING' },
+  { name: 'order_created_at', type: 'TIMESTAMP' },
+  { name: 'order_updated_at', type: 'TIMESTAMP' },
+  { name: 'order_paid_at', type: 'TIMESTAMP' },
+  { name: 'order_completed_at', type: 'TIMESTAMP' },
+  { name: 'currency', type: 'STRING' },
+  { name: 'payment_method', type: 'STRING' },
+  { name: 'payment_method_title', type: 'STRING' },
+  { name: 'shipping_method_title', type: 'STRING' },
+  { name: 'customer_note', type: 'STRING' },
+  { name: 'created_via', type: 'STRING' },
+  { name: 'referer', type: 'STRING' },
+  { name: 'landing_path', type: 'STRING' },
+  { name: 'utm_campaign', type: 'STRING' },
+  { name: 'utm_medium', type: 'STRING' },
+  { name: 'utm_source', type: 'STRING' },
+  { name: 'utm_term', type: 'STRING' },
+  { name: 'utm_content', type: 'STRING' },
+  { name: 'utm_id', type: 'STRING' },
+  { name: 'total', type: 'NUMERIC' },
+  { name: 'total_discount', type: 'NUMERIC' },
+  { name: 'total_items', type: 'INT64' },
+  { name: 'total_refunds', type: 'NUMERIC' },
+  { name: 'net', type: 'NUMERIC' },
+  { name: 'net_original', type: 'NUMERIC' },
+  { name: 'resource_link', type: 'STRING' },
+  { name: 'billing_country', type: 'STRING' },
+  { name: 'billing_state', type: 'STRING' },
+  { name: 'shipping_country', type: 'STRING' },
+  { name: 'shipping_state', type: 'STRING' },
+  { name: 'discount_codes_json', type: 'STRING' },
+  { name: 'coupon_lines_json', type: 'STRING' },
+  { name: 'shipping_lines_json', type: 'STRING' },
+  { name: 'fee_lines_json', type: 'STRING' },
+  { name: 'tax_lines_json', type: 'STRING' },
+  { name: 'synced_at', type: 'TIMESTAMP', mode: 'REQUIRED' }
+];
+
+const METORIK_ORDER_LINE_ITEMS_SCHEMA = [
+  { name: 'order_id', type: 'INT64', mode: 'REQUIRED' },
+  { name: 'line_item_id', type: 'INT64', mode: 'REQUIRED' },
+  { name: 'customer_id', type: 'INT64' },
+  { name: 'order_created_at', type: 'TIMESTAMP' },
+  { name: 'currency', type: 'STRING' },
+  { name: 'name', type: 'STRING' },
+  { name: 'sku', type: 'STRING' },
+  { name: 'product_id', type: 'INT64' },
+  { name: 'variation_id', type: 'INT64' },
+  { name: 'quantity', type: 'INT64' },
+  { name: 'tax_class', type: 'STRING' },
+  { name: 'price', type: 'NUMERIC' },
+  { name: 'subtotal', type: 'NUMERIC' },
+  { name: 'subtotal_tax', type: 'NUMERIC' },
+  { name: 'total', type: 'NUMERIC' },
+  { name: 'total_tax', type: 'NUMERIC' },
+  { name: 'price_original', type: 'NUMERIC' },
+  { name: 'subtotal_original', type: 'NUMERIC' },
+  { name: 'subtotal_tax_original', type: 'NUMERIC' },
+  { name: 'total_original', type: 'NUMERIC' },
+  { name: 'total_tax_original', type: 'NUMERIC' },
+  { name: 'cogs', type: 'NUMERIC' },
+  { name: 'ring_size', type: 'STRING' },
+  { name: 'metadata_json', type: 'STRING', mode: 'REQUIRED' },
+  { name: 'synced_at', type: 'TIMESTAMP', mode: 'REQUIRED' }
+];
+
+// Current catalogue state only. Metorik can return product tags as an empty
+// string, an array, or an object, so the complete value is retained as JSON.
+// Metorik's date-window-dependent product analytics are deliberately excluded
+// because BigQuery remains financial truth.
+const METORIK_PRODUCTS_SCHEMA = [
+  { name: 'product_id', type: 'INT64', mode: 'REQUIRED' },
+  { name: 'title', type: 'STRING' },
+  { name: 'sku', type: 'STRING' },
+  { name: 'type', type: 'STRING' },
+  { name: 'status', type: 'STRING' },
+  { name: 'tags_json', type: 'STRING', mode: 'REQUIRED' },
+  { name: 'image', type: 'STRING' },
+  { name: 'current_price', type: 'NUMERIC' },
+  { name: 'regular_price', type: 'NUMERIC' },
+  { name: 'sale_price', type: 'NUMERIC' },
+  { name: 'stock_quantity', type: 'INT64' },
+  { name: 'in_stock', type: 'BOOL' },
+  { name: 'product_created_at', type: 'TIMESTAMP' },
+  { name: 'product_updated_at', type: 'TIMESTAMP' },
+  { name: 'synced_at', type: 'TIMESTAMP', mode: 'REQUIRED' }
+];
+
+const METORIK_PRODUCT_VARIATIONS_SCHEMA = [
+  { name: 'variation_id', type: 'INT64', mode: 'REQUIRED' },
+  { name: 'product_id', type: 'INT64', mode: 'REQUIRED' },
+  { name: 'sku', type: 'STRING' },
+  { name: 'name', type: 'STRING' },
+  { name: 'image', type: 'STRING' },
+  { name: 'attributes_json', type: 'STRING', mode: 'REQUIRED' },
+  { name: 'current_price', type: 'NUMERIC' },
+  { name: 'regular_price', type: 'NUMERIC' },
+  { name: 'sale_price', type: 'NUMERIC' },
+  { name: 'stock_quantity', type: 'INT64' },
+  { name: 'in_stock', type: 'BOOL' },
+  { name: 'variation_created_at', type: 'TIMESTAMP' },
+  { name: 'variation_updated_at', type: 'TIMESTAMP' },
+  { name: 'synced_at', type: 'TIMESTAMP', mode: 'REQUIRED' }
+];
+
+// This is deliberately an analytics-only schema. In particular, it excludes
+// names, email addresses, telephone numbers, street addresses, postcodes,
+// companies, and notes even when those values are present in the API response.
+const METORIK_CUSTOMERS_SCHEMA = [
+  { name: 'metorik_customer_id', type: 'INT64', mode: 'REQUIRED' },
+  { name: 'customer_id', type: 'INT64' },
+  { name: 'created_at', type: 'TIMESTAMP' },
+  { name: 'first_order_date', type: 'TIMESTAMP' },
+  { name: 'last_order_date', type: 'TIMESTAMP' },
+  { name: 'order_count', type: 'INT64', mode: 'REQUIRED' },
+  { name: 'total_spend', type: 'NUMERIC' },
+  { name: 'net_spend', type: 'NUMERIC' },
+  { name: 'average_order_value', type: 'NUMERIC' },
+  { name: 'status', type: 'STRING' },
+  { name: 'type', type: 'STRING' },
+  { name: 'country', type: 'STRING' },
+  { name: 'state', type: 'STRING' },
+  { name: 'currency', type: 'STRING' },
+  { name: 'resource_link', type: 'STRING' },
+  { name: 'synced_at', type: 'TIMESTAMP', mode: 'REQUIRED' }
+];
+
+class MetorikSyncValidationError extends Error {
+  constructor(message, diagnostics = null) {
+    super(message);
+    this.name = 'MetorikSyncValidationError';
+    this.diagnostics = diagnostics;
+  }
+}
+
+function metorikPageDiagnostics(requestedPage, result, failureCategory) {
+  return {
+    requested_page: requestedPage,
+    failure_category: failureCategory ?? result.failureCategory,
+    http_status: result.apiStatus,
+    response_was_json: result.responseWasJson,
+    metorik_errors: result.metorikErrors,
+    pagination: result.pagination,
+    attempts: result.attempts
+  };
+}
+
+function firstMetorikValue(source, fields) {
+  for (const field of fields) {
+    if (source?.[field] !== undefined && source[field] !== null) {
+      return source[field];
+    }
+  }
+  return null;
+}
+
+function firstMetorikNestedValue(source, paths) {
+  for (const pathParts of paths) {
+    let value = source;
+    for (const pathPart of pathParts) value = value?.[pathPart];
+    if (value !== undefined && value !== null) return value;
+  }
+  return null;
+}
+
+function metorikString(value, field) {
+  if (value === undefined || value === null || value === '') return null;
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return String(value);
+  }
+  throw new MetorikSyncValidationError(`${field} is not a scalar value`);
+}
+
+function metorikInteger(value, field, { required = false } = {}) {
+  if (value === undefined || value === null || value === '') {
+    if (required) {
+      throw new MetorikSyncValidationError(`${field} is missing`);
+    }
+    return null;
+  }
+
+  const stringValue = String(value);
+  if (!/^-?\d+$/.test(stringValue)) {
+    throw new MetorikSyncValidationError(`${field} is not a valid integer`);
+  }
+
+  const integer = Number(stringValue);
+  if (!Number.isSafeInteger(integer)) {
+    throw new MetorikSyncValidationError(`${field} is outside the safe integer range`);
+  }
+  return integer;
+}
+
+function metorikNumeric(value, field) {
+  if (value === undefined || value === null || value === '') return null;
+  const stringValue = String(value).trim();
+  if (!/^-?(?:\d+)(?:\.\d+)?$/.test(stringValue)) {
+    throw new MetorikSyncValidationError(`${field} is not a valid decimal`);
+  }
+  return stringValue;
+}
+
+function metorikTimestamp(value, field) {
+  if (value === undefined || value === null || value === '') return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    throw new MetorikSyncValidationError(`${field} is not a valid timestamp`);
+  }
+  return date.toISOString();
+}
+
+function metorikBoolean(value, field) {
+  if (value === undefined || value === null || value === '') return null;
+  if (typeof value === 'boolean') return value;
+  throw new MetorikSyncValidationError(`${field} is not a boolean`);
+}
+
+function metorikJson(value, field) {
+  try {
+    return JSON.stringify(value ?? []);
+  } catch {
+    throw new MetorikSyncValidationError(`${field} is not valid JSON data`);
+  }
+}
+
+function metorikProductTagsJson(value) {
+  // Metorik uses both an empty string and an empty collection for "no tags".
+  // Canonicalise only those semantically empty cases; populated arrays and
+  // objects are serialized without flattening or scalar coercion.
+  return metorikJson(
+    value === undefined || value === null || value === '' ? [] : value,
+    'product tags'
+  );
+}
+
+function getMetorikLineItemMetadata(item) {
+  return firstMetorikValue(item, ['meta_data', 'metadata', 'meta']) ?? [];
+}
+
+function extractMetorikRingSize(metadata) {
+  if (!Array.isArray(metadata)) return null;
+
+  for (const entry of metadata) {
+    const labels = [entry?.key, entry?.display_key, entry?.name]
+      .filter(value => value !== undefined && value !== null)
+      .map(value => String(value).toLowerCase().replace(/[^a-z0-9]/g, ''));
+    if (labels.includes('paringsize') || labels.includes('ringsize')) {
+      return metorikString(
+        firstMetorikValue(entry, ['display_value', 'value']),
+        'line item ring size'
+      );
+    }
+  }
+  return null;
+}
+
+function transformMetorikOrder(order, syncedAt) {
+  const orderId = metorikInteger(
+    firstMetorikValue(order, ['order_id', 'id']),
+    'order_id',
+    { required: true }
+  );
+  const timestamp = fields => metorikTimestamp(
+    firstMetorikValue(order, fields),
+    fields[0]
+  );
+  const numeric = field => metorikNumeric(order?.[field], field);
+
+  return {
+    order_id: orderId,
+    customer_id: metorikInteger(order?.customer_id, 'customer_id'),
+    order_number: metorikString(order?.order_number, 'order_number'),
+    order_name: metorikString(order?.order_name, 'order_name'),
+    status: metorikString(order?.status, 'status'),
+    order_created_at: timestamp(['order_created_at', 'created_at', 'date_created']),
+    order_updated_at: timestamp(['order_updated_at', 'updated_at', 'date_modified']),
+    order_paid_at: timestamp(['order_paid_at', 'paid_at', 'date_paid']),
+    order_completed_at: timestamp(['order_completed_at', 'completed_at', 'date_completed']),
+    currency: metorikString(order?.currency, 'currency'),
+    payment_method: metorikString(order?.payment_method, 'payment_method'),
+    payment_method_title: metorikString(order?.payment_method_title, 'payment_method_title'),
+    shipping_method_title: metorikString(order?.shipping_method_title, 'shipping_method_title'),
+    customer_note: metorikString(order?.customer_note, 'customer_note'),
+    created_via: metorikString(order?.created_via, 'created_via'),
+    referer: metorikString(order?.referer, 'referer'),
+    landing_path: metorikString(order?.landing_path, 'landing_path'),
+    utm_campaign: metorikString(order?.utm_campaign, 'utm_campaign'),
+    utm_medium: metorikString(order?.utm_medium, 'utm_medium'),
+    utm_source: metorikString(order?.utm_source, 'utm_source'),
+    utm_term: metorikString(order?.utm_term, 'utm_term'),
+    utm_content: metorikString(order?.utm_content, 'utm_content'),
+    utm_id: metorikString(order?.utm_id, 'utm_id'),
+    total: numeric('total'),
+    total_discount: numeric('total_discount'),
+    total_items: metorikInteger(order?.total_items, 'total_items'),
+    total_refunds: numeric('total_refunds'),
+    net: numeric('net'),
+    net_original: numeric('net_original'),
+    resource_link: metorikString(order?.resource_link, 'resource_link'),
+    billing_country: metorikString(firstMetorikNestedValue(order, [['billing_country'], ['billing', 'country']]), 'billing_country'),
+    billing_state: metorikString(firstMetorikNestedValue(order, [['billing_state'], ['billing', 'state']]), 'billing_state'),
+    shipping_country: metorikString(firstMetorikNestedValue(order, [['shipping_country'], ['shipping', 'country']]), 'shipping_country'),
+    shipping_state: metorikString(firstMetorikNestedValue(order, [['shipping_state'], ['shipping', 'state']]), 'shipping_state'),
+    discount_codes_json: metorikJson(order?.discount_codes, 'discount_codes'),
+    coupon_lines_json: metorikJson(order?.coupon_lines, 'coupon_lines'),
+    shipping_lines_json: metorikJson(order?.shipping_lines, 'shipping_lines'),
+    fee_lines_json: metorikJson(order?.fee_lines, 'fee_lines'),
+    tax_lines_json: metorikJson(order?.tax_lines, 'tax_lines'),
+    synced_at: syncedAt
+  };
+}
+
+function transformMetorikLineItems(order, orderRow, syncedAt) {
+  const lineItems = firstMetorikValue(order, ['line_items', 'items']) ?? [];
+  if (!Array.isArray(lineItems)) {
+    throw new MetorikSyncValidationError('An order has a non-array line_items value');
+  }
+
+  return lineItems.map(item => {
+    const metadata = getMetorikLineItemMetadata(item);
+    const numeric = field => metorikNumeric(item?.[field], `line item ${field}`);
+    return {
+      order_id: orderRow.order_id,
+      line_item_id: metorikInteger(
+        firstMetorikValue(item, ['line_item_id', 'id']),
+        'line_item_id',
+        { required: true }
+      ),
+      customer_id: orderRow.customer_id,
+      order_created_at: orderRow.order_created_at,
+      currency: orderRow.currency,
+      name: metorikString(item?.name, 'line item name'),
+      sku: metorikString(item?.sku, 'line item sku'),
+      product_id: metorikInteger(item?.product_id, 'product_id'),
+      variation_id: metorikInteger(item?.variation_id, 'variation_id'),
+      quantity: metorikInteger(item?.quantity, 'quantity'),
+      tax_class: metorikString(item?.tax_class, 'tax_class'),
+      price: numeric('price'),
+      subtotal: numeric('subtotal'),
+      subtotal_tax: numeric('subtotal_tax'),
+      total: numeric('total'),
+      total_tax: numeric('total_tax'),
+      price_original: numeric('price_original'),
+      subtotal_original: numeric('subtotal_original'),
+      subtotal_tax_original: numeric('subtotal_tax_original'),
+      total_original: numeric('total_original'),
+      total_tax_original: numeric('total_tax_original'),
+      cogs: numeric('cogs'),
+      ring_size: extractMetorikRingSize(metadata),
+      metadata_json: metorikJson(metadata, 'line item metadata'),
+      synced_at: syncedAt
+    };
+  });
+}
+
+function transformMetorikProduct(product, syncedAt) {
+  return {
+    product_id: metorikInteger(product?.product_id, 'product_id', {
+      required: true
+    }),
+    title: metorikString(product?.title, 'product title'),
+    sku: metorikString(product?.sku, 'product sku'),
+    type: metorikString(product?.type, 'product type'),
+    status: metorikString(product?.status, 'product status'),
+    tags_json: metorikProductTagsJson(product?.tags),
+    image: metorikString(product?.image, 'product image'),
+    current_price: metorikNumeric(product?.current_price, 'product current_price'),
+    regular_price: metorikNumeric(product?.regular_price, 'product regular_price'),
+    sale_price: metorikNumeric(product?.sale_price, 'product sale_price'),
+    stock_quantity: metorikInteger(product?.stock_quantity, 'product stock_quantity'),
+    in_stock: metorikBoolean(product?.in_stock, 'product in_stock'),
+    product_created_at: metorikTimestamp(
+      product?.product_created_at,
+      'product_created_at'
+    ),
+    product_updated_at: metorikTimestamp(
+      product?.product_updated_at,
+      'product_updated_at'
+    ),
+    synced_at: syncedAt
+  };
+}
+
+function transformMetorikProductVariation(variation, syncedAt) {
+  return {
+    variation_id: metorikInteger(variation?.variation_id, 'variation_id', {
+      required: true
+    }),
+    product_id: metorikInteger(variation?.product_id, 'variation product_id', {
+      required: true
+    }),
+    sku: metorikString(variation?.sku, 'variation sku'),
+    name: metorikString(variation?.name, 'variation name'),
+    image: metorikString(variation?.image, 'variation image'),
+    attributes_json: metorikJson(variation?.atts, 'variation atts'),
+    current_price: metorikNumeric(
+      variation?.current_price,
+      'variation current_price'
+    ),
+    regular_price: metorikNumeric(
+      variation?.regular_price,
+      'variation regular_price'
+    ),
+    sale_price: metorikNumeric(variation?.sale_price, 'variation sale_price'),
+    stock_quantity: metorikInteger(
+      variation?.stock_quantity,
+      'variation stock_quantity'
+    ),
+    in_stock: metorikBoolean(variation?.in_stock, 'variation in_stock'),
+    variation_created_at: metorikTimestamp(
+      variation?.variation_created_at,
+      'variation_created_at'
+    ),
+    variation_updated_at: metorikTimestamp(
+      variation?.variation_updated_at,
+      'variation_updated_at'
+    ),
+    synced_at: syncedAt
+  };
+}
+
+function duplicateMetorikIds(rows, field) {
+  const seen = new Set();
+  const duplicates = new Set();
+  for (const row of rows) {
+    if (seen.has(row[field])) duplicates.add(row[field]);
+    seen.add(row[field]);
+  }
+  return [...duplicates];
+}
+
+function duplicateMetorikLineItemIdentities(rows) {
+  const seen = new Set();
+  const duplicates = new Set();
+  for (const row of rows) {
+    const identity = `${row.order_id}:${row.line_item_id}`;
+    if (seen.has(identity)) duplicates.add(identity);
+    seen.add(identity);
+  }
+  return [...duplicates];
+}
+
+function transformMetorikCustomer(customer, syncedAt) {
+  if (!customer || Array.isArray(customer) || typeof customer !== 'object') {
+    throw new MetorikSyncValidationError('A Metorik customer record is not an object');
+  }
+
+  const metorikCustomerId = metorikInteger(
+    customer.metorik_customer_id,
+    'metorik_customer_id',
+    { required: true }
+  );
+  const wooCustomerId = metorikInteger(customer.customer_id, 'customer_id');
+  const orderCount = metorikInteger(customer.order_count, 'order_count', {
+    required: true
+  });
+  if (metorikCustomerId <= 0) {
+    throw new MetorikSyncValidationError('metorik_customer_id must be positive');
+  }
+  if (wooCustomerId !== null && wooCustomerId < 0) {
+    throw new MetorikSyncValidationError('customer_id must not be negative');
+  }
+  if (orderCount < 0) {
+    throw new MetorikSyncValidationError('order_count must not be negative');
+  }
+
+  return {
+    metorik_customer_id: metorikCustomerId,
+    customer_id: wooCustomerId,
+    created_at: metorikTimestamp(customer.created_at, 'created_at'),
+    first_order_date: metorikTimestamp(customer.first_order_date, 'first_order_date'),
+    last_order_date: metorikTimestamp(customer.last_order_date, 'last_order_date'),
+    order_count: orderCount,
+    total_spend: metorikNumeric(customer.total_spend, 'total_spend'),
+    net_spend: metorikNumeric(customer.net_spend, 'net_spend'),
+    average_order_value: metorikNumeric(
+      customer.average_order_value,
+      'average_order_value'
+    ),
+    status: metorikString(customer.status, 'status'),
+    type: metorikString(customer.type, 'type'),
+    country: metorikString(customer.country, 'country'),
+    state: metorikString(customer.state, 'state'),
+    currency: metorikString(customer.currency, 'currency'),
+    resource_link: metorikString(customer.resource_link, 'resource_link'),
+    synced_at: syncedAt
+  };
+}
+
+async function fetchAllMetorikCustomers(store) {
+  const customers = [];
+  const pageSignatures = new Set();
+
+  for (
+    let requestedPage = 1;
+    requestedPage <= METORIK_MAX_CUSTOMER_PAGES;
+    requestedPage++
+  ) {
+    const result = await requestMetorikResource(
+      'customers',
+      store,
+      { page: String(requestedPage), per_page: String(METORIK_CUSTOMERS_PER_PAGE) },
+      {
+        includeDiscoveryDateRange: false,
+        retryCount: METORIK_REQUEST_RETRY_COUNT
+      }
+    );
+    if (!result.success) {
+      throw new MetorikSyncValidationError(
+        `Metorik customers request failed on page ${requestedPage}`,
+        metorikPageDiagnostics(requestedPage, result)
+      );
+    }
+    if (!result.recordsShapeValid) {
+      throw new MetorikSyncValidationError(
+        `Metorik customers response has no record collection on page ${requestedPage}`,
+        metorikPageDiagnostics(requestedPage, result, 'malformed_response')
+      );
+    }
+
+    const pagination = result.pagination;
+    let currentPage;
+    let perPage;
+    try {
+      currentPage = metorikInteger(
+        pagination?.current_page,
+        'pagination.current_page',
+        { required: true }
+      );
+      perPage = metorikInteger(
+        pagination?.per_page,
+        'pagination.per_page',
+        { required: true }
+      );
+    } catch (error) {
+      if (!(error instanceof MetorikSyncValidationError)) throw error;
+      throw new MetorikSyncValidationError(
+        error.message,
+        metorikPageDiagnostics(requestedPage, result, 'pagination_validation_failure')
+      );
+    }
+    if (currentPage !== requestedPage || perPage <= 0) {
+      throw new MetorikSyncValidationError(
+        `Metorik pagination did not advance to page ${requestedPage}`,
+        metorikPageDiagnostics(requestedPage, result, 'pagination_validation_failure')
+      );
+    }
+    if (typeof pagination?.has_more_pages !== 'boolean') {
+      throw new MetorikSyncValidationError(
+        'pagination.has_more_pages is missing or invalid',
+        metorikPageDiagnostics(requestedPage, result, 'pagination_validation_failure')
+      );
+    }
+    if (result.records.some(record =>
+      !record || Array.isArray(record) || typeof record !== 'object'
+    )) {
+      throw new MetorikSyncValidationError(
+        `Metorik customers page ${requestedPage} contains a non-object record`,
+        metorikPageDiagnostics(requestedPage, result, 'malformed_response')
+      );
+    }
+
+    const signature = JSON.stringify(
+      result.records.map(record => record.metorik_customer_id)
+    );
+    if (pageSignatures.has(signature)) {
+      throw new MetorikSyncValidationError(
+        `Metorik repeated page content at page ${requestedPage}`,
+        metorikPageDiagnostics(requestedPage, result, 'pagination_validation_failure')
+      );
+    }
+    pageSignatures.add(signature);
+    customers.push(...result.records);
+
+    if (!pagination.has_more_pages) {
+      return {
+        customers,
+        pagesFetched: requestedPage,
+        paginationCompleted: true,
+        pageDelayMs: METORIK_PAGE_DELAY_MS
+      };
+    }
+    if (result.records.length === 0) {
+      throw new MetorikSyncValidationError(
+        `Metorik returned an empty non-final page at page ${requestedPage}`,
+        metorikPageDiagnostics(requestedPage, result, 'pagination_validation_failure')
+      );
+    }
+
+    await sleep(METORIK_PAGE_DELAY_MS);
+  }
+
+  throw new MetorikSyncValidationError(
+    'Metorik customer pagination exceeded the safety page limit'
+  );
+}
+
+async function fetchAllMetorikOrders(store) {
+  const orders = [];
+  const pageSignatures = new Set();
+
+  for (let requestedPage = 1; requestedPage <= METORIK_MAX_ORDER_PAGES; requestedPage++) {
+    const result = await requestMetorikResource(
+      'orders',
+      store,
+      { page: String(requestedPage), per_page: String(METORIK_ORDERS_PER_PAGE) },
+      {
+        includeDiscoveryDateRange: false,
+        retryCount: METORIK_REQUEST_RETRY_COUNT
+      }
+    );
+    if (!result.success) {
+      throw new MetorikSyncValidationError(
+        `Metorik orders request failed on page ${requestedPage}`,
+        metorikPageDiagnostics(requestedPage, result)
+      );
+    }
+    if (!result.recordsShapeValid) {
+      throw new MetorikSyncValidationError(
+        `Metorik orders response has no record collection on page ${requestedPage}`,
+        metorikPageDiagnostics(requestedPage, result, 'malformed_response')
+      );
+    }
+
+    const pagination = result.pagination;
+    let currentPage;
+    let perPage;
+    try {
+      currentPage = metorikInteger(
+        pagination?.current_page,
+        'pagination.current_page',
+        { required: true }
+      );
+      perPage = metorikInteger(
+        pagination?.per_page,
+        'pagination.per_page',
+        { required: true }
+      );
+    } catch (error) {
+      if (!(error instanceof MetorikSyncValidationError)) throw error;
+      throw new MetorikSyncValidationError(
+        error.message,
+        metorikPageDiagnostics(requestedPage, result, 'pagination_validation_failure')
+      );
+    }
+    if (currentPage !== requestedPage || perPage <= 0) {
+      throw new MetorikSyncValidationError(
+        `Metorik pagination did not advance to page ${requestedPage}`,
+        metorikPageDiagnostics(requestedPage, result, 'pagination_validation_failure')
+      );
+    }
+    if (typeof pagination?.has_more_pages !== 'boolean') {
+      throw new MetorikSyncValidationError(
+        'pagination.has_more_pages is missing or invalid',
+        metorikPageDiagnostics(requestedPage, result, 'pagination_validation_failure')
+      );
+    }
+
+    const signature = JSON.stringify(result.records.map(record =>
+      firstMetorikValue(record, ['order_id', 'id'])
+    ));
+    if (pageSignatures.has(signature)) {
+      throw new MetorikSyncValidationError(
+        `Metorik repeated page content at page ${requestedPage}`,
+        metorikPageDiagnostics(requestedPage, result, 'pagination_validation_failure')
+      );
+    }
+    pageSignatures.add(signature);
+    orders.push(...result.records);
+
+    if (!pagination.has_more_pages) {
+      return {
+        orders,
+        pagesFetched: requestedPage,
+        paginationCompleted: true,
+        pageDelayMs: METORIK_PAGE_DELAY_MS
+      };
+    }
+    if (result.records.length === 0) {
+      throw new MetorikSyncValidationError(
+        `Metorik returned an empty non-final page at page ${requestedPage}`,
+        metorikPageDiagnostics(requestedPage, result, 'pagination_validation_failure')
+      );
+    }
+
+    await sleep(METORIK_PAGE_DELAY_MS);
+  }
+
+  throw new MetorikSyncValidationError('Metorik pagination exceeded the safety page limit');
+}
+
+async function fetchAllMetorikCatalogueResource(store, resource, identityField) {
+  const records = [];
+  const pageSignatures = new Set();
+
+  for (
+    let requestedPage = 1;
+    requestedPage <= METORIK_MAX_CATALOGUE_PAGES;
+    requestedPage++
+  ) {
+    // These dates are required by Metorik solely as the calculation window for
+    // analytics that this sync discards. They do not filter catalogue membership.
+    const result = await requestMetorikResource(
+      resource,
+      store,
+      {
+        page: String(requestedPage),
+        per_page: String(METORIK_CATALOGUE_PER_PAGE),
+        start_date: METORIK_DISCOVERY_START_DATE,
+        end_date: METORIK_DISCOVERY_END_DATE
+      },
+      {
+        includeDiscoveryDateRange: false,
+        retryCount: METORIK_REQUEST_RETRY_COUNT
+      }
+    );
+    if (!result.success) {
+      throw new MetorikSyncValidationError(
+        `Metorik ${resource} request failed on page ${requestedPage}`,
+        metorikPageDiagnostics(requestedPage, result)
+      );
+    }
+    if (!result.recordsShapeValid) {
+      throw new MetorikSyncValidationError(
+        `Metorik ${resource} response has no record collection on page ${requestedPage}`,
+        metorikPageDiagnostics(requestedPage, result, 'malformed_response')
+      );
+    }
+
+    const pagination = result.pagination;
+    let currentPage;
+    let perPage;
+    try {
+      currentPage = metorikInteger(
+        pagination?.current_page,
+        'pagination.current_page',
+        { required: true }
+      );
+      perPage = metorikInteger(
+        pagination?.per_page,
+        'pagination.per_page',
+        { required: true }
+      );
+    } catch (error) {
+      if (!(error instanceof MetorikSyncValidationError)) throw error;
+      throw new MetorikSyncValidationError(
+        error.message,
+        metorikPageDiagnostics(
+          requestedPage,
+          result,
+          'pagination_validation_failure'
+        )
+      );
+    }
+    if (
+      currentPage !== requestedPage ||
+      perPage !== METORIK_CATALOGUE_PER_PAGE
+    ) {
+      throw new MetorikSyncValidationError(
+        `Metorik ${resource} pagination did not match page ${requestedPage}`,
+        metorikPageDiagnostics(
+          requestedPage,
+          result,
+          'pagination_validation_failure'
+        )
+      );
+    }
+    if (typeof pagination?.has_more_pages !== 'boolean') {
+      throw new MetorikSyncValidationError(
+        'pagination.has_more_pages is missing or invalid',
+        metorikPageDiagnostics(
+          requestedPage,
+          result,
+          'pagination_validation_failure'
+        )
+      );
+    }
+    if (result.records.some(record =>
+      !record || Array.isArray(record) || typeof record !== 'object'
+    )) {
+      throw new MetorikSyncValidationError(
+        `Metorik ${resource} page ${requestedPage} contains a non-object record`,
+        metorikPageDiagnostics(requestedPage, result, 'malformed_response')
+      );
+    }
+
+    const signature = JSON.stringify(
+      result.records.map(record => record[identityField])
+    );
+    if (pageSignatures.has(signature)) {
+      throw new MetorikSyncValidationError(
+        `Metorik repeated ${resource} page content at page ${requestedPage}`,
+        metorikPageDiagnostics(
+          requestedPage,
+          result,
+          'pagination_validation_failure'
+        )
+      );
+    }
+    pageSignatures.add(signature);
+    records.push(...result.records);
+
+    if (!pagination.has_more_pages) {
+      return {
+        records,
+        pagesFetched: requestedPage,
+        paginationCompleted: true,
+        pageDelayMs: METORIK_PAGE_DELAY_MS
+      };
+    }
+    if (result.records.length === 0) {
+      throw new MetorikSyncValidationError(
+        `Metorik returned an empty non-final ${resource} page at page ${requestedPage}`,
+        metorikPageDiagnostics(
+          requestedPage,
+          result,
+          'pagination_validation_failure'
+        )
+      );
+    }
+    await sleep(METORIK_PAGE_DELAY_MS);
+  }
+
+  throw new MetorikSyncValidationError(
+    `Metorik ${resource} pagination exceeded the safety page limit`
+  );
+}
+
+async function ensureMetorikDatasetAndTables(store) {
+  const dataset = bigquery.dataset(store.dataset);
+  const [datasetExists] = await dataset.exists();
+  if (!datasetExists) {
+    await bigquery.createDataset(store.dataset);
+  }
+
+  for (const [tableName, schema] of [
+    [METORIK_ORDERS_TABLE, METORIK_ORDERS_SCHEMA],
+    [METORIK_ORDER_LINE_ITEMS_TABLE, METORIK_ORDER_LINE_ITEMS_SCHEMA]
+  ]) {
+    const table = dataset.table(tableName);
+    const [exists] = await table.exists();
+    if (!exists) await dataset.createTable(tableName, { schema });
+  }
+  return dataset;
+}
+
+async function insertMetorikRows(table, rows) {
+  const batchSize = 500;
+  for (let offset = 0; offset < rows.length; offset += batchSize) {
+    await table.insert(rows.slice(offset, offset + batchSize));
+  }
+}
+
+async function safelyReplaceMetorikTables(store, orderRows, lineItemRows) {
+  const dataset = await ensureMetorikDatasetAndTables(store);
+  const suffix = `${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+  const stagingOrdersName = `_staging_orders_${suffix}`;
+  const stagingLinesName = `_staging_order_line_items_${suffix}`;
+  const [stagingOrders] = await dataset.createTable(stagingOrdersName, {
+    schema: METORIK_ORDERS_SCHEMA,
+    expirationTime: Date.now() + 24 * 60 * 60 * 1000
+  });
+  let stagingLines;
+
+  try {
+    [stagingLines] = await dataset.createTable(stagingLinesName, {
+      schema: METORIK_ORDER_LINE_ITEMS_SCHEMA,
+      expirationTime: Date.now() + 24 * 60 * 60 * 1000
+    });
+    await insertMetorikRows(stagingOrders, orderRows);
+    await insertMetorikRows(stagingLines, lineItemRows);
+
+    const [counts] = await bigquery.query({ query: `
+      SELECT
+        (SELECT COUNT(*) FROM \`${GOOGLE_PROJECT_ID}.${store.dataset}.${stagingOrdersName}\`) AS orders_count,
+        (SELECT COUNT(*) FROM \`${GOOGLE_PROJECT_ID}.${store.dataset}.${stagingLinesName}\`) AS lines_count
+    ` });
+    if (Number(counts[0]?.orders_count) !== orderRows.length ||
+        Number(counts[0]?.lines_count) !== lineItemRows.length) {
+      throw new MetorikSyncValidationError('BigQuery staging row counts did not match the validated source data');
+    }
+
+    await bigquery.query({ query: `
+      BEGIN TRANSACTION;
+      DELETE FROM \`${GOOGLE_PROJECT_ID}.${store.dataset}.${METORIK_ORDERS_TABLE}\` WHERE TRUE;
+      INSERT INTO \`${GOOGLE_PROJECT_ID}.${store.dataset}.${METORIK_ORDERS_TABLE}\`
+        SELECT * FROM \`${GOOGLE_PROJECT_ID}.${store.dataset}.${stagingOrdersName}\`;
+      DELETE FROM \`${GOOGLE_PROJECT_ID}.${store.dataset}.${METORIK_ORDER_LINE_ITEMS_TABLE}\` WHERE TRUE;
+      INSERT INTO \`${GOOGLE_PROJECT_ID}.${store.dataset}.${METORIK_ORDER_LINE_ITEMS_TABLE}\`
+        SELECT * FROM \`${GOOGLE_PROJECT_ID}.${store.dataset}.${stagingLinesName}\`;
+      COMMIT TRANSACTION;
+    ` });
+
+    return {
+      staging_orders_count: orderRows.length,
+      staging_line_items_count: lineItemRows.length,
+      coordinated_transactional_replacement: true
+    };
+  } finally {
+    await Promise.allSettled([
+      stagingOrders.delete({ ignoreNotFound: true }),
+      stagingLines?.delete({ ignoreNotFound: true })
+    ]);
+  }
+}
+
+async function syncMetorikOrders(store) {
+  const fetched = await fetchAllMetorikOrders(store);
+  if (!fetched.paginationCompleted || fetched.orders.length === 0) {
+    throw new MetorikSyncValidationError('Metorik did not return a complete, non-empty order history');
+  }
+
+  const syncedAt = new Date().toISOString();
+  const orderRows = [];
+  const lineItemRows = [];
+  for (const order of fetched.orders) {
+    const orderRow = transformMetorikOrder(order, syncedAt);
+    orderRows.push(orderRow);
+    lineItemRows.push(...transformMetorikLineItems(order, orderRow, syncedAt));
+  }
+
+  const duplicateOrderIds = duplicateMetorikIds(orderRows, 'order_id');
+  const duplicateLineItemIdentities =
+    duplicateMetorikLineItemIdentities(lineItemRows);
+  if (duplicateOrderIds.length > 0) {
+    throw new MetorikSyncValidationError(`Duplicate order IDs detected (${duplicateOrderIds.length})`);
+  }
+  if (duplicateLineItemIdentities.length > 0) {
+    throw new MetorikSyncValidationError(
+      `Duplicate line-item identity pairs detected (${duplicateLineItemIdentities.length})`
+    );
+  }
+  const orderIds = new Set(orderRows.map(row => row.order_id));
+  const orphanLineItems = lineItemRows.filter(
+    row => !orderIds.has(row.order_id)
+  ).length;
+  if (orphanLineItems > 0) {
+    throw new MetorikSyncValidationError('A line item references an order outside the fetched order set');
+  }
+
+  const distribution = (rows, field) => Object.fromEntries(
+    [...rows.reduce((counts, row) => {
+      const value = row[field] ?? '(null)';
+      counts.set(value, (counts.get(value) ?? 0) + 1);
+      return counts;
+    }, new Map())].sort(([left], [right]) => String(left).localeCompare(String(right)))
+  );
+  const currencyDistribution = distribution(orderRows, 'currency');
+  const currencies = Object.keys(currencyDistribution).filter(
+    currency => currency !== '(null)'
+  );
+  const unexpectedCurrencies = currencies.filter(
+    currency => !store.expectedOrderCurrencies.includes(currency)
+  );
+  const orderDates = orderRows.map(row => row.order_created_at).filter(Boolean).sort();
+
+  const replacement = await safelyReplaceMetorikTables(store, orderRows, lineItemRows);
+
+  return {
+    success: true,
+    store: store.storeName,
+    orders_fetched: orderRows.length,
+    orders_imported: orderRows.length,
+    line_items_fetched: lineItemRows.length,
+    line_items_imported: lineItemRows.length,
+    first_order_date: orderDates[0] ?? null,
+    last_order_date: orderDates.at(-1) ?? null,
+    currencies_observed: currencies,
+    currency_distribution: currencyDistribution,
+    status_distribution: distribution(orderRows, 'status'),
+    unexpected_currencies: unexpectedCurrencies,
+    pages_fetched: fetched.pagesFetched,
+    page_delay_ms: fetched.pageDelayMs,
+    duplicate_order_ids_detected: 0,
+    duplicate_line_item_identity_pairs_detected: 0,
+    orphan_line_items_detected: orphanLineItems,
+    ...replacement,
+    destination_tables: [
+      `${GOOGLE_PROJECT_ID}.${store.dataset}.${METORIK_ORDERS_TABLE}`,
+      `${GOOGLE_PROJECT_ID}.${store.dataset}.${METORIK_ORDER_LINE_ITEMS_TABLE}`
+    ]
+  };
+}
+
+async function ensureMetorikCatalogueTables(store) {
+  const dataset = bigquery.dataset(store.dataset);
+  const [datasetExists] = await dataset.exists();
+  if (!datasetExists) await bigquery.createDataset(store.dataset);
+
+  for (const [tableName, schema] of [
+    [METORIK_PRODUCTS_TABLE, METORIK_PRODUCTS_SCHEMA],
+    [METORIK_PRODUCT_VARIATIONS_TABLE, METORIK_PRODUCT_VARIATIONS_SCHEMA]
+  ]) {
+    const table = dataset.table(tableName);
+    const [exists] = await table.exists();
+    if (!exists) await dataset.createTable(tableName, { schema });
+  }
+  return dataset;
+}
+
+function normalizedBigQueryField(field) {
+  const typeAliases = { INTEGER: 'INT64', BOOLEAN: 'BOOL' };
+  return {
+    name: field.name,
+    type: typeAliases[field.type] ?? field.type,
+    mode: field.mode ?? 'NULLABLE'
+  };
+}
+
+function metorikSchemaMatches(actualFields, expectedFields) {
+  if (actualFields.length !== expectedFields.length) return false;
+  return actualFields.every((field, index) => {
+    const actual = normalizedBigQueryField(field);
+    const expected = normalizedBigQueryField(expectedFields[index]);
+    return actual.name === expected.name &&
+      actual.type === expected.type && actual.mode === expected.mode;
+  });
+}
+
+async function reconcileMetorikProductsSchema(store, dataset) {
+  const table = dataset.table(METORIK_PRODUCTS_TABLE);
+  const [metadata] = await table.getMetadata();
+  const actualFields = metadata.schema?.fields ?? [];
+  if (metorikSchemaMatches(actualFields, METORIK_PRODUCTS_SCHEMA)) return;
+
+  const oldProductsSchema = METORIK_PRODUCTS_SCHEMA.map(field =>
+    field.name === 'tags_json'
+      ? { name: 'tags', type: 'STRING' }
+      : field
+  );
+  if (!metorikSchemaMatches(actualFields, oldProductsSchema)) {
+    throw new MetorikSyncValidationError(
+      'Existing Metorik products table has an unexpected schema'
+    );
+  }
+
+  // CREATE OR REPLACE is atomic in BigQuery. This preserves every existing row
+  // while upgrading a table created by the prior release; an empty/null legacy
+  // tag becomes the canonical empty JSON array and a populated scalar remains
+  // represented as that scalar's JSON value.
+  await bigquery.query({ query: `
+    CREATE OR REPLACE TABLE
+      \`${GOOGLE_PROJECT_ID}.${store.dataset}.${METORIK_PRODUCTS_TABLE}\` (
+        product_id INT64 NOT NULL,
+        title STRING,
+        sku STRING,
+        type STRING,
+        status STRING,
+        tags_json STRING NOT NULL,
+        image STRING,
+        current_price NUMERIC,
+        regular_price NUMERIC,
+        sale_price NUMERIC,
+        stock_quantity INT64,
+        in_stock BOOL,
+        product_created_at TIMESTAMP,
+        product_updated_at TIMESTAMP,
+        synced_at TIMESTAMP NOT NULL
+      )
+    AS SELECT
+      product_id, title, sku, type, status,
+      CASE
+        WHEN tags IS NULL OR tags = '' THEN '[]'
+        ELSE TO_JSON_STRING(tags)
+      END AS tags_json,
+      image, current_price, regular_price, sale_price, stock_quantity,
+      in_stock, product_created_at, product_updated_at, synced_at
+    FROM \`${GOOGLE_PROJECT_ID}.${store.dataset}.${METORIK_PRODUCTS_TABLE}\`
+  ` });
+
+  const [updatedMetadata] = await table.getMetadata();
+  if (!metorikSchemaMatches(
+    updatedMetadata.schema?.fields ?? [],
+    METORIK_PRODUCTS_SCHEMA
+  )) {
+    throw new MetorikSyncValidationError(
+      'Metorik products table schema reconciliation did not succeed'
+    );
+  }
+}
+
+function numberFromBigQuery(value) {
+  return Number(value?.value ?? value ?? 0);
+}
+
+async function getMetorikCatalogueDiagnostics(
+  store,
+  stagingProductsName,
+  stagingVariationsName
+) {
+  const [relationshipRows] = await bigquery.query({ query: `
+    SELECT
+      COUNT(DISTINCT v.product_id) AS variation_parent_ids,
+      COUNTIF(p.product_id IS NOT NULL) AS variation_parents_present,
+      COUNTIF(p.product_id IS NULL) AS variation_parents_absent,
+      COUNT(DISTINCT IF(p.product_id IS NOT NULL, v.product_id, NULL))
+        AS distinct_variation_parents_present,
+      COUNT(DISTINCT IF(p.product_id IS NULL, v.product_id, NULL))
+        AS distinct_variation_parents_absent
+    FROM \`${GOOGLE_PROJECT_ID}.${store.dataset}.${stagingVariationsName}\` v
+    LEFT JOIN \`${GOOGLE_PROJECT_ID}.${store.dataset}.${stagingProductsName}\` p
+      USING (product_id)
+  ` });
+  const [historicalRows] = await bigquery.query({ query: `
+    WITH historical_products AS (
+      SELECT DISTINCT product_id
+      FROM \`${GOOGLE_PROJECT_ID}.${store.dataset}.${METORIK_ORDER_LINE_ITEMS_TABLE}\`
+      WHERE product_id IS NOT NULL
+    ), historical_variations AS (
+      SELECT DISTINCT variation_id
+      FROM \`${GOOGLE_PROJECT_ID}.${store.dataset}.${METORIK_ORDER_LINE_ITEMS_TABLE}\`
+      WHERE variation_id IS NOT NULL AND variation_id != 0
+    ), product_comparison AS (
+      SELECT h.product_id, p.product_id IS NOT NULL AS is_present
+      FROM historical_products h
+      LEFT JOIN \`${GOOGLE_PROJECT_ID}.${store.dataset}.${stagingProductsName}\` p
+        USING (product_id)
+    ), variation_comparison AS (
+      SELECT h.variation_id, v.variation_id IS NOT NULL AS is_present
+      FROM historical_variations h
+      LEFT JOIN \`${GOOGLE_PROJECT_ID}.${store.dataset}.${stagingVariationsName}\` v
+        USING (variation_id)
+    )
+    SELECT
+      (SELECT COUNT(*) FROM product_comparison) AS historical_product_ids,
+      (SELECT COUNTIF(is_present) FROM product_comparison)
+        AS historical_product_ids_present,
+      (SELECT COUNTIF(NOT is_present) FROM product_comparison)
+        AS historical_product_ids_absent,
+      ARRAY(
+        SELECT product_id FROM product_comparison
+        WHERE NOT is_present ORDER BY product_id LIMIT 10
+      ) AS sample_absent_product_ids,
+      (SELECT COUNT(*) FROM variation_comparison) AS historical_variation_ids,
+      (SELECT COUNTIF(is_present) FROM variation_comparison)
+        AS historical_variation_ids_present,
+      (SELECT COUNTIF(NOT is_present) FROM variation_comparison)
+        AS historical_variation_ids_absent,
+      ARRAY(
+        SELECT variation_id FROM variation_comparison
+        WHERE NOT is_present ORDER BY variation_id LIMIT 10
+      ) AS sample_absent_variation_ids
+  ` });
+
+  const relationship = relationshipRows[0] ?? {};
+  const historical = historicalRows[0] ?? {};
+  const historicalProductIds = numberFromBigQuery(
+    historical.historical_product_ids
+  );
+  const historicalProductIdsPresent = numberFromBigQuery(
+    historical.historical_product_ids_present
+  );
+  const historicalVariationIds = numberFromBigQuery(
+    historical.historical_variation_ids
+  );
+  const historicalVariationIdsPresent = numberFromBigQuery(
+    historical.historical_variation_ids_present
+  );
+
+  return {
+    variation_parent_ids: numberFromBigQuery(relationship.variation_parent_ids),
+    variation_parents_present: numberFromBigQuery(
+      relationship.variation_parents_present
+    ),
+    variation_parents_absent: numberFromBigQuery(
+      relationship.variation_parents_absent
+    ),
+    distinct_variation_parents_present: numberFromBigQuery(
+      relationship.distinct_variation_parents_present
+    ),
+    distinct_variation_parents_absent: numberFromBigQuery(
+      relationship.distinct_variation_parents_absent
+    ),
+    historical_product_ids: historicalProductIds,
+    historical_product_ids_present: historicalProductIdsPresent,
+    historical_product_ids_absent: numberFromBigQuery(
+      historical.historical_product_ids_absent
+    ),
+    historical_product_ids_present_percentage: historicalProductIds === 0
+      ? null
+      : 100 * historicalProductIdsPresent / historicalProductIds,
+    sample_absent_product_ids: historical.sample_absent_product_ids ?? [],
+    historical_variation_ids: historicalVariationIds,
+    historical_variation_ids_present: historicalVariationIdsPresent,
+    historical_variation_ids_absent: numberFromBigQuery(
+      historical.historical_variation_ids_absent
+    ),
+    historical_variation_ids_present_percentage: historicalVariationIds === 0
+      ? null
+      : 100 * historicalVariationIdsPresent / historicalVariationIds,
+    sample_absent_variation_ids: historical.sample_absent_variation_ids ?? []
+  };
+}
+
+async function safelyReplaceMetorikCatalogue(store, productRows, variationRows) {
+  const dataset = await ensureMetorikCatalogueTables(store);
+  const suffix = `${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+  const stagingProductsName = `_staging_products_${suffix}`;
+  const stagingVariationsName = `_staging_product_variations_${suffix}`;
+  const [stagingProducts] = await dataset.createTable(stagingProductsName, {
+    schema: METORIK_PRODUCTS_SCHEMA,
+    expirationTime: Date.now() + 24 * 60 * 60 * 1000
+  });
+  let stagingVariations;
+
+  try {
+    [stagingVariations] = await dataset.createTable(stagingVariationsName, {
+      schema: METORIK_PRODUCT_VARIATIONS_SCHEMA,
+      expirationTime: Date.now() + 24 * 60 * 60 * 1000
+    });
+    await insertMetorikRows(stagingProducts, productRows);
+    await insertMetorikRows(stagingVariations, variationRows);
+
+    const [counts] = await bigquery.query({ query: `
+      SELECT
+        (SELECT COUNT(*) FROM \`${GOOGLE_PROJECT_ID}.${store.dataset}.${stagingProductsName}\`)
+          AS products_count,
+        (SELECT COUNT(*) FROM \`${GOOGLE_PROJECT_ID}.${store.dataset}.${stagingVariationsName}\`)
+          AS variations_count
+    ` });
+    if (
+      numberFromBigQuery(counts[0]?.products_count) !== productRows.length ||
+      numberFromBigQuery(counts[0]?.variations_count) !== variationRows.length
+    ) {
+      throw new MetorikSyncValidationError(
+        'BigQuery catalogue staging row counts did not match validated source data'
+      );
+    }
+
+    const diagnostics = await getMetorikCatalogueDiagnostics(
+      store,
+      stagingProductsName,
+      stagingVariationsName
+    );
+
+    // Reconcile only after the complete source has transformed and both
+    // staging tables and diagnostics have succeeded. Unexpected schemas abort
+    // without modifying production.
+    await reconcileMetorikProductsSchema(store, dataset);
+
+    // One transaction prevents current products and variations from ever
+    // representing different successful ingestion runs.
+    await bigquery.query({ query: `
+      BEGIN TRANSACTION;
+      DELETE FROM \`${GOOGLE_PROJECT_ID}.${store.dataset}.${METORIK_PRODUCTS_TABLE}\`
+        WHERE TRUE;
+      INSERT INTO \`${GOOGLE_PROJECT_ID}.${store.dataset}.${METORIK_PRODUCTS_TABLE}\`
+        SELECT * FROM \`${GOOGLE_PROJECT_ID}.${store.dataset}.${stagingProductsName}\`;
+      DELETE FROM \`${GOOGLE_PROJECT_ID}.${store.dataset}.${METORIK_PRODUCT_VARIATIONS_TABLE}\`
+        WHERE TRUE;
+      INSERT INTO \`${GOOGLE_PROJECT_ID}.${store.dataset}.${METORIK_PRODUCT_VARIATIONS_TABLE}\`
+        SELECT * FROM \`${GOOGLE_PROJECT_ID}.${store.dataset}.${stagingVariationsName}\`;
+      COMMIT TRANSACTION;
+    ` });
+
+    return {
+      ...diagnostics,
+      staging_products_count: productRows.length,
+      staging_variations_count: variationRows.length,
+      coordinated_transactional_replacement: true
+    };
+  } finally {
+    await Promise.allSettled([
+      stagingProducts.delete({ ignoreNotFound: true }),
+      stagingVariations?.delete({ ignoreNotFound: true })
+    ]);
+  }
+}
+
+async function syncMetorikProducts(store) {
+  const fetchedProducts = await fetchAllMetorikCatalogueResource(
+    store,
+    'products',
+    'product_id'
+  );
+  const fetchedVariations = await fetchAllMetorikCatalogueResource(
+    store,
+    'variations',
+    'variation_id'
+  );
+  if (!fetchedProducts.paginationCompleted || fetchedProducts.records.length === 0) {
+    throw new MetorikSyncValidationError(
+      'Metorik did not return a complete, non-empty product catalogue'
+    );
+  }
+  if (!fetchedVariations.paginationCompleted || fetchedVariations.records.length === 0) {
+    throw new MetorikSyncValidationError(
+      'Metorik did not return a complete, non-empty variation catalogue'
+    );
+  }
+
+  const syncedAt = new Date().toISOString();
+  const productRows = fetchedProducts.records.map(product =>
+    transformMetorikProduct(product, syncedAt)
+  );
+  const variationRows = fetchedVariations.records.map(variation =>
+    transformMetorikProductVariation(variation, syncedAt)
+  );
+  if (productRows.length !== fetchedProducts.records.length ||
+      variationRows.length !== fetchedVariations.records.length) {
+    throw new MetorikSyncValidationError(
+      'Transformed catalogue counts did not match fetched source counts'
+    );
+  }
+  const duplicateProductIds = duplicateMetorikIds(productRows, 'product_id');
+  const duplicateVariationIds = duplicateMetorikIds(variationRows, 'variation_id');
+  if (duplicateProductIds.length > 0) {
+    throw new MetorikSyncValidationError(
+      `Duplicate product IDs detected (${duplicateProductIds.length})`
+    );
+  }
+  if (duplicateVariationIds.length > 0) {
+    throw new MetorikSyncValidationError(
+      `Duplicate variation IDs detected (${duplicateVariationIds.length})`
+    );
+  }
+  if (productRows.some(row => row.product_id === null)) {
+    throw new MetorikSyncValidationError('A product is missing required product_id');
+  }
+  if (variationRows.some(row =>
+    row.variation_id === null || row.product_id === null
+  )) {
+    throw new MetorikSyncValidationError(
+      'A variation is missing required variation_id or product_id'
+    );
+  }
+
+  const productTypes = {};
+  const productStatuses = {};
+  for (const row of productRows) {
+    const type = row.type ?? '(null)';
+    productTypes[type] = (productTypes[type] ?? 0) + 1;
+    const status = row.status ?? '(null)';
+    productStatuses[status] = (productStatuses[status] ?? 0) + 1;
+  }
+  const validation = await safelyReplaceMetorikCatalogue(
+    store,
+    productRows,
+    variationRows
+  );
+
+  return {
+    success: true,
+    store: store.storeName,
+    products_fetched: fetchedProducts.records.length,
+    products_imported: productRows.length,
+    variations_fetched: fetchedVariations.records.length,
+    variations_imported: variationRows.length,
+    product_types: productTypes,
+    product_statuses: productStatuses,
+    products_pages_fetched: fetchedProducts.pagesFetched,
+    variations_pages_fetched: fetchedVariations.pagesFetched,
+    page_delay_ms: METORIK_PAGE_DELAY_MS,
+    duplicate_product_ids_detected: 0,
+    duplicate_variation_ids_detected: 0,
+    ...validation,
+    destination_tables: [
+      `${GOOGLE_PROJECT_ID}.${store.dataset}.${METORIK_PRODUCTS_TABLE}`,
+      `${GOOGLE_PROJECT_ID}.${store.dataset}.${METORIK_PRODUCT_VARIATIONS_TABLE}`
+    ]
+  };
+}
+
+async function ensureMetorikCustomersTable(store) {
+  const dataset = bigquery.dataset(store.dataset);
+  const [datasetExists] = await dataset.exists();
+  if (!datasetExists) {
+    await bigquery.createDataset(store.dataset);
+  }
+
+  const table = dataset.table(METORIK_CUSTOMERS_TABLE);
+  const [tableExists] = await table.exists();
+  if (!tableExists) {
+    await dataset.createTable(METORIK_CUSTOMERS_TABLE, {
+      schema: METORIK_CUSTOMERS_SCHEMA
+    });
+  }
+  return dataset;
+}
+
+async function safelyReplaceMetorikCustomers(store, customerRows) {
+  const dataset = await ensureMetorikCustomersTable(store);
+  const suffix = `${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+  const stagingName = `_staging_customers_${suffix}`;
+  const [stagingTable] = await dataset.createTable(stagingName, {
+    schema: METORIK_CUSTOMERS_SCHEMA,
+    expirationTime: Date.now() + 24 * 60 * 60 * 1000
+  });
+
+  try {
+    await insertMetorikRows(stagingTable, customerRows);
+    const [counts] = await bigquery.query({ query: `
+      SELECT COUNT(*) AS customer_count
+      FROM \`${GOOGLE_PROJECT_ID}.${store.dataset}.${stagingName}\`
+    ` });
+    if (Number(counts[0]?.customer_count) !== customerRows.length) {
+      throw new MetorikSyncValidationError(
+        'BigQuery customer staging row count did not match the validated source data'
+      );
+    }
+
+    await bigquery.query({ query: `
+      BEGIN TRANSACTION;
+      DELETE FROM \`${GOOGLE_PROJECT_ID}.${store.dataset}.${METORIK_CUSTOMERS_TABLE}\` WHERE TRUE;
+      INSERT INTO \`${GOOGLE_PROJECT_ID}.${store.dataset}.${METORIK_CUSTOMERS_TABLE}\`
+        SELECT * FROM \`${GOOGLE_PROJECT_ID}.${store.dataset}.${stagingName}\`;
+      COMMIT TRANSACTION;
+    ` });
+
+    return {
+      staging_customers_count: customerRows.length,
+      transactional_replacement: true
+    };
+  } finally {
+    await Promise.allSettled([
+      stagingTable.delete({ ignoreNotFound: true })
+    ]);
+  }
+}
+
+async function syncMetorikCustomers(store) {
+  const fetched = await fetchAllMetorikCustomers(store);
+  if (!fetched.paginationCompleted || fetched.customers.length === 0) {
+    throw new MetorikSyncValidationError(
+      'Metorik did not return a complete, non-empty customer history'
+    );
+  }
+
+  const syncedAt = new Date().toISOString();
+  const customerRows = fetched.customers.map(customer =>
+    transformMetorikCustomer(customer, syncedAt)
+  );
+  const duplicateCustomerIds = duplicateMetorikIds(
+    customerRows,
+    'metorik_customer_id'
+  );
+  if (duplicateCustomerIds.length > 0) {
+    throw new MetorikSyncValidationError(
+      `Duplicate metorik_customer_id identities detected (${duplicateCustomerIds.length})`
+    );
+  }
+
+  const createdDates = customerRows
+    .map(row => row.created_at)
+    .filter(Boolean)
+    .sort();
+  const currencies = [...new Set(
+    customerRows.map(row => row.currency).filter(Boolean)
+  )].sort();
+
+  const replacement = await safelyReplaceMetorikCustomers(store, customerRows);
+
+  return {
+    success: true,
+    store: store.storeName,
+    customers_fetched: customerRows.length,
+    customers_imported: customerRows.length,
+    metorik_customer_id_count: customerRows.filter(
+      row => row.metorik_customer_id !== null
+    ).length,
+    registered_woo_linked_customers: customerRows.filter(
+      row => row.customer_id !== null && row.customer_id > 0
+    ).length,
+    guest_customer_id_zero_count: customerRows.filter(
+      row => row.customer_id === 0
+    ).length,
+    customers_with_orders: customerRows.filter(row => row.order_count > 0).length,
+    customers_with_zero_orders: customerRows.filter(row => row.order_count === 0).length,
+    first_order_date_populated_count: customerRows.filter(
+      row => row.first_order_date !== null
+    ).length,
+    last_order_date_populated_count: customerRows.filter(
+      row => row.last_order_date !== null
+    ).length,
+    first_customer_created_date: createdDates[0] ?? null,
+    last_customer_created_date: createdDates.at(-1) ?? null,
+    currencies_observed: currencies,
+    pages_fetched: fetched.pagesFetched,
+    page_delay_ms: fetched.pageDelayMs,
+    duplicate_canonical_identities_detected: 0,
+    ...replacement,
+    destination_table:
+      `${GOOGLE_PROJECT_ID}.${store.dataset}.${METORIK_CUSTOMERS_TABLE}`
+  };
+}
+
+function addMetorikSyncRoute({ path, store, resourceLabel, sync }) {
+  app.post(path, requireSyncSecret, async (req, res) => {
+    if (!store.apiKey) {
+      return res.status(500).json({
+        success: false,
+        store: store.storeName,
+        error: `${store.apiKeyEnvironmentVariable} is not configured`
+      });
+    }
+
+    try {
+      return res.json(await sync(store));
+    } catch (error) {
+      console.error(
+        `Metorik ${store.storeName} ${resourceLabel} sync failed:`,
+        error.name
+      );
+      if (error instanceof MetorikSyncValidationError && error.diagnostics) {
+        console.error(
+          `Metorik ${store.storeName} ${resourceLabel} sync diagnostics:`,
+          error.diagnostics
+        );
+      }
+      return res.status(500).json({
+        success: false,
+        store: store.storeName,
+        error: error instanceof MetorikSyncValidationError
+          ? error.message
+          : `Metorik ${store.storeName} ${resourceLabel} sync failed`,
+        ...(error instanceof MetorikSyncValidationError && error.diagnostics
+          ? { diagnostics: error.diagnostics }
+          : {})
+      });
+    }
+  });
+}
+
+for (const [slug, store] of Object.entries({
+  uk: METORIK_STORES.UK,
+  us: METORIK_STORES.US
+})) {
+  addMetorikSyncRoute({
+    path: `/sync-metorik-${slug}-orders`,
+    store,
+    resourceLabel: 'orders',
+    sync: syncMetorikOrders
+  });
+  addMetorikSyncRoute({
+    path: `/sync-metorik-${slug}-customers`,
+    store,
+    resourceLabel: 'customers',
+    sync: syncMetorikCustomers
+  });
+  addMetorikSyncRoute({
+    path: `/sync-metorik-${slug}-products`,
+    store,
+    resourceLabel: 'product catalogue',
+    sync: syncMetorikProducts
+  });
+}
+
+/* ---------------------------------------------------------
+   SHOPIFY TEST
+--------------------------------------------------------- */
+
+app.get(
+  '/test-shopify',
+  async (req, res) => {
+    try {
+      const token =
+        await getShopifyAccessToken();
+
+      const query = `
+        query {
+          orders(
+            first: 20
+            sortKey: CREATED_AT
+            reverse: true
+          ) {
+            nodes {
+              id
+              name
+              createdAt
+              updatedAt
+
+              app {
+                id
+                name
+              }
+
+              retailLocation {
+                id
+                name
+              }
+            }
+          }
+        }
+      `;
+
+      const data =
+        await shopifyGraphQL(
+          token,
+          query
+        );
+
+      const orders =
+        data.orders.nodes;
+
+      res.json({
+        success: true,
+
+        count:
+          orders.length,
+
+        orders:
+          orders.map(
             order => ({
               id:
                 order.id,
