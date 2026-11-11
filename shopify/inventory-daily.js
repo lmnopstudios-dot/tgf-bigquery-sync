@@ -12,23 +12,54 @@ const q=(name,body)=>`query ${name}($after:String){${body}}`;
 const products=q('Products','products(first:100,after:$after){nodes{id title status} pageInfo{hasNextPage endCursor}}');
 const locations=q('Locations','locations(first:100,after:$after,includeInactive:true,includeLegacy:true){nodes{id name isActive} pageInfo{hasNextPage endCursor}}');
 const variants='query Variants($id:ID!,$after:String){product(id:$id){variants(first:100,after:$after){nodes{id title sku inventoryItem{id tracked}} pageInfo{hasNextPage endCursor}}}}';
-const levels='query Levels($id:ID!,$after:String){inventoryItem(id:$id){inventoryLevels(first:100,after:$after){nodes{location{id} quantities(names:["available","on_hand","committed","incoming"]){name quantity}} pageInfo{hasNextPage endCursor}}}}';
+const levels='query InventoryBatch($ids:[ID!]!,$location:ID!){nodes(ids:$ids){... on InventoryItem{id tracked inventoryLevel(locationId:$location){location{id} quantities(names:["available","on_hand","committed","incoming"]){name quantity}}}}}';
 const check=(ok,code)=>{if(!ok)throw Error(code);};
-export async function collect(graphql,{now=()=>new Date(),signal=AbortSignal.timeout(900000),maxCalls=14000,maxRows=250000}={}){
-  const start=now(),date=londonDate(start),rows=[];
-  let calls=0;
+const safeCodes=new Set(['CALL_LIMIT','ROW_LIMIT','INVALID_PAGE','INVALID_NODE','INVALID_CURSOR','INVALID_LOCATION',
+  'NO_ACTIVE_LOCATIONS','DUPLICATE_PRODUCT','INVALID_VARIANT','INVALID_LEVEL','INVALID_QUANTITY','INVALID_BATCH',
+  'INCOMPLETE_MATRIX','LONDON_DATE_CHANGED','UNSAFE_EXPIRATION_OR_TYPE','INVALID_MODE','WRITES_DISABLED',
+  'UNSAFE_DATASET_DEFAULTS','MISSING_OR_INCOMPLETE_SNAPSHOT','LATE_SNAPSHOT','THROTTLED','ACCESS_DENIED',
+  'GRAPHQL_VALIDATION_FAILED','SHOPIFY_AUTH_FAILED','SHOPIFY_PERMISSION_DENIED','SHOPIFY_HTTP_FAILED',
+  'SHOPIFY_INVALID_RESPONSE','SHOPIFY_AUTH_INVALID_RESPONSE']);
+export const safeError=(e,aborted=false)=>({
+  error_code:[e?.code,e?.message].find(x=>safeCodes.has(x))??(aborted||['AbortError','TimeoutError'].includes(e?.name)?'DEADLINE':'UNCLASSIFIED'),
+  http_status:Number.isInteger(e?.http_status)?e.http_status:null
+});
+export async function collect(graphql,{now=()=>new Date(),signal=AbortSignal.timeout(900000),
+  maxCalls=14000,maxRows=250000,onProgress=()=>{},sleep=pause}={}){
+  const start=now(),date=londonDate(start),rows=[],catalogue=[];
+  const stores=new Map(),ps=new Set(),vs=new Set(),items=new Set();
+  let calls=0,phase='locations',nextAllowed=0;
+  const progress=extra=>onProgress({phase,elapsed_seconds:Math.round((Date.now()-wallStart)/1000),
+    api_attempts:calls,products:ps.size,variants:vs.size,locations:stores.size,rows_prepared:rows.length,...extra});
+  const wallStart=Date.now();
+  const timer=setInterval(()=>progress({status:'running'}),15000);
+  timer.unref?.();
+  progress({status:'started'});
+  async function call(query,vars){
+    for(let attempt=0;;attempt++){
+      signal.throwIfAborted();
+      const wait=nextAllowed-Date.now();
+      if(wait>0)await sleep(wait,undefined,{signal});
+      signal.throwIfAborted();check(++calls<=maxCalls,'CALL_LIMIT');
+      try{
+        const data=await graphql(query,vars,signal);
+        const cost=data?.shopify_metadata?.cost, throttle=cost?.throttleStatus;
+        if(throttle&&throttle.restoreRate>0)
+          nextAllowed=Date.now()+Math.max(0,(Number(cost.requestedQueryCost||0)-Number(throttle.currentlyAvailable||0))/throttle.restoreRate*1000);
+        return data;
+      }catch(e){
+        if(attempt>=3||e.code!=='THROTTLED')throw e;
+        progress({status:'throttled'});
+        await sleep(1000*2**attempt,undefined,{signal});
+      }
+    }
+  }
   async function* pages(query,vars,select){
     let after=null;const seen=new Set();
     do{
-      let data;
-      for(let attempt=0;;attempt++){
-        signal.throwIfAborted();
-        check(++calls<=maxCalls,'CALL_LIMIT');
-        try{data=await graphql(query,{...vars,after},signal);break;}
-        catch(e){if(attempt>=3||e.code!=='THROTTLED')throw e;await pause(1000*2**attempt,undefined,{signal});}
-      }
-      const page=select(data),observed=now().toISOString();
+      const page=select(await call(query,{...vars,after}));
       check(Array.isArray(page?.nodes)&&typeof page.pageInfo?.hasNextPage==='boolean','INVALID_PAGE');
+      const observed=now().toISOString();
       for(const node of page.nodes){check(node,'INVALID_NODE');yield [node,observed];}
       if(!page.pageInfo.hasNextPage)return;
       after=page.pageInfo.endCursor;
@@ -36,44 +67,60 @@ export async function collect(graphql,{now=()=>new Date(),signal=AbortSignal.tim
       seen.add(after);
     }while(true);
   }
-  const stores=new Map(),ps=new Set(),vs=new Set();
-  for await(const [l] of pages(locations,{},d=>d?.locations)){
-    check(l.id&&!stores.has(l.id)&&typeof l.isActive==='boolean','INVALID_LOCATION');stores.set(l.id,l);
-  }
-  const active=[...stores.values()].filter(l=>l.isActive);
-  check(active.length,'NO_ACTIVE_LOCATIONS');
-  for await(const [p] of pages(products,{},d=>d?.products)){
-    check(p.id&&!ps.has(p.id),'DUPLICATE_PRODUCT');ps.add(p.id);
-    for await(const [v,variantSeen] of pages(variants,{id:p.id},d=>d?.product?.variants)){
-      check(v.id&&!vs.has(v.id)&&v.inventoryItem?.id&&typeof v.inventoryItem.tracked==='boolean','INVALID_VARIANT');vs.add(v.id);
-      const item=v.inventoryItem, byLocation=new Map();
-      let last=variantSeen;
-      if(item.tracked)for await(const [l,observed] of pages(levels,{id:item.id},d=>d?.inventoryItem?.inventoryLevels)){
-        const id=l.location?.id;
-        check(id&&!byLocation.has(id)&&Array.isArray(l.quantities),'INVALID_LEVEL');
-        const quantities=new Map();
-        for(const r of l.quantities){
-          check(r&&fields.includes(r.name)&&!quantities.has(r.name)&&Number.isSafeInteger(r.quantity),'INVALID_QUANTITY');
-          quantities.set(r.name,r.quantity);
-        }
-        byLocation.set(id,{quantities,observed});last=observed;
-      }
-      if(item.tracked)last=now().toISOString();
-      for(const l of active){
-        check(rows.length<maxRows,'ROW_LIMIT');
-        const level=byLocation.get(l.id);
-        rows.push({snapshot_date:date,product_id:p.id,product_name:p.title,product_status:p.status,
-          variant_id:v.id,variant_name:v.title,sku:v.sku,inventory_item_id:item.id,location_id:l.id,
-          location_name:l.name,workshop:/\bworkshop\b/i.test(l.name),observed_at:level?.observed??last,
-          stock_state:!item.tracked?'untracked':!level?'unstocked':fields.every(n=>level.quantities.has(n))?'observed':'missing_quantity',
-          ...Object.fromEntries(fields.map(n=>[n,level?.quantities.get(n)??null]))});
+  try{
+    for await(const [l] of pages(locations,{},d=>d?.locations)){
+      check(l.id&&!stores.has(l.id)&&typeof l.isActive==='boolean','INVALID_LOCATION');stores.set(l.id,l);
+    }
+    const active=[...stores.values()].filter(l=>l.isActive);
+    check(active.length,'NO_ACTIVE_LOCATIONS');
+    phase='catalogue';progress({status:'started'});
+    for await(const [p] of pages(products,{},d=>d?.products)){
+      check(p.id&&!ps.has(p.id),'DUPLICATE_PRODUCT');ps.add(p.id);
+      for await(const [v,observed] of pages(variants,{id:p.id},d=>d?.product?.variants)){
+        check(v.id&&!vs.has(v.id)&&v.inventoryItem?.id&&!items.has(v.inventoryItem.id)&&typeof v.inventoryItem.tracked==='boolean','INVALID_VARIANT');
+        vs.add(v.id);items.add(v.inventoryItem.id);catalogue.push({p,v,observed});
+        check(catalogue.length*active.length<=maxRows,'ROW_LIMIT');
       }
     }
-  }
-  const end=now();
-  check(rows.length&&rows.length===vs.size*active.length,'INCOMPLETE_MATRIX');
-  check(londonDate(end)===date,'LONDON_DATE_CHANGED');
-  return {date,rows,calls,variants:vs.size,locations:active.length,start:start.toISOString(),end:end.toISOString()};
+    // Exact lookups cover every active location without a nested inventoryLevels
+    // connection to truncate. 50 IDs stays below Shopify's 250 input-array cap.
+    phase='inventory_batches';progress({status:'started'});
+    for(const l of active)for(let offset=0;offset<catalogue.length;offset+=50){
+      const batch=catalogue.slice(offset,offset+50),tracked=batch.filter(x=>x.v.inventoryItem.tracked);
+      const found=new Map();
+      if(tracked.length){
+        const expected=new Set(tracked.map(x=>x.v.inventoryItem.id));
+        const data=await call(levels,{ids:[...expected],location:l.id});
+        check(Array.isArray(data?.nodes)&&data.nodes.length===expected.size,'INVALID_BATCH');
+        for(const item of data.nodes){
+          check(item&&expected.has(item.id)&&!found.has(item.id)&&item.tracked===true&&Object.hasOwn(item,'inventoryLevel'),'INVALID_BATCH');
+          const level=item.inventoryLevel;
+          check(level===null||(level?.location?.id===l.id&&Array.isArray(level.quantities)),'INVALID_LEVEL');
+          const quantities=new Map();
+          for(const q of level?.quantities??[]){
+            check(q&&fields.includes(q.name)&&!quantities.has(q.name)&&Number.isSafeInteger(q.quantity),'INVALID_QUANTITY');
+            quantities.set(q.name,q.quantity);
+          }
+          found.set(item.id,{level,quantities});
+        }
+      }
+      const observed=now().toISOString();
+      for(const {p,v,observed:catalogueObserved} of batch){
+        const item=v.inventoryItem,entry=found.get(item.id),level=entry?.level,quantities=entry?.quantities;
+        rows.push({snapshot_date:date,product_id:p.id,product_name:p.title,product_status:p.status,
+          variant_id:v.id,variant_name:v.title,sku:v.sku,inventory_item_id:item.id,location_id:l.id,
+          location_name:l.name,workshop:/\bworkshop\b/i.test(l.name),observed_at:item.tracked?observed:catalogueObserved,
+          stock_state:!item.tracked?'untracked':!level?'unstocked':fields.every(n=>quantities.has(n))?'observed':'missing_quantity',
+          ...Object.fromEntries(fields.map(n=>[n,quantities?.get(n)??null]))});
+      }
+    }
+    const end=now();signal.throwIfAborted();
+    check(rows.length&&rows.length===vs.size*active.length,'INCOMPLETE_MATRIX');
+    check(londonDate(end)===date,'LONDON_DATE_CHANGED');
+    progress({status:'complete'});
+    return {date,rows,calls,variants:vs.size,locations:active.length,start:start.toISOString(),end:end.toISOString()};
+  }catch(e){progress({status:'failed',...safeError(e,signal.aborted)});throw e;}
+  finally{clearInterval(timer);}
 }
 
 const schema='snapshot_date DATE, product_id STRING, product_name STRING, product_status STRING, variant_id STRING, variant_name STRING, sku STRING, inventory_item_id STRING, location_id STRING, location_name STRING, workshop BOOL, observed_at TIMESTAMP, stock_state STRING, available INT64, on_hand INT64, committed INT64, incoming INT64';
@@ -94,13 +141,16 @@ export function publicationSql(live,manifest,stage){
     COMMIT TRANSACTION;`;
 }
 async function main(){
+  const emit=x=>console.log(JSON.stringify(x));
+  emit({phase:'startup',status:'started'});
   const mode=process.argv[2];
   check(['preview','setup','apply','check'].includes(mode)&&process.argv.length===3,'INVALID_MODE');
   if(['setup','apply'].includes(mode))check(process.env.SHOPIFY_INVENTORY_DAILY_ENABLED==='true','WRITES_DISABLED');
   async function read(){
     const config=loadShopifyConfig(), signal=AbortSignal.timeout(900000);
+    emit({phase:'authentication',status:'started'});
     const token=await getShopifyAccessToken(config,fetch,signal);
-    return collect(createShopifyGraphql({shop:config.shop,token}),{signal});
+    return collect(createShopifyGraphql({shop:config.shop,token}),{signal,onProgress:emit});
   }
   const summary=({rows,...x})=>({...x,row_count:rows.length});
   if(mode==='preview'){console.log(JSON.stringify({status:'preview',...summary(await read())}));return;}
@@ -143,4 +193,4 @@ async function main(){
   console.log(JSON.stringify({status:'complete_day_present',snapshot_date:date,collected_rows:rows.length}));
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href)
-  main().catch(()=>{console.error('Inventory daily snapshot failed; check mode, source access, coverage bounds and retention settings.');process.exitCode=1;});
+  main().catch(e=>{console.error(JSON.stringify({phase:'inventory_daily',status:'failed',...safeError(e)}));process.exitCode=1;});

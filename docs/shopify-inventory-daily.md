@@ -72,3 +72,47 @@ Verify backup row counts by date against the manifest. Restore to separate
 names first, check schema, row uniqueness, counts and expiry, and only then
 switch consumers. Ensure the manifest has exactly one lock row before
 re-enabling publication. Never rely solely on time travel for retention.
+
+
+## Batched collector revision
+
+The production preview reached 3,580 API attempts at the unchanged 900-second
+deadline. Per-variant level requests caused excessive network overhead.
+The revised reader retains product/variant pagination, then sends batches of
+at most 50 inventory-item IDs for one exact active location at a time.
+No inventoryLevels connection is used: all active locations are enumerated
+and every tracked item/location pair is explicitly requested. A null level
+means unstocked; a missing/null batch node fails the complete run. Untracked
+items retain null quantities. Duplicate item IDs or changed tracking state
+also fail closed so a changing catalogue cannot silently become a complete day.
+
+The 12,000-variant/six-location synthetic fixture uses 1,562 attempts with a
+single product (catalogue distribution changes the total). This measures
+request count, not live elapsed time. Shopify query cost, not request count
+alone, controls throughput. Returned requested cost and throttle restoration
+metadata pace subsequent reads, with bounded throttle retries. A cost error
+does not reduce coverage or automatically increase limits.
+
+No bulk operation is created. Bulk asynchronous JSONL exports were considered,
+but batched exact location reads keep preview query-only, avoid introducing
+vendor job ownership/cancellation and parent-child download recovery, and retain
+bounded synchronous failure semantics. Live preview must still prove completion.
+
+From deployed code containing this revision, the full validation command is:
+
+```bash
+timeout --signal=TERM --kill-after=5s 16m node shopify/inventory-daily.js preview
+```
+
+It emits startup, authentication, catalogue and inventory-batch phase messages,
+aggregate heartbeats every 15 seconds, and an allowlisted failure code.
+No raw API messages, inventory rows, customer records, credentials or IDs are
+logged. Setup/apply remain separately gated as above. Do not enable the cron
+until this preview completes and a separately approved first publication is
+verified. Existing snapshot/manifest publication and retention guards are unchanged.
+
+Official API references:
+- https://shopify.dev/docs/api/admin-graphql/2026-07/queries/nodes
+- https://shopify.dev/docs/api/admin-graphql/2026-07/objects/InventoryItem
+- https://shopify.dev/docs/apps/build/apis/graphql-admin/rate-limits
+- https://shopify.dev/docs/api/usage/bulk-operations/queries
