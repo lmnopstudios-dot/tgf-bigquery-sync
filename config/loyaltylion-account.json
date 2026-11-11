@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "access_status": "unverified",
+  "reviewed_by": null,
+  "reviewed_at": null,
+  "account_id": null,
+  "program_id": null,
+  "site_id": null,
+  "shopify_shop": null,
+  "site_url": null,
+  "merchant_ids_verified": false,
+  "dataset": "loyaltylion",
+  "timezone": "Europe/London",
+  "initial_sync": null,
+  "limits": {"max_calls": 40, "max_pages": 30, "max_rows": 10000, "max_ms": 120000, "requests_per_second": 4, "retries": 2},
+  "historical_exports": {"status": "unverified", "tier_history": "unavailable", "reward_usage": "unavailable"}
+}

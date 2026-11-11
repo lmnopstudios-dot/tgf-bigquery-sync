@@ -31,6 +31,7 @@ import OpenAI from 'openai';
 import { syncGa4, parseArgs as parseGa4SyncArgs } from './ga4/sync.js';
 import { createEcommerceManagementReportService } from './oracle/ecommerce-management-report.js';
 import { createOrderQueryService, executeOrderToolCall } from './oracle/order-query.js';
+import {executeLoyaltyToolCall} from './oracle/loyaltylion.js';
 import { createCustomerQueryService, executeCustomerToolCall } from './oracle/customer-query.js';
 import { applyJourneyAnalysisContext, createCustomerJourneyService, executeCustomerJourneyToolCall } from './oracle/customer-journey.js';
 import { createOracleToolDefinitions } from './oracle/tool-registry.js';
@@ -189,7 +190,7 @@ const customerOrderIntervalService = createCustomerOrderIntervalService({ bigque
 const onlineCountrySalesService = createOnlineCountrySalesService({ bigquery, project: GOOGLE_PROJECT_ID });
 const platformSalesService = createPlatformSalesService({ bigquery, project: GOOGLE_PROJECT_ID });
 // Bind the live server through the same adapter factory used by the parity CLI.
-const {customerJourney:governedCustomerJourneyService,populationConversion:populationConversionService,deviceConversion:deviceSourceConversionService,klaviyo:klaviyoEmailService,social:metaInstagramService,dailySales:dailySalesService,orderValues:orderValueService,basketComposition:basketCompositionService,productPrices:productPriceService}=createOracleProviderDependencies({env:process.env,bigquery,project:GOOGLE_PROJECT_ID,shopifySales:args=>getShopifySalesKpis(args)});
+const {loyalty:loyaltyReportService,customerJourney:governedCustomerJourneyService,populationConversion:populationConversionService,deviceConversion:deviceSourceConversionService,klaviyo:klaviyoEmailService,social:metaInstagramService,dailySales:dailySalesService,orderValues:orderValueService,basketComposition:basketCompositionService,productPrices:productPriceService}=createOracleProviderDependencies({env:process.env,bigquery,project:GOOGLE_PROJECT_ID,shopifySales:args=>getShopifySalesKpis(args)});
 const categorySalesService = createCategorySalesService({ bigquery, project: GOOGLE_PROJECT_ID });
 const productViewPurchaseService = createProductViewPurchaseService({bigquery});
 const pageviewsPerSessionService=createPageviewsPerSessionService({bigquery,project:GOOGLE_PROJECT_ID,runShopifyql:async(query,reportName)=>runShopifyqlReport(await getShopifyAccessToken(),query,reportName),getShopTimezone:async()=>{const data=await shopifyGraphQL(await getShopifyAccessToken(),'{ shop { ianaTimezone } }');if(!data?.shop?.ianaTimezone)throw new Error('Shopify reporting timezone unavailable');return data.shop.ianaTimezone;}});
@@ -4185,6 +4186,7 @@ const ecommerceBaselineOverview=createBaselineOverviewService({
   shopifyDevice:deviceSourceConversionService,
   wooConversion:deviceSourceConversionService,
   knowledgeService,
+  loyalty:loyaltyReportService,
   klaviyo:klaviyoEmailService,
   social:(name,args)=>metaInstagramService(name,args),
   socialExportStore:{get:(...args)=>priorityExportStore.get(...args),put:(...args)=>priorityExportStore.put(...args)},
@@ -8207,7 +8209,7 @@ Important rules:
                 } else {
                   const pageviewsCall=await executePageviewsToolCall(pageviewsPerSessionService,item.name,args);
                   if(pageviewsCall.handled)result=pageviewsCall.result;
-                  else { const klaviyoCall=await executeKlaviyoEmailToolCall(klaviyoEmailService,item.name,args);
+                  else { const loyaltyCall=await executeLoyaltyToolCall(loyaltyReportService,item.name,args);const klaviyoCall=loyaltyCall.handled?loyaltyCall:await executeKlaviyoEmailToolCall(klaviyoEmailService,item.name,args);
                   if(klaviyoCall.handled)result=klaviyoCall.result;
                   else { const tikTokCall=await executeTikTokToolCall(metaInstagramService,item.name,args);
                   const socialCall=tikTokCall.handled?tikTokCall:await executeMetaInstagramToolCall(metaInstagramService,item.name,args);

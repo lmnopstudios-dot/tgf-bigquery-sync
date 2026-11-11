@@ -1,3 +1,4 @@
+import {LOYALTY_TOOL_DEFINITION} from './loyaltylion.js';
 import {TIKTOK_TOOL_DEFINITIONS} from './tiktok.js';
 import {META_INSTAGRAM_TOOL_DEFINITIONS} from './meta-instagram.js';
 import { ORDER_TOOL_DEFINITIONS } from './order-query.js';
@@ -17,7 +18,7 @@ import { GOOGLE_ADS_TOOL_DEFINITIONS } from './google-ads.js';
 
 /** The exact OpenAI tool registry submitted by the Oracle request boundary. */
 export function createOracleToolDefinitions() {
-  return [
+  return [LOYALTY_TOOL_DEFINITION,
         ...ORDER_TOOL_DEFINITIONS,
         ...CUSTOMER_TOOL_DEFINITIONS,
         CUSTOMER_JOURNEY_TOOL_DEFINITION,

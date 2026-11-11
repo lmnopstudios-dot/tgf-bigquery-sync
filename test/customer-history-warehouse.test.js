@@ -195,7 +195,7 @@ test('commit success after result wait expiry reconciles the same job without ca
   const result=await historyQuery({createQueryJob:async settings=>{
     submissions++;assert.equal(settings.jobTimeoutMs,5);return [job];
   }},{query:'BEGIN TRANSACTION; COMMIT TRANSACTION;',jobTimeoutMs:20000},
-  {stage:'batch_commit',write:true,maximumMs:5});
+  {stage:'batch_commit',write:true,maximumMs:5,reconciliationMs:1000});
   assert.equal(result[2].jobComplete,true);assert.equal(submissions,1);
   assert.equal(reads,1);assert.equal(cancels,0);
   deliver([[],null,{jobComplete:true}]);await tick();assert.equal(submissions,1);
@@ -206,7 +206,7 @@ test('terminal stopped commit preserves provider error and uncertainty without c
   await assert.rejects(historyQuery({createQueryJob:async()=>{submissions++;return [{id:'stopped-job',
     getQueryResults:pending,getMetadata:async()=>[{status:{state:'DONE',errorResult:{reason:'stopped',message:'Job cancelled'}}}],
     cancel:async()=>{cancels++;}}];}},
-  {query:'BEGIN TRANSACTION; COMMIT TRANSACTION;'}, {stage:'batch_commit',write:true,maximumMs:5}),error=>{
+  {query:'BEGIN TRANSACTION; COMMIT TRANSACTION;'}, {stage:'batch_commit',write:true,maximumMs:5,reconciliationMs:1000}),error=>{
     assert.equal(error.errors[0].reason,'stopped');
     assert.equal(historyFailure(error).commit_outcome,'unknown');return true;
   });

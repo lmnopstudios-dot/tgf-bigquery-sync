@@ -91,17 +91,18 @@ test('same-job publication reconciliation accepts terminal success and fences la
   deliver([[],{pageToken:'late'},{jobComplete:false}]);await tick();assert.equal(polls,1);
 });
 
-for(const mode of ['stopped','pending','abort','caller_deadline'])test(`publication reconciliation ${mode} cannot report success or replay`,async()=>{
+for(const mode of ['stopped','pending','abort','caller_deadline'])test(`publication reconciliation ${mode} cannot report success or replay`,async t=>{
+  if(mode==='caller_deadline')t.mock.timers.enable({apis:['Date'],now:1000000});
   let calls=0,cancels=0,reads=0;
   const controller=new AbortController();
   await assert.rejects(historyQuery({createQueryJob:async()=>{calls++;return [{id:'publication',
-    getQueryResults:pending,cancel:async()=>{cancels++;},getMetadata:async()=>{
+    getQueryResults:()=>{if(mode==='caller_deadline')t.mock.timers.setTime(1000010);return pending();},cancel:async()=>{cancels++;},getMetadata:async()=>{
       reads++;
       if(mode==='abort')controller.abort();
       if(mode==='pending')return pending();
       return [{status:{state:'DONE',...(mode==='stopped'?{errorResult:{reason:'stopped',message:'private@customer.test'}}:{})}}];
     }}];}}, {query:'COMMIT TRANSACTION;'},
-  {stage:'publish',write:true,maximumMs:5,reconciliationMs:10,signal:controller.signal,
+  {stage:'publish',write:true,maximumMs:5,reconciliationMs:mode==='pending'?10:1000,signal:controller.signal,
     ...(mode==='caller_deadline'?{deadlineAt:Date.now()+5}:{})}),error=>{
     const safe=historyFailure(error);assert.equal(safe.commit_outcome,'unknown');
     if(mode==='stopped')assert.equal(safe.bigquery_reason,'stopped');

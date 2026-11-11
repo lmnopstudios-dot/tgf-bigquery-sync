@@ -78,6 +78,11 @@ export function validateCustomerSearch(input = {}) {
 
 // This query is intentionally a view-like CTE rather than a persisted customer table:
 // it keeps PII and reversible source IDs out of a new object while using current governed sources.
+export function qualifyingCustomerOrderPredicate(){return `source_customer_id IS NOT NULL AND source_customer_id NOT IN ('', '0') AND NOT is_migrated_order AND NOT cancelled
+      AND ((source_platform = 'woo' AND status IN ('completed', 'processing'))
+        OR (source_platform = 'shopify' AND status IN ('paid', 'partially_refunded', 'partially_paid')))
+      AND COALESCE(source_order_value, 0) > COALESCE(source_refund_value, 0)`;}
+
 export function customerEvidenceSql(project, identity=null) {
   const sql = `WITH order_evidence AS (
     SELECT 'woo' source_platform, 'ww' source_store, CAST(o.order_id AS STRING) source_order_id,
@@ -108,10 +113,7 @@ export function customerEvidenceSql(project, identity=null) {
       currency, source_order_value, source_refund_value, shipping_country, is_migrated_order,
       CONCAT('c_', TO_HEX(SHA256(CONCAT(source_platform, '|', source_store, '|', source_customer_id)))) customer_ref
     FROM deduplicated_orders
-    WHERE source_customer_id IS NOT NULL AND source_customer_id NOT IN ('', '0') AND NOT is_migrated_order AND NOT cancelled
-      AND ((source_platform = 'woo' AND status IN ('completed', 'processing'))
-        OR (source_platform = 'shopify' AND status IN ('paid', 'partially_refunded', 'partially_paid')))
-      AND COALESCE(source_order_value, 0) > COALESCE(source_refund_value, 0)
+    WHERE ${qualifyingCustomerOrderPredicate()}
   ), line_evidence AS (
     SELECT 'woo' source_platform, 'ww' source_store, CAST(order_id AS STRING) source_order_id,
       CAST(product_id AS STRING) product_id, sku, name product_title
