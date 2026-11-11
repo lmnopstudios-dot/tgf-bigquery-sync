@@ -15,6 +15,7 @@ export async function verifyLoyaltyRetention(bigquery,dataset){
   if(exists){const [m]=await t.getMetadata();if(m.expirationTime!=null||m.timePartitioning?.expirationMs!=null)throw fail('LOYALTY_EXPIRATION_UNSAFE');}
  }
 }
+export function setupGuardSql(project,dataset){return `BEGIN TRANSACTION; INSERT INTO ${table(project,dataset,'sync_guard')} (program_id,holder,acquired_at) SELECT @program_id,CAST(NULL AS STRING),CAST(NULL AS TIMESTAMP) FROM UNNEST([1]) AS seed WHERE NOT EXISTS(SELECT 1 FROM ${table(project,dataset,'sync_guard')} WHERE program_id=@program_id); ASSERT (SELECT COUNT(*) FROM ${table(project,dataset,'sync_guard')} WHERE program_id=@program_id)=1 AS 'LOYALTY_GUARD_SINGLETON'; COMMIT TRANSACTION;`;}
 export async function provision({bigquery,project,config,env={},apply=false}){
  collectionGate(config,env,{apply});
  const [shop]=await bigquery.dataset('shopify_data').getMetadata(),[dest]=await bigquery.dataset(config.dataset).getMetadata();
@@ -23,7 +24,7 @@ export async function provision({bigquery,project,config,env={},apply=false}){
  // Dataset creation/ACL assignment is deliberately external. Explicit setup only.
  for(const [name,schema]of Object.entries(TABLES)){const t=bigquery.dataset(config.dataset).table(name),[exists]=await t.exists();if(!exists)await t.create({schema:{fields:schema}});else{const [m]=await t.getMetadata();if(schema.some(f=>!m.schema?.fields?.some(x=>x.name===f.name&&({BOOL:'BOOLEAN',INT64:'INTEGER'}[f.type]||f.type)===({BOOL:'BOOLEAN',INT64:'INTEGER'}[x.type]||x.type))))throw fail('LOYALTY_SCHEMA_MISMATCH');}}
  await verifyLoyaltyRetention(bigquery,config.dataset);
- await bigquery.query({query:`BEGIN TRANSACTION; INSERT INTO ${table(project,config.dataset,'sync_guard')} (program_id,holder,acquired_at) SELECT @program_id,NULL,NULL WHERE NOT EXISTS(SELECT 1 FROM ${table(project,config.dataset,'sync_guard')} WHERE program_id=@program_id); ASSERT (SELECT COUNT(*) FROM ${table(project,config.dataset,'sync_guard')} WHERE program_id=@program_id)=1 AS 'LOYALTY_GUARD_SINGLETON'; COMMIT TRANSACTION;`,params:{program_id:config.program_id},types:{program_id:'STRING'},location:dest.location,useLegacySql:false,maximumBytesBilled:'100000000',jobTimeoutMs:15000});
+ await bigquery.query({query:setupGuardSql(project,config.dataset),params:{program_id:config.program_id},types:{program_id:'STRING'},location:dest.location,useLegacySql:false,maximumBytesBilled:'100000000',jobTimeoutMs:15000});
 }
 export function promotionSql(project,dataset,resource){
  const fq=n=>table(project,dataset,n);

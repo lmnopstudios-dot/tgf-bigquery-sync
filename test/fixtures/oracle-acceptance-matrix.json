@@ -1402,6 +1402,10 @@
     {
       "file": "test/oracle-eyewear-report.test.js",
       "purpose": "Dedicated eyewear command and original durable request, scoped order totals, approved and conflicting mappings, stock pagination, independent source failures and authenticated workbook."
+    },
+    {
+      "file": "test/loyaltylion-setup.test.js",
+      "purpose": "LoyaltyLion provisioning uses typed guard values and a singleton source while preserving idempotent guard initialization and disabled collection."
     }
   ]
 }
