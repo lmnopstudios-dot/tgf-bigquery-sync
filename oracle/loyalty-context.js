@@ -1,6 +1,6 @@
-import {readFileSync} from 'node:fs';
+import {loadLoyaltyConfig} from '../loyaltylion/runtime-config.js';
 import {naturalReportPeriod} from './report-natural-period.js';
-const configured=JSON.parse(readFileSync(new URL('../config/loyaltylion-account.json',import.meta.url),'utf8'));
+const configured=loadLoyaltyConfig();
 const sections=['membership','tiers','points','claims','linkage'];
 export function validateLoyaltyScope(v){
  if(v==null)return null;

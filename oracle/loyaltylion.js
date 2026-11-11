@@ -1,5 +1,5 @@
 import {loyaltyMarkdown} from './loyalty-presentation.js';
-import {readFileSync} from 'node:fs';
+import {loadLoyaltyConfig} from '../loyaltylion/runtime-config.js';
 import {validateConfig} from '../loyaltylion/contracts.js';
 import {resolveAnalyticalPlan} from './analytical-plan.js';
 import {shopifyRecordedChannel} from './shopify-sale-binding.js';
@@ -7,7 +7,7 @@ import {qualifyingCustomerOrderPredicate,MATRIXIFY_APP_ID} from './customer-quer
 import {datasetLocation} from '../bigquery/dataset-location.js';
 import {boundedQuery} from './bounded-query.js';
 import {boundedEvidenceRead} from './bounded-evidence-read.js';
-const defaultConfig=JSON.parse(readFileSync(new URL('../config/loyaltylion-account.json',import.meta.url),'utf8'));
+const defaultConfig=loadLoyaltyConfig();
 const fail=code=>Object.assign(Error(code),{code});
 const clean=v=>v&&typeof v==='object'&&'value'in v?v.value:v;
 const rowFields={membership:['enrolled','guest','blocked','profiles','approved_points','pending_points','unlinked_customer_profiles'],tiers:['tier','enrolled_members','approved_points','pending_points'],points:['date','resource','point_movements','approved_delta','pending_delta','net_points_delta'],claims:['date','reward_kind','reward_claims','claimed_points'],linkage:['order_date','linkage_state','channel','currency','point_records','linked_qualifying_orders']};

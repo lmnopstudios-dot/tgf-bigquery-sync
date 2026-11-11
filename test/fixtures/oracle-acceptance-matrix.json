@@ -1410,6 +1410,10 @@
     {
       "file": "test/loyaltylion-roster-staging.test.js",
       "purpose": "Over-10000 paginated roster staging, terminal-only atomic publication, explicit bounds, duplicate/late-page/interruption failure isolation and read-only preview."
+    },
+    {
+      "file": "test/loyaltylion-runtime-config.test.js",
+      "purpose": "Reporting and scope resolution use the private runtime configuration; missing or malformed private files fail closed without fallback."
     }
   ]
 }
