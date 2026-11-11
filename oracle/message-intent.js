@@ -1,5 +1,5 @@
 import {inventoryCatalogueExportIntent} from './inventory-export-intent.js';
-import { explicitKnowledgeSaveIntent } from './clarification-consumption.js';
+import { explicitKnowledgeSaveIntent, knowledgeReviewIntent } from './clarification-consumption.js';
 /** Current-message authority boundary. Supplied material is evidence, not instructions. */
 export const DOCUMENT_CLARIFICATION='Would you like me to edit this, use it as context, or propose knowledge records?';
 export function messageIntent(message) {
@@ -16,14 +16,15 @@ export function messageIntent(message) {
   const knowledge=explicitKnowledgeSaveIntent(actionText)||/^(?:please\s+)?(?:propose|ingest)\b/i.test(actionText);
   const editing=/\b(?:edit|rewrite|proofread|summari[sz]e|improve|draft|translate)\b/i.test(actionText);
   const editingOnly=editing&&/^(?:please\s+)?(?:edit|rewrite|proofread|summari[sz]e|improve|draft|translate)\b/i.test(instruction)&&! /\band (?:compare|analyse|analyze|calculate|evaluate|assess)\b/i.test(actionText);
-  const analyticalAction=analytical&&!editingOnly;
+  const review=knowledgeReviewIntent(actionText);
+  const analyticalAction=analytical&&!editingOnly&&!review;
   const document=editingOnly||structuredDocument||actionText!==instruction&&!analyticalAction&&!knowledge&&!editing;
   const contextOnly=/^(?:for (?:your )?context|context only|use (?:this|it) as context|fyi)\b/i.test(actionText);
   const contextualMention=!document&&!analyticalAction&&!knowledge&&/^(?:for (?:your )?context|context only|fyi|during\b)|\b(?:context only|as context)\b|\b(?:may|might|will|changes?|happens?|needs?|implemented|added)\b[\s\S]*\bduring\b/i.test(actionText);
-  return {document,instruction,actionText,content:structuredDocument?text.slice(offset):document?text:null,analytical:analyticalAction,knowledge,editing,contextOnly,blocked:document&&!analyticalAction||knowledge&&!analyticalAction||contextualMention,clarification:document&&!analyticalAction&&!knowledge&&!editing&&!contextOnly?DOCUMENT_CLARIFICATION:null};
+  return {document,instruction,actionText,content:structuredDocument?text.slice(offset):document?text:null,analytical:analyticalAction,knowledge,review,editing,contextOnly,blocked:document&&!analyticalAction||knowledge&&!analyticalAction||contextualMention,clarification:document&&!analyticalAction&&!knowledge&&!editing&&!contextOnly?DOCUMENT_CLARIFICATION:null};
 }
 export function nonAnalyticalResult(message) {
   const intent=messageIntent(message);
   if(!intent.blocked)return null;
-  return {answer:intent.clarification||(intent.knowledge?'I can prepare knowledge proposals for your review. Records are saved only after approval.':intent.contextOnly?'I’ll use this as context.':intent.editing?null:'What would you like me to do with this context?'),tools:[]};
+  return {answer:intent.clarification||(intent.review?'This request is for a knowledge proposal. Saving requires your approval.':intent.knowledge?'I can prepare knowledge proposals for your review. Records are saved only after approval.':intent.contextOnly?'I’ll use this as context.':intent.editing?null:'What would you like me to do with this context?'),tools:[]};
 }

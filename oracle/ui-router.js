@@ -102,6 +102,12 @@ export function createOracleUiRouter({ knowledgeService, bigquery, project, chat
       catch (error) { error.phase = 'proposal_validation'; logProposalError(error); return invalidProposal(candidate); }
     }).filter(proposal => proposal.validity !== 'already_known');
   };
+  const reviewAnswer=(message,answer,proposals)=>{
+    if(!messageIntent(message).review)return answer;
+    return {...answer,answer:proposals.some(p=>p.validity==='valid')
+      ?'Review the proposed knowledge entry below. Saving requires your approval.'
+      :'I could not prepare a new saveable knowledge entry for review.'};
+  };
   router.post('/auth/login', json, (req, res) => {
     if (!allowedOrigins(req).has(req.get('origin'))) return res.status(403).json({ success: false, error: 'Invalid request origin' });
     const supplied = Buffer.from(String(req.body?.password || ''));
@@ -178,8 +184,9 @@ export function createOracleUiRouter({ knowledgeService, bigquery, project, chat
       const onProviderStage=event=>{onStage(event);console.info('Oracle durable provider stage:',{...correlation,...event});};
       const answer=await dispatchAnalysisRequest({message:input.message,analysisContext:input.analysis_context,baselineOverview,baselineOptions:{now:now(),exportStore,operationKnowledgeService:knowledgeService,recentEvidence:input.recent_evidence,clarificationKind:input.transition?.clarification_consumed,onProviderStage,exportOwner:input.export_owner,requestId:job.request_id,signal,assertLease:async()=>{const current=await analysisJobStore.get(job.job_id,job.owner_key);if(!current||current.cancel_requested||current.status!=='running'||current.claim_token!==job.claim_token||current.lease_until!==job.lease_until||Date.parse(current.lease_until)<Date.now())throw Object.assign(Error('Lease rejected'),{code:'LEASE_NOT_OWNED'});},deadlineAt:Date.now()+(Number(env.ORACLE_JOB_RUNTIME_MS)||480_000)-2000,onEvidence:async answer=>{if(await analysisJobStore.checkpoint(job.job_id,{success:true,...answer},job)===false)throw Object.assign(new Error('Lease rejected'),{code:'LEASE_NOT_OWNED'});}},chat,chatOptions:{analysisContext:input.analysis_context,transition:input.transition,recentEvidence:input.recent_evidence,requestId:job.request_id,jobId:job.job_id,attempt:Number(job.attempts)||0,signal,durable:true}});
       let proposals=[],proposal_error=null;
-      try { proposals=answer.artifact||isSpreadsheetFollowup(input.original_message||input.message)||suppressAnalyticalProposals(input.analysis_context,input.transition,input.original_message||input.message)?[]:await proposalsFor(input.message,input.created_by,input.temporal_context); } catch(error) { logProposalError(error);proposal_error='Knowledge proposal could not be generated.'; }
-      return {success:true,...answer,analysis_context:answer.analysis_context||null,answer:answer.answer,presentation:answer.presentation||null,evidence:answer.evidence||null,inline_chart:answer.inline_chart||null,charts:answer.charts||answer.evidence?.chart_specs||[],artifact:answer.artifact||null,proposals,proposal_error,analysis_scope:analysisScope(input.analysis_context),tools:(answer.tools||[]).slice(0,20)};
+      try { proposals=['get_tw_supplier_stock_report','get_eyewear_sales_stock'].includes(input.analysis_context?.tool_route)||answer.artifact||isSpreadsheetFollowup(input.original_message||input.message)||suppressAnalyticalProposals(input.analysis_context,input.transition,input.original_message||input.message)?[]:await proposalsFor(input.message,input.created_by,input.temporal_context); } catch(error) { logProposalError(error);proposal_error='Knowledge proposal could not be generated.'; }
+      const reviewed=reviewAnswer(input.original_message||input.message,answer,proposals);
+      return {success:true,...reviewed,analysis_context:answer.analysis_context||null,answer:reviewed.answer,presentation:answer.presentation||null,evidence:answer.evidence||null,inline_chart:answer.inline_chart||null,charts:answer.charts||answer.evidence?.chart_specs||[],artifact:answer.artifact||null,proposals,proposal_error,analysis_scope:analysisScope(input.analysis_context),tools:(answer.tools||[]).slice(0,20)};
     }});
     let closing=false;
     router.stopAnalysisWorker=()=>{closing=true;return worker.stop();};
@@ -245,7 +252,7 @@ export function createOracleUiRouter({ knowledgeService, bigquery, project, chat
       reportAnalysisDecision(decision,event=>console.info('Oracle interactive provider stage:',{request_id:id,...event}));
       // Knowledge assertion dates describe a different contract. They cannot
       // preempt an already resolved analytical subject or capability limitation.
-      const clarification=!isSpreadsheetFollowup(req.body.message)&&(result.transition.clarification_rejected||(!result.context.requested_subject&&campaignDateClarification(req.body.message,messageTemporalContext))||(decision.outcome==='clarification'?decision.answer:null));
+      const clarification=!isSpreadsheetFollowup(req.body.message)&&(result.transition.clarification_rejected||(result.context.request_kind!=='knowledge_save'&&!result.context.requested_subject&&campaignDateClarification(req.body.message,messageTemporalContext))||(decision.outcome==='clarification'?decision.answer:null));
       const key=sessionKey(req),cached=recentChatEvidence.get(key);
       const recentEvidence=(isSpreadsheetFollowup(req.body.message)?spreadsheetEvidence(cached,result.context):relevantEvidence(cached,result.context))||cached?.expires_at>now()&&(compatibleEventClarificationEvidence(cached.value,result.context)||compatibleClarificationEvidence(cached.value,result.context)||compatibleCampaignEvidence(cached.value,result.context))||null;
       const retainedPending=unansweredIntents.get(key);
@@ -278,10 +285,10 @@ export function createOracleUiRouter({ knowledgeService, bigquery, project, chat
       else if(requestGeneration===generation(req))unansweredIntents.delete(key);
       let proposals = [], proposal_error = null;
       const proposalStarted=Date.now();
-      try { proposals = answer.artifact||isSpreadsheetFollowup(req.body.message)||suppressAnalyticalProposals(result.context,result.transition,req.body.message)||clarification&&campaignDateClarification(req.body.message,messageTemporalContext)?[]:await proposalsFor(req.body.message, req.oracleUser.sub, messageTemporalContext); console.info('Oracle UI stage outcome:',stageOutcome({id,stage:'knowledge_proposals',startedAt:proposalStarted,outcome:'success',extra:{proposal_count:proposals.length}})); }
+      try { proposals = ['get_tw_supplier_stock_report','get_eyewear_sales_stock'].includes(result.context.tool_route)||answer.artifact||isSpreadsheetFollowup(req.body.message)||suppressAnalyticalProposals(result.context,result.transition,req.body.message)||clarification&&campaignDateClarification(req.body.message,messageTemporalContext)?[]:await proposalsFor(req.body.message, req.oracleUser.sub, messageTemporalContext); console.info('Oracle UI stage outcome:',stageOutcome({id,stage:'knowledge_proposals',startedAt:proposalStarted,outcome:'success',extra:{proposal_count:proposals.length}})); }
       catch (error) { logProposalError(error); console.error('Oracle UI stage outcome:',stageOutcome({id,stage:'knowledge_proposals',startedAt:proposalStarted,outcome:'failed',error})); proposal_error = 'Knowledge proposal could not be generated.'; }
       console.info('Oracle UI stage outcome:',stageOutcome({id,stage:'ui_response',startedAt:requestStarted,outcome:'success'}));
-      answer=deliverOracleResult(answer,result.context);
+      answer=deliverOracleResult(reviewAnswer(req.body.message,answer,proposals),result.context);
       res.json({ success: true, ...answer, answer: answer.answer, presentation:answer.presentation||null, evidence:answer.evidence||null, inline_chart:answer.inline_chart||null,charts:answer.charts||answer.evidence?.chart_specs||[], artifact:answer.artifact||null, proposals, proposal_error, scope_generation:generation(req), analysis_scope:analysisScope(sessionContext(req)) });
     } catch (error) {
       if (error?.code === 'THROTTLED') return res.status(429).json({ success: false, code: 'SHOPIFY_TEMPORARILY_RATE_LIMITED', error: SHOPIFY_RATE_LIMIT_MESSAGE });
@@ -293,7 +300,7 @@ export function createOracleUiRouter({ knowledgeService, bigquery, project, chat
       if (typeof req.body?.message !== 'string' || !req.body.message.trim() || req.body.message.length > 12000) return res.status(400).json({ success: false, error: 'message must be a non-empty string of at most 12000 characters' });
       const resolved=requestTransition(req,sessionContext(req),req.body.message,{now:now()});
       if(suppressAnalyticalProposals(resolved.context,resolved.transition,req.body.message))return res.json({success:true,proposals:[],clarification:null});
-      const temporalContext=resolveKnowledgeDates(req.body.message,{timestamp:now(),timeZone:'Europe/London'}),clarification=campaignDateClarification(req.body.message,temporalContext);
+      const temporalContext=resolveKnowledgeDates(req.body.message,{timestamp:now(),timeZone:'Europe/London'}),clarification=resolved.context.request_kind==='knowledge_save'?null:campaignDateClarification(req.body.message,temporalContext);
       res.json({ success: true, proposals: clarification?[]:await proposalsFor(messageIntent(req.body.message).document&&!messageIntent(req.body.message).analytical?'Propose knowledge records from this document:\n'+req.body.message:req.body.message, req.oracleUser.sub, temporalContext), clarification });
     } catch (error) { logProposalError(error); res.status(503).json({ success: false, error: 'Knowledge proposal could not be generated.' }); }
   });

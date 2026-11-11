@@ -35,7 +35,7 @@ test('plan is inert; reviewed identity, explicit initial plan, flag and apply al
 });
 test('resource pagination failure cannot promote rows or advance checkpoints; independent success retained',async()=>{
  const c=reviewedConfig();c.initial_sync.end_exclusive='2026-10-02T23:00:00Z';const writes=[];
- const result=await collectReviewedPlan({config:c,env:{LOYALTYLION_COLLECTION_ENABLED:'true'},apply:true,project:'fixture',now:()=>run.observed_at,client:{get:async path=>path==='sites'?{sites:[{id:3,program_id:1,platform:'shopify',url:'https://fixture.example'}]}:{identity:{program_id:1,account_id:2,scopes:['read_orders','read_customers']}},list:async r=>{if(r==='transactions')throw Error('late page failed');return [customer];}},bigquery:{dataset:()=>({getMetadata:async()=>[{location:'US'}],table:()=>({exists:async()=>[true]})}),query:async q=>{writes.push(q);return [[]];}}});
+ const result=await collectReviewedPlan({config:c,env:{LOYALTYLION_COLLECTION_ENABLED:'true'},apply:true,project:'fixture',now:()=>run.observed_at,client:{get:async path=>path==='sites'?{sites:[{id:3,program_id:1,platform:'shopify',url:'https://fixture.example'}]}:{identity:{program_id:1,account_id:2,scopes:['read_orders','read_customers']}},list:async r=>{if(r==='transactions')throw Error('late page failed');return [customer];}},bigquery:{dataset:()=>({getMetadata:async()=>[{location:'US'}],table:()=>({exists:async()=>[true],getMetadata:async()=>[{}]})}),query:async q=>{writes.push(q);return [[]];}}});
  const promotions=writes.filter(q=>q.labels?.operation==='promote');assert.equal(promotions.length,1);assert.equal(promotions[0].params.resource,'customers');assert.equal(result.guard_status,'released');assert.equal(result.resources[0].status,'complete');assert.equal(result.resources[1].status,'failed_or_commit_unknown');assert.equal(result.complete,false);
  assert.match(promotions[0].query,/BEGIN TRANSACTION/);assert.match(promotions[0].query,/COMMIT TRANSACTION/);assert.doesNotMatch(promotions[0].query,/TRUNCATE|DELETE|CREATE TABLE/);
  const sql=promotionSql('fixture','loyaltylion','transactions');assert.match(sql,/IMMUTABLE_CONFLICT/);assert.match(sql,/WHEN NOT MATCHED THEN INSERT \(/);assert.doesNotMatch(sql,/WHEN MATCHED THEN UPDATE SET.*approved_delta/);
@@ -73,11 +73,19 @@ test('metadata access verification never fetches customers or exposes keys/expor
 test('unknown promotion retains the warehouse guard and prevents automatic recollection',async()=>{
  const c=reviewedConfig();let locked=false,listCalls=0;const writes=[];
  const client={get:async path=>path==='sites'?{sites:[{id:3,program_id:1,platform:'shopify',url:'https://fixture.example'}]}:{identity:{program_id:1,account_id:2,scopes:['read_customers','read_orders']}},list:async()=>{listCalls++;return [customer];}};
- const bq={dataset:()=>({getMetadata:async()=>[{location:'US'}],table:()=>({exists:async()=>[true]})}),query:async q=>{writes.push(q);if(q.labels.operation==='acquire'){if(locked)throw Error('busy');locked=true;return [[]];}if(q.labels.operation==='promote')throw Error('commit result lost');assert.fail('Must not release uncertain guard');}};
+ const bq={dataset:()=>({getMetadata:async()=>[{location:'US'}],table:()=>({exists:async()=>[true],getMetadata:async()=>[{}]})}),query:async q=>{writes.push(q);if(q.labels.operation==='acquire'){if(locked)throw Error('busy');locked=true;return [[]];}if(q.labels.operation==='promote')throw Error('commit result lost');assert.fail('Must not release uncertain guard');}};
  const first=await collectReviewedPlan({config:c,env:{LOYALTYLION_COLLECTION_ENABLED:'true'},apply:true,client,bigquery:bq,project:'fixture',now:()=>run.observed_at});assert.equal(first.guard_status,'retained_commit_unknown');assert.equal(first.resources[1].status,'not_attempted_after_resource_failure');
  const second=await collectReviewedPlan({config:c,env:{LOYALTYLION_COLLECTION_ENABLED:'true'},apply:true,client,bigquery:bq,project:'fixture',now:()=>run.observed_at});assert.equal(second.status,'guard_acquisition_failed_or_unknown');assert.equal(listCalls,1);
 });
 
 test('multi-site programmes fail before customer collection instead of assuming shared merchant IDs',async()=>{
  const c=reviewedConfig();await assert.rejects(collectReviewedPlan({config:c,env:{LOYALTYLION_COLLECTION_ENABLED:'true'},apply:true,client:{get:async path=>path==='sites'?{sites:[{id:3,program_id:1},{id:4,program_id:1}]}:{identity:{program_id:1,account_id:2,scopes:['read_customers','read_orders']}},list:()=>assert.fail('No customer reads')},bigquery:{},project:'fixture'}),{code:'LOYALTY_MULTI_SITE_MAPPING_UNAVAILABLE'});
+});
+
+test('permanent loyalty history rejects dataset/table/partition expiry without mutations',async()=>{
+ const {verifyLoyaltyRetention}=await import('../loyaltylion/sync.js');
+ const client=(d={},m={})=>({dataset:()=>({getMetadata:async()=>[d],table:()=>({exists:async()=>[true],getMetadata:async()=>[m]})})});
+ await verifyLoyaltyRetention(client(),'loyaltylion');
+ for(const b of [client({defaultTableExpirationMs:'1'}),client({defaultPartitionExpirationMs:'1'}),client({}, {expirationTime:'1'}),client({}, {timePartitioning:{expirationMs:'1'}})])
+   await assert.rejects(verifyLoyaltyRetention(b,'loyaltylion'),{code:'LOYALTY_EXPIRATION_UNSAFE'});
 });

@@ -1,4 +1,7 @@
 import {loyaltyContextPatch,validateLoyaltyScope} from './loyalty-context.js';
+import {eyewearReportIntent,eyewearReportPeriod} from '../public/oracle/eyewear-intent.js';
+import {twSupplierScope} from '../public/oracle/tw-supplier-intent.js';
+import {isPhasedSale} from './explicit-sale-periods.js';
 import {eventSaleScopePatch,validateEventSaleScope} from './event-sale-scope.js';
 import {isSpreadsheetFollowup} from './spreadsheet-intent.js';
 import {parseCurrentStock,validateStockScope} from './current-stock-scope.js';
@@ -41,7 +44,7 @@ const FIELDS = new Set(['loyalty_scope','journey_scope',
 const GRAINS = new Set(['day','week','month','quarter','year']);
 const CURRENCIES = new Set(['GBP','USD','JPY','EUR']);
 const METRICS = new Set(['loyalty','orders','sales','refunds','customers','products','search_console','shipping_countries','ecommerce_performance','customer_journey','customer_order_interval','product_views_before_purchase','conversion','email_attribution','meta_ads','instagram','tiktok']);
-export const ANALYSIS_TOOL_ROUTES = Object.freeze(['get_loyalty_report','analyze_customer_journey','get_population_conversion','get_order_value_analysis','get_shopify_inventory_by_location','get_meta_performance','get_instagram_performance','get_tiktok_performance','get_shopify_online_country_products','get_online_country_sales','get_shopify_customer_kpis','get_search_console_evidence','get_average_customer_order_interval','get_governed_category_sales','get_product_views_before_purchase','compare_historical_events','get_shopify_operational_sales_baseline','get_woocommerce_device_conversion','get_governed_device_conversion','get_general_sales_analysis','get_daily_sales_analysis','get_product_sales_analysis','export_product_priorities','get_klaviyo_email_performance','get_klaviyo_click_purchase_opportunities','compare_klaviyo_email_with_shopify_referrer']);
+export const ANALYSIS_TOOL_ROUTES = Object.freeze(['get_loyalty_report','get_eyewear_sales_stock','get_tw_supplier_stock_report','analyze_customer_journey','get_population_conversion','get_order_value_analysis','get_shopify_inventory_by_location','get_meta_performance','get_instagram_performance','get_tiktok_performance','get_shopify_online_country_products','get_online_country_sales','get_shopify_customer_kpis','get_search_console_evidence','get_average_customer_order_interval','get_governed_category_sales','get_product_views_before_purchase','compare_historical_events','get_shopify_operational_sales_baseline','get_woocommerce_device_conversion','get_governed_device_conversion','get_general_sales_analysis','get_daily_sales_analysis','get_product_sales_analysis','export_product_priorities','get_klaviyo_email_performance','get_klaviyo_click_purchase_opportunities','compare_klaviyo_email_with_shopify_referrer']);
 const TOOL_ROUTES = new Set(ANALYSIS_TOOL_ROUTES);
 const MONTHS = {jan:1,january:1,feb:2,february:2,mar:3,march:3,apr:4,april:4,may:5,jun:6,june:6,jul:7,july:7,aug:8,august:8,sep:9,sept:9,september:9,oct:10,october:10,nov:11,november:11,dec:12,december:12};
 
@@ -145,13 +148,28 @@ function transitionContext(existing, message, {now=Date.now(),reportContext=null
   let base=validateAnalysisContext(existing||{}); const text=String(message||'').trim(), lower=text.toLowerCase();
   if(isSpreadsheetFollowup(text))return {context:validateAnalysisContext({...base,output_preference:'xlsx',requested_formats:[...new Set([...base.requested_formats,'xlsx'])]}),transition:{continuation:true,set:['output_preference','requested_formats'],clear:[],retain:ANALYSIS_CONTEXT_FIELDS,missing_required_fields:[],ready_to_execute:true,applies_to_message:true}};
   if(/^(?:new (?:question|analysis)|forget that|start over)\b/i.test(text))return transitionAnalysisContext(emptyAnalysisContext(),text.replace(/^(?:new (?:question|analysis)|forget that|start over)\s*[:,.]?\s*/i,''),{now});
+  if(eyewearReportIntent(text)){
+    const context=validateAnalysisContext({...emptyAnalysisContext(),tool_route:'get_eyewear_sales_stock',
+      requested_subject:'eyewear_sales_stock',time_zone:'Europe/London',output_preference:'xlsx',requested_formats:['xlsx'],...eyewearReportPeriod(now)});
+    return {context,transition:{continuation:false,set:['requested_subject','tool_route','start_date','end_date'],
+      clear:[],retain:[],missing_required_fields:[],ready_to_execute:true,applies_to_message:true}};
+  }
+  const tw=twSupplierScope(text,now);
+  if(tw){
+    const context=validateAnalysisContext({...emptyAnalysisContext(),tool_route:'get_tw_supplier_stock_report',
+      requested_subject:'tw_supplier_stock',platform:'shopify',time_zone:'Europe/London',
+      output_preference:'xlsx',requested_formats:['xlsx'],...(!tw.invalid?tw:{unresolved_required_fields:['end_date']})});
+    return {context,transition:{continuation:false,set:['requested_subject','tool_route','start_date','end_date'],
+      clear:[],retain:[],missing_required_fields:context.unresolved_required_fields,ready_to_execute:!tw.invalid,applies_to_message:true}};
+  }
   if(individualOrderQuestion(text)){const context=emptyAnalysisContext();return {context,transition:{continuation:false,set:[],clear:ANALYSIS_CONTEXT_FIELDS,retain:[],missing_required_fields:[],ready_to_execute:false,applies_to_message:true}};}
   if(reportContext) base=initializeFromReportContext(base,reportContext);
   const loyalty=loyaltyContextPatch(base,text,now);
   if(loyalty){const context=validateAnalysisContext({...emptyAnalysisContext(),...loyalty.patch});return {context,transition:{continuation:loyalty.continuation,set:ANALYSIS_CONTEXT_FIELDS.filter(k=>JSON.stringify(base[k])!==JSON.stringify(context[k])),clear:[],retain:loyalty.continuation?['loyalty_scope']:[],missing_required_fields:[],ready_to_execute:true,applies_to_message:true}};}
   const eventScope=eventSaleScopePatch(text,base,now);
   if(eventScope){
-    const context=validateAnalysisContext({...emptyAnalysisContext(),requested_subject:'sales',analysis_type:'ecommerce',metrics:['sales',...(eventScope.products?['products']:[])],tool_route:'compare_historical_events',event_name:eventScope.periods?'Requested sale periods':eventScope.shopify_window?.name||'Black Friday',event_count:eventScope.years.length,event_scope:eventScope,...(eventScope.periods?{grain:'day',dimensions:['day','channel']}:{}),...(eventScope.shopify_window?{platform:'shopify',start_date:eventScope.shopify_window.start_date,end_date:eventScope.shopify_window.end_date,limit:eventScope.shopify_window.product_limit,filters:['exclude_matrixify']}:{}),channel:eventScope.channels.length===1?eventScope.channels[0]:null,channel_breakdown:eventScope.channels.length>1,time_zone:'Europe/London'});
+    const phased=isPhasedSale(eventScope.periods);
+    const context=validateAnalysisContext({...emptyAnalysisContext(),requested_subject:'sales',analysis_type:'ecommerce',metrics:['sales',...(eventScope.products?['products']:[]),...(phased?['refunds','orders',...(eventScope.sessions?['conversion']:[])]:[])],tool_route:'compare_historical_events',event_name:phased?'Black Friday':eventScope.periods?'Requested sale periods':eventScope.shopify_window?.name||'Black Friday',event_count:eventScope.years.length,event_scope:eventScope,...(eventScope.periods?{grain:'day',dimensions:['day','channel']}:{}),...(phased?{platform:'shopify',filters:['exclude_matrixify']}:{}),...(eventScope.shopify_window?{platform:'shopify',start_date:eventScope.shopify_window.start_date,end_date:eventScope.shopify_window.end_date,limit:eventScope.shopify_window.product_limit,filters:['exclude_matrixify']}:{}),channel:eventScope.channels.length===1?eventScope.channels[0]:null,channel_breakdown:eventScope.channels.length>1,time_zone:'Europe/London'});
     return {context,transition:{continuation:Boolean(base.event_scope),set:['event_scope','event_name','event_count','tool_route'],clear:[],retain:[],missing_required_fields:[],ready_to_execute:true,applies_to_message:true}};
   }
   const scoped=requestedJourneyScope(text,base.journey_scope);
@@ -441,6 +459,7 @@ function transitionAnalysisContextBase(existing,message,options={}){
     const context=validateAnalysisContext(consumed.context),changed=ANALYSIS_CONTEXT_FIELDS.filter(k=>JSON.stringify(base[k])!==JSON.stringify(context[k]));return {context,transition:{continuation:true,set:changed,clear:[],retain:ANALYSIS_CONTEXT_FIELDS.filter(k=>!changed.includes(k)),missing_required_fields:context.unresolved_required_fields,ready_to_execute:!context.unresolved_required_fields.length,applies_to_message:true,clarification_consumed:consumed.kind}};}
   const result=transitionContext(existing,text,options),pending=pendingClarificationKind(base);
   const calendar=reportPeriodResolution(text,options.now??Date.now());
+  if(['get_eyewear_sales_stock','get_tw_supplier_stock_report'].includes(result.context.tool_route))return result;
   if(calendar.invalid&&!result.context.request_kind&&!result.context.promotion_context){
     result.context=validateAnalysisContext({...result.context,period_issue:'invalid_period',start_date:null,end_date:null,unresolved_required_fields:['start_date','end_date']});
     result.transition.ready_to_execute=false;result.transition.missing_required_fields=['start_date','end_date'];

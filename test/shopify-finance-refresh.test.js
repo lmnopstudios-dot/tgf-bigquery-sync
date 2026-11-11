@@ -157,3 +157,47 @@ test('preflight retains bounded stage-specific destination write-readiness failu
     assert.equal(error.code,'DESTINATION_NOT_WRITE_READY');assert.match(error.message,/active streaming buffer/);assert.ok(error.message.length<400);return true;
   });
 });
+
+test('empty-message partial refund insert failure records only safe reasons and never promotes',async()=>{
+  const calls=[],deleted=[],inserted=[];
+  const error=Object.assign(new Error(''),{name:'PartialFailureError',errors:[
+    {row:{customer:'private-customer'},errors:[{reason:'invalid',message:'Invalid numeric value: private refund payload',location:'refund_total_shop'}]},
+    {row:{},errors:[{reason:'stopped'},{reason:'private-unknown-reason',location:'private-field'}]}
+  ]});
+  const bigquery={
+    query:async options=>{calls.push(options);return [[]]},
+    dataset:()=>({table:name=>({
+      insert:async()=>{inserted.push(name);if(name.startsWith('_order_refunds_'))throw error},
+      delete:async()=>{deleted.push(name)}
+    })})
+  };
+  const message='Shopify finance staging_insert failed; table=order_refunds; batch=1; reasons=invalid,stopped,unrecognised; fields=refund_total_shop; categories=invalid_value_or_type';
+  await assert.rejects(promote({
+    bigquery,project:'p',dataset:'d',runId:'run-1',start:'2026-10-19T12:17:24Z',
+    end:'2026-11-09T14:17:25Z',data:{orders:[{}],financials:[{}],refunds:[{},{}]},pages:49,mode:'scheduled',runRecorded:true
+  }),{message});
+  assert.deepEqual(inserted,['_order_locations_run_1','_order_financials_run_1','_order_refunds_run_1']);
+  assert.deepEqual(deleted,inserted);
+  assert.equal(calls.find(x=>x.query.includes("SET status='failed'")).params.error,message);
+  assert.ok(!calls.some(x=>x.query.startsWith('BEGIN TRANSACTION')));
+  assert.doesNotMatch(JSON.stringify(calls),/private-/);
+});
+
+test('refund tax sums serialize as exact NUMERIC decimals without floating-point tails',()=>{
+  const money=amount=>({shopMoney:{amount},presentmentMoney:{amount}});
+  const r={...refund,
+    refundLineItems:{nodes:['0.1','0.2'].map(amount=>({totalTaxSet:money(amount)}))},
+    refundShippingLines:{nodes:[{taxAmountSet:money('0.000000001')}]},
+    orderAdjustments:{nodes:[{taxAmountSet:money('-0.02')}]}
+  };
+  assert.notEqual(0.1+0.2,0.3);
+  const [row]=transform([order('test','2026-11-09T00:00:00Z',[r])]).refunds;
+  const Table=new BigQuery({projectId:'test'}).dataset('test').table('test').constructor;
+  const encoded=JSON.parse(JSON.stringify(Table.encodeValue_(row)));
+  for(const side of ['shop','presentment']){
+    assert.equal(encoded['refund_line_tax_'+side],'0.3');
+    assert.equal(encoded['refund_shipping_tax_'+side],'0.000000001');
+    assert.equal(encoded['refund_adjustment_tax_'+side],'-0.02');
+    assert.equal(encoded['refund_tax_'+side],'0.280000001');
+  }
+});

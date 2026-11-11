@@ -1,4 +1,5 @@
 import {assertLoyaltyEvidence} from './loyaltylion.js';
+import {isPhasedSale} from './explicit-sale-periods.js';
 import {isSpreadsheetFollowup} from './spreadsheet-intent.js';
 import {exportRetainedSpreadsheet,rememberSpreadsheetEvidence,spreadsheetEvidenceFor} from './retained-spreadsheet.js';
 import {inventoryReportConfigKey,filteredInventoryScope} from './inventory-report-config.js';
@@ -38,7 +39,7 @@ const governedBaseline = async ({message,baselineOverview,baselineOptions}) => {
 // route names, so a deterministic transition cannot silently become orphaned.
 export const ANALYSIS_ROUTE_DISPATCHERS = Object.freeze(Object.fromEntries(ANALYSIS_TOOL_ROUTES.map(route=>[
   route,
-  ['get_loyalty_report','compare_historical_events','analyze_customer_journey','get_population_conversion','get_order_value_analysis','get_shopify_inventory_by_location','get_meta_performance','get_instagram_performance','get_woocommerce_device_conversion','get_governed_device_conversion','get_general_sales_analysis','get_daily_sales_analysis','export_product_priorities','get_klaviyo_email_performance','get_klaviyo_click_purchase_opportunities','compare_klaviyo_email_with_shopify_referrer'].includes(route)
+  ['get_loyalty_report','get_eyewear_sales_stock','get_tw_supplier_stock_report','compare_historical_events','analyze_customer_journey','get_population_conversion','get_order_value_analysis','get_shopify_inventory_by_location','get_meta_performance','get_instagram_performance','get_woocommerce_device_conversion','get_governed_device_conversion','get_general_sales_analysis','get_daily_sales_analysis','export_product_priorities','get_klaviyo_email_performance','get_klaviyo_click_purchase_opportunities','compare_klaviyo_email_with_shopify_referrer'].includes(route)
     ? governedBaseline
     : baselineThenAgent
 ])));
@@ -140,6 +141,13 @@ function disclosePeriod(result,context){
   if(!result?.answer||!context?.date_cutoff||!context.start_date||context.campaign_request)return result;
   return {...result,answer:`**Resolved dates:** ${context.start_date} to ${context.end_date}${context.comparison_start_date?` versus ${context.comparison_start_date} to ${context.comparison_end_date}`:''}, inclusive (Europe/London). Current day ${context.current_day_included?'included; evidence through the runtime cutoff may be partial':'excluded'}. Runtime cutoff: ${context.date_cutoff}.\n\n${result.answer}`};
 }
+function unsupportedValueOperation(request,context,message){
+  if(!request||['get_order_value_analysis','get_tw_supplier_stock_report','get_eyewear_sales_stock'].includes(context?.tool_route))return false;
+  return !(isPhasedSale(context?.event_scope?.periods)&&!request.charge_domain&&
+    request.operations.includes('merchandise_mean')&&
+    request.operations.every(op=>['merchandise_mean','optional_product_enrichment'].includes(op))&&
+    !/\b(?:merchandise|add[ -]?ons?|product[ -]?prices?|published[ -]?prices?)\b/i.test(message));
+}
 export async function dispatchAnalysisRequest({message,analysisContext,baselineOverview=null,baselineOptions,chat,chatOptions}){
   if(isSpreadsheetFollowup(message)){const result=await exportRetainedSpreadsheet({recent:Object.hasOwn(baselineOptions||{},'recentEvidence')&&baselineOptions.recentEvidence==null?null:baselineOptions?.recentEvidence?.retained_at?baselineOptions.recentEvidence:spreadsheetEvidenceFor(baselineOverview,baselineOptions?.exportOwner)||baselineOptions?.recentEvidence,context:validateAnalysisContext(analysisContext||{}),store:baselineOptions?.exportStore||baselineOverview?.spreadsheetExportStore,owner:baselineOptions?.exportOwner,requestId:baselineOptions?.requestId,downloadBase:baselineOptions?.downloadBase,assertAgreement:assertEvidenceAgreement,now:baselineOptions?.now??baselineOverview?.spreadsheetNow?.()??Date.now()});await baselineOptions?.onEvidence?.(result);return deliverOracleResult(result,result.analysis_context);}
   const nonAnalysis=nonAnalyticalResult(message);
@@ -149,7 +157,7 @@ export async function dispatchAnalysisRequest({message,analysisContext,baselineO
   if(intent.document){analysisContext=transitionAnalysisContext(null,intent.instruction).context;chatOptions={...chatOptions,suppliedMessage:message,analysisContext};message=intent.instruction;}
   const context=analysisContext==null?null:validateAnalysisContext(analysisContext);
   const requested=requestedAnalyticalOperations(message);
-  if(requested&&context?.tool_route!=='get_order_value_analysis'){baselineOptions?.onProviderStage?.({stage:'capability_selection',status:'unsupported',operation_count:requested.operations.length});return deliverOracleResult(await unsupportedOperationResult(requested,context||transitionAnalysisContext(null,message).context,baselineOptions),context);}
+  if(unsupportedValueOperation(requested,context,message)){baselineOptions?.onProviderStage?.({stage:'capability_selection',status:'unsupported',operation_count:requested.operations.length});return deliverOracleResult(await unsupportedOperationResult(requested,context||transitionAnalysisContext(null,message).context,baselineOptions),context);}
   const decision=resolveAnalysisDecision(context,ANALYSIS_ROUTE_DISPATCHERS),execution=decision.execution;
   reportAnalysisDecision(decision,baselineOptions?.onProviderStage);
   if(decision.outcome!=='execution')return deliverOracleResult(decisionResult(decision),context);
@@ -175,7 +183,7 @@ export async function executeGovernedAgentAnalysis({message,analysisContext,base
   const resolved=scopeResolved?{context:validateAnalysisContext(analysisContext||{})}:transitionAnalysisContext(analysisContext,message,{now});
   baselineOptions.onProviderStage?.({stage:'scope_resolution',resolved_subject:resolved.context.requested_subject,selected_route:resolved.context.tool_route,start_date:resolved.context.start_date,end_date:resolved.context.end_date});
   const requested=requestedAnalyticalOperations(message);
-  if(requested&&resolved.context.tool_route!=='get_order_value_analysis')return deliverOracleResult(await unsupportedOperationResult(requested,resolved.context,baselineOptions),resolved.context);
+  if(unsupportedValueOperation(requested,resolved.context,message))return deliverOracleResult(await unsupportedOperationResult(requested,resolved.context,baselineOptions),resolved.context);
   const decision=resolveAnalysisDecision(resolved.context,ANALYSIS_ROUTE_DISPATCHERS),execution=decision.execution;
   reportAnalysisDecision(decision,baselineOptions.onProviderStage);
   if(decision.outcome!=='execution')return deliverOracleResult(decisionResult(decision),resolved.context);

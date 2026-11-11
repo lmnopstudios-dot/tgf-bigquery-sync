@@ -7,12 +7,22 @@ import {createLoyaltyClient} from './client.js';
 const safe=s=>{if(!/^[A-Za-z0-9_-]+$/.test(s))throw fail('LOYALTY_INVALID_IDENTIFIER');return s;};
 const table=(p,d,t)=>`\`${safe(p)}.${safe(d)}.${safe(t)}\``;
 export function initialSyncPlan(config){validateConfig(config);return {collection_enabled:false,access_status:config.access_status,resources:['customers (complete current roster)','transactions (explicit half-open window)','reward claims observed within transaction responses'],bounds:config.limits,requested_plan:config.initial_sync,prerequisites:['review account/scopes/sites and retained warehouse evidence','review explicit initial window and counts against caps','verify Shopify merchant-ID correspondence and dataset colocation','separate explicit schema provisioning','collection flag plus --apply'],unsupported:['historical tier reconstruction','actual reward usage','automatic history replay','automatic scheduling']};}
+export async function verifyLoyaltyRetention(bigquery,dataset){
+ const [d]=await bigquery.dataset(dataset).getMetadata();
+ if(Number(d.defaultTableExpirationMs)||Number(d.defaultPartitionExpirationMs))throw fail('LOYALTY_EXPIRATION_UNSAFE');
+ for(const name of Object.keys(TABLES)){
+  const t=bigquery.dataset(dataset).table(name),[exists]=await t.exists();
+  if(exists){const [m]=await t.getMetadata();if(m.expirationTime!=null||m.timePartitioning?.expirationMs!=null)throw fail('LOYALTY_EXPIRATION_UNSAFE');}
+ }
+}
 export async function provision({bigquery,project,config,env={},apply=false}){
  collectionGate(config,env,{apply});
  const [shop]=await bigquery.dataset('shopify_data').getMetadata(),[dest]=await bigquery.dataset(config.dataset).getMetadata();
  if(shop.location!==dest.location)throw fail('LOYALTY_REGION_MISMATCH');
+ await verifyLoyaltyRetention(bigquery,config.dataset);
  // Dataset creation/ACL assignment is deliberately external. Explicit setup only.
  for(const [name,schema]of Object.entries(TABLES)){const t=bigquery.dataset(config.dataset).table(name),[exists]=await t.exists();if(!exists)await t.create({schema:{fields:schema}});else{const [m]=await t.getMetadata();if(schema.some(f=>!m.schema?.fields?.some(x=>x.name===f.name&&({BOOL:'BOOLEAN',INT64:'INTEGER'}[f.type]||f.type)===({BOOL:'BOOLEAN',INT64:'INTEGER'}[x.type]||x.type))))throw fail('LOYALTY_SCHEMA_MISMATCH');}}
+ await verifyLoyaltyRetention(bigquery,config.dataset);
  await bigquery.query({query:`BEGIN TRANSACTION; INSERT INTO ${table(project,config.dataset,'sync_guard')} (program_id,holder,acquired_at) SELECT @program_id,NULL,NULL WHERE NOT EXISTS(SELECT 1 FROM ${table(project,config.dataset,'sync_guard')} WHERE program_id=@program_id); ASSERT (SELECT COUNT(*) FROM ${table(project,config.dataset,'sync_guard')} WHERE program_id=@program_id)=1 AS 'LOYALTY_GUARD_SINGLETON'; COMMIT TRANSACTION;`,params:{program_id:config.program_id},types:{program_id:'STRING'},location:dest.location,useLegacySql:false,maximumBytesBilled:'100000000',jobTimeoutMs:15000});
 }
 export function promotionSql(project,dataset,resource){
@@ -43,6 +53,7 @@ export async function collectReviewedPlan({config,env={},apply=false,client,bigq
  if(!Array.isArray(sites)||sites.filter(s=>String(s.program_id)===config.program_id).length!==1)throw fail('LOYALTY_MULTI_SITE_MAPPING_UNAVAILABLE');
  if(!sites?.some(s=>String(s.id)===config.site_id&&String(s.program_id)===config.program_id&&s.platform==='shopify'&&(()=>{try{return new URL(s.url).hostname===new URL(config.site_url).hostname;}catch{return false;}})()))throw fail('LOYALTY_SITE_NOT_VERIFIED');
  const [shop]=await bigquery.dataset('shopify_data').getMetadata(),[target]=await bigquery.dataset(config.dataset).getMetadata();if(shop.location!==target.location)throw fail('LOYALTY_REGION_MISMATCH');
+ await verifyLoyaltyRetention(bigquery,config.dataset);
  const guardHolder=randomUUID(),guardTable=table(project,config.dataset,'sync_guard');
  const guard=async acquire=>bigquery.query({query:`BEGIN TRANSACTION; ASSERT (SELECT COUNT(*) FROM ${guardTable} WHERE program_id=@program_id)=1 AS 'LOYALTY_GUARD_SINGLETON'; UPDATE ${guardTable} SET holder=${acquire?'@holder':'NULL'},acquired_at=${acquire?'CURRENT_TIMESTAMP()':'NULL'} WHERE program_id=@program_id AND ${acquire?'holder IS NULL':'holder=@holder'}; ASSERT @@row_count=1 AS 'LOYALTY_GUARD_BUSY_OR_UNOWNED'; COMMIT TRANSACTION;`,params:{program_id:config.program_id,holder:guardHolder},types:{program_id:'STRING',holder:'STRING'},location:target.location,useLegacySql:false,maximumBytesBilled:'100000000',jobTimeoutMs:15000,labels:{component:'loyalty_manual_sync',operation:acquire?'acquire':'release'}});
  try{await guard(true);}catch{ return {complete:false,guard_holder:guardHolder,status:'guard_acquisition_failed_or_unknown',resources:[],replay:'Inspect guard ownership and terminal query evidence before any retry; no source data was collected.'};}
@@ -65,5 +76,5 @@ export async function collectReviewedPlan({config,env={},apply=false,client,bigq
  let guardStatus='retained_commit_unknown';if(!commitUncertain){try{await guard(false);guardStatus='released';}catch{guardStatus='release_unverified';}}
  return {resources:results,guard_holder:guardHolder,guard_status:guardStatus,complete:results.length===plan.resources.length&&results.every(r=>r.status==='complete'),replay:'No automatic replay or expired-lock takeover; reconcile any uncertain run/guard before another --apply.'};
 }
-async function main(){const args=process.argv.slice(2);if(args.some(a=>!['--plan','--apply','--setup'].includes(a)))throw fail('LOYALTY_INVALID_ARGUMENT');const config=JSON.parse(await readFile(new URL('../config/loyaltylion-account.json',import.meta.url),'utf8'));if(!args.includes('--apply'))return console.log(JSON.stringify(initialSyncPlan(config),null,2));collectionGate(config,process.env,{apply:true});const {bigquery,project}=createBigQueryClient();if(args.includes('--setup'))return provision({bigquery,project,config,env:process.env,apply:true});const client=createLoyaltyClient({key:process.env.LOYALTYLION_API_KEY,limits:config.limits});console.log(JSON.stringify(await collectReviewedPlan({config,env:process.env,apply:true,client,bigquery,project})));}
+async function main(){const args=process.argv.slice(2);if(args.some(a=>!['--plan','--apply','--setup'].includes(a)))throw fail('LOYALTY_INVALID_ARGUMENT');const config=JSON.parse(await readFile(process.env.LOYALTYLION_CONFIG_PATH||new URL('../config/loyaltylion-account.json',import.meta.url),'utf8'));if(!args.includes('--apply'))return console.log(JSON.stringify(initialSyncPlan(config),null,2));collectionGate(config,process.env,{apply:true});const {bigquery,project}=createBigQueryClient();if(args.includes('--setup'))return provision({bigquery,project,config,env:process.env,apply:true});const client=createLoyaltyClient({key:process.env.LOYALTYLION_API_KEY,limits:config.limits});console.log(JSON.stringify(await collectReviewedPlan({config,env:process.env,apply:true,client,bigquery,project})));}
 if(import.meta.url===pathToFileURL(process.argv[1]||'').href)main().catch(e=>{console.error(JSON.stringify({code:/^LOYALTY_[A-Z_]+$/.test(e.code||'')?e.code:'LOYALTY_UNAVAILABLE'}));process.exitCode=1;});

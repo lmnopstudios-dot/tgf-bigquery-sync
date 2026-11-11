@@ -1386,6 +1386,22 @@
     {
       "file": "test/oracle-markdown.test.js",
       "purpose": "Shared visible rendering preserves intraword underscores in LoyaltyLion partial-failure codes, governed sales identifiers, table fields and retained details while retaining explicit emphasis and safe HTML/link handling."
+    },
+    {
+      "file": "test/loyaltylion-private-preflight.test.js",
+      "purpose": "Metadata-only private preflight: programme/site/Shopify correspondence, explicit warehouse colocation, historical snapshot counts versus unknown current roster, disabled private configuration and no source/customer/export fallback on unavailable access."
+    },
+    {
+      "file": "test/oracle-black-friday-2026.test.js",
+      "purpose": "Verbatim save-only incident through actual chat and durable jobs, review without persistence or reads, explicit 2026 native Shopify phase boundaries and comparison populations, daily units/orders/AOV, partial refunds and lines, validated native session denominators and retained-scope integrity."
+    },
+    {
+      "file": "test/oracle-tw-supplier-report.test.js",
+      "purpose": "TW supplier short and original requests through durable chat, authenticated workbook, partial October and missing-evidence recommendation safeguards."
+    },
+    {
+      "file": "test/oracle-eyewear-report.test.js",
+      "purpose": "Dedicated eyewear command and original durable request, scoped order totals, approved and conflicting mappings, stock pagination, independent source failures and authenticated workbook."
     }
   ]
 }

@@ -1,0 +1,4 @@
+# Black Friday sale periods
+
+Sales definition: canonical finance gross sales less accounting refunds, including tax, within one currency. Refunds use the refund transaction date. Product line sales are separate source-native operational measures; they do not reconcile to finance totals. Currencies are never converted or combined.
+Requested 2026 instore source shopify has no approved historical binding for
