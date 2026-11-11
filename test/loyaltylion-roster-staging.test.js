@@ -33,7 +33,7 @@ function fixture(fault){
   table:()=>({exists:async()=>[true],getMetadata:async()=>[{}]})}),
   query:async q=>{
    writes.push(q);
-   if(q.query.startsWith('INSERT INTO'))staged+=JSON.parse(q.params.rows).length;
+   if(q.query.startsWith('INSERT INTO')){staged+=JSON.parse(q.params.rows).length;if(fault==='stage'&&staged>10000)throw Error('stage failure');}
    if(q.labels?.operation==='promote'){assert.equal(q.params.row_count,q.params.resource==='customers'?staged:0);published++;}
    return [[]];
   }};
@@ -52,7 +52,7 @@ test('12050 customers are staged pagewise, then atomically promoted, without who
  assert.match(promote.query,/INSERT INTO .*coverage_windows/);
  assert.ok(f.writes.some(q=>/INTERVAL 24 HOUR/.test(q.query)));
 });
-for(const fault of ['late','duplicate','interrupt'])test(fault+' failure leaves previous complete roster and coverage unchanged',async()=>{
+for(const fault of ['late','duplicate','interrupt','stage'])test(fault+' failure leaves previous complete roster and coverage unchanged',async()=>{
  const f=fixture(fault);
  const r=await collectReviewedPlan({...f,project:'fixture',apply:true,env:{LOYALTYLION_COLLECTION_ENABLED:'true'}});
  assert.equal(r.complete,false);assert.equal(r.guard_status,'released');
