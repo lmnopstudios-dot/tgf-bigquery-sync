@@ -13,8 +13,15 @@ export function validateConfig(c,{reviewed=false}={}){
  if(reviewed&&(c.access_status!=='reviewed'||!c.reviewed_by||!Number.isFinite(Date.parse(c.reviewed_at))||!/^\d+$/.test(c.account_id||'')||!/^\d+$/.test(c.program_id||'')||!/^\d+$/.test(c.site_id||'')||!/^[a-z0-9-]+\.myshopify\.com$/.test(c.shopify_shop||'')||!/^https:\/\/[^/]+\/?$/.test(c.site_url||'')||c.merchant_ids_verified!==true))throw fail('LOYALTY_ACCESS_NOT_REVIEWED');
  return c;
 }
+export function rosterStagingPlan(c){
+ const p=c.roster_staging;if(!p)return null;
+ const caps={max_rows:100000,max_pages:250,max_calls:300,max_ms:900000,max_bytes:64000000,page_bytes:2000000};
+ if(!p.reviewed_by||!Number.isFinite(Date.parse(p.reviewed_at)))throw fail('LOYALTY_STAGING_PLAN_NOT_REVIEWED');
+ for(const [k,cap]of Object.entries(caps))if(!Number.isInteger(p[k])||p[k]<1||p[k]>cap)throw fail('LOYALTY_STAGING_BOUNDS');
+ return p;
+}
 export function collectionGate(c,env,{apply=false}={}){
- validateConfig(c,{reviewed:true});
+ validateConfig(c,{reviewed:true});rosterStagingPlan(c);
  if(!apply||env.LOYALTYLION_COLLECTION_ENABLED!=='true')throw fail('LOYALTY_COLLECTION_DISABLED');
  const plan=c.initial_sync;
  if(!plan||!plan.reviewed_by||!Number.isFinite(Date.parse(plan.reviewed_at))||!Array.isArray(plan.resources)||!plan.resources.length||plan.resources.some(r=>!['customers','transactions'].includes(r))||new Set(plan.resources).size!==plan.resources.length)throw fail('LOYALTY_SYNC_PLAN_NOT_REVIEWED');
