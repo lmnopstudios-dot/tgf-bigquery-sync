@@ -1,0 +1,35 @@
+{
+  "status": "proposed_not_authorized",
+  "reviewed_by": null,
+  "reviewed_at": null,
+  "resources": [
+    "customers",
+    "transactions"
+  ],
+  "start_at": "2026-11-01T00:00:00.000Z",
+  "end_exclusive": "2026-11-06T00:00:00.000Z",
+  "timezone": "Europe/London",
+  "description": "Complete current roster plus a five-completed-day points pilot (1-5 November inclusive), including reward claims observed in those responses. Roster is current at retrieval, not a historical roster for these dates.",
+  "expected_customer_count": null,
+  "expected_transaction_count": null,
+  "api_call_cap": 40,
+  "resource_page_cap": 30,
+  "resource_row_cap": 10000,
+  "vendor_elapsed_ms_cap": 120000,
+  "request_rate_cap_per_second": 4,
+  "retry_cap": 2,
+  "payload_byte_cap_per_resource": 4000000,
+  "prerequisites": [
+    "Verify existing API key or securely configure a read-only programme key; do not paste it into chat",
+    "Verify account/program/site IDs, Shopify site correspondence and read_customers/read_orders scopes",
+    "Inspect existing export-job metadata without creating or downloading an export",
+    "Confirm Shopify dataset location from metadata and co-locate the new dataset",
+    "Review inventory and unknown counts against caps; do not raise limits automatically",
+    "Review and separately authorize the account configuration, exact window and explicit schema setup",
+    "Confirm browser and required acceptance gates before release"
+  ],
+  "automatic_backfill": false,
+  "automatic_schedule": false,
+  "collection_enabled": false,
+  "deployment_authorized": false
+}
