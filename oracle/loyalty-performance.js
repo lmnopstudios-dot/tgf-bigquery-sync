@@ -11,6 +11,7 @@ export const PERFORMANCE_DEFINITIONS=[
  'Period repeat rate is customers with at least two eligible orders in the same period / customers with at least one. It is not a subsequent-purchase probability or lifetime retention rate. A customer can occur in multiple channel/currency groups.',
  'Cohorts use 30/90/180 elapsed days before/after recorded enrolment, same customer pool on both sides, including customers with zero observed purchases. Rates require mature, certified full observation windows. Missing coverage is not zero demand.',
  'Claims, points spent and negative movements do not prove voucher use. Actual use, recorded reward discounts, historical tiers and financial points liability remain unavailable until verified bindings exist.',
+ 'Monetary aggregates are transported as exact decimal strings. Excel uses numeric cells only when they round-trip without precision loss within 15 significant digits; larger or finer values remain exact text.',
  'Monthly activity counts distinct point participants separately from distinct claimants. Approval transfers can move pending into approved without earning new points; negative movements are not all redemptions.',
  'May Bank Holiday and Black Friday are recurring context. Only reviewed actual campaign dates are shown. No dates or campaign participation are guessed; promotions can confound comparisons.'
 ];
@@ -35,7 +36,7 @@ export function performanceQueries(project,dataset){
   usage:`WITH ${roster},${tx},${windows} SELECT w.period,CAST(DATE_TRUNC(DATE(t.created_at,'Europe/London'),MONTH) AS STRING) month,t.resource,COUNT(*) point_movements,COUNT(DISTINCT t.customer_ref_id) participants,COUNT(DISTINCT IF(m.enrolled,t.customer_ref_id,NULL)) current_enrolled_participants,SUM(GREATEST(t.approved_delta+t.pending_delta,0)) positive_net_movements,SUM(LEAST(t.approved_delta+t.pending_delta,0)) negative_net_movements,SUM(t.approved_delta) approved_delta,SUM(t.pending_delta) pending_delta,SUM(t.approved_delta+t.pending_delta) net_delta,COUNT(DISTINCT IF(t.resource='claimed_reward',t.customer_ref_id,NULL)) observed_claimants FROM tx t JOIN windows w ON DATE(t.created_at,'Europe/London') BETWEEN w.start_date AND w.end_date LEFT JOIN members m ON t.customer_ref_id=m.customer_ref_id GROUP BY 1,2,3 ORDER BY 1,2,3 LIMIT 1001`,
   enrolments:`WITH ${roster},${windows} SELECT w.period,CAST(DATE_TRUNC(DATE(m.enrolled_at,'Europe/London'),MONTH) AS STRING) month,COUNT(*) observed_enrolments FROM members m JOIN windows w ON DATE(m.enrolled_at,'Europe/London') BETWEEN w.start_date AND w.end_date GROUP BY 1,2 ORDER BY 1,2 LIMIT 1001`,
   purchasing:`${base},customer_period AS(SELECT w.period,w.start_date,w.end_date,o.membership_basis,o.channel,o.currency,month,o.source_customer_id,COUNT(DISTINCT source_order_id) orders,SUM(gross) gross,SUM(retained_refunds) retained_refunds,COUNTIF(gross IS NULL) missing_values FROM selected o JOIN windows w ON DATE(o.created_at,'Europe/London') BETWEEN w.start_date AND w.end_date CROSS JOIN UNNEST(['Full period',CAST(DATE_TRUNC(DATE(o.created_at,'Europe/London'),MONTH) AS STRING)]) month GROUP BY 1,2,3,4,5,6,7,8)
-   SELECT period,CAST(start_date AS STRING) start_date,CAST(end_date AS STRING) end_date,membership_basis,channel,currency,month,COUNT(*) purchasing_customers,SUM(orders) eligible_orders,COUNTIF(orders>=2) repeat_purchasers,SAFE_DIVIDE(COUNTIF(orders>=2),COUNT(*)) observed_period_repeat_rate,SAFE_DIVIDE(SUM(orders),COUNT(*)) observed_orders_per_customer,IF(SUM(missing_values)=0,SUM(gross),NULL) original_order_gross,IF(SUM(missing_values)=0,SAFE_DIVIDE(SUM(gross),SUM(orders)),NULL) observed_aov,SUM(retained_refunds) retained_lifetime_refunds FROM customer_period GROUP BY 1,2,3,4,5,6,7 ORDER BY 1,7,4,5,6 LIMIT 1001`,
+   SELECT period,CAST(start_date AS STRING) start_date,CAST(end_date AS STRING) end_date,membership_basis,channel,currency,month,COUNT(*) purchasing_customers,SUM(orders) eligible_orders,COUNTIF(orders>=2) repeat_purchasers,SAFE_DIVIDE(COUNTIF(orders>=2),COUNT(*)) observed_period_repeat_rate,SAFE_DIVIDE(SUM(orders),COUNT(*)) observed_orders_per_customer,CAST(IF(SUM(missing_values)=0,SUM(gross),NULL) AS STRING) original_order_gross,CAST(IF(SUM(missing_values)=0,SAFE_DIVIDE(SUM(gross),SUM(orders)),NULL) AS STRING) observed_aov,CAST(SUM(retained_refunds) AS STRING) retained_lifetime_refunds FROM customer_period GROUP BY 1,2,3,4,5,6,7 ORDER BY 1,7,4,5,6 LIMIT 1001`,
   cohorts:`${base},currencies AS(SELECT DISTINCT channel,currency FROM selected),cohort AS(SELECT w.period,m.*,d window_days FROM unique_members m JOIN windows w ON DATE(m.enrolled_at,'Europe/London') BETWEEN w.start_date AND w.end_date CROSS JOIN UNNEST([30,90,180]) d WHERE m.enrolled_at IS NOT NULL AND TIMESTAMP_ADD(m.enrolled_at,INTERVAL d DAY)<=TIMESTAMP(@as_of)),customer_windows AS(
    SELECT c.period,c.customer_ref_id,c.enrolled_at,c.window_days,CAST(DATE_TRUNC(DATE(c.enrolled_at,'Europe/London'),MONTH) AS STRING) enrolment_month,g.channel,g.currency,
     IF(EXISTS(SELECT 1 FROM qualifying_orders p WHERE p.source_customer_id=c.shopify_customer_gid AND p.created_at<c.enrolled_at),'existing_observed_customer','prior_history_unverified') customer_history,
@@ -100,14 +101,24 @@ export async function readPerformance({context,evidence,bigquery,project,config,
      row.status=certified?'Certified observation; association only':'Partial observed counts; rates withheld';
     }
    }
+   for(const row of rows){const issue=performanceRowIssue(name,row,windows);if(issue)throw Object.assign(Error('LOYALTY_PERFORMANCE_ROW_CONTRACT_INVALID'),{code:'LOYALTY_PERFORMANCE_ROW_CONTRACT_INVALID',...issue});}
    result.tables.push({section:name,status:'partial',rows});
    options.onProviderStage?.({stage:'loyalty_performance',section:name,status:'success',aggregate_rows:rows.length});
-  }catch(e){const code=/^LOYALTY_[A-Z_]+$/.test(e.code||e.message||'')?(e.code||e.message):'LOYALTY_PERFORMANCE_READ_UNAVAILABLE';result.tables.push({section:name,status:'unavailable',code,rows:[]});options.onProviderStage?.({stage:'loyalty_performance',section:name,status:'failed',code});}
+  }catch(e){const code=/^LOYALTY_[A-Z_]+$/.test(e.code||e.message||'')?(e.code||e.message):'LOYALTY_PERFORMANCE_READ_UNAVAILABLE';result.tables.push({section:name,status:'unavailable',code,rows:[]});options.onProviderStage?.({stage:'loyalty_performance',section:name,status:'failed',code,...(e.code==='LOYALTY_PERFORMANCE_ROW_CONTRACT_INVALID'?{field:OUTPUT_FIELDS[name].includes(e.field)?e.field:'unavailable',category:['non_record','unknown_field','non_scalar','non_finite','string_bound','period_mismatch'].includes(e.category)?e.category:'invalid_contract'}:{})});}
  }
  return result;
 }
+const MONEY_FIELDS=new Set(['original_order_gross','observed_aov','retained_lifetime_refunds']);
+export function excelLoyaltyDecimal(value){
+ if(typeof value!=='string'||!/^[-+]?[0-9]+(?:\.[0-9]+)?$/.test(value))return value;
+ const canonical=s=>{const negative=s.startsWith('-'),parts=s.replace(/^[-+]/,'').split('.'),whole=parts[0].replace(/^0+(?=.)/,'')||'0',fraction=(parts[1]||'').replace(/0+$/,'');return (negative&&(whole!=='0'||fraction)?'-':'')+whole+(fraction?'.'+fraction:'');};
+ const exact=canonical(value),digits=exact.replace(/[-.]/g,'').replace(/^0+/,'').length;
+ const number=Number(value);
+ if(digits>15||!Number.isFinite(number)||!/^[-+]?[0-9]+(?:\.[0-9]+)?$/.test(String(number))||canonical(String(number))!==exact)return value;
+ return number;
+}
 export function performanceWorkbookTables(e){
- const table=(name,rows)=>{const headers=[...new Set(rows.flatMap(Object.keys))];return {name,headers:headers.length?headers:['status'],rows:rows.length?rows.map(r=>headers.map(k=>r[k]??null)):[['Unavailable; see Coverage']]};};
+ const table=(name,rows)=>{const headers=[...new Set(rows.flatMap(Object.keys))];return {name,headers:headers.length?headers:['status'],rows:rows.length?rows.map(r=>headers.map(k=>MONEY_FIELDS.has(k)?excelLoyaltyDecimal(r[k]??null):r[k]??null)):[['Unavailable; see Coverage']]};};
  const p=e.performance,base=e.sections||[],find=s=>p.tables.find(t=>t.section===s),rows=s=>find(s)?.rows||[];
  const coverage=[{section:'Report',status:'partial',note:'Retained observations, not causal uplift. Missing evidence is never zero.'},...p.windows.map(w=>({section:w.label,status:'requested',note:w.start_date+' to '+w.end_date})),...base.map(s=>({section:s.section,status:s.status,note:s.code||s.definition||''})),...p.tables.map(s=>({section:s.section,status:s.status,note:s.code||'Observed aggregates; completeness and historical identity limits apply'})),...(e.coverage.windows||[]).map(w=>({section:w.resource,status:w.status,note:w.start_at+' to '+w.end_exclusive,observed_at:w.observed_at,rows:w.row_count})),...p.certificates.map(c=>({section:'Reviewed commerce coverage',status:'reviewed',note:c.start_at+' to '+c.end_exclusive+'; '+c.channel+'; '+c.evidence_reference})),{section:'Actual reward use',status:'unavailable',note:'No verified redemption/cancellation export binding'},{section:'Historical tiers',status:'unavailable',note:'Current tier is not tier-at-order evidence'},{section:'Legacy references',status:'unavailable',note:'WooCommerce order namespaces and governed bridge not established; no heuristic matching'}];
  const notes=[{definition:'Report generated',detail:e.as_of},{definition:'Membership snapshot collected',detail:e.snapshot_observed_at},...p.limitations.map(detail=>({definition:'Definition or limitation',detail}))];
@@ -120,6 +131,17 @@ const OUTPUT_FIELDS={
  cohorts:['period','enrolment_month','window_days','channel','currency','customer_history','mature_customers','before_orders','after_orders','zero_before_customers','zero_after_customers','customers_purchasing_after','required_start_at','required_end_exclusive','certified_observation','subsequent_purchase_rate','before_orders_per_customer','after_orders_per_customer','status'],
  linkage:['period','outcome','point_records','distinct_movements']
 };
+function performanceRowIssue(section,row,windows){
+ if(!row||typeof row!=='object'||Array.isArray(row))return {field:'unavailable',category:'non_record'};
+ for(const [field,value]of Object.entries(row)){
+  if(!OUTPUT_FIELDS[section].includes(field))return {field:'unavailable',category:'unknown_field'};
+  if(value!=null&&typeof value==='object')return {field,category:'non_scalar'};
+  if(typeof value==='number'&&!Number.isFinite(value))return {field,category:'non_finite'};
+  if(typeof value==='string'&&value.length>300)return {field,category:'string_bound'};
+ }
+ if(!windows.some(w=>w.label===row.period))return {field:'period',category:'period_mismatch'};
+ return null;
+}
 export function assertPerformanceEvidence(context,e){
  const fail=()=>{throw Object.assign(Error('EVIDENCE_SCOPE_MISMATCH'),{code:'EVIDENCE_SCOPE_MISMATCH',failed_stage:'evidence_validation'});};
  const p=e.performance;
@@ -127,7 +149,7 @@ export function assertPerformanceEvidence(context,e){
  for(const section of Object.keys(OUTPUT_FIELDS)){
   const tables=p.tables.filter(t=>t.section===section);if(tables.length!==1)fail();const t=tables[0];
   if(!['partial','unavailable'].includes(t.status)||!Array.isArray(t.rows)||t.rows.length>1000||t.status==='unavailable'&&t.rows.length)fail();
-  for(const row of t.rows){if(!row||typeof row!=='object'||Object.keys(row).some(k=>!OUTPUT_FIELDS[section].includes(k))||Object.values(row).some(v=>v!=null&&(typeof v==='object'||typeof v==='string'&&v.length>300||typeof v==='number'&&!Number.isFinite(v))))fail();if(!p.windows.some(w=>w.label===row.period))fail();}
+  for(const row of t.rows)if(performanceRowIssue(section,row,p.windows))fail();
  }
  return true;
 }

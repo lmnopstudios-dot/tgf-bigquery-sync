@@ -1426,6 +1426,10 @@
     {
       "file": "test/oracle-loyalty-persistence.test.js",
       "purpose": "Production BigQuery export store canonical JSON must preserve LoyaltyLion scope, windows and every workbook value through interactive/durable delivery, polling, continued exports and downloads. Cover 4d14c2a6-0e21-4ec0-80c0-7a7e1ff3fc4b; reject actual scope/cell mutations and preserve generic cross-subject exports."
+    },
+    {
+      "file": "test/oracle-loyalty-sdk-numeric.test.js",
+      "purpose": "BigQuery SDK NUMERIC decoding must not invalidate LoyaltyLion performance evidence (24856e45-610e-4b1a-b725-0eb771cb074b). Verify exact decimal transport, safe Excel numeric cells, high precision, canonical persistence and partial section diagnostics without payload values."
     }
   ]
 }
