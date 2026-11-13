@@ -88,7 +88,14 @@ export async function assertRetainedSpreadsheet(a){
  if(a.envelope.kind!=='retained_spreadsheet'){const {assertProductArtifact}=await import('./product-artifact-validation.js');await assertProductArtifact({...a,retained_export:undefined});const wb=new ExcelJS.Workbook();await wb.xlsx.load(bytes);const expectedNotes=retainedSpreadsheetTables(e.source_evidence,{context:a.analysis_context,answer:e.source_answer,as_of:e.source_as_of,partial:e.source_partial}).at(-1).rows;const notes=wb.getWorksheet('Definitions');if(!notes||notes.rowCount<expectedNotes.length)throw fail('EXPORT_INTEGRITY_FAILED');const offset=notes.rowCount-expectedNotes.length;for(const [i,row]of expectedNotes.entries())for(const [j,value]of row.entries())if((notes.getRow(offset+i+1).getCell(j+1).value??null)!==(value??null))throw fail('EXPORT_INTEGRITY_FAILED');return;}
  const expected=retainedSpreadsheetTables(e.source_evidence,{context:a.analysis_context,answer:e.source_answer,as_of:e.source_as_of,partial:e.source_partial});
  const wb=new ExcelJS.Workbook();await wb.xlsx.load(bytes);if(wb.worksheets.length!==expected.length)throw fail('EXPORT_INTEGRITY_FAILED');
- for(const [index,t]of expected.entries()){const s=wb.worksheets[index];if(s.name!==t.name||s.rowCount!==t.rows.length+1||s.columnCount!==t.headers.length)throw fail('EXPORT_INTEGRITY_FAILED');for(const [i,row]of [t.headers,...t.rows].entries())for(const [j,v]of row.entries())if((s.getRow(i+1).getCell(j+1).value??null)!==(v??null))throw fail('EXPORT_INTEGRITY_FAILED');}
+ // Durable JSON can reorder object members. Locate each sheet and column by its
+ // unique name, while still checking every value, row order and exact shape.
+ for(const t of expected){
+  const s=wb.getWorksheet(t.name);if(!s||s.rowCount!==t.rows.length+1||s.columnCount!==t.headers.length)throw fail('EXPORT_INTEGRITY_FAILED');
+  const headers=Array.from({length:s.columnCount},(_,i)=>s.getRow(1).getCell(i+1).value);
+  if(new Set(headers).size!==headers.length||headers.some(h=>!t.headers.includes(h)))throw fail('EXPORT_INTEGRITY_FAILED');
+  for(const [i,row]of t.rows.entries())for(const [j,v]of row.entries())if((s.getRow(i+2).getCell(headers.indexOf(t.headers[j])+1).value??null)!==(v??null))throw fail('EXPORT_INTEGRITY_FAILED');
+ }
 }
 export function retainedSpreadsheetResult(a,id,downloadBase='/api/oracle/exports'){
  const e=sourceInfo(a);

@@ -2,7 +2,7 @@ import {readPerformance,assertPerformanceEvidence} from './loyalty-performance.j
 import {loyaltyMarkdown} from './loyalty-presentation.js';
 import {loadLoyaltyConfig} from '../loyaltylion/runtime-config.js';
 import {validateConfig} from '../loyaltylion/contracts.js';
-import {resolveAnalyticalPlan} from './analytical-plan.js';
+import {resolveAnalyticalPlan,stableAnalyticalJSON} from './analytical-plan.js';
 import {shopifyRecordedChannel} from './shopify-sale-binding.js';
 import {qualifyingCustomerOrderPredicate,MATRIXIFY_APP_ID} from './customer-query.js';
 import {datasetLocation} from '../bigquery/dataset-location.js';
@@ -98,7 +98,7 @@ export function createLoyaltyReportService({bigquery,project,env={},config=defau
  };
 }
 export function assertLoyaltyEvidence(context,e){
- if(e?.kind!=='governed_loyalty'||JSON.stringify(context.loyalty_scope)!==JSON.stringify(e.loyalty_scope)||!Array.isArray(e.sections)||e.sections.length!==context.loyalty_scope.sections.length||context.loyalty_scope.sections.some(name=>e.sections.filter(s=>s.section===name).length!==1)||e.sections.some(s=>!['fulfilled','partial','unavailable'].includes(s.status)||!Array.isArray(s.rows)||s.rows.length>500||s.status==='unavailable'&&s.rows.length))throw fail('EVIDENCE_SCOPE_MISMATCH');
+ if(e?.kind!=='governed_loyalty'||stableAnalyticalJSON(context.loyalty_scope)!==stableAnalyticalJSON(e.loyalty_scope)||!Array.isArray(e.sections)||e.sections.length!==context.loyalty_scope.sections.length||context.loyalty_scope.sections.some(name=>e.sections.filter(s=>s.section===name).length!==1)||e.sections.some(s=>!['fulfilled','partial','unavailable'].includes(s.status)||!Array.isArray(s.rows)||s.rows.length>500||s.status==='unavailable'&&s.rows.length))throw fail('EVIDENCE_SCOPE_MISMATCH');
  if(context.loyalty_scope.program_id!=null&&context.loyalty_scope.program_id!==e.program_id)throw fail('EVIDENCE_SCOPE_MISMATCH');
  for(const s of e.sections)if(s.status!=='unavailable')validateRows(s.section,s.rows,context);
  if(e.performance)assertPerformanceEvidence(context,e);
