@@ -1414,6 +1414,14 @@
     {
       "file": "test/loyaltylion-runtime-config.test.js",
       "purpose": "Reporting and scope resolution use the private runtime configuration; missing or malformed private files fail closed without fallback. Production-default provider and parser must agree on the private program in fresh and continued interactive/durable November overview requests (0d8cbfdf-33bd-4657-86f6-db2140368158), without injected test configuration."
+    },
+    {
+      "file": "test/loyaltylion-history.test.js",
+      "purpose": "Reviewed bounds, >10000 pagewise transaction staging, atomic coverage/checkpoints, gap-first resumption, interrupted publication and safe guard handling; no production replay."
+    },
+    {
+      "file": "test/oracle-loyalty-performance.test.js",
+      "purpose": "Default completed London year and MTD, explicit/comparison periods, current-roster versus historical membership, mature zero-order cohorts, currency/AOV SQL, partial workbook delivery and authenticated recovery."
     }
   ]
 }

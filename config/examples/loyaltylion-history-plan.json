@@ -1,0 +1,30 @@
+{
+  "version": 1,
+  "status": "proposed",
+  "reviewed_by": null,
+  "reviewed_at": null,
+  "start_at": "1970-01-01T00:00:00.000Z",
+  "end_exclusive": "2026-11-13T00:00:00.000Z",
+  "window_days": 7,
+  "incremental_enabled": false,
+  "roster_staging": {
+    "reviewed_by": null,
+    "reviewed_at": null,
+    "max_rows": 100000,
+    "max_pages": 250,
+    "max_calls": 300,
+    "max_ms": 900000,
+    "max_bytes": 64000000,
+    "page_bytes": 2000000
+  },
+  "transaction_staging": {
+    "reviewed_by": null,
+    "reviewed_at": null,
+    "max_rows": 100000,
+    "max_pages": 250,
+    "max_calls": 300,
+    "max_ms": 900000,
+    "max_bytes": 64000000,
+    "page_bytes": 2000000
+  }
+}

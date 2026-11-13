@@ -52,6 +52,11 @@ test('production default provider and parser share private program identity thro
       assert.equal(result.evidence.sections.find(s=>s.section==='membership').status,'fulfilled');
       assert.equal(result.evidence.sections.find(s=>s.section==='points').status,'fulfilled');
       assert.equal(result.evidence.sections.find(s=>s.section==='linkage').linkage_coverage.matched,2);
+      const performance=await h.submit('LoyaltyLion performance report for October 2026');
+      assert.equal(performance.evidence.program_id,'1');
+      assert.equal(performance.evidence.performance.version,1);
+      assert(performance.artifact);
+
      }
     }finally{await h.close();}
    }
