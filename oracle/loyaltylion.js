@@ -1,3 +1,4 @@
+import {readPerformance,assertPerformanceEvidence} from './loyalty-performance.js';
 import {loyaltyMarkdown} from './loyalty-presentation.js';
 import {loadLoyaltyConfig} from '../loyaltylion/runtime-config.js';
 import {validateConfig} from '../loyaltylion/contracts.js';
@@ -91,13 +92,16 @@ export function createLoyaltyReportService({bigquery,project,env={},config=defau
     sections.push({section,status:complete?'fulfilled':'partial',rows:rows.slice(0,500),truncated,coverage_complete:complete,transaction_window_complete:eventCoverage,...(linkCoverage?{linkage_coverage:linkCoverage}:{}),...(params.roster_run?{roster_run:params.roster_run}:{}),...(section==='claims'?{definition:'Distinct claims by claimed_at; actual use unavailable. Coverage concerns accessible transaction history, not proof of all claims including claims without point movements.'}:{}),...(section==='linkage'?{commerce_coverage:'unverified',definition:'Observed orders linked from point transactions in the requested London transaction-date window; order_date is the original order date, not a second period filter.'}:{})});
    }catch(e){sections.push({section,status:'unavailable',code:/^LOYALTY_[A-Z_]+$/.test(e.code||'')?e.code:'LOYALTY_SECTION_ACCESS_UNAVAILABLE',rows:[]});}
   }
-  evidence.coverage.complete=!evidence.comparison&&sections.every(s=>s.status==='fulfilled'&&s.coverage_complete)&&!evidence.coverage.truncated;return evidence;
+  evidence.coverage.complete=!evidence.comparison&&sections.every(s=>s.status==='fulfilled'&&s.coverage_complete)&&!evidence.coverage.truncated;
+  if(scope.report_kind==='performance'){evidence.performance=await readPerformance({context,evidence,bigquery,project,config,options:{signal,deadlineAt,onProviderStage,onQueryAllocated,midnight:londonMidnight},now:as_of});evidence.coverage.complete=false;}
+  return evidence;
  };
 }
 export function assertLoyaltyEvidence(context,e){
  if(e?.kind!=='governed_loyalty'||JSON.stringify(context.loyalty_scope)!==JSON.stringify(e.loyalty_scope)||!Array.isArray(e.sections)||e.sections.length!==context.loyalty_scope.sections.length||context.loyalty_scope.sections.some(name=>e.sections.filter(s=>s.section===name).length!==1)||e.sections.some(s=>!['fulfilled','partial','unavailable'].includes(s.status)||!Array.isArray(s.rows)||s.rows.length>500||s.status==='unavailable'&&s.rows.length))throw fail('EVIDENCE_SCOPE_MISMATCH');
  if(context.loyalty_scope.program_id!=null&&context.loyalty_scope.program_id!==e.program_id)throw fail('EVIDENCE_SCOPE_MISMATCH');
  for(const s of e.sections)if(s.status!=='unavailable')validateRows(s.section,s.rows,context);
+ if(e.performance)assertPerformanceEvidence(context,e);
  if((context.loyalty_scope.tier_basis==='historical'||context.loyalty_scope.reward_use)&&e.sections.some(s=>(context.loyalty_scope.tier_basis==='historical'||s.section==='claims')&&s.status!=='unavailable'))throw fail('EVIDENCE_SCOPE_MISMATCH');
  return true;
 }
@@ -105,10 +109,15 @@ export async function answerLoyaltyReport({context,provider,...options}){
  const evidence=await provider(context,options);assertLoyaltyEvidence(context,evidence);
  const lines=loyaltyMarkdown(evidence);
  const result={answer:lines.join('\n'),analysis_context:context,evidence,partial:!evidence.coverage.complete,tools:['get_loyalty_report']};
- if(context.output_preference==='xlsx'){
+ if(context.output_preference==='xlsx'||context.loyalty_scope.report_kind==='performance'&&evidence.performance){
   const {exportRetainedSpreadsheet}=await import('./retained-spreadsheet.js'),{assertEvidenceAgreement}=await import('./analysis-route-dispatcher.js');
   const timestamp=typeof options.now==='number'?options.now:Date.now();
-  return exportRetainedSpreadsheet({recent:{...result,retained_at:new Date(timestamp).toISOString()},context,store:options.exportStore,owner:options.exportOwner,requestId:options.requestId,downloadBase:options.downloadBase,assertAgreement:assertEvidenceAgreement,now:timestamp});
+  const exported=await exportRetainedSpreadsheet({recent:{...result,retained_at:new Date(timestamp).toISOString()},context,store:options.exportStore,owner:options.exportOwner,requestId:options.requestId,downloadBase:options.downloadBase,assertAgreement:assertEvidenceAgreement,now:timestamp});
+  if(evidence.performance&&exported.artifact){
+   const failed=evidence.performance.tables.filter(t=>t.status==='unavailable').map(t=>t.section),summary=`LoyaltyLion performance report: ${context.start_date} to ${context.end_date} inclusive (London)${context.loyalty_scope.performance_mtd?', plus separate current month through yesterday':''}. Membership snapshot: ${evidence.snapshot_observed_at||'unavailable'}. Purchasing uses current-roster groups, not historical membership. Cohort rates require certified observation coverage. Actual reward use and historical tiers remain unavailable.${failed.length?' Unavailable sections: '+failed.join(', ')+'.':''} See Coverage and Read me in the workbook. Differences are observed associations, not proven programme impact.`;
+   return {...exported,answer:summary,presentation:{version:1,summary_markdown:summary,supporting_markdown:lines.join('\n')}};
+  }
+  return exported;
  }
  return result;
 }

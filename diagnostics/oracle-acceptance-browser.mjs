@@ -1,3 +1,4 @@
+import {verifyLoyaltyPerformanceBrowser} from '../test/helpers/loyalty-performance-browser.js';
 import {verifyLoyaltyBrowser} from '../test/helpers/loyalty-browser.js';
 import {verifyMultiPeriodDailyBrowser} from '../test/helpers/multi-period-daily-browser.js';
 import {verifyBankHolidaySaleBrowser} from '../test/helpers/bank-holiday-sale-browser.js';
@@ -32,6 +33,7 @@ try{
   await verifyBankHolidaySaleBrowser(browser);
   await verifyMultiPeriodDailyBrowser(browser);
   await verifyLoyaltyBrowser(browser);
+  await verifyLoyaltyPerformanceBrowser(browser);
   await verifyRetainedSpreadsheetBrowser(browser);
   await verifyInventoryReportBrowser(browser);
   await verifyFilteredInventoryBrowser(browser);

@@ -1,4 +1,5 @@
 import ExcelJS from 'exceljs';
+import {performanceWorkbookTables} from './loyalty-performance.js';
 import {createHash} from 'node:crypto';
 import {priorityArtifactId} from './product-priority-storage.js';
 import {stableAnalyticalJSON,resolveAnalyticalPlan,analyticalPlanKey} from './analytical-plan.js';
@@ -16,7 +17,8 @@ export function retainedSpreadsheetTables(evidence,{answer='',context={},as_of=n
  safe(evidence);
  const tables=[];
  const nested=v=>v&&typeof v==='object'&&(Array.isArray(v)||Object.values(v).some(x=>nested(x)));
- if(['current_stock','inventory_report'].includes(evidence.kind)&&Array.isArray(evidence.products)){
+ if(evidence.kind==='governed_loyalty'&&evidence.performance){tables.push(...performanceWorkbookTables(evidence));}
+ else if(['current_stock','inventory_report'].includes(evidence.kind)&&Array.isArray(evidence.products)){
   const locations=evidence.location_coverage?.resolved||evidence.locations||[];
   const headers=['Product','Variant','SKU',...locations.map(l=>l.name||l.location_name||l.id)];
   const rows=evidence.products.flatMap(p=>(p.variants||[]).map(v=>[p.title,v.title,v.sku||null,...locations.map(l=>{const q=v.locations?.find(q=>q.location_id===(l.id||l.location_id));return typeof q?.available==='number'?q.available:null;})]));

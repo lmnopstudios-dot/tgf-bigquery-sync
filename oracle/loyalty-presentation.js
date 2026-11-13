@@ -2,6 +2,7 @@
 export function loyaltyMarkdown(e){
  const text=v=>String(v??'Unavailable').replaceAll('|','\\|').replaceAll('\n',' ').replaceAll('<','&lt;').replaceAll('>','&gt;');
  const lines=['# LoyaltyLion reporting',`Report generated at ${text(e.as_of)}. Membership snapshot collected at ${text(e.snapshot_observed_at)}. Dates filter points and claims; they do not turn current membership into historical membership.`];
+ if(e.performance){lines.push('', 'LoyaltyLion performance report: observed programme usage and customer purchasing. See the authenticated workbook for purchasing groups, enrolment cohorts, linkage and coverage. Current-roster groups are not historical membership; differences are associations, not proven programme impact.');}
  for(const s of e.sections||[]){
   lines.push('',`## ${text(s.section)}`);
   if(s.status==='unavailable'){lines.push(`Unavailable: ${text(s.code)}.`);continue;}

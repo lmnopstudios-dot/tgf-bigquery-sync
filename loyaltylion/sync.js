@@ -2,7 +2,7 @@ import {randomUUID} from 'node:crypto';
 import {readFile} from 'node:fs/promises';
 import {pathToFileURL} from 'node:url';
 import {createBigQueryClient} from '../bigquery/client.js';
-import {collectionGate,fail,instant,normalizeCustomer,normalizeTransaction,TABLES,validateConfig,rosterStagingPlan} from './contracts.js';
+import {collectionGate,fail,instant,normalizeCustomer,normalizeTransaction,TABLES,validateConfig,rosterStagingPlan,transactionStagingPlan} from './contracts.js';
 import {createLoyaltyClient} from './client.js';
 const safe=s=>{if(!/^[A-Za-z0-9_-]+$/.test(s))throw fail('LOYALTY_INVALID_IDENTIFIER');return s;};
 const table=(p,d,t)=>`\`${safe(p)}.${safe(d)}.${safe(t)}\``;
@@ -26,15 +26,15 @@ export async function provision({bigquery,project,config,env={},apply=false}){
  await verifyLoyaltyRetention(bigquery,config.dataset);
  await bigquery.query({query:setupGuardSql(project,config.dataset),params:{program_id:config.program_id},types:{program_id:'STRING'},location:dest.location,useLegacySql:false,maximumBytesBilled:'100000000',jobTimeoutMs:15000});
 }
-export function promotionSql(project,dataset,resource,customerStage=null){
+export function promotionSql(project,dataset,resource,customerStage=null,claimStage=null){
  const fq=n=>table(project,dataset,n);
  const columns=n=>TABLES[n].map(f=>f.name).join(','),values=n=>TABLES[n].map(f=>'s.'+f.name).join(',');
  const projectJson=(name,param)=>`CREATE TEMP TABLE incoming_${name} AS SELECT ${TABLES[name].map(f=>`SAFE_CAST(JSON_VALUE(j,'$.${f.name}') AS ${f.type}) ${f.name}`).join(',')} FROM UNNEST(JSON_QUERY_ARRAY(@${param})) j;`;
  const transaction=resource==='transactions';
- return `${customerStage&&!transaction?`CREATE TEMP TABLE incoming_customer_snapshots AS SELECT * FROM ${table(project,dataset,customerStage)};`:projectJson(transaction?'points_transactions':'customer_snapshots','rows')}
- ${transaction?projectJson('reward_claim_observations','claims'):''}
+ return `${customerStage?`CREATE TEMP TABLE incoming_${transaction?'points_transactions':'customer_snapshots'} AS SELECT * FROM ${table(project,dataset,customerStage)};`:projectJson(transaction?'points_transactions':'customer_snapshots','rows')}
+ ${transaction?(claimStage?`CREATE TEMP TABLE incoming_reward_claim_observations AS SELECT * FROM ${table(project,dataset,claimStage)};`:projectJson('reward_claim_observations','claims')):''}
  ASSERT (SELECT COUNT(*) FROM incoming_${transaction?'points_transactions':'customer_snapshots'})=@row_count AS 'LOYALTY_PAYLOAD_COUNT';
- ${transaction?'':"ASSERT (SELECT COUNT(DISTINCT customer_ref_id)=COUNT(*) FROM incoming_customer_snapshots) AS 'LOYALTY_STAGE_DUPLICATES';"}
+ ASSERT (SELECT COUNT(DISTINCT ${transaction?'transaction_id':'customer_ref_id'})=COUNT(*) FROM incoming_${transaction?'points_transactions':'customer_snapshots'}) AS 'LOYALTY_STAGE_DUPLICATES';
  BEGIN TRANSACTION;
  ASSERT (SELECT COUNT(*) FROM ${fq('sync_guard')} WHERE program_id=@program_id AND holder=@guard_holder)=1 AS 'LOYALTY_GUARD_OWNERSHIP';
  UPDATE ${fq('sync_guard')} SET acquired_at=CURRENT_TIMESTAMP() WHERE program_id=@program_id AND holder=@guard_holder;
@@ -70,7 +70,7 @@ export async function previewRoster({config,client,onProgress=()=>{},now=()=>new
  if(!complete)throw fail('LOYALTY_PAGE_BOUND');
  return {status:'preview_complete',rows,pages,bytes,warehouse_writes:false,complete_roster:true};
 }
-async function verifyVendor(config,client){
+export async function verifyVendor(config,client){
  const identity=(await client.get('identity/whoami')).identity;
  if(String(identity?.program_id)!==config.program_id||String(identity?.account_id)!==config.account_id||!['read_customers','read_orders'].every(s=>identity?.scopes?.includes(s)))throw fail('LOYALTY_IDENTITY_OR_SCOPE_MISMATCH');
  const sites=(await client.get('sites')).sites;
@@ -92,8 +92,27 @@ async function collectInternal({config,env={},apply=false,client,bigquery,projec
   try{
    // No production provisioning or implicit table creation here.
    for(const name of Object.keys(TABLES)){const [exists]=await bigquery.dataset(config.dataset).table(name).exists();if(!exists)throw fail('LOYALTY_SCHEMA_UNAVAILABLE');}
-   let rows=[],claims=[],stage=null,rowCount=0;
-   const staging=resource==='customers'?rosterStagingPlan(config):null;
+   let rows=[],claims=[],stage=null,claimStage=null,rowCount=0;
+   const staging=resource==='customers'?rosterStagingPlan(config):transactionStagingPlan(config);
+   if(resource==='transactions'&&staging){
+    stage='_loyalty_points_'+run.run_id.replaceAll('-','');claimStage=stage+'_claims';
+    for(const [name,schema] of [[stage,TABLES.points_transactions],[claimStage,TABLES.reward_claim_observations]])
+      await bigquery.query({query:`CREATE TABLE ${table(project,config.dataset,name)} (${schema.map(f=>f.name+' '+f.type).join(',')}) OPTIONS(expiration_timestamp=TIMESTAMP_ADD(CURRENT_TIMESTAMP(),INTERVAL 24 HOUR))`,location:target.location,useLegacySql:false,jobTimeoutMs:20000});
+    let bytes=0,complete=false;
+    for await(const page of client.pages('transactions',{created_at_min:plan.start_at,created_at_max:plan.end_exclusive},staging)){
+      const normalized=page.items.map(item=>normalizeTransaction(item,run));
+      if(normalized.some(n=>n.transaction.created_at<plan.start_at||n.transaction.created_at>=plan.end_exclusive))throw fail('LOYALTY_WINDOW_MISMATCH');
+      const payloads=[[stage,TABLES.points_transactions,normalized.map(n=>n.transaction)],[claimStage,TABLES.reward_claim_observations,normalized.flatMap(n=>n.claim?[n.claim]:[])]];
+      for(const [name,schema,items] of payloads){
+        const payload=JSON.stringify(items),size=Buffer.byteLength(payload);bytes+=size;
+        if(size>staging.page_bytes||bytes>staging.max_bytes)throw fail('LOYALTY_PAYLOAD_BOUND');
+        if(items.length)await bigquery.query({query:`INSERT INTO ${table(project,config.dataset,name)} SELECT ${schema.map(f=>`CAST(JSON_VALUE(j,'$.${f.name}') AS ${f.type})`).join(',')} FROM UNNEST(JSON_QUERY_ARRAY(@rows)) j`,params:{rows:payload},types:{rows:'STRING'},location:target.location,useLegacySql:false,maximumBytesBilled:'1000000000',jobTimeoutMs:20000});
+      }
+      rowCount+=normalized.length;complete=page.complete;
+      onProgress({phase:'transactions_staging',pages:page.page,rows:rowCount,bytes,...client.stats()});
+    }
+    if(!complete)throw fail('LOYALTY_PAGE_BOUND');
+   }else
    if(staging){
     stage='_loyalty_roster_'+run.run_id.replaceAll('-','');
     await bigquery.query({query:`CREATE TABLE ${table(project,config.dataset,stage)}
@@ -122,7 +141,7 @@ async function collectInternal({config,env={},apply=false,client,bigquery,projec
    onProgress({phase:resource+'_publication',rows:rowCount,status:'started'});
    await verifyLoyaltyRetention(bigquery,config.dataset);
    commitUncertain=true;
-   await bigquery.query({query:promotionSql(project,config.dataset,resource,stage),params:{...payload,...run,guard_holder:guardHolder,resource,start_at:plan.start_at,end_exclusive:plan.end_exclusive,row_count:rowCount},types:{rows:'STRING',claims:'STRING',program_id:'STRING',run_id:'STRING',guard_holder:'STRING',observed_at:'STRING',resource:'STRING',start_at:'STRING',end_exclusive:'STRING',row_count:'INT64'},location:target.location,useLegacySql:false,maximumBytesBilled:'1000000000',jobTimeoutMs:20000,labels:{component:'loyalty_manual_sync',operation:'promote'}});
+   await bigquery.query({query:promotionSql(project,config.dataset,resource,stage,claimStage),params:{...payload,...run,guard_holder:guardHolder,resource,start_at:plan.start_at,end_exclusive:plan.end_exclusive,row_count:rowCount},types:{rows:'STRING',claims:'STRING',program_id:'STRING',run_id:'STRING',guard_holder:'STRING',observed_at:'STRING',resource:'STRING',start_at:'STRING',end_exclusive:'STRING',row_count:'INT64'},location:target.location,useLegacySql:false,maximumBytesBilled:'1000000000',jobTimeoutMs:20000,labels:{component:'loyalty_manual_sync',operation:'promote'}});
    commitUncertain=false;
    results.push({resource,status:'complete',run_id:run.run_id,rows:rowCount});
   }catch(e){results.push({resource,status:'failed_or_commit_unknown',run_id:run.run_id,code:/^LOYALTY_[A-Z_]+$/.test(e.code||'')?e.code:'LOYALTY_RESOURCE_OR_COMMIT_UNAVAILABLE',publication_submitted:commitUncertain,bigquery_reason:['invalidQuery','accessDenied','notFound','quotaExceeded','backendError','rateLimitExceeded'].includes(e.errors?.[0]?.reason)?e.errors[0].reason:null});break;}
