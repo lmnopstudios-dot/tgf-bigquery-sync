@@ -57,3 +57,16 @@ test('unsupported purchasing values and weekly grain cannot silently become link
  const f=loyaltyFixture();const values=scope('Show LoyaltyLion purchasing revenue for October 2026'),r=await f.provider(values);assert.equal(r.sections[0].code,'LOYALTY_PURCHASING_VALUES_UNAVAILABLE');
  const daily=scope('Show LoyaltyLion points daily for October 2026'),weekly=scope('By week',daily),w=await f.provider(weekly);assert.equal(w.sections[0].code,'LOYALTY_GRAIN_UNSUPPORTED');
 });
+
+test('membership uses retained observation time; unfiltered linkage must reconcile all point records',async()=>{
+ const {answerLoyaltyReport}=await import('../oracle/loyaltylion.js');
+ const f=loyaltyFixture(),context=scope('Show LoyaltyLion overview for October 2026');
+ const r=await answerLoyaltyReport({context,provider:f.provider});
+ assert.match(r.answer,/Report generated at 2026-11-06T12:00:00/);
+ assert.match(r.answer,/Membership snapshot collected at 2026-11-06T10:00:00/);
+ const original=f.bigquery.query;
+ f.bigquery.query=async q=>q.labels.operation==='linkage'?[[]]:original(q);
+ const bad=await f.provider(context);
+ assert.equal(bad.sections.find(s=>s.section==='linkage').code,'LOYALTY_LINKAGE_ROWS_MISMATCH');
+ assert.equal(bad.sections.find(s=>s.section==='membership').status,'fulfilled');
+});

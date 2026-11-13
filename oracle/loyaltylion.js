@@ -1,5 +1,5 @@
 import {loyaltyMarkdown} from './loyalty-presentation.js';
-import {loadLoyaltyConfig} from '../loyaltylion/runtime-config.js';
+import {readFileSync} from 'node:fs';
 import {validateConfig} from '../loyaltylion/contracts.js';
 import {resolveAnalyticalPlan} from './analytical-plan.js';
 import {shopifyRecordedChannel} from './shopify-sale-binding.js';
@@ -7,7 +7,7 @@ import {qualifyingCustomerOrderPredicate,MATRIXIFY_APP_ID} from './customer-quer
 import {datasetLocation} from '../bigquery/dataset-location.js';
 import {boundedQuery} from './bounded-query.js';
 import {boundedEvidenceRead} from './bounded-evidence-read.js';
-const defaultConfig=loadLoyaltyConfig();
+const defaultConfig=JSON.parse(readFileSync(new URL('../config/loyaltylion-account.json',import.meta.url),'utf8'));
 const fail=code=>Object.assign(Error(code),{code});
 const clean=v=>v&&typeof v==='object'&&'value'in v?v.value:v;
 const rowFields={membership:['enrolled','guest','blocked','profiles','approved_points','pending_points','unlinked_customer_profiles'],tiers:['tier','enrolled_members','approved_points','pending_points'],points:['date','resource','point_movements','approved_delta','pending_delta','net_points_delta'],claims:['date','reward_kind','reward_claims','claimed_points'],linkage:['order_date','linkage_state','channel','currency','point_records','linked_qualifying_orders']};
@@ -63,7 +63,7 @@ export function createLoyaltyReportService({bigquery,project,env={},config=defau
   let location,coverage=[],tierObserved=true;
   const hooks=()=>({signal,deadlineAt,maximumMs:15000,onProviderStage,onQueryAllocated});
   const read=async name=>{signal?.throwIfAborted();const [rows]=await boundedQuery(bigquery,{query:q[name],params,types,location,useLegacySql:false,maximumBytesBilled:'1000000000',jobTimeoutMs:15000,labels:{component:'oracle_loyalty',operation:name}},hooks());return rows.map(r=>Object.fromEntries(Object.entries(r).map(([k,v])=>[k,clean(v)])));};
-  try{location=await boundedEvidenceRead(()=>datasetLocation(bigquery,project,config.dataset),hooks());coverage=await read('coverage');evidence.coverage.windows=coverage.slice(0,500);evidence.coverage.truncated=coverage.length>500;params.roster_run=coverage.find(r=>r.resource==='customers'&&r.status==='complete')?.run_id||null;params.transaction_runs=[...new Set(coverage.filter(r=>r.resource==='transactions'&&r.status==='complete').map(r=>r.run_id))];}catch{evidence.coverage.status='unavailable';}
+  try{location=await boundedEvidenceRead(()=>datasetLocation(bigquery,project,config.dataset),hooks());coverage=await read('coverage');evidence.coverage.windows=coverage.slice(0,500);evidence.coverage.truncated=coverage.length>500;const roster=coverage.find(r=>r.resource==='customers'&&r.status==='complete');params.roster_run=roster?.run_id||null;evidence.snapshot_observed_at=roster?.observed_at||null;params.transaction_runs=[...new Set(coverage.filter(r=>r.resource==='transactions'&&r.status==='complete').map(r=>r.run_id))];}catch{evidence.coverage.status='unavailable';}
   if(scope.tier&&params.roster_run){try{tierObserved=Number((await read('tier_presence'))[0]?.profiles)>0;}catch{tierObserved=false;}}
   for(const section of scope.sections){
    let unavailable=null;
@@ -84,7 +84,10 @@ export function createLoyaltyReportService({bigquery,project,env={},config=defau
     const required=coverage.filter(r=>r.resource==='transactions');
     const eventCoverage=['membership','tiers'].includes(section)?true:coverageComplete(required,londonMidnight(context.start_date),londonMidnight(new Date(Date.parse(context.end_date+'T00:00:00Z')+86400000).toISOString().slice(0,10)));
     const complete=eventCoverage&&!truncated&&!evidence.coverage.truncated&&!['claims','linkage'].includes(section);
-    let linkCoverage=null;if(section==='linkage'){linkCoverage=(await read('linkage_coverage'))[0]||null;if(!linkCoverage||['no_order_reference','unmatched_or_ineligible_order','customer_unavailable','ambiguous_customer','matched'].reduce((n,k)=>n+linkCoverage[k],0)!==linkCoverage.point_records)throw fail('LOYALTY_LINKAGE_COVERAGE_INVALID');}
+    let linkCoverage=null;if(section==='linkage'){linkCoverage=(await read('linkage_coverage'))[0]||null;if(!linkCoverage||['no_order_reference','unmatched_or_ineligible_order','customer_unavailable','ambiguous_customer','matched'].reduce((n,k)=>n+linkCoverage[k],0)!==linkCoverage.point_records)throw fail('LOYALTY_LINKAGE_COVERAGE_INVALID');
+      if(!context.channel&&!context.currencies.length&&!truncated&&rows.reduce((n,r)=>n+r.point_records,0)!==linkCoverage.point_records)
+        throw fail('LOYALTY_LINKAGE_ROWS_MISMATCH');
+    }
     sections.push({section,status:complete?'fulfilled':'partial',rows:rows.slice(0,500),truncated,coverage_complete:complete,transaction_window_complete:eventCoverage,...(linkCoverage?{linkage_coverage:linkCoverage}:{}),...(params.roster_run?{roster_run:params.roster_run}:{}),...(section==='claims'?{definition:'Distinct claims by claimed_at; actual use unavailable. Coverage concerns accessible transaction history, not proof of all claims including claims without point movements.'}:{}),...(section==='linkage'?{commerce_coverage:'unverified',definition:'Observed orders linked from point transactions in the requested London transaction-date window; order_date is the original order date, not a second period filter.'}:{})});
    }catch(e){sections.push({section,status:'unavailable',code:/^LOYALTY_[A-Z_]+$/.test(e.code||'')?e.code:'LOYALTY_SECTION_ACCESS_UNAVAILABLE',rows:[]});}
   }
