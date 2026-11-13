@@ -1422,6 +1422,10 @@
     {
       "file": "test/oracle-loyalty-performance.test.js",
       "purpose": "Default completed London year and MTD, explicit/comparison periods, current-roster versus historical membership, mature zero-order cohorts, currency/AOV SQL, partial workbook delivery and authenticated recovery."
+    },
+    {
+      "file": "test/oracle-loyalty-persistence.test.js",
+      "purpose": "Production BigQuery export store canonical JSON must preserve LoyaltyLion scope, windows and every workbook value through interactive/durable delivery, polling, continued exports and downloads. Cover 4d14c2a6-0e21-4ec0-80c0-7a7e1ff3fc4b; reject actual scope/cell mutations and preserve generic cross-subject exports."
     }
   ]
 }

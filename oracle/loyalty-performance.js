@@ -1,3 +1,4 @@
+import {stableAnalyticalJSON} from './analytical-plan.js';
 import {boundedQuery} from './bounded-query.js';
 import {datasetLocation} from '../bigquery/dataset-location.js';
 import {boundedEvidenceRead} from './bounded-evidence-read.js';
@@ -122,7 +123,7 @@ const OUTPUT_FIELDS={
 export function assertPerformanceEvidence(context,e){
  const fail=()=>{throw Object.assign(Error('EVIDENCE_SCOPE_MISMATCH'),{code:'EVIDENCE_SCOPE_MISMATCH',failed_stage:'evidence_validation'});};
  const p=e.performance;
- if(context.loyalty_scope.report_kind!=='performance'||p?.version!==1||!Array.isArray(p.tables)||p.tables.length!==5||JSON.stringify(p.windows)!==JSON.stringify(performanceWindows(context,e.as_of)))fail();
+ if(context.loyalty_scope.report_kind!=='performance'||p?.version!==1||!Array.isArray(p.tables)||p.tables.length!==5||stableAnalyticalJSON(p.windows)!==stableAnalyticalJSON(performanceWindows(context,e.as_of)))fail();
  for(const section of Object.keys(OUTPUT_FIELDS)){
   const tables=p.tables.filter(t=>t.section===section);if(tables.length!==1)fail();const t=tables[0];
   if(!['partial','unavailable'].includes(t.status)||!Array.isArray(t.rows)||t.rows.length>1000||t.status==='unavailable'&&t.rows.length)fail();

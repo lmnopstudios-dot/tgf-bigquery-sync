@@ -1,9 +1,10 @@
+import {exportJsonWire} from './export-json-wire.js';
 import assert from 'node:assert/strict';
 import {acceptanceServer} from './oracle-acceptance.js';
 import {loyaltyFixture,LOYALTY_NOW} from './loyalty-fixture.js';
 export async function verifyLoyaltyBrowser(browser){
  for(const width of [390,1280]){
-  const f=loyaltyFixture({failure:'points'}),h=await acceptanceServer(f,{durable:true,now:LOYALTY_NOW}),page=await browser.newPage({viewport:{width,height:900}});
+  const f=loyaltyFixture({failure:'points'});f.exportStore=exportJsonWire().store;const h=await acceptanceServer(f,{durable:true,now:LOYALTY_NOW}),page=await browser.newPage({viewport:{width,height:900}});
   try{
    await page.goto(h.origin+'/oracle/');await page.locator('#password').fill('fixture');await page.locator('#login-form button').click();await page.locator('#app').waitFor({state:'visible'});
    const send=async message=>{const count=await page.locator('.analytical-answer').count();await page.locator('#message').fill(message);await page.locator('#send').click();await page.waitForFunction(()=>!document.querySelector('#send').disabled);assert.equal(await page.locator('.analytical-answer').count(),count+1);return page.locator('.analytical-answer').last();};
