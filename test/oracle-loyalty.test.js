@@ -70,3 +70,27 @@ test('membership uses retained observation time; unfiltered linkage must reconci
  assert.equal(bad.sections.find(s=>s.section==='linkage').code,'LOYALTY_LINKAGE_ROWS_MISMATCH');
  assert.equal(bad.sections.find(s=>s.section==='membership').status,'fulfilled');
 });
+
+test('generated linkage SQL preserves unfiltered null/empty currency arrays and explicit currencies',async()=>{
+ const {loyaltyQueries}=await import('../oracle/loyaltylion.js');
+ const {spawnSync}=await import('node:child_process');
+ const sql=loyaltyQueries('fixture','loyaltylion').linkage;
+ const predicate=sql.match(/selected_links AS\(SELECT \* FROM links WHERE ([\s\S]*?)\) SELECT/)[1];
+ const script=`
+import sqlite3,json,sys
+predicate=sys.stdin.read().replace('UNNEST(@currencies)','(SELECT value FROM json_each(@currencies))')
+c=sqlite3.connect(':memory:')
+c.create_function('ARRAY_LENGTH',1,lambda v:None if v is None else len(json.loads(v)))
+c.execute('CREATE TABLE links(channel TEXT,currency TEXT,point_records INT)')
+c.executemany('INSERT INTO links VALUES (?,?,?)',[('online','GBP',1),('instore','USD',2),(None,None,3)])
+q='SELECT COALESCE(SUM(point_records),0) FROM links WHERE '+predicate
+assert c.execute(q,{'channel':None,'currencies':None}).fetchone()[0]==6
+assert c.execute(q,{'channel':None,'currencies':'[]'}).fetchone()[0]==6
+assert c.execute(q,{'channel':None,'currencies':'["GBP"]'}).fetchone()[0]==1
+assert c.execute(q,{'channel':'instore','currencies':None}).fetchone()[0]==2
+# The former predicate reproduces zero represented rows for null.
+assert c.execute(q.replace('COALESCE(ARRAY_LENGTH(@currencies),0)','ARRAY_LENGTH(@currencies)'),{'channel':None,'currencies':None}).fetchone()[0]==0
+`;
+ const r=spawnSync('python3',['-c',script],{input:predicate,encoding:'utf8'});
+ assert.equal(r.status,0,r.stderr);
+});
