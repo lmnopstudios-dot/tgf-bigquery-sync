@@ -1438,6 +1438,10 @@
     {
       "file": "test/shopify-customer-refresh.test.js",
       "purpose": "Customer-link catch-up must not advance the scheduled watermark; gated bootstrap, exact pagination, atomic publication, uncertainty/locks, no-expiry controls, disabled Render cron and independent freshness checks."
+    },
+    {
+      "file": "test/loyalty-purchase-changes.test.js",
+      "purpose": "Executed paired before/after enrolment AOV and customer-weighted mean/median order gaps; one-sided buyers, exact duplicate orders, migrations, DST, currency/channel separation, missing money, zero gaps, certified coverage and durable authenticated workbook compatibility."
     }
   ]
 }
