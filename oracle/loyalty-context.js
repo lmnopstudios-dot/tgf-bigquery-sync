@@ -18,7 +18,9 @@ export function loyaltyContextPatch(base,text,now){
  if(!performance&&/\boverview\b/i.test(text)){delete scope.report_kind;delete scope.performance_mtd;}
  const named=[];if(/\bmembers?(?:hip)?|enrol(?:led|ment)/i.test(text))named.push('membership');if(/\btiers?\b/i.test(text))named.push('tiers');if(/\bpoints?\b/i.test(text))named.push('points');if(/\b(?:reward|claim|redemption)s?\b/i.test(text))named.push('claims');if(/\b(?:purchas\w*|orders?|linkage|linked|spend|sales)\b/i.test(text))named.push('linkage');
  if(/\boverview|all sections\b/i.test(text))scope.sections=sections;else if(named.length&&!/\bonly\s+(?:gold|silver|platinum|diamond)\b/i.test(text))scope.sections=[...new Set(named)];
- if(/\b(?:historical|at (?:the )?(?:order|purchase)|held when|tier history)\b/i.test(text))scope.tier_basis='historical';else if(/\bcurrent\b/i.test(text))scope.tier_basis='current';
+ // Negated membership-at-purchase wording is a disclosure, not a historical-tier filter.
+ const tierText=text.replace(/\b(?:not|rather than)\s+(?:membership|membership status|tiers?)\s+at\s+(?:(?:the )?time of\s+)?(?:purchase|order)\b/gi,'');
+ if(/\b(?:historical|at (?:the )?(?:order|purchase)|held when|tier history)\b/i.test(tierText))scope.tier_basis='historical';else if(/\bcurrent\b/i.test(tierText))scope.tier_basis='current';
  if(/\b(?:actually (?:used|redeemed)|actual reward use|rewards? used|used rewards?|usage)\b/i.test(text))scope.reward_use=true;else if(/\bclaims? only|claimed rewards? only\b/i.test(text))scope.reward_use=false;
  const tier=text.match(/\btier\s+["']([^"']{1,100})["']/i)||text.match(/\b(?:only|just|tier)\s+(Gold|Silver|Platinum|Diamond)\b/i);if(tier)scope.tier=tier[1].toLowerCase();if(/\ball tiers\b/i.test(text))scope.tier=null;
  if(/\b(?:sales|revenue|spend|aov|average order value|repeat|frequency|retention|lifetime|uplift)\b/i.test(text))scope.purchase_values=true;else if(/\b(?:linkage|links?|order counts?) only\b/i.test(text))scope.purchase_values=false;
