@@ -1434,6 +1434,10 @@
     {
       "file": "test/loyalty-evidence-gaps.test.js",
       "purpose": "Complete versus unverified commerce coverage, partial-day cutoff and monthly windows, stale roster metadata, October enrolments with November outcomes, immature and genuine zero-purchase cohorts, missing/ambiguous native links, bounded aggregate source/manifests audit. Synthetic execution does not certify live coverage."
+    },
+    {
+      "file": "test/shopify-customer-refresh.test.js",
+      "purpose": "Customer-link catch-up must not advance the scheduled watermark; gated bootstrap, exact pagination, atomic publication, uncertainty/locks, no-expiry controls, disabled Render cron and independent freshness checks."
     }
   ]
 }

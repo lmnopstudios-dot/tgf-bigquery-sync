@@ -2,6 +2,9 @@
 import json,re,sys,datetime,duckdb,sqlglot
 from sqlglot import exp
 p=json.load(sys.stdin);c=duckdb.connect()
+# BigQuery TIMESTAMP arithmetic uses elapsed UTC time, independent of host TZ.
+# Keep this synthetic execution adapter deterministic across London DST changes.
+c.execute("SET TimeZone='UTC'")
 schemas={
  'customer_snapshots':'program_id VARCHAR,customer_ref_id VARCHAR,shopify_customer_gid VARCHAR,enrolled BOOLEAN,guest BOOLEAN,blocked BOOLEAN,approved BIGINT,pending BIGINT,tier_name VARCHAR,run_id VARCHAR,enrolled_at TIMESTAMPTZ',
  'coverage_windows':'program_id VARCHAR,resource VARCHAR,start_at TIMESTAMPTZ,end_exclusive TIMESTAMPTZ,status VARCHAR,run_id VARCHAR,observed_at TIMESTAMPTZ',
