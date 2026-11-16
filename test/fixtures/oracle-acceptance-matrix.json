@@ -1445,7 +1445,7 @@
     },
     {
       "file": "test/loyalty-source-reconciliation.test.js",
-      "purpose": "Bounded read-only Shopify created-order population reconciliation: >10000 rows, exact pre/post counts, historical scopes, full pagination, native IDs and monetary/link/channel fields, concurrency, missing rows, throttling, interrupted/late failures, aggregate privacy and executed warehouse SQL. Never certifies coverage or writes data automatically."
+      "purpose": "Bounded read-only Shopify created-order population reconciliation: >10000 rows, exact pre/post counts, historical scopes, full pagination, native IDs and monetary/link/channel fields, concurrency, missing rows, throttling, interrupted/late failures, aggregate privacy and executed warehouse SQL. Never certifies coverage or writes data automatically. Source-seeded placeholders cannot inflate retained ID counts/hashes; explicit repair previews save bounded native-ID/field plans privately without warehouse writes, reject stale or inconsistent inputs, and leave ordinary audit output aggregate-only."
     }
   ]
 }
