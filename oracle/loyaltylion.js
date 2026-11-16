@@ -77,7 +77,7 @@ export function createLoyaltyReportService({bigquery,project,env={},config=defau
    else if(['membership','tiers'].includes(section)&&!params.roster_run||scope.tier&&!params.roster_run)unavailable='LOYALTY_ROSTER_UNAVAILABLE';
    else if(!['membership','tiers'].includes(section)&&(!context.start_date||!context.end_date))unavailable='LOYALTY_PERIOD_REQUIRED';
    else if(['membership','tiers','points','claims'].includes(section)&&(context.channel||context.channel_breakdown||context.currencies.length))unavailable='LOYALTY_SECTION_FILTER_UNSUPPORTED';
-   else if(['membership','tiers'].includes(section)&&context.grain)unavailable='LOYALTY_SNAPSHOT_NOT_TIME_SERIES';
+   else if(['membership','tiers'].includes(section)&&context.grain&&scope.report_kind!=='performance')unavailable='LOYALTY_SNAPSHOT_NOT_TIME_SERIES';
    if(unavailable){sections.push({section,status:'unavailable',code:unavailable,rows:[]});continue;}
    try{
     if(section==='linkage'){const shopLocation=await boundedEvidenceRead(()=>datasetLocation(bigquery,project,'shopify_data'),hooks());if(shopLocation!==location)throw fail('LOYALTY_REGION_MISMATCH');}
@@ -89,7 +89,7 @@ export function createLoyaltyReportService({bigquery,project,env={},config=defau
       if(!context.channel&&!context.currencies.length&&!truncated&&rows.reduce((n,r)=>n+r.point_records,0)!==linkCoverage.point_records)
         throw fail('LOYALTY_LINKAGE_ROWS_MISMATCH');
     }
-    sections.push({section,status:complete?'fulfilled':'partial',rows:rows.slice(0,500),truncated,coverage_complete:complete,transaction_window_complete:eventCoverage,...(linkCoverage?{linkage_coverage:linkCoverage}:{}),...(params.roster_run?{roster_run:params.roster_run}:{}),...(section==='claims'?{definition:'Distinct claims by claimed_at; actual use unavailable. Coverage concerns accessible transaction history, not proof of all claims including claims without point movements.'}:{}),...(section==='linkage'?{commerce_coverage:'unverified',definition:'Observed orders linked from point transactions in the requested London transaction-date window; order_date is the original order date, not a second period filter.'}:{})});
+    sections.push({section,status:complete?'fulfilled':'partial',rows:rows.slice(0,500),truncated,coverage_complete:complete,transaction_window_complete:eventCoverage,...(linkCoverage?{linkage_coverage:linkCoverage}:{}),...(params.roster_run?{roster_run:params.roster_run}:{}),...(['membership','tiers'].includes(section)&&scope.report_kind==='performance'?{definition:'Current snapshot collected at '+evidence.snapshot_observed_at+'; shown once, not monthly historical membership or tiers.'}:{}),...(section==='claims'?{definition:'Distinct claims by claimed_at; actual use unavailable. Coverage concerns accessible transaction history, not proof of all claims including claims without point movements.'}:{}),...(section==='linkage'?{commerce_coverage:'unverified',definition:'Observed orders linked from point transactions in the requested London transaction-date window; order_date is the original order date, not a second period filter.'}:{})});
    }catch(e){sections.push({section,status:'unavailable',code:/^LOYALTY_[A-Z_]+$/.test(e.code||'')?e.code:'LOYALTY_SECTION_ACCESS_UNAVAILABLE',rows:[]});}
   }
   evidence.coverage.complete=!evidence.comparison&&sections.every(s=>s.status==='fulfilled'&&s.coverage_complete)&&!evidence.coverage.truncated;

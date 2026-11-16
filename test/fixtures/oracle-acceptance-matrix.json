@@ -1421,7 +1421,7 @@
     },
     {
       "file": "test/oracle-loyalty-performance.test.js",
-      "purpose": "Default completed London year and MTD, explicit/comparison periods, current-roster versus historical membership, mature zero-order cohorts, currency/AOV SQL, partial workbook delivery and authenticated recovery. Exact annual LoyaltyLion prompt with AOV and mean/median order intervals must bypass the generic order-value preflight in interactive/durable delivery; genuine merchandise distributions and shipping scenarios remain unsupported."
+      "purpose": "Default completed London year and MTD, explicit/comparison periods, current-roster versus historical membership, mature zero-order cohorts, currency/AOV SQL, partial workbook delivery and authenticated recovery. Exact annual LoyaltyLion prompt with AOV and mean/median order intervals must bypass the generic order-value preflight in interactive/durable delivery; genuine merchandise distributions and shipping scenarios remain unsupported. Monthly performance includes membership and tiers once as timestamped snapshots; monthly overview remains explicit about unsupported time series."
     },
     {
       "file": "test/oracle-loyalty-persistence.test.js",
@@ -1433,7 +1433,7 @@
     },
     {
       "file": "test/loyalty-evidence-gaps.test.js",
-      "purpose": "Complete versus unverified commerce coverage, partial-day cutoff and monthly windows, stale roster metadata, October enrolments with November outcomes, immature and genuine zero-purchase cohorts, missing/ambiguous native links, bounded aggregate source/manifests audit. Synthetic execution does not certify live coverage."
+      "purpose": "Complete versus unverified commerce coverage, partial-day cutoff and monthly windows, stale roster metadata, October enrolments with November outcomes, immature and genuine zero-purchase cohorts, missing/ambiguous native links, bounded aggregate source/manifests audit. Synthetic execution does not certify live coverage. Coverage-review outcomes must distinguish failed reads, missing joins and missing source population proof; no certificate is inferred from zero gaps."
     },
     {
       "file": "test/shopify-customer-refresh.test.js",

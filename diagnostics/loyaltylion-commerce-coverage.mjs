@@ -38,6 +38,20 @@ export function commerceAuditQueries(project,dataset){
   customer_runs:`SELECT mode,window_start,window_end,status,COUNT(*) runs,SUM(requested_count) requested,SUM(returned_count) returned,SUM(ARRAY_LENGTH(unresolved_ids)) unresolved,MAX(finished_at) last_finished_at FROM ${t('customer_refresh_runs')} WHERE window_start<TIMESTAMP(@as_of) AND window_end>TIMESTAMP(@start_at) GROUP BY 1,2,3,4 ORDER BY 2 LIMIT 1001`
  };
 }
+// Reconciled retained joins are necessary, but are not proof that Shopify's
+// complete created-order population was collected. Never emits a certificate.
+export function commerceAuditReview(sections){
+ const failed=Object.entries(sections).filter(([,s])=>s.status!=='observed').map(([name])=>name);
+ const monthly=sections.monthly?.status==='observed'?sections.monthly.rows:null;
+ const fields=['missing_finance','missing_customer_evidence','missing_channel_evidence','invalid_order_namespace','missing_gross'];
+ const counts=monthly?.length?Object.fromEntries(fields.map(k=>[k,monthly.every(r=>r[k]!=null&&Number.isSafeInteger(Number(r[k]))&&Number(r[k])>=0)?monthly.reduce((sum,r)=>sum+Number(r[k]),0):null])):null;
+ const issues=counts?Object.entries(counts).filter(([,v])=>v===null||v>0).map(([field,count])=>({field,count})):[];
+ const status=failed.length?'audit_reads_incomplete':!monthly?.length?'no_retained_observations':issues.length?'retained_reconciliation_required':'source_population_proof_required';
+ return {certified:false,status,failed_reads:failed,retained_gaps:counts,issues,
+  source_population_proof:'Not established by retained row counts, update-window runs or repaired customer links',
+  next_action:status==='audit_reads_incomplete'?'Resolve the listed read failures before reviewing coverage':status==='no_retained_observations'?'Establish source coverage; absent rows do not prove zero orders':status==='retained_reconciliation_required'?'Reconcile retained finance, customer and channel evidence; inspect exclusions and gaps before any coverage review':'Compare exact native order IDs against a completed order-created source manifest, then review only supported channel intervals',
+  certification_policy:'Only mature, fully supported cohort windows may enable before/after AOV and order gaps; keep gaps and unavailable channels withheld'};
+}
 export async function auditCommerce({bigquery,project,config,start_at,end_exclusive,now=new Date().toISOString()}){
  if(!Number.isFinite(Date.parse(start_at))||!Number.isFinite(Date.parse(end_exclusive))||Date.parse(start_at)>=Date.parse(end_exclusive)||Date.parse(end_exclusive)-Date.parse(start_at)>380*86400000)throw Error('LOYALTY_AUDIT_WINDOW_INVALID');
  const deadlineAt=Date.now()+65000,signal=AbortSignal.timeout(65000),hooks={deadlineAt,signal,maximumMs:15000};
@@ -53,7 +67,7 @@ export async function auditCommerce({bigquery,project,config,start_at,end_exclus
    sections[name]={status:'observed',rows};
   }catch(e){sections[name]={failure:safeReadFailure(e,'diagnostic'),status:'unavailable',reason:'Missing/inaccessible source, schema, deadline or query bound; no completeness inferred'};}
  }
- return {read_only:true,source_collection:false,warehouse_writes:false,roster_linkage:config.program_id?'Configured programme; exact native ID join':'Unavailable: private programme configuration absent; roster link counts are unresolved',start_at,end_exclusive,sections,certified:false,
+ return {read_only:true,source_collection:false,warehouse_writes:false,roster_linkage:config.program_id?'Configured programme; exact native ID join':'Unavailable: private programme configuration absent; roster link counts are unresolved',start_at,end_exclusive,sections,review:commerceAuditReview(sections),certified:false,
   missing_proof:'Reconcile order-created population and native IDs against a completed source manifest for all three tables, including source access/retention and exclusions. Update-window success and latest observed order are not complete history certificates.'};
 }
 async function main(){
