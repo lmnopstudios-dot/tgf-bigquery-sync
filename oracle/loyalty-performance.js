@@ -10,6 +10,10 @@ export const PERFORMANCE_DEFINITIONS=[
  'AOV uses original discounted order gross including shipping and tax, before refunds, in presentment currency. Retained lifetime order refunds are separate; they are not refund-event-date sales. Never combine currencies.',
  'Full period distinct customers and repeat rates are calculated directly across the full period. Never sum monthly distinct customers or average monthly repeat rates. Do not sum Full period and monthly rows. Period repeat rate is customers with at least two eligible orders in the same period / customers with at least one. It is not a subsequent-purchase probability or lifetime retention rate. A customer can occur in multiple channel/currency groups.',
  'Cohorts use 30/90/180 elapsed days before/after recorded enrolment, same customer pool on both sides, including customers with zero observed purchases. Rates require mature, certified full observation windows. Missing coverage is not zero demand.',
+ 'Purchase changes compare equal 30/90/180-day windows around recorded enrolment. Paired AOV uses the same customers with eligible orders on both sides, with original tax/shipping-inclusive gross divided by their orders. Customers with no purchases on a side remain visible in cohort counts but are excluded from paired AOV.',
+ 'Order gaps use consecutive native orders within each side, channel and currency. Only customers with at least two orders on both sides enter the paired gap comparison. Mean and median describe customer-level mean gaps in elapsed days, with equal customer weights. Gaps crossing enrolment or a window boundary and censored waiting times are excluded; same-timestamp distinct orders can have a zero gap. These are not retention probabilities or programme-wide launch effects.',
+ 'AOV change is after minus before, in the displayed currency; its fraction is change divided by before AOV. A negative order-gap change means shorter observed intervals (more frequent purchasing); a positive change means longer intervals. Sample counts and within-window gap counts are shown beside the estimates.',
+ 'Before/after purchase-change metrics are withheld until the full observation window is certified and mature. Missing order values suppress AOV, while no paired repeat customers suppress order gaps. Percentage changes are unavailable when the before value is zero. Seasonal campaigns and enrolment timing can explain observed changes.',
  'Claims, points spent and negative movements do not prove voucher use. Actual use, recorded reward discounts, historical tiers and financial points liability remain unavailable until verified bindings exist.',
  'Monetary aggregates are transported as exact decimal strings. Excel uses numeric cells only when they round-trip without precision loss within 15 significant digits; larger or finer values remain exact text.',
  'Monthly activity counts distinct point participants separately from distinct claimants. Approval transfers can move pending into approved without earning new points; negative movements are not all redemptions.',
@@ -43,14 +47,41 @@ export function performanceQueries(project,dataset){
   enrolments:`WITH ${roster},${windows} SELECT w.period,CAST(DATE_TRUNC(DATE(m.enrolled_at,'Europe/London'),MONTH) AS STRING) month,COUNT(*) observed_enrolments FROM members m JOIN windows w ON DATE(m.enrolled_at,'Europe/London') BETWEEN w.start_date AND w.end_date GROUP BY 1,2 ORDER BY 1,2 LIMIT 1001`,
   purchasing:`${base},customer_period AS(SELECT w.period,w.start_date,w.end_date,o.membership_basis,o.channel,o.currency,month,o.source_customer_id,COUNT(DISTINCT source_order_id) orders,SUM(gross) gross,SUM(retained_refunds) retained_refunds,COUNTIF(gross IS NULL) missing_values FROM selected o JOIN windows w ON DATE(o.created_at,'Europe/London') BETWEEN w.start_date AND w.end_date CROSS JOIN UNNEST(['Full period',CAST(DATE_TRUNC(DATE(o.created_at,'Europe/London'),MONTH) AS STRING)]) month GROUP BY 1,2,3,4,5,6,7,8)
    SELECT period,CAST(start_date AS STRING) start_date,CAST(end_date AS STRING) end_date,membership_basis,channel,currency,month,COUNT(*) purchasing_customers,SUM(orders) eligible_orders,COUNTIF(orders>=2) repeat_purchasers,SAFE_DIVIDE(COUNTIF(orders>=2),COUNT(*)) observed_period_repeat_rate,SAFE_DIVIDE(SUM(orders),COUNT(*)) observed_orders_per_customer,CAST(IF(SUM(missing_values)=0,SUM(gross),NULL) AS STRING) original_order_gross,CAST(IF(SUM(missing_values)=0,SAFE_DIVIDE(SUM(gross),SUM(orders)),NULL) AS STRING) observed_aov,CAST(SUM(retained_refunds) AS STRING) retained_lifetime_refunds FROM customer_period GROUP BY 1,2,3,4,5,6,7 ORDER BY 1,7,4,5,6 LIMIT 1001`,
-  cohorts:`${base},currencies AS(SELECT DISTINCT channel,currency FROM selected),cohort AS(SELECT w.period,m.*,d window_days FROM unique_members m JOIN windows w ON DATE(m.enrolled_at,'Europe/London') BETWEEN w.start_date AND w.end_date CROSS JOIN UNNEST([30,90,180]) d WHERE m.enrolled_at IS NOT NULL),customer_windows AS(
-   SELECT c.period,c.customer_ref_id,c.enrolled_at,c.window_days,CAST(DATE_TRUNC(DATE(c.enrolled_at,'Europe/London'),MONTH) AS STRING) enrolment_month,g.channel,g.currency,
-    COALESCE(TIMESTAMP_ADD(c.enrolled_at,INTERVAL c.window_days DAY)<=TIMESTAMP((SELECT JSON_VALUE(v,'$.end_exclusive') FROM UNNEST(JSON_QUERY_ARRAY(@commerce_cutoffs)) v WHERE JSON_VALUE(v,'$.channel')=g.channel)),FALSE) observation_mature,
-    IF(EXISTS(SELECT 1 FROM qualifying_orders p WHERE p.source_customer_id=c.shopify_customer_gid AND p.created_at<c.enrolled_at),'existing_observed_customer','prior_history_unverified') customer_history,
-    COUNT(DISTINCT IF(o.created_at<c.enrolled_at,o.source_order_id,NULL)) before_orders,COUNT(DISTINCT IF(o.created_at>=c.enrolled_at,o.source_order_id,NULL)) after_orders
-   FROM cohort c CROSS JOIN currencies g LEFT JOIN selected o ON o.source_customer_id=c.shopify_customer_gid AND o.channel=g.channel AND o.currency=g.currency AND o.created_at>=TIMESTAMP_SUB(c.enrolled_at,INTERVAL c.window_days DAY) AND o.created_at<TIMESTAMP_ADD(c.enrolled_at,INTERVAL c.window_days DAY)
-   GROUP BY 1,2,3,4,5,6,7,8,9)
-   SELECT period,enrolment_month,window_days,channel,currency,customer_history,observation_mature,COUNT(*) cohort_customers,COUNTIF(observation_mature) mature_customers,SUM(before_orders) before_orders,SUM(after_orders) after_orders,COUNTIF(before_orders=0) zero_before_customers,COUNTIF(after_orders=0) zero_after_customers,COUNTIF(after_orders>=1) customers_purchasing_after,MIN(CAST(TIMESTAMP_SUB(enrolled_at,INTERVAL window_days DAY) AS STRING)) required_start_at,MAX(CAST(TIMESTAMP_ADD(enrolled_at,INTERVAL window_days DAY) AS STRING)) required_end_exclusive FROM customer_windows GROUP BY 1,2,3,4,5,6,7 ORDER BY 1,2,3,4,5,6 LIMIT 1001`,
+  cohorts:`${base},currencies AS(SELECT DISTINCT channel,currency FROM selected),cohort AS(SELECT w.period,m.*,d window_days FROM unique_members m JOIN windows w ON DATE(m.enrolled_at,'Europe/London') BETWEEN w.start_date AND w.end_date CROSS JOIN UNNEST([30,90,180]) d WHERE m.enrolled_at IS NOT NULL),order_windows AS(
+ SELECT c.period,c.customer_ref_id,c.enrolled_at,c.window_days,CAST(DATE_TRUNC(DATE(c.enrolled_at,'Europe/London'),MONTH) AS STRING) enrolment_month,g.channel,g.currency,
+ COALESCE(TIMESTAMP_ADD(c.enrolled_at,INTERVAL c.window_days DAY)<=TIMESTAMP((SELECT JSON_VALUE(v,'$.end_exclusive') FROM UNNEST(JSON_QUERY_ARRAY(@commerce_cutoffs)) v WHERE JSON_VALUE(v,'$.channel')=g.channel)),FALSE) observation_mature,
+ IF(EXISTS(SELECT 1 FROM qualifying_orders p WHERE p.source_customer_id=c.shopify_customer_gid AND p.created_at<c.enrolled_at),'existing_observed_customer','prior_history_unverified') customer_history,
+ o.source_order_id,o.created_at,o.gross,IF(o.source_order_id IS NULL,NULL,IF(o.created_at<c.enrolled_at,'before','after')) side
+ FROM cohort c CROSS JOIN currencies g LEFT JOIN selected o ON o.source_customer_id=c.shopify_customer_gid AND o.channel=g.channel AND o.currency=g.currency AND o.created_at>=TIMESTAMP_SUB(c.enrolled_at,INTERVAL c.window_days DAY) AND o.created_at<TIMESTAMP_ADD(c.enrolled_at,INTERVAL c.window_days DAY)
+ ),with_previous AS(SELECT *,LAG(created_at) OVER(PARTITION BY period,customer_ref_id,window_days,channel,currency,side ORDER BY created_at,source_order_id) previous_at FROM order_windows),customer_windows AS(
+ SELECT period,customer_ref_id,enrolled_at,window_days,enrolment_month,channel,currency,observation_mature,customer_history,
+ COUNT(DISTINCT IF(side='before',source_order_id,NULL)) before_orders,COUNT(DISTINCT IF(side='after',source_order_id,NULL)) after_orders,
+ SUM(IF(side='before',gross,0)) before_gross,SUM(IF(side='after',gross,0)) after_gross,
+ COUNTIF(side='before' AND gross IS NULL) before_missing_values,COUNTIF(side='after' AND gross IS NULL) after_missing_values,
+ COUNTIF(side='before' AND previous_at IS NOT NULL) before_gap_count,COUNTIF(side='after' AND previous_at IS NOT NULL) after_gap_count,
+ SUM(IF(side='before' AND previous_at IS NOT NULL,TIMESTAMP_DIFF(created_at,previous_at,SECOND),0)) before_gap_seconds,
+ SUM(IF(side='after' AND previous_at IS NOT NULL,TIMESTAMP_DIFF(created_at,previous_at,SECOND),0)) after_gap_seconds
+ FROM with_previous GROUP BY 1,2,3,4,5,6,7,8,9
+ ),customer_metrics AS(SELECT *,before_orders>0 AND after_orders>0 aov_paired,before_gap_count>0 AND after_gap_count>0 gap_paired,
+ SAFE_DIVIDE(before_gap_seconds,before_gap_count)/86400.0 before_customer_gap_days,SAFE_DIVIDE(after_gap_seconds,after_gap_count)/86400.0 after_customer_gap_days FROM customer_windows),with_medians AS(
+ SELECT *,PERCENTILE_CONT(IF(gap_paired,before_customer_gap_days,NULL),0.5) OVER(PARTITION BY period,enrolment_month,window_days,channel,currency,customer_history,observation_mature) before_median_gap_days,
+ PERCENTILE_CONT(IF(gap_paired,after_customer_gap_days,NULL),0.5) OVER(PARTITION BY period,enrolment_month,window_days,channel,currency,customer_history,observation_mature) after_median_gap_days FROM customer_metrics
+ ),totals AS(
+ SELECT period,enrolment_month,window_days,channel,currency,customer_history,observation_mature,COUNT(*) cohort_customers,COUNTIF(observation_mature) mature_customers,SUM(before_orders) before_orders,SUM(after_orders) after_orders,COUNTIF(before_orders=0) zero_before_customers,COUNTIF(after_orders=0) zero_after_customers,COUNTIF(after_orders>=1) customers_purchasing_after,
+ MIN(CAST(TIMESTAMP_SUB(enrolled_at,INTERVAL window_days DAY) AS STRING)) required_start_at,MAX(CAST(TIMESTAMP_ADD(enrolled_at,INTERVAL window_days DAY) AS STRING)) required_end_exclusive,
+ COUNTIF(aov_paired) paired_aov_customers,SUM(IF(aov_paired,before_orders,0)) paired_before_orders,SUM(IF(aov_paired,after_orders,0)) paired_after_orders,
+ IF(SUM(IF(aov_paired,before_missing_values,0))=0,SUM(IF(aov_paired,before_gross,0)),NULL) paired_before_gross,
+ IF(SUM(IF(aov_paired,after_missing_values,0))=0,SUM(IF(aov_paired,after_gross,0)),NULL) paired_after_gross,
+ COUNTIF(gap_paired) paired_repeat_customers,SUM(IF(gap_paired,before_gap_count,0)) paired_before_gap_count,SUM(IF(gap_paired,after_gap_count,0)) paired_after_gap_count,
+ AVG(IF(gap_paired,before_customer_gap_days,NULL)) before_mean_gap_days,AVG(IF(gap_paired,after_customer_gap_days,NULL)) after_mean_gap_days,
+ MAX(before_median_gap_days) before_median_gap_days,MAX(after_median_gap_days) after_median_gap_days
+ FROM with_medians GROUP BY 1,2,3,4,5,6,7
+ ) SELECT * EXCEPT(paired_before_gross,paired_after_gross),CAST(paired_before_gross AS STRING) paired_before_gross,CAST(paired_after_gross AS STRING) paired_after_gross,
+ CAST(SAFE_DIVIDE(paired_before_gross,paired_before_orders) AS STRING) before_aov,CAST(SAFE_DIVIDE(paired_after_gross,paired_after_orders) AS STRING) after_aov,
+ CAST(SAFE_DIVIDE(paired_after_gross,paired_after_orders)-SAFE_DIVIDE(paired_before_gross,paired_before_orders) AS STRING) aov_change_amount,
+ CAST(SAFE_DIVIDE(SAFE_DIVIDE(paired_after_gross,paired_after_orders)-SAFE_DIVIDE(paired_before_gross,paired_before_orders),SAFE_DIVIDE(paired_before_gross,paired_before_orders)) AS STRING) aov_change_fraction,
+ after_mean_gap_days-before_mean_gap_days mean_gap_change_days,SAFE_DIVIDE(after_mean_gap_days-before_mean_gap_days,before_mean_gap_days) mean_gap_change_fraction
+ FROM totals ORDER BY 1,2,3,4,5,6 LIMIT 1001`,
   linkage:`WITH ${roster},${tx},${windows},${orders},classified AS(SELECT w.period,t.transaction_id,CASE WHEN t.shopify_order_gid IS NULL THEN 'no_order_reference' WHEN f.order_id IS NULL THEN 'order_absent' WHEN c.order_id IS NULL THEN 'customer_evidence_missing' WHEN l.order_id IS NULL THEN 'channel_evidence_missing' WHEN l.source_app_id=@matrixify_app_id OR c.source_app_id=@matrixify_app_id THEN 'known_migrated_copy' WHEN c.cancelled_at IS NOT NULL OR f.cancelled_at IS NOT NULL THEN 'cancelled' WHEN c.customer_id IS NULL OR c.customer_id IN ('','0') THEN 'order_customer_missing' WHEN t.shopify_customer_gid IS NULL THEN 'transaction_customer_missing' WHEN t.shopify_customer_gid!=c.customer_id THEN 'customer_mismatch' WHEN o.source_order_id IS NULL THEN 'other_non_qualifying' ELSE 'matched' END outcome FROM tx t JOIN windows w ON DATE(t.created_at,'Europe/London') BETWEEN w.start_date AND w.end_date LEFT JOIN f ON t.shopify_order_gid=f.order_id LEFT JOIN c ON t.shopify_order_gid=c.order_id LEFT JOIN l ON t.shopify_order_gid=l.order_id LEFT JOIN qualifying_orders o ON t.shopify_order_gid=o.source_order_id)
    SELECT period,outcome,COUNT(*) point_records,COUNT(DISTINCT transaction_id) distinct_movements FROM classified GROUP BY 1,2 ORDER BY 1,2 LIMIT 1001`
  };
@@ -87,7 +118,7 @@ export function cohortObservation(intervals,row,now){
  return {cutoff,mature,certified:certified&&!reason,reason};
 }
 export async function readPerformance({context,evidence,bigquery,project,config,options={},now}){
- const windows=performanceWindows(context,now),result={version:1,windows,tables:[],limitations:[...PERFORMANCE_DEFINITIONS],certificates:[]};
+ const windows=performanceWindows(context,now),result={version:1,purchase_change_version:1,windows,tables:[],limitations:[...PERFORMANCE_DEFINITIONS],certificates:[]};
  const events=config.performance_events;
  if(events?.reviewed_by&&Number.isFinite(Date.parse(events.reviewed_at))&&Array.isArray(events.windows)&&events.windows.length<=100){
   for(const event of events.windows){if(['May Bank Holiday','Black Friday'].includes(event.name)&&/^\d{4}-\d{2}-\d{2}$/.test(event.start_date||'')&&/^\d{4}-\d{2}-\d{2}$/.test(event.end_date||'')&&event.start_date<=event.end_date&&event.evidence_reference&&windows.some(w=>event.start_date<=w.end_date&&event.end_date>=w.start_date))result.limitations.push('Reviewed promotion context: '+event.name+' '+event.start_date+' to '+event.end_date+'; '+event.evidence_reference+'; no variant or customer participation inferred.');}
@@ -143,6 +174,7 @@ export async function readPerformance({context,evidence,bigquery,project,config,
      row.subsequent_purchase_rate=certified&&denominator>0?Number(row.customers_purchasing_after)/denominator:null;
      row.before_orders_per_customer=certified&&denominator>0?Number(row.before_orders)/denominator:null;
      row.after_orders_per_customer=certified&&denominator>0?Number(row.after_orders)/denominator:null;
+     applyPurchaseChangeCoverage(row,certified,assessment.reason);
      row.status=certified?'Certified observation; association only':'Partial observed counts; rates withheld';
     }
    }
@@ -153,7 +185,20 @@ export async function readPerformance({context,evidence,bigquery,project,config,
  }
  return result;
 }
-const MONEY_FIELDS=new Set(['original_order_gross','observed_aov','retained_lifetime_refunds']);
+export const PURCHASE_CHANGE_FIELDS=['paired_aov_customers','paired_before_orders','paired_after_orders','paired_before_gross','paired_after_gross','before_aov','after_aov','aov_change_amount','aov_change_fraction','paired_repeat_customers','paired_before_gap_count','paired_after_gap_count','before_mean_gap_days','after_mean_gap_days','before_median_gap_days','after_median_gap_days','mean_gap_change_days','mean_gap_change_fraction','aov_withheld_reason','gap_withheld_reason','aov_fraction_withheld_reason','gap_fraction_withheld_reason'];
+const AOV_VALUES=['before_aov','after_aov','aov_change_amount','aov_change_fraction'];
+const GAP_VALUES=['before_mean_gap_days','after_mean_gap_days','before_median_gap_days','after_median_gap_days','mean_gap_change_days','mean_gap_change_fraction'];
+export function applyPurchaseChangeCoverage(row,certified,coverageReason){
+ const aovReason=!certified?coverageReason:Number(row.paired_aov_customers||0)<1?'No customers with eligible orders on both sides':row.paired_before_gross==null||row.paired_after_gross==null?'Missing order values in paired customer sample':null;
+ const gapReason=!certified?coverageReason:Number(row.paired_repeat_customers||0)<1?'No customers with at least two eligible orders on both sides':null;
+ if(aovReason)for(const f of AOV_VALUES)row[f]=null;
+ if(gapReason)for(const f of GAP_VALUES)row[f]=null;
+ row.aov_withheld_reason=aovReason;row.gap_withheld_reason=gapReason;
+ row.aov_fraction_withheld_reason=aovReason||(Number(row.before_aov)===0?'Before-period AOV is zero; percentage change unavailable':null);
+ row.gap_fraction_withheld_reason=gapReason||(row.before_mean_gap_days===0?'Before-period mean gap is zero; percentage change unavailable':null);
+ return row;
+}
+const MONEY_FIELDS=new Set(['original_order_gross','observed_aov','retained_lifetime_refunds','paired_before_gross','paired_after_gross','before_aov','after_aov','aov_change_amount','aov_change_fraction']);
 export function excelLoyaltyDecimal(value){
  if(typeof value!=='string'||!/^[-+]?[0-9]+(?:\.[0-9]+)?$/.test(value))return value;
  const canonical=s=>{const negative=s.startsWith('-'),parts=s.replace(/^[-+]/,'').split('.'),whole=parts[0].replace(/^0+(?=.)/,'')||'0',fraction=(parts[1]||'').replace(/0+$/,'');return (negative&&(whole!=='0'||fraction)?'-':'')+whole+(fraction?'.'+fraction:'');};
@@ -172,13 +217,14 @@ export function performanceWorkbookTables(e){
  const completePoints=(e.coverage.windows||[]).filter(w=>w.resource==='transactions'&&w.status==='complete');
  coverage.push({section:'Latest certified points cutoff',status:completePoints.length?'partial':'unavailable',note:completePoints.map(w=>w.end_exclusive).sort().at(-1)||'No complete points windows; see individual ranges for gaps'});
  const notes=[{definition:'Snapshot age in days (stale after one day)',detail:p.snapshot_age_days??null},{definition:'Report generated',detail:e.as_of},{definition:'Membership snapshot collected',detail:e.snapshot_observed_at},...p.limitations.map(detail=>({definition:'Definition or limitation',detail}))];
- return [table('Read me',notes),table('Coverage',coverage),table('Programme usage',[...rows('usage').map(r=>({measure:'Points movements',...r})),...rows('enrolments').map(r=>({measure:'Observed enrolments in current roster',...r})),...(base.find(s=>s.section==='membership')?.rows||[]).map(r=>({measure:'Current profiles',...r}))]),table('Customer purchasing',rows('purchasing')),table('Enrolment cohorts',rows('cohorts')),table('Rewards and purchasing',(base.find(s=>s.section==='claims')?.rows||[]).map(r=>({...r,actual_use:null,reward_order_value:null,recorded_reward_discount:null,status:'Claim observations only; actual use unavailable'}))),table('Tiers',(base.find(s=>s.section==='tiers')?.rows||[]).map(r=>({...r,basis:'Current roster; historical tiers unavailable'}))),table('Linkage and limitations',rows('linkage'))];
+ const changes=p.purchase_change_version===1?[table('Purchase changes',rows('cohorts').map(r=>Object.fromEntries(['period','enrolment_month','window_days','channel','currency','customer_history','cohort_customers',...PURCHASE_CHANGE_FIELDS,'required_start_at','required_end_exclusive','verified_commerce_cutoff','certified_observation'].map(k=>[k,r[k]??null]))))]:[];
+ return [table('Read me',notes),table('Coverage',coverage),table('Programme usage',[...rows('usage').map(r=>({measure:'Points movements',...r})),...rows('enrolments').map(r=>({measure:'Observed enrolments in current roster',...r})),...(base.find(s=>s.section==='membership')?.rows||[]).map(r=>({measure:'Current profiles',...r}))]),table('Customer purchasing',rows('purchasing')),table('Enrolment cohorts',rows('cohorts')),...changes,table('Rewards and purchasing',(base.find(s=>s.section==='claims')?.rows||[]).map(r=>({...r,actual_use:null,reward_order_value:null,recorded_reward_discount:null,status:'Claim observations only; actual use unavailable'}))),table('Tiers',(base.find(s=>s.section==='tiers')?.rows||[]).map(r=>({...r,basis:'Current roster; historical tiers unavailable'}))),table('Linkage and limitations',rows('linkage'))];
 }
 const OUTPUT_FIELDS={
  usage:['period','month','resource','point_movements','participants','current_enrolled_participants','positive_net_movements','negative_net_movements','approved_delta','pending_delta','net_delta','observed_claimants'],
  enrolments:['period','month','observed_enrolments'],
  purchasing:['period','start_date','end_date','membership_basis','channel','currency','month','purchasing_customers','eligible_orders','repeat_purchasers','observed_period_repeat_rate','observed_orders_per_customer','original_order_gross','observed_aov','retained_lifetime_refunds','coverage','certified_commerce_coverage'],
- cohorts:['period','enrolment_month','window_days','channel','currency','customer_history','observation_mature','cohort_customers','verified_commerce_cutoff','withheld_reason','mature_customers','before_orders','after_orders','zero_before_customers','zero_after_customers','customers_purchasing_after','required_start_at','required_end_exclusive','certified_observation','subsequent_purchase_rate','before_orders_per_customer','after_orders_per_customer','status'],
+ cohorts:['period','enrolment_month','window_days','channel','currency','customer_history','observation_mature','cohort_customers','verified_commerce_cutoff','withheld_reason','mature_customers','before_orders','after_orders','zero_before_customers','zero_after_customers','customers_purchasing_after','required_start_at','required_end_exclusive','certified_observation','subsequent_purchase_rate','before_orders_per_customer','after_orders_per_customer','status',...PURCHASE_CHANGE_FIELDS],
  linkage:['period','outcome','point_records','distinct_movements']
 };
 function performanceRowIssue(section,row,windows){

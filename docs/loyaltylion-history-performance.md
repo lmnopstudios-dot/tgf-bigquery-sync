@@ -287,3 +287,9 @@ resume a writer without reconciliation. Staging expiry is intentional; permanent
 history expiry is not. Existing recovery procedures remain applicable.
 
 Current evidence-gap audit, roster-only commands and validation prompts: [rollout guide](loyaltylion-evidence-gaps.md).
+
+## Before/after order value and ordering frequency
+
+See [Purchase changes and refresh](loyaltylion-purchase-changes.md) for the matched
+customer AOV and order-gap definitions, sample sizes, coverage gates and safe
+refresh sequence. No new collector or schedule is introduced by those metrics.
