@@ -63,3 +63,32 @@ test('corrected customer links clear stale personal names while stable links pre
  assert.equal(mergeCandidate('order_customers',old,{customer_id:old.customer_id}).customer_name,'old person');
  assert.equal(mergeCandidate('order_customers',old,{customer_id:'gid://shopify/Customer/2'}).extra,'preserve');
 });
+
+test('compound BigQuery ASSERT predicates are wholly parenthesized, including idle, stage and ownership checks',()=>{
+ const f=fixture(),sql=promotionSql('gf-full-data',Object.fromEntries(TABLES.map(t=>[t,'stage_'+t])),f.schemas);
+ for(const statement of sql.split(';').filter(s=>s.trim().startsWith('ASSERT')&&s.includes(' AND '))){
+  const expr=statement.trim().replace(/^ASSERT\s+/,'').replace(/\s+AS\s+'[^']+'$/,'');assert.equal(expr[0],'(');let depth=0;for(let i=0;i<expr.length;i++){if(expr[i]==='(')depth++;if(expr[i]===')')depth--;if(depth===0)assert.equal(i,expr.length-1,'ASSERT predicate must not end before its AND clause');}assert.equal(depth,0);
+ }
+});
+
+import {spawnSync} from 'node:child_process';
+import {idleSql} from '../shopify/commerce-repair.js';
+const guardSqlAvailable=spawnSync('python3',['-c','import duckdb,sqlglot']).status===0;
+test('executed idle guard expressions retain active-writer and singleton ownership protections',{skip:!guardSqlAvailable},()=>{
+ const expressions=idleSql('gf-full-data').split(';').map(s=>s.trim()).filter(Boolean).map(s=>s.replace(/^ASSERT\s+/,'').replace(/\s+AS\s+'[^']+'$/,''));
+ const script=`import sys,json,re,duckdb,sqlglot
+expr=json.load(sys.stdin);result=[]
+for finance,customer,holders in [(False,False,[None]),(True,False,[None]),(False,True,[None]),(False,False,['busy']),(False,False,[]),(False,False,[None,None])]:
+ c=duckdb.connect()
+ c.execute('CREATE TABLE finance_refresh_runs(status VARCHAR)');c.execute('CREATE TABLE customer_refresh_runs(status VARCHAR)');c.execute('CREATE TABLE customer_incremental_guard(holder VARCHAR)')
+ if finance:c.execute("INSERT INTO finance_refresh_runs VALUES ('running')")
+ if customer:c.execute("INSERT INTO customer_refresh_runs VALUES ('running')")
+ for holder in holders:c.execute('INSERT INTO customer_incremental_guard VALUES (?)',[holder])
+ values=[]
+ for e in expr:
+  q=re.sub(r'\x60gf-full-data.shopify_data.([^\x60]+)\x60',r'\\1','SELECT '+e)
+  q=sqlglot.parse_one(q,read='bigquery').sql(dialect='duckdb');values.append(c.execute(q).fetchone()[0])
+ result.append(values)
+print(json.dumps(result))`;
+ const r=spawnSync('python3',['-c',script],{input:JSON.stringify(expressions),encoding:'utf8'});assert.equal(r.status,0,r.stderr);assert.deepEqual(JSON.parse(r.stdout),[[true,true,true],[false,true,true],[true,false,true],[true,true,false],[true,true,false],[true,true,false]]);
+});
