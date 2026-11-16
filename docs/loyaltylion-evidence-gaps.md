@@ -273,3 +273,6 @@ channel-specific intervals are reviewed, rerunning the same report enables only
 mature, fully covered rows through the existing gate; remaining rows retain
 counts and withholding reasons. Actual reward use and causal programme impact
 remain separate evidence requirements.
+
+For the remaining native source-population check, see
+[Read-only Shopify source reconciliation](loyaltylion-source-reconciliation.md).
