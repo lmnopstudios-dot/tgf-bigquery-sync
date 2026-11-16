@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {mkdtemp,readFile,rm,stat} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {TABLES,candidates,preview,apply,validatePreview,digest,promotionSql,snapshotSql,mergeCandidate} from '../shopify/commerce-repair.js';
+import {TABLES,candidates,preview,apply,validatePreview,digest,promotionSql,snapshotSql,mergeCandidate,controlDml,validateControlDml} from '../shopify/commerce-repair.js';
 const NOW='2026-11-16T13:00:00.000Z',now=()=>NOW,old='2026-11-15T00:00:00.000Z',id='gid://shopify/Order/1';
 function fixture(){
  const source={id,name:'#test',createdAt:'2026-10-05T00:00:00Z',updatedAt:'2026-11-01T00:00:00Z',processedAt:null,cancelledAt:null,displayFinancialStatus:'PAID',paymentGatewayNames:['fixture'],customer:{id:'gid://shopify/Customer/1'},app:{id:'gid://shopify/App/1',name:'Online Store'},retailLocation:null,transactions:[]};
@@ -91,4 +91,17 @@ for finance,customer,holders in [(False,False,[None]),(True,False,[None]),(False
  result.append(values)
 print(json.dumps(result))`;
  const r=spawnSync('python3',['-c',script],{input:JSON.stringify(expressions),encoding:'utf8'});assert.equal(r.status,0,r.stderr);assert.deepEqual(JSON.parse(r.stdout),[[true,true,true],[false,true,true],[true,false,true],[true,true,false],[true,true,false],[true,true,false]]);
+});
+
+
+test('lock acquisition UPDATE targets only the unheld guard and every generated UPDATE has WHERE',async t=>{
+ const f=fixture(),{plan}=await f.prepare(await root(t));await f.apply(plan);
+ assert.match(controlDml('fixture').claim,/SET holder=@run WHERE holder IS NULL$/);
+ const all=[...f.events.filter(e=>e.sql).map(e=>e.sql),...f.events.filter(e=>e.job).map(e=>e.job.query)];
+ for(const sql of all)for(const update of sql.split(';').filter(x=>/^\s*UPDATE\b/.test(x)))assert.match(update,/\bWHERE\b/,'BigQuery UPDATE requires a scoped condition');
+ assert.equal(f.published,1);
+});
+test('control DML preflight validates each statement independently without executing writes',async()=>{
+ const jobs=[];await validateControlDml({createQueryJob:async q=>{jobs.push(q);return [{}];}},'fixture','US');assert.equal(jobs.length,2);assert(jobs.every(q=>q.dryRun===true&&q.useLegacySql===false));assert.match(jobs[0].query,/WHERE holder IS NULL/);assert.match(jobs[1].query,/\(run_id,status,affected_orders,created_at,committed_at\)/);
+ await assert.rejects(validateControlDml({createQueryJob:async()=>{throw Object.assign(Error('bad SQL'),{code:400});}},'fixture','US'));
 });

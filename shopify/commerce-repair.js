@@ -49,6 +49,16 @@ export function snapshotSql(project,schemas){return TABLES.map(t=>{
  }).join(' UNION ALL ');}
 const stateSql=p=>['finance_refresh_state','customer_refresh_state'].map(t=>`SELECT '${t}' table_name,TO_HEX(SHA256(COALESCE(STRING_AGG(TO_JSON_STRING(x),'\\n' ORDER BY TO_JSON_STRING(x)),''))) fingerprint FROM ${fq(p,t)} x`).join(' UNION ALL ');
 export function idleSql(p){return `ASSERT NOT EXISTS(SELECT 1 FROM ${fq(p,'finance_refresh_runs')} WHERE status='running') AS 'REPAIR_FINANCE_ACTIVE'; ASSERT NOT EXISTS(SELECT 1 FROM ${fq(p,'customer_refresh_runs')} WHERE status='running') AS 'REPAIR_CUSTOMER_ACTIVE'; ASSERT ((SELECT COUNT(*) FROM ${fq(p,'customer_incremental_guard')})=1 AND NOT EXISTS(SELECT 1 FROM ${fq(p,'customer_incremental_guard')} WHERE holder IS NOT NULL)) AS 'REPAIR_CUSTOMER_GUARD';`;}
+export function controlDml(p){return {
+ claim:`UPDATE ${fq(p,'commerce_repair_guard')} SET holder=@run WHERE holder IS NULL`,
+ marker:`INSERT INTO ${fq(p,'commerce_repair_runs')} (run_id,status,affected_orders,created_at,committed_at) VALUES(@run,'preparing',@count,CURRENT_TIMESTAMP(),NULL)`
+};}
+export async function validateControlDml(db,project,location){
+ for(const [name,sql]of Object.entries(controlDml(project))){
+  const params=name==='claim'?{run:'00000000-0000-4000-8000-000000000000'}:{run:'00000000-0000-4000-8000-000000000000',count:0},types=name==='claim'?{run:'STRING'}:{run:'STRING',count:'INT64'};
+  await db.createQueryJob({query:sql,params,types,location,dryRun:true,useLegacySql:false,maximumBytesBilled:'1000000000'});
+ }
+}
 export function promotionSql(p,stages,schemas){
  const expected=`SELECT JSON_VALUE(x,'$.table_name') table_name,JSON_VALUE(x,'$.order_id') order_id,JSON_VALUE(x,'$.fingerprint') fingerprint FROM UNNEST(JSON_QUERY_ARRAY(@expected)) x`;
  return `BEGIN TRANSACTION;
@@ -87,15 +97,17 @@ export function validatePreview(plan,now=new Date().toISOString()){
 }
 export async function apply({db,project,location,graphql,plan,env={},confirmedPaused=false,signal,onProgress=()=>{},now=()=>new Date().toISOString()}){
  if(env.SHOPIFY_COMMERCE_REPAIR_ENABLED!=='true'||!confirmedPaused)fail('REPAIR_APPLY_DISABLED');validatePreview(plan,now());if(project!==plan.project)fail('REPAIR_PROJECT');
- const schemas=await retention(db);if(digest(schemas)!==plan.schema_hash)fail('REPAIR_SCHEMA_CHANGED');
+ onProgress({phase:'source_revalidation',run_id:plan.run_id});const schemas=await retention(db);if(digest(schemas)!==plan.schema_hash)fail('REPAIR_SCHEMA_CHANGED');
  const orders=await details(graphql,plan.ids,signal);if(digest(orders)!==plan.source_hash)fail('REPAIR_SOURCE_CHANGED');
- const current=await query(db,location,snapshotSql(project,schemas),{ids:plan.ids},{ids:['STRING']});if(digest(cleanFingerprints(current))!==digest(plan.expected)||statesText(await query(db,location,stateSql(project)))!==plan.states)fail('REPAIR_WAREHOUSE_CHANGED');
+ onProgress({phase:'warehouse_revalidation',run_id:plan.run_id});const current=await query(db,location,snapshotSql(project,schemas),{ids:plan.ids},{ids:['STRING']});if(digest(cleanFingerprints(current))!==digest(plan.expected)||statesText(await query(db,location,stateSql(project)))!==plan.states)fail('REPAIR_WAREHOUSE_CHANGED');
  const fresh=candidates(orders,plan.observed),latest=new Map(current.map(r=>[r.table_name+':'+r.order_id,JSON.parse(r.row_json)]));const derived=Object.fromEntries(TABLES.map(t=>[t,fresh[t].map(r=>mergeCandidate(t,latest.get(t+':'+r.order_id),r))]));if(digest(derived)!==digest(plan.data))fail('REPAIR_PREVIEW_CHANGED');
- await query(db,location,idleSql(project));signal?.throwIfAborted();
+ onProgress({phase:'idle_checks',run_id:plan.run_id});await query(db,location,idleSql(project));signal?.throwIfAborted();
+ onProgress({phase:'control_setup',run_id:plan.run_id});
  await query(db,location,`CREATE TABLE IF NOT EXISTS ${fq(project,'commerce_repair_runs')} (run_id STRING,status STRING,affected_orders INT64,created_at TIMESTAMP,committed_at TIMESTAMP) OPTIONS(expiration_timestamp=NULL); CREATE TABLE IF NOT EXISTS ${fq(project,'commerce_repair_guard')} (holder STRING) OPTIONS(expiration_timestamp=NULL); INSERT INTO ${fq(project,'commerce_repair_guard')} SELECT CAST(NULL AS STRING) FROM UNNEST([1]) WHERE NOT EXISTS(SELECT 1 FROM ${fq(project,'commerce_repair_guard')});`);
  for(const t of ['commerce_repair_runs','commerce_repair_guard']){const [m]=await db.dataset('shopify_data').table(t).getMetadata();if(m.expirationTime||m.timePartitioning?.expirationMs)fail('REPAIR_RETENTION');}
+ await validateControlDml(db,project,location);
  const existing=await query(db,location,`SELECT status FROM ${fq(project,'commerce_repair_runs')} WHERE run_id=@run`,{run:plan.run_id},{run:'STRING'});if(existing.length)fail('REPAIR_RUN_ALREADY_PRESENT');
- await query(db,location,`BEGIN TRANSACTION; ASSERT ((SELECT COUNT(*) FROM ${fq(project,'commerce_repair_guard')})=1 AND NOT EXISTS(SELECT 1 FROM ${fq(project,'commerce_repair_guard')} WHERE holder IS NOT NULL)) AS 'REPAIR_BUSY'; ASSERT NOT EXISTS(SELECT 1 FROM ${fq(project,'commerce_repair_runs')} WHERE status='preparing') AS 'REPAIR_UNRESOLVED'; UPDATE ${fq(project,'commerce_repair_guard')} SET holder=@run; INSERT INTO ${fq(project,'commerce_repair_runs')} VALUES(@run,'preparing',@count,CURRENT_TIMESTAMP(),NULL); COMMIT TRANSACTION;`,{run:plan.run_id,count:plan.ids.length},{run:'STRING',count:'INT64'});
+ onProgress({phase:'lock_acquisition',run_id:plan.run_id});await query(db,location,`BEGIN TRANSACTION; ASSERT ((SELECT COUNT(*) FROM ${fq(project,'commerce_repair_guard')})=1 AND NOT EXISTS(SELECT 1 FROM ${fq(project,'commerce_repair_guard')} WHERE holder IS NOT NULL)) AS 'REPAIR_BUSY'; ASSERT NOT EXISTS(SELECT 1 FROM ${fq(project,'commerce_repair_runs')} WHERE status='preparing') AS 'REPAIR_UNRESOLVED'; ${controlDml(project).claim}; ${controlDml(project).marker}; COMMIT TRANSACTION;`,{run:plan.run_id,count:plan.ids.length},{run:'STRING',count:'INT64'});
  const stages=Object.fromEntries(TABLES.map(t=>[t,'_commerce_repair_'+t+'_'+plan.run_id.replaceAll('-','_')])),directory=await mkdtemp(join(tmpdir(),'commerce-repair-stage-'));let submitted=false;
  try{
   onProgress({phase:'staging',run_id:plan.run_id,affected_orders:plan.ids.length});
@@ -111,7 +123,7 @@ export async function apply({db,project,location,graphql,plan,env={},confirmedPa
 }
 async function main(){
  const [mode,...args]=process.argv.slice(2);if(!['preview','apply','status','preflight'].includes(mode))fail('REPAIR_ARGUMENTS');const {bigquery:db,project}=createBigQueryClient(),location=await datasetLocation(db,project,'shopify_data');
- if(mode==='preflight'){if(args.length)fail('REPAIR_ARGUMENTS');await query(db,location,idleSql(project));return console.log(JSON.stringify({status:'idle_sql_verified',read_only:true,warehouse_writes:false,source_reads:false}));}
+ if(mode==='preflight'){if(args.length)fail('REPAIR_ARGUMENTS');await query(db,location,idleSql(project));let controls='dry_run_verified';try{for(const table of ['commerce_repair_runs','commerce_repair_guard'])await db.dataset('shopify_data').table(table).getMetadata();}catch(e){if(Number(e.code)===404)controls='tables_not_created';else throw e;}if(controls==='dry_run_verified')await validateControlDml(db,project,location);return console.log(JSON.stringify({status:'idle_sql_verified',control_dml_validation:controls,read_only:true,warehouse_writes:false,source_reads:false}));}
  if(mode==='status'){if(args.length!==1||!/^[a-f0-9-]{36}$/.test(args[0]))fail('REPAIR_ARGUMENTS');const rows=await query(db,location,`SELECT run_id,status,affected_orders,created_at,committed_at FROM ${fq(project,'commerce_repair_runs')} WHERE run_id=@run`,{run:args[0]},{run:'STRING'});const guards=await query(db,location,`SELECT COUNT(*) guard_rows,COUNTIF(holder IS NOT NULL) held_guards FROM ${fq(project,'commerce_repair_guard')}`);return console.log(JSON.stringify({read_only:true,runs:rows,guards}));}
  let plan;if(mode==='preview'&&args.length!==2||mode==='apply'&&(args.length!==2||args[1]!=='--confirm-collectors-paused'))fail('REPAIR_ARGUMENTS');
  if(mode==='apply'){if(process.env.SHOPIFY_COMMERCE_REPAIR_ENABLED!=='true')fail('REPAIR_APPLY_DISABLED');const m=await stat(args[0]);if(!m.isFile()||m.size>16000000||(m.mode&0o077))fail('REPAIR_PRIVATE_FILE');plan=validatePreview(JSON.parse(await readFile(args[0],'utf8')));}

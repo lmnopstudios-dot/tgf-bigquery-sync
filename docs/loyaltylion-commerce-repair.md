@@ -134,3 +134,26 @@ were never created, notFound is consistent with the pre-DDL failure. Do not repl
 an apply merely because its source preview remains on disk. Deployment can remove
 that file and all previews expire after 30 minutes: generate a fresh preview after
 preflight succeeds, then separately apply the newly printed path.
+
+## Control UPDATE regression (run 4905a490)
+
+The second failed apply's location, line 1 column 358, aligns with UPDATE in the
+acquisition script. That UPDATE lacked BigQuery's mandatory WHERE condition. The
+claim now updates only WHERE holder IS NULL, after the same singleton/unheld
+assertions, inside the transaction. Control claim and run-marker statements are
+shared by acquisition and independent BigQuery dry-run validation. Every generated
+UPDATE is tested for an explicit condition.
+
+Preflight now runs the read-only idle checks and, when repair control tables exist,
+dry-runs the exact claim and marker DML separately. It reports
+control_dml_validation: dry_run_verified only if both validate; if control tables
+are absent it explicitly reports tables_not_created rather than implying those
+writes were checked. Apply repeats DML validation after setup and before acquiring
+the lock. Dry runs never acquire a guard or create run markers. Safe progress now
+identifies source/warehouse revalidation, idle checks, control setup and lock
+acquisition rather than leaving all pre-staging activity labelled authentication.
+
+The reported empty run list and singleton unheld guard do not justify replaying a
+stale apply. After this fix is deployed, run preflight, generate a fresh preview,
+and review its new file path before a separately gated apply. Existing guard,
+source/warehouse freshness, stage and atomic publication protections remain.
