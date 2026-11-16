@@ -1,7 +1,8 @@
+import {spawnSync} from 'node:child_process';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile} from 'node:fs/promises';
-import {options,collect,run,publish,missing,retention,promotionSql,status,safeCode,COLLECTOR,LIMITS} from '../shopify/customer-refresh.js';
+import {options,collect,run,publish,missing,retention,promotionSql,planSql,status,safeCode,COLLECTOR,LIMITS} from '../shopify/customer-refresh.js';
 import {mergeSql,apply as legacyApply,runScheduled as legacyScheduled} from '../shopify/customer-recovery.js';
 import {plannedCommand,sourceInspections,runCollector} from '../ops/collector-runner.js';
 import {ORACLE_SOURCE_CONTRACTS} from '../oracle/freshness.js';
@@ -33,3 +34,20 @@ test('page, byte and retry caps fail without truncation or runaway retry',async(
 
 test('SQL assertion diagnostics emit only known codes and failed dry-run cannot publish or advance state',async()=>{assert.equal(safeCode({message:'private record detail: CUSTOMER_LOCKED at [4:3]',errors:[{reason:'invalidQuery'}]}),'CUSTOMER_LOCKED');assert.equal(safeCode({message:'private@example.test CUSTOMER_INVENTED',errors:[{reason:'invalidQuery'}]}),'CUSTOMER_SQL_INVALID');const db=fixture();db.createQueryJob=async()=>{throw Object.assign(Error('private SQL body'),{errors:[{reason:'invalidQuery'}]})};await assert.rejects(run({bigquery:db,project:'p',o:{...o,apply:true},now,graphql,env:{SHOPIFY_CUSTOMERS_ENABLED:'true'}}));assert.equal(db.state,null);assert.equal(db.live.length,0);assert.equal(db.guard,null);assert.equal(db.stages.size,1);assert.ok(db.queries.some(q=>q.query.includes("SET status='failed'")))});
 test('missing customer response fields are invalid evidence, while an explicit null is retained as a genuine guest',async()=>{await assert.rejects(collect({ids:['gid://shopify/Order/1'],graphql:async()=>({nodes:[{...order(1),customer:undefined}]}),o,pause:async()=>{}}),/INVALID_RESPONSE/);const result=await collect({ids:['gid://shopify/Order/1'],graphql:async()=>({nodes:[{...order(1),customer:null}]}),o,pause:async()=>{}});assert.equal(result.orders[0].customer,null)});
+
+test('production plan uses an explicit financial source alias for whole-row tie breaking',()=>{
+ const sql=planSql('fixture');
+ assert.match(sql,/order_financials\` AS src/);
+ assert.match(sql,/TO_JSON_STRING\(src\)/);
+ assert.match(sql,/PARTITION BY src\.order_id ORDER BY src\.synced_at/);
+ assert.doesNotMatch(sql,/TO_JSON_STRING\(order_financials\)/);
+});
+
+const aliasSqlAvailable=spawnSync('python3',['-c','import duckdb,sqlglot']).status===0;
+test('execute generated plan: deduplicate financial rows, exclude retained customer rows and respect frozen timestamp bounds',{skip:!aliasSqlAvailable},()=>{
+ const id=n=>'gid://shopify/Order/'+n;
+ const finance=(n,created,synced)=>[id(n),100,0,'GBP',null,synced,created,100,0];
+ const tables={order_financials:[finance(1,'2026-10-01T10:00:00Z','2026-11-15T00:00:00Z'),finance(1,'2026-10-01T10:00:00Z','2026-11-14T00:00:00Z'),finance(2,'2026-10-01T11:00:00Z','2026-11-15T00:00:00Z'),finance(3,'2026-11-16T00:00:00Z','2026-11-16T00:00:00Z')],order_customers:[[id(2),'gid://shopify/Customer/2','PAID',null,'2026-11-15T00:00:00Z',null,'2026-10-01T11:00:00Z']]};
+ const r=spawnSync('python3',['test/loyalty-performance-sql.py'],{input:JSON.stringify({queries:{plan:planSql('fixture')},params:{start:o.start,end:o.end,limit:5001},tables}),encoding:'utf8'});
+ assert.equal(r.status,0,r.stderr);assert.deepEqual(JSON.parse(r.stdout).plan,[{order_id:id(1),missing_count:1}]);
+});
