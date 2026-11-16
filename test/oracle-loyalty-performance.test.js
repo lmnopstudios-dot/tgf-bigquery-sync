@@ -72,7 +72,7 @@ Include before/after enrolment comparisons of AOV and mean/median time between o
 Show current membership and tiers separately. State actual points, claims and purchasing coverage dates; don’t treat missing history as zero. Keep supported sections and generate the authenticated Excel workbook. Do not run collection or change data.`;
 for(const durable of [false,true])test(`annual LoyaltyLion AOV and median order-gap request reaches authenticated workbook via ${durable?'durable':'interactive'} chat`,async t=>{
  const reportNow=Date.parse('2026-11-16T12:00:00Z'),f=fixture(),h=await acceptanceServer(f,{durable,now:reportNow});t.after(h.close);
- const result=await h.submit(annualLoyaltyPrompt,{fresh:true});assert(result.artifact,JSON.stringify(result));assert.equal(result.analysis_context.tool_route,'get_loyalty_report');assert.equal(result.analysis_context.start_date,'2025-11-16');assert.equal(result.analysis_context.end_date,'2026-11-15');assert.equal(result.evidence.performance.windows.length,1);assert.equal(result.analysis_context.loyalty_scope.tier_basis,'current');assert(result.evidence.performance.tables.find(x=>x.section==='purchasing').rows.length>0);assert.doesNotMatch(result.answer,/requested order-value analysis is unavailable/);
+ const result=await h.submit(annualLoyaltyPrompt,{fresh:true});assert(result.artifact,JSON.stringify(result));assert.equal(result.analysis_context.tool_route,'get_loyalty_report');assert.equal(result.analysis_context.start_date,'2025-11-16');assert.equal(result.analysis_context.end_date,'2026-11-15');assert.equal(result.evidence.performance.windows.length,1);assert.equal(result.analysis_context.loyalty_scope.tier_basis,'current');for(const name of ['membership','tiers']){const section=result.evidence.sections.find(x=>x.section===name);assert.equal(section.status,'fulfilled');assert.equal(section.rows.length,1);assert.match(section.definition,/Current snapshot collected at/);assert.match(section.definition,/not monthly historical/);}assert.equal(result.evidence.snapshot_observed_at,'2026-11-06T10:00:00Z');assert(result.evidence.performance.tables.find(x=>x.section==='purchasing').rows.length>0);assert.doesNotMatch(result.answer,/requested order-value analysis is unavailable/);
  const response=await fetch(h.origin+result.artifact.download_url,{headers:{cookie:h.headers.cookie}});assert.equal(response.status,200);const workbook=new ExcelJS.Workbook();await workbook.xlsx.load(Buffer.from(await response.arrayBuffer()));assert(workbook.getWorksheet('Purchase changes'));assert(workbook.getWorksheet('Customer purchasing'));assert.notEqual((await fetch(h.origin+result.artifact.download_url)).status,200);
  const calls=f.queries.length;const follow=await h.submit('Show mean and median time between orders and average order value');assert(follow.artifact,JSON.stringify(follow));assert.equal(follow.analysis_context.tool_route,'get_loyalty_report');assert(f.queries.length>calls);
 });
@@ -85,4 +85,9 @@ test('loyalty precedence does not allow unsupported merchandise distributions or
    const r=await invoke();assert.equal(r.analysis_unavailable,true);assert.match(r.answer,/order-value analysis is unavailable/);
   }
  }
+});
+
+test('monthly overview still cannot imply a historical membership time series',async()=>{
+ const f=fixture(),context=transitionAnalysisContext(null,'LoyaltyLion overview for October 2026 by month',{now}).context,e=await f.provider(context);
+ for(const section of e.sections.filter(s=>['membership','tiers'].includes(s.section))){assert.equal(section.status,'unavailable');assert.equal(section.code,'LOYALTY_SNAPSHOT_NOT_TIME_SERIES');}
 });

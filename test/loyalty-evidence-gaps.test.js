@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {spawnSync} from 'node:child_process';
 import ExcelJS from 'exceljs';
 import {performanceQueries,cohortObservation,commerceCutoffs,performanceWorkbookTables} from '../oracle/loyalty-performance.js';
-import {commerceAuditQueries,auditCommerce} from '../diagnostics/loyaltylion-commerce-coverage.mjs';
+import {commerceAuditQueries,auditCommerce,commerceAuditReview} from '../diagnostics/loyaltylion-commerce-coverage.mjs';
 import {performanceFixture} from './helpers/loyalty-performance-fixture.js';
 import {transitionAnalysisContext} from '../oracle/analysis-context.js';
 const now='2026-11-15T12:00:00Z';
@@ -75,4 +75,15 @@ test('executed SQL: October enrolments see November outcomes beyond requested da
  const immature=out.cohorts.find(r=>r.window_days===30&&!r.observation_mature);assert.equal(immature.cohort_customers,1);assert.equal(immature.mature_customers,0);assert.equal(immature.after_orders,1);
  const audit=out.audit.filter(r=>r.month.startsWith('2026-10-01'));assert.equal(audit.reduce((n,r)=>n+r.ambiguous_roster_link,0),1);assert.equal(audit.reduce((n,r)=>n+r.missing_customer_id,0),2);assert.equal(audit.reduce((n,r)=>n+r.missing_finance,0),1);assert.equal(audit.reduce((n,r)=>n+r.missing_customer_evidence,0),1);assert.equal(audit.reduce((n,r)=>n+r.missing_channel_evidence,0),2);assert.equal(audit.reduce((n,r)=>n+r.known_migration_exclusions,0),1);
  assert.equal(out.purchasing.length,2);assert(out.purchasing.every(r=>r.membership_basis==='unknown'&&r.eligible_orders===1));
+});
+
+
+test('coverage audit distinguishes join repairs from missing source proof without auto-certifying',()=>{
+ const row={missing_finance:0,missing_customer_evidence:0,missing_channel_evidence:0,invalid_order_namespace:0,missing_gross:0};
+ const sections={monthly:{status:'observed',rows:[row]},schema:{status:'observed',rows:[]},finance_runs:{status:'observed',rows:[]},customer_runs:{status:'observed',rows:[]}};
+ let review=commerceAuditReview(sections);assert.equal(review.status,'source_population_proof_required');assert.equal(review.certified,false);assert.match(review.source_population_proof,/repaired customer links/);
+ review=commerceAuditReview({...sections,monthly:{status:'observed',rows:[{...row,missing_customer_evidence:4}]}});assert.equal(review.status,'retained_reconciliation_required');assert.equal(review.retained_gaps.missing_customer_evidence,4);
+ review=commerceAuditReview({...sections,monthly:{status:'observed',rows:[]}});assert.equal(review.status,'no_retained_observations');assert.equal(review.retained_gaps,null);
+ review=commerceAuditReview({...sections,monthly:{status:'unavailable'}});assert.equal(review.status,'audit_reads_incomplete');assert.deepEqual(review.failed_reads,['monthly']);assert.equal(review.retained_gaps,null);
+ review=commerceAuditReview({...sections,monthly:{status:'observed',rows:[{}]}});assert.equal(review.status,'retained_reconciliation_required');assert.equal(review.retained_gaps.missing_finance,null);
 });

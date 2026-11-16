@@ -236,3 +236,40 @@ regression, not a production BigQuery dry-run or live coverage certification.
 The acceptance matrix registers the evidence-gap suite; staged roster failure,
 interactive/durable partial workbooks, authenticated downloads and desktop/mobile
 browser recovery are exercised by the existing gates and added assertions.
+
+## Annual assessment: current snapshots and purchase-change coverage
+
+Performance reports show current membership and tiers once, stamped with the
+complete roster's collection timestamp, even when purchasing and points use a
+monthly grain. This is not a monthly historical membership series. An explicit
+monthly overview still cannot infer historical memberships or tiers.
+
+For the annual 16 November 2025–15 November 2026 assessment, run the existing
+bounded audit from Render before changing any private coverage intervals:
+
+```bash
+LOYALTYLION_CONFIG_PATH=/etc/secrets/loyaltylion-account.json \
+timeout --signal=TERM --kill-after=5s 75s \
+node diagnostics/loyaltylion-commerce-coverage.mjs \
+  2025-11-16T00:00:00Z 2026-11-16T00:00:00Z --execute-read-only
+```
+
+The aggregate-only review distinguishes incomplete audit reads, no retained
+observations, retained join gaps, and missing source-population proof. Missing
+fields and failed queries stay unknown. Zero missing joins do **not** certify
+history: the finance cron reads updated orders, and customer catch-up repairs
+retained finance IDs rather than establishing the full Shopify created-order
+population. Reconcile a completed order-created source manifest and exact IDs
+before adding reviewed `performance_coverage` intervals to the existing private
+account configuration. This command neither generates an approved certificate nor
+changes data, source collection, reporting flags or schedules.
+
+Check `required_start_at` and `required_end_exclusive` in Purchase changes.
+An enrolment selected inside this annual window may need earlier orders for its
+180-day before window, or a future after window that cannot yet be mature. Audit
+earlier required bounds separately within the existing 380-day invocation cap.
+Do not extend a certificate beyond evidence to fill either gap. Once supported
+channel-specific intervals are reviewed, rerunning the same report enables only
+mature, fully covered rows through the existing gate; remaining rows retain
+counts and withholding reasons. Actual reward use and causal programme impact
+remain separate evidence requirements.
