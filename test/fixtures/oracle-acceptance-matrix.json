@@ -1430,6 +1430,10 @@
     {
       "file": "test/oracle-loyalty-sdk-numeric.test.js",
       "purpose": "BigQuery SDK NUMERIC decoding must not invalidate LoyaltyLion performance evidence (24856e45-610e-4b1a-b725-0eb771cb074b). Verify exact decimal transport, safe Excel numeric cells, high precision, canonical persistence and partial section diagnostics without payload values."
+    },
+    {
+      "file": "test/loyalty-evidence-gaps.test.js",
+      "purpose": "Complete versus unverified commerce coverage, partial-day cutoff and monthly windows, stale roster metadata, October enrolments with November outcomes, immature and genuine zero-purchase cohorts, missing/ambiguous native links, bounded aggregate source/manifests audit. Synthetic execution does not certify live coverage."
     }
   ]
 }

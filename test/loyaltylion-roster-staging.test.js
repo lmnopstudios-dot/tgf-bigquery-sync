@@ -66,3 +66,18 @@ test('preview validates over 10000 customers without warehouse access; profile i
  assert.throws(()=>rosterStagingPlan({...f.config,roster_staging:{...profile,max_rows:100001}}),{code:'LOYALTY_STAGING_BOUNDS'});
  assert.doesNotMatch(promotionSql('fixture','loyaltylion','transactions'),/\$\{transaction/);
 });
+
+import {runHistory} from '../loyaltylion/history.js';
+for(const apply of [false,true])test(`roster-only ${apply?'apply':'preview'} reuses staged collector without reading transactions or broadening points`,async()=>{
+ const f=fixture(),query=f.bigquery.query;
+ f.bigquery.query=async q=>{
+  if(q.labels?.operation==='coverage')return [[{resource:'customers',status:'complete',run_id:'previous-complete',observed_at:'2026-11-11T00:00:00Z'},{resource:'transactions',status:'complete',run_id:'preserved-points',start_at:'2026-07-17T00:00:00Z',end_exclusive:'2026-11-13T17:29:00Z'}]];
+  if(q.labels?.operation==='guard')return [[{guard_rows:1,held_guards:0}]];
+  return query(q);
+ };
+ const pages=f.client.pages.bind(f.client);f.client.pages=(resource,...args)=>{assert.equal(resource,'customers');return pages(resource,...args);};
+ const plan={version:1,status:'reviewed',reviewed_by:'fixture',reviewed_at:profile.reviewed_at,start_at:'2026-07-17T00:00:00Z',end_exclusive:'2026-11-13T17:29:00Z',window_days:7,incremental_enabled:false,roster_staging:profile,transaction_staging:profile};
+ const r=await runHistory({...f,project:'fixture',plan,mode:'roster',apply,env:{LOYALTYLION_COLLECTION_ENABLED:apply?'true':'false'},clientFactory:()=>f.client,now:()=> '2026-11-15T12:00:00Z'});
+ if(apply){assert.equal(r.complete,true);const commits=f.writes.filter(q=>q.labels?.operation==='promote');assert.equal(commits.length,1);assert.equal(commits[0].params.resource,'customers');assert.equal(commits[0].params.observed_at,'2026-11-15T12:00:00.000Z');assert.doesNotMatch(commits[0].query,/DELETE|TRUNCATE/);}
+ else{assert.equal(r.status,'preview_complete');assert.equal(r.resource,'customers');assert.equal(r.rows,12050);assert.equal(f.writes.length,0);}
+});

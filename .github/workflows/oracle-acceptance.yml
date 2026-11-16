@@ -13,6 +13,10 @@ jobs:
         with:
           node-version: 24
       - run: npm install --ignore-scripts --no-package-lock
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -r test/requirements-loyalty-sql.txt
       - run: npm run test:oracle:acceptance
       - uses: actions/upload-artifact@v4
         if: always()

@@ -12,6 +12,8 @@ export async function verifyLoyaltyPerformanceBrowser(browser){
    assert.match(await page.locator('.analytical-answer').last().innerText(),/LoyaltyLion performance report/);
    const link=page.locator('a[href*="/api/oracle/exports/"]').last();await link.waitFor();const response=await page.request.get(h.origin+await link.getAttribute('href'));assert.equal(response.status(),200);
    const wb=new ExcelJS.Workbook();await wb.xlsx.load(await response.body());assert(wb.getWorksheet('Customer purchasing'));assert(wb.getWorksheet('Coverage'));assert(wb.getWorksheet('Enrolment cohorts'));
+   const cells=JSON.stringify(wb.model);assert.match(cells,/Latest certified commerce cutoff/);assert.match(cells,/Latest certified points cutoff/);assert.match(cells,/Membership snapshot collected/);
+   const anonymous=await browser.newContext();try{const denied=await anonymous.request.get(h.origin+await link.getAttribute('href'));assert.notEqual(denied.status(),200);}finally{await anonymous.close();}
    const calls=f.queries.length;await page.reload();await page.waitForFunction(()=>!document.querySelector('#send').disabled&&document.querySelector('.analytical-answer'));assert.match(await page.locator('.analytical-answer').last().innerText(),/LoyaltyLion performance report/);assert.equal(f.queries.length,calls);
   }finally{await page.close();await h.close();}
  }

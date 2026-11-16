@@ -1,0 +1,4 @@
+# Execute generated BigQuery loyalty queries against synthetic rows in CI.
+duckdb==2.0.0
+sqlglot==30.31.0
+pytz==2026.6

@@ -32,7 +32,7 @@ for(const durable of [false,true])test(`performance workbook through ${durable?'
 });
 test('unverified cohort exposure withholds rates and preserves zero-sales customers; tampered extra evidence is rejected',async()=>{
  const f=fixture(),c=transitionAnalysisContext(null,'LoyaltyLion performance report',{now}).context,e=await f.provider(c);
- const row=e.performance.tables.find(t=>t.section==='cohorts').rows[0];assert.equal(row.mature_customers,2);assert.equal(row.zero_after_customers,1);assert.equal(row.subsequent_purchase_rate,null);assert.equal(row.after_orders_per_customer,null);
+ const row=e.performance.tables.find(t=>t.section==='cohorts').rows[0];assert.equal(row.cohort_customers,2);assert.equal(row.mature_customers,null);assert.equal(row.zero_after_customers,1);assert.equal(row.subsequent_purchase_rate,null);assert.equal(row.after_orders_per_customer,null);
  assertPerformanceEvidence(c,e);const bad=structuredClone(e);bad.performance.windows[0].end_date='2026-11-12';assert.throws(()=>assertPerformanceEvidence(c,bad));
  const pii=structuredClone(e);pii.performance.tables[0].rows[0].email='private@example.test';assert.throws(()=>assertPerformanceEvidence(c,pii));
  assert(observationCovered([{channel:'online',start_at:'2025-12-01T00:00:00Z',end_exclusive:'2026-02-01T00:00:00Z'}],row.required_start_at,row.required_end_exclusive,'online'));
@@ -40,7 +40,7 @@ test('unverified cohort exposure withholds rates and preserves zero-sales custom
 });
 test('read-only queries preserve immutable movement reversal semantics, mature zero-order cohorts, currency and exact IDs',()=>{
  const q=performanceQueries('fixture','loyaltylion');for(const sql of Object.values(q))assert.doesNotMatch(sql,/INSERT|MERGE|DELETE|CREATE|UPDATE|email|voucher_code/);
- assert.match(q.cohorts,/LEFT JOIN selected/);assert.match(q.cohorts,/TIMESTAMP_ADD\(m.enrolled_at,INTERVAL d DAY\)<=TIMESTAMP\(@as_of\)/);assert.match(q.purchasing,/COUNT\(DISTINCT source_order_id\)/);assert.match(q.purchasing,/current_non_member/);assert.match(q.linkage,/known_migrated_copy/);assert.match(q.linkage,/customer_mismatch/);assert.match(q.purchasing,/Full period/);
+ assert.match(q.cohorts,/LEFT JOIN selected/);assert.match(q.cohorts,/@commerce_cutoffs/);assert.doesNotMatch(q.cohorts,/INTERVAL d DAY\)<=TIMESTAMP\(@as_of\)/);assert.match(q.purchasing,/COUNT\(DISTINCT source_order_id\)/);assert.match(q.purchasing,/current_non_member/);assert.match(q.linkage,/known_migrated_copy/);assert.match(q.linkage,/customer_mismatch/);assert.match(q.purchasing,/Full period/);
 });
 
 import {spawnSync} from 'node:child_process';
@@ -51,7 +51,7 @@ test('executed generated SQL: exact AOV/currency, repeated orders, zero-order co
  const tables={customer_snapshots:members,points_transactions:[['1','t1','1',cid(1),oid(1),'2026-01-02T00:00:00Z','activity',10,0,'points'],['1','t2','1',cid(1),oid(1),'2026-01-03T00:00:00Z','activity',-10,0,'points'],['1','t3','1',cid(1),oid(99),'2026-01-03T00:00:00Z','activity',5,0,'points']],order_financials:[],order_customers:[],order_locations:[],reward_claim_observations:[]};
  const add=(id,customer,date,currency,gross,app=null,status='PAID',refund=0)=>{tables.order_financials.push([oid(id),gross,refund,currency,null,stamp,date,gross,refund]);tables.order_customers.push([oid(id),cid(customer),status,null,stamp]);tables.order_locations.push([oid(id),app,date,null,'Online Store',stamp]);};
  add(1,1,'2026-01-02T12:00:00Z','GBP',100);add(2,1,'2026-01-03T12:00:00Z','GBP',200);add(3,1,'2025-12-20T12:00:00Z','GBP',50);add(4,3,'2026-01-04T12:00:00Z','USD',80);add(5,1,'2026-01-04T12:00:00Z','GBP',999,'gid://shopify/App/1758145');add(6,1,'2026-01-04T12:00:00Z','GBP',999,null,'REFUNDED',999);
- const params={program_id:'1',roster_run:'roster',transaction_runs:['points'],as_of:'2026-11-13T00:00:00Z',windows:JSON.stringify([{label:'Requested period',start_date:'2026-01-01',end_date:'2026-01-31'}]),channel:null,currencies:[],matrixify_app_id:'gid://shopify/App/1758145'};
+ const params={commerce_cutoffs:JSON.stringify([{channel:'online',end_exclusive:'2026-11-13T00:00:00Z'}]),program_id:'1',roster_run:'roster',transaction_runs:['points'],as_of:'2026-11-13T00:00:00Z',windows:JSON.stringify([{label:'Requested period',start_date:'2026-01-01',end_date:'2026-01-31'}]),channel:null,currencies:[],matrixify_app_id:'gid://shopify/App/1758145'};
  const r=spawnSync('python3',['test/loyalty-performance-sql.py'],{input:JSON.stringify({queries:performanceQueries('fixture','loyaltylion'),params,tables}),encoding:'utf8'});assert.equal(r.status,0,r.stderr);const out=JSON.parse(r.stdout);
  const p=out.purchasing.find(x=>x.month==='Full period'&&x.currency==='GBP');assert.equal(p.eligible_orders,2);assert.equal(Number(p.observed_aov),150);assert.equal(p.repeat_purchasers,1);assert.equal(p.membership_basis,'current_member');
  assert.equal(out.purchasing.find(x=>x.month==='Full period'&&x.currency==='USD').membership_basis,'current_non_member');

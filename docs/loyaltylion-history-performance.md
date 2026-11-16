@@ -235,10 +235,13 @@ purchasing customer, not per every roster member.
 
 Cohort zeros include non-purchasers in a mature enrolled cohort, but remain only
 observed zeros until sales coverage is certified. The 30/90/180-day cohort includes
-only enrolments mature by the report-generation cutoff. Before and after windows
-use the same cohort and exact elapsed-day duration. Cohort outcome observation runs
-through the generation cutoff, which can be later than the enrolment selection
-period. `existing_observed_customer` requires an observed pre-enrolment purchase;
+all uniquely linked enrolments, split by maturity at the verified commerce cutoff
+for each channel. Before and after windows use the same cohort and exact elapsed-day
+duration. Observed counts can extend through report generation, beyond the enrolment
+selection period. Rates require the complete before/after interval to be certified;
+maturity uses the verified commerce cutoff, never report generation. Immature rows
+remain visible with explicit withheld reasons. `existing_observed_customer` requires
+an observed pre-enrolment purchase;
 otherwise `prior_history_unverified` is used, never "new customer" without complete
 prior evidence. Cohort rows have separate currency/channel populations.
 
@@ -282,3 +285,5 @@ dataset to verify row counts, IDs and coverage markers. Back up data, coverage,
 checkpoints and schema together. A guard copied in a backup must never be used to
 resume a writer without reconciliation. Staging expiry is intentional; permanent
 history expiry is not. Existing recovery procedures remain applicable.
+
+Current evidence-gap audit, roster-only commands and validation prompts: [rollout guide](loyaltylion-evidence-gaps.md).
