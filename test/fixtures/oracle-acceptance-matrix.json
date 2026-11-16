@@ -1442,6 +1442,10 @@
     {
       "file": "test/loyalty-purchase-changes.test.js",
       "purpose": "Executed paired before/after enrolment AOV and customer-weighted mean/median order gaps; one-sided buyers, exact duplicate orders, migrations, DST, currency/channel separation, missing money, zero gaps, certified coverage and durable authenticated workbook compatibility."
+    },
+    {
+      "file": "test/loyalty-source-reconciliation.test.js",
+      "purpose": "Bounded read-only Shopify created-order population reconciliation: >10000 rows, exact pre/post counts, historical scopes, full pagination, native IDs and monetary/link/channel fields, concurrency, missing rows, throttling, interrupted/late failures, aggregate privacy and executed warehouse SQL. Never certifies coverage or writes data automatically."
     }
   ]
 }
