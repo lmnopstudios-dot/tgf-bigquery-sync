@@ -92,3 +92,37 @@ services:
     buildCommand: npm install
     startCommand: npm run collect:freshness -- google_ads
     envVars: *collector-env
+
+  # Deploy disabled. Bootstrap only after reviewed catch-up; activation is separate.
+  - type: cron
+    name: oracle-shopify-customers
+    runtime: node
+    schedule: "47 */2 * * *"
+    buildCommand: npm ci --ignore-scripts
+    startCommand: node shopify/customer-refresh.js scheduled --apply
+    envVars:
+      - key: SHOPIFY_CUSTOMERS_ENABLED
+        value: "false"
+      - key: GOOGLE_PROJECT_ID
+        sync: false
+      - key: GOOGLE_SERVICE_ACCOUNT_JSON
+        sync: false
+      - key: SHOPIFY_SHOP
+        sync: false
+      - key: SHOPIFY_CLIENT_ID
+        sync: false
+      - key: SHOPIFY_CLIENT_SECRET
+        sync: false
+  - type: cron
+    name: oracle-shopify-customers-check
+    runtime: node
+    schedule: "57 */2 * * *"
+    buildCommand: npm ci --ignore-scripts
+    startCommand: node shopify/customer-refresh.js check
+    envVars:
+      - key: SHOPIFY_CUSTOMERS_ENABLED
+        value: "false"
+      - key: GOOGLE_PROJECT_ID
+        sync: false
+      - key: GOOGLE_SERVICE_ACCOUNT_JSON
+        sync: false

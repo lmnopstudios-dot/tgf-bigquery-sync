@@ -149,6 +149,8 @@ Never unlock/replay automatically. Permanent history and no-expiry guards remain
 
 ## Commerce remediation only if the audit identifies a bounded gap
 
+**Customer writes below are superseded:** the dedicated [customer automation runbook](shopify-customer-automation.md) now owns guarded catch-up, bootstrap and scheduling. Legacy `customer-recovery.js` plan/verify remain read only; its apply/scheduled commands fail closed to prevent watermark poisoning and writer races. Do not use the old write examples below.
+
 No commerce collection is authorized or run by this change. Resolve access first;
 403 is not an empty source. For a **confirmed** small missing `order_customers`
 population, use the existing read-only plan for one date/currency slice (example

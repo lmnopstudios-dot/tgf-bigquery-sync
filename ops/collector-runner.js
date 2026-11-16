@@ -11,6 +11,7 @@ const isoDate=d=>d.toISOString().slice(0,10);
 const minusDays=(date,n)=>{const d=new Date(`${date}T00:00:00Z`);d.setUTCDate(d.getUTCDate()-n);return isoDate(d)};
 export function plannedCommand(source,{now=new Date(),coverageEnd=null}={}){
   const yesterday=minusDays(isoDate(now),1),max=coverageEnd?String(coverageEnd).slice(0,10):null;
+  if(source==='shopify_customers')return ['node',['shopify/customer-refresh.js','scheduled','--apply']];
   if(source==='shopify_finance')return ['npm',['run','refresh:shopify-finance','--','--mode','scheduled']];
   if(source==='ga4'){const end=yesterday,start=max?minusDays(max,6):null;if(!start)throw new Error('ga4 has no persisted coverage; supply an explicit bounded catch-up before scheduling');return ['npm',['run','sync:ga4','--','--start',start,'--end',end]];}
   if(source==='search_console'){const end=minusDays(isoDate(now),3),start=max?minusDays(max,6):null;if(!start)throw new Error('search_console has no persisted coverage; supply an explicit bounded catch-up before scheduling');return ['npm',['run','sync:search-console','--','--start',start,'--end',end]];}
@@ -28,6 +29,7 @@ const snapshot=(project,dataset,table,timestamp=null)=>({table,kind:'snapshot',q
 export function sourceInspections(project,source){safe(project);const q={
   ga4:['daily','acquisition','landing_pages','device_geo'].map(t=>daily(project,'ga4',t,'date')).concat(['conversion_device','conversion_breakdown','ecommerce_funnel'].map(t=>daily(project,'ga4',t,'date',{role:'ecommerce_instrumentation'})),daily(project,'ga4','conversion_coverage','date',{role:'ecommerce_instrumentation',evidenceSelect:`,(SELECT ARRAY_AGG(STRUCT(grain AS grain,status AS status,CAST(first_date AS STRING) AS first_date,CAST(last_date AS STRING) AS last_date,day_count AS day_count) ORDER BY grain,status) FROM (SELECT grain,status,MIN(date) first_date,MAX(date) last_date,COUNT(DISTINCT date) day_count FROM \`${project}.ga4.conversion_coverage\` GROUP BY grain,status)) instrumentation_status_boundaries`})),
   search_console:['daily','queries','pages','device_country'].map(t=>daily(project,'search_console',t,'date')).concat(daily(project,'search_console','canonical_daily','date',{observedStatus:"coverage_status='unavailable'"})),
+  shopify_customers:[snapshot(project,'shopify_data','order_customers','synced_at')],
   shopify_finance:[snapshot(project,'shopify_data','order_locations','synced_at'),snapshot(project,'shopify_data','order_financials','synced_at'),snapshot(project,'shopify_data','order_refunds','synced_at')],
   shopify_geography:[snapshot(project,'shopify_data','order_shipping_geography','synced_at')],
   shopify_conversion:['session_conversion_by_device','session_conversion_by_device_source'].map(t=>daily(project,'shopify_data',t,'date')),
@@ -59,7 +61,7 @@ export function execute(command,args,{env=process.env}={}){return new Promise((r
 export async function recoveryCheck(bigquery,project,source){const [rows]=await collectorQuery(bigquery,'recovery_check',{query:`SELECT run_id,status,started_at,finished_at,window_start,window_end,status='running' AND started_at>TIMESTAMP_SUB(CURRENT_TIMESTAMP(),INTERVAL 6 HOUR) AS active_lock FROM \`${project}.${CONTROL_DATASET}.collector_runs\` WHERE source=@source ORDER BY started_at DESC LIMIT 10`,params:{source},types:{source:'STRING'}});return {source,read_only:true,runs:rows};}
 export async function runCollector({source,bigquery,project,now=new Date(),executeCommand=execute}){
   if(!ORACLE_SOURCE_CONTRACTS[source]||ORACLE_SOURCE_CONTRACTS[source].retired)throw new Error(`${source} has no scheduled collector`);
-  if(source==='meta_ads'||source==='instagram'){const [command,args]=plannedCommand(source,{now});return executeCommand(command,args);}
+  if(source==='meta_ads'||source==='instagram'||source==='shopify_customers'){const [command,args]=plannedCommand(source,{now});return executeCommand(command,args);}
   await ensureControl(bigquery,project);if(source==='google_ads')await ensureGoogleAdsSchema(bigquery,project);const runId=randomUUID();await acquire(bigquery,project,source,runId,{now});
   try{
     const [coverage]=await collectorQuery(bigquery,'coverage_before',{query:coverageSql(project,source)});const before=coverage[0]?.coverage_end||null;
