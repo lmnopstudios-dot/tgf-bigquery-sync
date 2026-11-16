@@ -65,3 +65,24 @@ test('reviewed matched observation coverage enables cohort rates; unsupported ti
  assert.equal(r.subsequent_purchase_rate,0.5);assert.equal(r.before_orders_per_customer,1.5);assert.equal(r.after_orders_per_customer,0.5);
  const only=transitionAnalysisContext(c,'Only Gold',{now}).context,filtered=await f.provider(only);assert(filtered.performance.tables.every(t=>t.status==='unavailable'&&t.code==='LOYALTY_PERFORMANCE_FILTER_UNSUPPORTED'));
 });
+
+const annualLoyaltyPrompt=`LoyaltyLion performance report for 16 November 2025 through 15 November 2026 inclusive, Europe/London.
+Show monthly member versus non-member AOV, repeat purchasing and order frequency. Label groups as current membership, not membership at purchase.
+Include before/after enrolment comparisons of AOV and mean/median time between orders using equal 30-, 90- and 180-day windows. Show matched sample sizes and explain withheld figures. Treat changes as associations, not proof of causal impact.
+Show current membership and tiers separately. State actual points, claims and purchasing coverage dates; don’t treat missing history as zero. Keep supported sections and generate the authenticated Excel workbook. Do not run collection or change data.`;
+for(const durable of [false,true])test(`annual LoyaltyLion AOV and median order-gap request reaches authenticated workbook via ${durable?'durable':'interactive'} chat`,async t=>{
+ const reportNow=Date.parse('2026-11-16T12:00:00Z'),f=fixture(),h=await acceptanceServer(f,{durable,now:reportNow});t.after(h.close);
+ const result=await h.submit(annualLoyaltyPrompt,{fresh:true});assert(result.artifact,JSON.stringify(result));assert.equal(result.analysis_context.tool_route,'get_loyalty_report');assert.equal(result.analysis_context.start_date,'2025-11-16');assert.equal(result.analysis_context.end_date,'2026-11-15');assert.equal(result.evidence.performance.windows.length,1);assert.equal(result.analysis_context.loyalty_scope.tier_basis,'current');assert(result.evidence.performance.tables.find(x=>x.section==='purchasing').rows.length>0);assert.doesNotMatch(result.answer,/requested order-value analysis is unavailable/);
+ const response=await fetch(h.origin+result.artifact.download_url,{headers:{cookie:h.headers.cookie}});assert.equal(response.status,200);const workbook=new ExcelJS.Workbook();await workbook.xlsx.load(Buffer.from(await response.arrayBuffer()));assert(workbook.getWorksheet('Purchase changes'));assert(workbook.getWorksheet('Customer purchasing'));assert.notEqual((await fetch(h.origin+result.artifact.download_url)).status,200);
+ const calls=f.queries.length;const follow=await h.submit('Show mean and median time between orders and average order value');assert(follow.artifact,JSON.stringify(follow));assert.equal(follow.analysis_context.tool_route,'get_loyalty_report');assert(f.queries.length>calls);
+});
+
+import {dispatchAnalysisRequest,executeGovernedAgentAnalysis} from '../oracle/analysis-route-dispatcher.js';
+test('loyalty precedence does not allow unsupported merchandise distributions or shipping scenarios',async()=>{
+ for(const extra of ['Show merchandise mean and median order value.','Show median order value.','Show order-value distribution bands.','Compare free shipping thresholds £150 versus £200.']){
+  const message='LoyaltyLion performance report. '+extra,context=transitionAnalysisContext(null,message,{now}).context;
+  for(const invoke of [()=>dispatchAnalysisRequest({message,analysisContext:context,baselineOverview:async()=>assert.fail('Unsupported operation reached provider')}),()=>executeGovernedAgentAnalysis({message,analysisContext:context,scopeResolved:true,baselineOverview:async()=>assert.fail('Unsupported operation reached provider'),now})]){
+   const r=await invoke();assert.equal(r.analysis_unavailable,true);assert.match(r.answer,/order-value analysis is unavailable/);
+  }
+ }
+});

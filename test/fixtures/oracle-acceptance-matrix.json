@@ -1421,7 +1421,7 @@
     },
     {
       "file": "test/oracle-loyalty-performance.test.js",
-      "purpose": "Default completed London year and MTD, explicit/comparison periods, current-roster versus historical membership, mature zero-order cohorts, currency/AOV SQL, partial workbook delivery and authenticated recovery."
+      "purpose": "Default completed London year and MTD, explicit/comparison periods, current-roster versus historical membership, mature zero-order cohorts, currency/AOV SQL, partial workbook delivery and authenticated recovery. Exact annual LoyaltyLion prompt with AOV and mean/median order intervals must bypass the generic order-value preflight in interactive/durable delivery; genuine merchandise distributions and shipping scenarios remain unsupported."
     },
     {
       "file": "test/oracle-loyalty-persistence.test.js",

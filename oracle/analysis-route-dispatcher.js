@@ -143,6 +143,10 @@ function disclosePeriod(result,context){
 }
 function unsupportedValueOperation(request,context,message){
   if(!request||['get_order_value_analysis','get_tw_supplier_stock_report','get_eyewear_sales_stock'].includes(context?.tool_route))return false;
+  // The resolved loyalty capability owns AOV and enrolment-relative order gaps.
+  // Generic words such as mean/median must not pre-empt that registered report.
+  // Actual merchandise distributions and threshold scenarios still fail closed.
+  if(context?.tool_route==='get_loyalty_report'&&context.loyalty_scope?.report_kind==='performance'&&!request.charge_domain&&request.operations.every(op=>['merchandise_mean','merchandise_median'].includes(op))&&(!request.operations.includes('merchandise_median')||/\bmedian\b[^.;\n]{0,60}\b(?:time between orders|order gaps?|order intervals?)\b/i.test(message))&&!/\bmerchandise\b|\bmedian\s+(?:order[ -]?values?|aov|basket[ -]?values?)\b|\b(?:order|basket)[ -]?value\s+(?:bands?|distribution|buckets?|ranges?)\b/i.test(message))return false;
   return !(isPhasedSale(context?.event_scope?.periods)&&!request.charge_domain&&
     request.operations.includes('merchandise_mean')&&
     request.operations.every(op=>['merchandise_mean','optional_product_enrichment'].includes(op))&&
