@@ -111,3 +111,26 @@ LoyaltyLion report. Keep older lookbacks, future cohort windows and genuine sour
 limitations separate. Resume paused collectors after the repair is confirmed and
 retain their existing schedules and settings. No automatic certification or
 LoyaltyLion report replay is part of this command.
+
+## Repair SQL preflight regression
+
+The first production apply failed with invalidQuery at line 1, column 356, the
+unparenthesized AND in the idle customer guard. This happens before repair-control
+DDL/acquisition and before staging. Compound ASSERT predicates are now wrapped as
+one parenthesized Boolean expression in idle checks, acquisition, ownership and
+stage counts; no guard is removed or weakened.
+
+After the fix is reviewed/deployed, validate the exact idle-check script without
+Shopify reads or warehouse writes, while competing collectors are paused:
+
+```bash
+node shopify/commerce-repair.js preflight
+```
+
+Expect idle_sql_verified. This validates idle SQL/access and current idleness;
+it does not certify commerce coverage or replace the final transaction checks.
+Read-only status for the original failed run remains available; if control tables
+were never created, notFound is consistent with the pre-DDL failure. Do not replay
+an apply merely because its source preview remains on disk. Deployment can remove
+that file and all previews expire after 30 minutes: generate a fresh preview after
+preflight succeeds, then separately apply the newly printed path.
