@@ -97,3 +97,41 @@ ordersCount defaults to a capped count; this diagnostic explicitly uses limit:nu
 and requires EXACT precision. Historical order visibility requires the appropriate
 access scope; no vendor bulk/export job is created. This audit does not prove
 actual reward redemption or that LoyaltyLion caused purchasing changes.
+
+## Prepare the targeted repair preview (no warehouse writes)
+
+If the reconciliation reports differences, use this explicit mode after review
+and deployment. It repeats the bounded source/warehouse comparison, captures the
+current affected set, and writes only exact native order IDs plus differing field
+names to a private local temporary plan:
+
+```bash
+timeout --signal=TERM --kill-after=5s 16m \
+node diagnostics/loyaltylion-source-reconciliation.mjs \
+  2025-11-16T00:00:00Z 2026-11-16T00:00:00Z --prepare-repair-plan
+```
+
+The final aggregate JSON adds affected_orders and repair_preview with the private
+file path and expiry. The plain --execute-read-only mode still creates no file.
+No IDs or raw/customer payloads are printed. The plan directory is mode 0700 and
+the file is mode 0600, created exclusively under a new temporary directory. The
+plan expires 30 minutes after preparation and is preview_only/apply_supported:false.
+This is a local file write only: no Shopify or BigQuery writes, watermark change,
+collector replay, schedule change or coverage certification occurs.
+
+The plan refuses more than 100 affected orders, duplicate/invalid IDs, inconsistent
+field totals, detected concurrent source updates and stale audit results. Source
+pagination/read failure prevents preparation. If there are no differences, it
+creates no file. Retained-only IDs require investigation; never automatically
+delete historical records merely because Shopify no longer returns them.
+
+Send only the final aggregate JSON for review, not plan contents. A repair writer
+must separately validate source freshness, expected warehouse state, concurrent
+collectors and schema-safe atomic publication before any approved apply. This PR
+does not enable that writer. The temporary file can disappear on deployment; in
+that case regenerate a fresh preview instead of reconstructing or trusting a stale
+plan. Do not copy it into the account secret or enable collection flags.
+
+The retained population count/hash now includes only IDs actually represented in
+at least one warehouse table. Source-seeded join placeholders are still checked
+for missing rows but cannot inflate retained counts or make the ID hashes agree.
