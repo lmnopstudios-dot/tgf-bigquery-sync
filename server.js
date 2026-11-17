@@ -1,3 +1,4 @@
+import {createKpiConversionReader} from './oracle/kpi-conversion.js';
 import {createEyewearReportService,createEyewearStockReader} from './oracle/eyewear-report.js';
 import {createEyewearSalesReader} from './oracle/eyewear-sales.js';
 import {createTwSupplierReportService,twSupplierSettings} from './oracle/tw-supplier-report.js';
@@ -4226,7 +4227,7 @@ const twSupplierReport=createTwSupplierReportService({
 });
 const eyewearReport=createEyewearReportService({...createEyewearSalesReader({bigquery,project:GOOGLE_PROJECT_ID}),
   readStock:createEyewearStockReader({graphql:shopifyGraphQL,getToken:getShopifyAccessToken}),artifactStore:priorityExportStore});
-const kpiDashboard=createKpiDashboard({read:createKpiReader({bigquery,project:GOOGLE_PROJECT_ID}),artifactStore:priorityExportStore,coverage:reviewedKpiCoverage(process.env),baselineStart:process.env.ORACLE_KPI_BASELINE_START||null});
+const kpiDashboard=createKpiDashboard({readConversion:createKpiConversionReader({env:process.env}),read:createKpiReader({bigquery,project:GOOGLE_PROJECT_ID}),artifactStore:priorityExportStore,coverage:reviewedKpiCoverage(process.env),baselineStart:process.env.ORACLE_KPI_BASELINE_START||null});
 baselineOverview=createOracleBaselineDispatcher({kpiDashboard,eyewearReport,twSupplierReport,currentStock,productPriorityExport,generalAnalytics,historicalEventComparison,ecommerceBaselineOverview,productEvidenceReport});
 
 async function getSalesByLocation({
