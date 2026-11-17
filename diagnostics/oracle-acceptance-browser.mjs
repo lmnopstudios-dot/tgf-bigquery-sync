@@ -28,6 +28,7 @@ const browser=await chromium.launch({executablePath:process.env.ORACLE_CHROMIUM|
 const output=process.env.ORACLE_BROWSER_OUTPUT||'/tmp/oracle-acceptance-browser';await mkdir(output,{recursive:true});
 try{
   await verifyKpiBrowser(browser);
+  await verifyKpiBrowser(browser,{conversion:true});
   await verifyBlackFridayBrowser(browser);
   await verifyBlackFridaySessionsBrowser(browser);
   await verifyBlackFridayRoutingBrowser(browser);

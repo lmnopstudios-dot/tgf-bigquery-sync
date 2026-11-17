@@ -27,7 +27,7 @@ coverage**. Missing source results do not erase successful components.
 | Mean / median order gap | Consecutive native qualifying orders in the selected channel/currency; elapsed seconds / 86,400, attributed to later order date. Require coverage back to the actual prior order. Interval-weighted mean and median; same-timestamp distinct orders have zero gap. Non-returners have no interval. |
 | 30 / 60 / 90-day repeat | First qualifying order per customer in each period and currency, not necessarily first-ever order. Fully mature customers only; full index-period and mature follow-up coverage required. Immature customers remain explicit. |
 | Returning customer rate / verified new customers | Withheld without complete prior purchase history, including earlier platforms. Observed returning and first-observed counts stay visible as diagnostics, not verified acquisition. Customerless orders are separate. |
-| Conversion: combined / UK / international | Withheld. Existing GA4 `ecommercePurchases / sessions` is purchases per session, not purchase-converted sessions / sessions. No substitute Shopify-order numerator, averaged country rates or all-key-event rate is used. |
+| Conversion: combined / UK / international | Native Shopify human completed-checkout sessions / human sessions, using the existing governed country reader. Independent native coverage and measurement-era checks apply. GA4 purchase-event ratios are not blended. See [conversion binding](oracle-kpi-conversion.md). |
 | Turnover | Withheld. Compatible merchandise, tax and refund-event-date components are not established together by this binding. Retained lifetime refunds are not period refunds. |
 | CAC / targets | Unset. Compatible governed acquisition attribution/spend and business targets have not been supplied. |
 
@@ -132,8 +132,7 @@ periods are rejected rather than silently ignored.
 
 ## Remaining integrations
 
-Add a verified GA4 purchase-converted-session numerator with compatible sessions,
-London dates, country role and collection coverage before conversion is enabled.
+Shopify session conversion is now bound as described in [conversion binding](oracle-kpi-conversion.md). GA4 converted-session history remains unavailable and is not used as a substitute. Native shop access and returned-day coverage still need live validation.
 Bind governed merchandise/tax/shipping and refund-occurrence measures before
 turnover or merchandise-only AOV is enabled. Audit longer cross-platform customer
 history before verified first-time acquisition and primary returning-customer
