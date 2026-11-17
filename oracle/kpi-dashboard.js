@@ -1,7 +1,8 @@
+import {assertWorksheetEvidence} from './workbook-evidence.js';
 import ExcelJS from 'exceljs';
 import {createHash} from 'node:crypto';
 import {kpiRequest,kpiPeriods,monthAdd,dayAdd,validDay} from '../public/oracle/kpi-intent.js';
-import {resolveAnalyticalPlan,assertPlanAgreement} from './analytical-plan.js';
+import {resolveAnalyticalPlan,assertPlanAgreement,stableAnalyticalJSON} from './analytical-plan.js';
 import {kpiCovered,kpiInstantCovered,safeKpiFailure} from './kpi-reader.js';
 import {priorityArtifactId} from './product-priority-storage.js';
 export const KPI_DEFINITIONS=[
@@ -57,33 +58,49 @@ export function buildKpiEvidence({context,periods,data,coverage,baseline,now}){
  }
  return {kind:'kpi_dashboard',subject:'kpi_tracking',start_date:context.start_date,end_date:context.end_date,periods,scope,analytical_plan:resolveAnalyticalPlan(context),generated_at:new Date(now).toISOString(),summary,monthly:rows.filter(r=>r.period.startsWith('month:')),rows,retention,baseline:baseline||{status:'unavailable',reason:'Three consecutive verified months unavailable'},definitions:KPI_DEFINITIONS,source_status:{commerce:data.commerce.failure||'read_completed',retention:data.retention.failure||'read_completed',conversion:'unavailable'},comparison_policy:KPI_DEFINITIONS.find(r=>r[0]==='Comparisons')[1]};
 }
-export function kpiWorkbookTables(e){return [['KPI summary',e.summary.map(({previous_change,year_change,...r})=>({...r,previous_change_absolute:previous_change.absolute,previous_change_percentage:previous_change.percentage,previous_direction:previous_change.direction,year_change_absolute:year_change.absolute,year_change_percentage:year_change.percentage}))],['Monthly trends',e.monthly],['Customer retention',e.retention],['Definitions and coverage',[...e.definitions.map(([definition,meaning])=>({definition,meaning})),{definition:'Generated at',meaning:e.generated_at},{definition:'Baseline',meaning:JSON.stringify(e.baseline)},...e.periods.map(p=>({definition:p.label,meaning:`${p.start_date} to ${p.end_date}; ${(Date.parse(p.end_date)-Date.parse(p.start_date))/86400000+1} calendar days`})),...e.rows.filter(r=>r.metric==='aov').map(r=>({definition:`${r.period} / ${r.currency} coverage`,meaning:r.source_reconciled?'Source-reconciled interval':r.reason,finance_observed_at:r.finance_observed_at,customer_observed_at:r.customer_observed_at,channel_observed_at:r.channel_observed_at}))]]];}
+export function kpiWorkbookTables(e){return [['KPI summary',e.summary.map(({previous_change,year_change,...r})=>({...r,previous_change_absolute:previous_change.absolute,previous_change_percentage:previous_change.percentage,previous_direction:previous_change.direction,year_change_absolute:year_change.absolute,year_change_percentage:year_change.percentage}))],['Monthly trends',e.monthly],['Customer retention',e.retention],['Definitions and coverage',[...e.definitions.map(([definition,meaning])=>({definition,meaning})),{definition:'Generated at',meaning:e.generated_at},{definition:'Baseline',meaning:stableAnalyticalJSON(e.baseline)},...e.periods.map(p=>({definition:p.label,meaning:`${p.start_date} to ${p.end_date}; ${(Date.parse(p.end_date)-Date.parse(p.start_date))/86400000+1} calendar days`})),...e.rows.filter(r=>r.metric==='aov').map(r=>({definition:`${r.period} / ${r.currency} coverage`,meaning:r.source_reconciled?'Source-reconciled interval':r.reason,finance_observed_at:r.finance_observed_at,customer_observed_at:r.customer_observed_at,channel_observed_at:r.channel_observed_at}))]]];}
+const kpiArtifactFailure=()=>Object.assign(Error('KPI_ARTIFACT_INVALID'),{code:'KPI_ARTIFACT_INVALID',failed_stage:'kpi_export_validation'});
 export async function assertKpiArtifact(a){
- if(!a?.analysis_context||a.envelope?.kind!=='kpi_dashboard')throw Error('KPI_ARTIFACT_INVALID');assertPlanAgreement(a.analysis_context,a.envelope);
- const bytes=Buffer.from(a.xlsx_base64||'','base64');if(createHash('sha256').update(bytes).digest('hex')!==a.sha256)throw Error('KPI_ARTIFACT_INVALID');
- const w=new ExcelJS.Workbook();await w.xlsx.load(bytes);const expected=kpiWorkbookTables(a.envelope);
- if(w.worksheets.length!==expected.length)throw Error('KPI_ARTIFACT_INVALID');
- for(const [name,rows] of expected){const sheet=w.getWorksheet(name),keys=[...new Set(rows.flatMap(Object.keys))];if(!sheet||sheet.rowCount!==rows.length+1||sheet.columnCount!==keys.length||keys.some((k,i)=>sheet.getCell(1,i+1).value!==k))throw Error('KPI_ARTIFACT_INVALID');for(const [i,r] of rows.entries())for(const [j,k] of keys.entries())if((sheet.getCell(i+2,j+1).value??null)!==(r[k]??null))throw Error('KPI_ARTIFACT_INVALID');}
+ if(!a?.analysis_context||a.envelope?.kind!=='kpi_dashboard')throw kpiArtifactFailure();assertPlanAgreement(a.analysis_context,a.envelope);
+ if(stableAnalyticalJSON(a.envelope.scope)!==stableAnalyticalJSON(a.analysis_context.kpi_scope)||a.envelope.start_date!==a.analysis_context.start_date||a.envelope.end_date!==a.analysis_context.end_date)throw kpiArtifactFailure();
+ const bytes=Buffer.from(a.xlsx_base64||'','base64');if(createHash('sha256').update(bytes).digest('hex')!==a.sha256)throw kpiArtifactFailure();
+ const w=new ExcelJS.Workbook();try{await w.xlsx.load(bytes);}catch{throw kpiArtifactFailure();}const expected=kpiWorkbookTables(a.envelope);
+ if(w.worksheets.length!==expected.length)throw kpiArtifactFailure();
+ // Baseline is the only JSON-encoded explanatory cell. Legacy exports used
+ // insertion-order JSON; compare that cell structurally, keeping other text exact.
+ const normalise=(value,row,key)=>{if(row.definition==='Baseline'&&key==='meaning'&&typeof value==='string'){try{return stableAnalyticalJSON(JSON.parse(value));}catch{}}return value;};
+ for(const [name,rows] of expected)assertWorksheetEvidence(w.getWorksheet(name),rows,kpiArtifactFailure,name==='Definitions and coverage'?normalise:undefined);
  return true;
 }
 export function createKpiDashboard({read,artifactStore,coverage=[],baselineStart=null}){
  return async(message,options={})=>{
   const context=options.analysisContext;if(context?.tool_route!=='get_kpi_dashboard')return null;
   const now=options.now??Date.now(),id=priorityArtifactId(options.exportOwner,options.requestId||message),scope=context.kpi_scope;
+  let stage='kpi_export_read';
+  const phase=name=>{stage=name;options.onProviderStage?.({stage:name,status:'started'});};
+  try{
+  phase(stage);
   let a=await artifactStore.get(id,options.exportOwner);
   if(a){assertPlanAgreement(context,a.envelope);await assertKpiArtifact(a);}
   else{
+   phase('kpi_scope_validation');
    const baseline=baselinePeriod(coverage,scope.channel,baselineStart),periods=kpiPeriods(context.start_date,context.end_date,now);if(baseline)periods.push(baseline);
+   phase('kpi_source_read');
    let data;try{data=await read({periods,scope,now,signal:options.signal,deadlineAt:options.deadlineAt,onProviderStage:options.onProviderStage});}catch(error){const failure=safeKpiFailure(error);data={commerce:{rows:[],failure},retention:{rows:[],failure}};}
    for(const [source,r] of Object.entries(data))options.onProviderStage?.({stage:'kpi_source',source,status:r.failure?'unavailable':'completed',...(r.failure?{code:r.failure}:{aggregate_rows:r.rows.length})});
    options.signal?.throwIfAborted();
+   phase('kpi_workbook_build');
    const e=buildKpiEvidence({context,periods,data,coverage,baseline,now}),w=new ExcelJS.Workbook();w.creator='The Great Frog Oracle';
    for(const [name,rows] of kpiWorkbookTables(e)){const s=w.addWorksheet(name),keys=[...new Set(rows.flatMap(Object.keys))];s.columns=keys.map(key=>({header:key,key,width:/reason|meaning/.test(key)?65:25}));rows.forEach(r=>s.addRow(r));s.getRow(1).font={bold:true};s.views=[{state:'frozen',ySplit:1}];}
    const bytes=Buffer.from(await w.xlsx.writeBuffer());const supported=e.summary.filter(r=>r.status==='supported').length;
    const figures=e.summary.filter(r=>r.period==='selected'&&r.status==='supported').map(r=>`${r.label} (${r.currency}): ${r.value.toFixed(2)}`).join('; ');
    a={analysis_context:context,request:message,envelope:e,answer:`KPI dashboard: ${context.start_date} to ${context.end_date}, inclusive (London). ${figures?figures+'. ':''}${supported} supported KPI values across selected period and separate MTD; currencies remain separate. Conversion, merchandise turnover and verified new/returning classification need additional governed evidence. Current source reads do not extend certified history. See the dashboard and workbook for comparisons, denominators and gaps.`,filename:'oracle-kpi-dashboard.xlsx',sha256:createHash('sha256').update(bytes).digest('hex'),xlsx_base64:bytes.toString('base64')};
-   await assertKpiArtifact(a);await options.assertLease?.();await artifactStore.put(id,options.exportOwner,a);a=await artifactStore.get(id,options.exportOwner);await assertKpiArtifact(a);
+   phase('kpi_export_validation');await assertKpiArtifact(a);await options.assertLease?.();
+   phase('kpi_export_persistence');await artifactStore.put(id,options.exportOwner,a);
+   phase('kpi_export_readback');a=await artifactStore.get(id,options.exportOwner);await assertKpiArtifact(a);
   }
+  phase('kpi_delivery_ready');
   return {answer:a.answer,tools:['get_kpi_dashboard'],partial:a.envelope.summary.some(r=>r.status!=='supported'),evidence:a.envelope,analysis_context:a.analysis_context,artifact:{id,filename:a.filename,row_count:a.envelope.rows.length,download_url:`/api/oracle/exports/${id}`}};
+  }catch(error){if(!error.code)error.code='KPI_REPORT_FAILED';error.failed_stage??=stage;throw error;}
  };
 }

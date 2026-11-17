@@ -1,0 +1,10 @@
+{
+  "request_id": "a3420369-000c-46c9-99c9-71f28a74e2cf",
+  "job_id": "f4725535-2976-4189-ac3d-1541e409afaa",
+  "status": "failed",
+  "error_code": "ANALYSIS_FAILED",
+  "failed_stage": "analysis",
+  "created_at": "2026-11-17T08:48:01.165Z",
+  "production_export_inspected": false,
+  "offline_reproduction": "KPI_ARTIFACT_INVALID after BigQuery-like JSON object-key canonicalization"
+}

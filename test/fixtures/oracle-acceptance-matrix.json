@@ -1454,6 +1454,10 @@
     {
       "file": "test/oracle-kpi-dashboard.test.js",
       "purpose": "Dedicated KPI routing across direct, interactive and durable delivery; weighted fixed baselines, London comparison periods, source coverage, exact aggregate SQL, customer history distinctions, partial results and authenticated workbook access."
+    },
+    {
+      "file": "test/oracle-kpi-recovery.test.js",
+      "purpose": "Production KPI ANALYSIS_FAILED regression: unordered BigQuery JSON versus workbook column order and legacy baseline JSON, exact cells/hash/scope checks, safe phase diagnostics and authenticated failed-job persisted-export recovery without provider replay."
     }
   ]
 }

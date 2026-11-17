@@ -4,7 +4,7 @@ import {acceptanceServer} from './oracle-acceptance.js';
 import ExcelJS from 'exceljs';
 export async function verifyKpiBrowser(browser){
  for(const width of [390,1280]){
-  const f=kpiFixture(),h=await acceptanceServer(f,{durable:true,now:KPI_NOW}),page=await browser.newPage({viewport:{width,height:900}});
+  const f=kpiFixture({failReadbackOnce:true}),h=await acceptanceServer(f,{durable:true,now:KPI_NOW}),page=await browser.newPage({viewport:{width,height:900}});
   try{
    await page.goto(h.origin+'/oracle/');await page.locator('#password').fill('fixture');await page.locator('#login-form button').click();await page.locator('#app').waitFor({state:'visible'});
    await page.locator('[data-view="kpi-dashboard"]').click();

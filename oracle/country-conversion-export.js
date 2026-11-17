@@ -1,3 +1,4 @@
+import {assertWorksheetEvidence} from './workbook-evidence.js';
 import ExcelJS from 'exceljs';
 import { assertPlanAgreement } from './analytical-plan.js';
 import { createHash } from 'node:crypto';
@@ -32,10 +33,7 @@ export async function assertCountryWorkbook(artifact){
   if(createHash('sha256').update(bytes).digest('hex')!==artifact.sha256)fail();
   const wb=new ExcelJS.Workbook();try{await wb.xlsx.load(bytes);}catch{fail();}
   for(const [name,rows] of countryWorkbookTables(artifact.envelope)){
-    const keys=[...new Set(rows.flatMap(Object.keys))],sheet=wb.getWorksheet(name);
-    if(!sheet||sheet.rowCount!==rows.length+1)fail();
-    for(const [j,key] of keys.entries())if(sheet.getRow(1).getCell(j+1).value!==key)fail();
-    for(const [i,row] of rows.entries())for(const [j,key] of keys.entries())if((sheet.getRow(i+2).getCell(j+1).value??null)!==(row[key]??null))fail();
+    assertWorksheetEvidence(wb.getWorksheet(name),rows,fail);
   }
   return true;
 }
