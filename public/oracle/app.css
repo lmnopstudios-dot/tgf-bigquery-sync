@@ -43,3 +43,12 @@ main{height:100%;min-height:0;min-width:0}.view{height:100%;min-height:0;min-wid
 
 /* KPI tracking uses direction labels, never automatic good/bad colours. */
 .kpi-dashboard-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:1rem;margin:1rem 0 2rem}.kpi-dashboard-card,.kpi-chart-panel{border:1px solid var(--border,#777);border-radius:10px;padding:1rem;min-width:0}.kpi-dashboard-card strong{display:block;font-size:1.65rem;margin:.6rem 0}.kpi-dashboard-card p{font-size:.85rem;margin:.35rem 0}.kpi-dashboard-card small{display:block;line-height:1.5}.kpi-trend{display:block;width:100%;height:auto;min-height:140px}.kpi-chart-panel{margin:1rem 0}.kpi-status{min-height:1.5em}#kpi-root details{margin:1rem 0}#kpi-root td{white-space:normal;overflow-wrap:anywhere}#kpi-root .table-wrap{max-width:100%;overflow-x:auto}#kpi-root summary{cursor:pointer}#kpi-root :focus-visible{outline:3px solid #b53945;outline-offset:3px}@media(max-width:600px){.kpi-dashboard-grid{grid-template-columns:1fr}#kpi-controls{display:grid;grid-template-columns:1fr 1fr}#kpi-root{min-width:0}}
+
+/* Each full-page view owns its scrolling; the chat keeps its existing scroller. */
+#kpi-dashboard{overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain;scrollbar-gutter:stable}
+#kpi-dashboard>header,#kpi-root{flex:0 0 auto}
+#kpi-root{padding:1.5rem 2rem 3rem;min-width:0;max-width:1500px;width:100%;margin:0 auto}
+#kpi-controls{padding:0 0 1rem}
+.kpi-readiness{padding:1rem;border:1px solid var(--line);border-radius:.6rem;margin:1rem 0;background:var(--panel)}
+.kpi-readiness p{margin:.4rem 0}.kpi-dashboard-card .kpi-proposed{color:var(--muted)}
+@media(max-width:700px){#kpi-root{padding:1rem 1rem 2rem}#kpi-controls label,#kpi-controls select,#kpi-controls input{min-width:0;width:100%}}

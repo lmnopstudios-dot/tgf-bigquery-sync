@@ -1,7 +1,7 @@
 import {performanceOrderSources,observationCovered,commerceCertificates} from './loyalty-performance.js';
 import {loadLoyaltyConfig} from '../loyaltylion/runtime-config.js';
 import {boundedQuery} from './bounded-query.js';
-import {londonDay} from '../public/oracle/kpi-intent.js';
+import {londonDay,dayAdd} from '../public/oracle/kpi-intent.js';
 import {datasetLocation} from '../bigquery/dataset-location.js';
 // Existing order authority, extended only with aggregate diagnostics and explicit windows.
 const kpiOrderSources=project=>performanceOrderSources(project).replace('c.customer_id source_customer_id',()=>"CASE WHEN REGEXP_CONTAINS(c.customer_id,r'^gid://shopify/Customer/[0-9]+$') THEN c.customer_id ELSE NULL END source_customer_id").replace('AND created_at<TIMESTAMP(@as_of)',()=>"AND REGEXP_CONTAINS(source_order_id,r'^gid://shopify/Order/[0-9]+$') AND created_at<TIMESTAMP(@as_of)");
@@ -42,6 +42,14 @@ export function kpiCovered(intervals,p,channel){
  const next=new Date(Date.parse(p.end_date+'T00:00:00Z')+86400000).toISOString().slice(0,10);
  return kpiInstantCovered(intervals,instant(p.start_date),instant(next),channel);
 }
+
+export function kpiCoverageSummary(intervals,channel,now){
+ const through=dayAdd(londonDay(now),-1),candidates=new Set([through]);
+ for(const i of intervals){const end=londonDay(Date.parse(i.end_exclusive)-1);candidates.add(end);candidates.add(dayAdd(end,-1));}
+ const latest=[...candidates].filter(d=>d<=through).sort().reverse().find(d=>kpiCovered(intervals,{start_date:d,end_date:d},channel))??null;
+ return {through_date:through,latest_reconciled_day:latest,gap_calendar_days:latest==null?null:Math.max(0,(Date.parse(through)-Date.parse(latest))/86400000)};
+}
+
 export function createKpiReader({bigquery,project}){
  return async({periods,scope,now,signal,deadlineAt,onProviderStage})=>{
   if(scope.geography!=='all')throw Object.assign(Error('Shipping geography coverage unavailable'),{code:'KPI_GEOGRAPHY_UNAVAILABLE'});
