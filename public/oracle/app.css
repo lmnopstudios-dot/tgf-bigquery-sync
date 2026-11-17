@@ -40,3 +40,6 @@ main{height:100%;min-height:0;min-width:0}.view{height:100%;min-height:0;min-wid
 #product-classifications{overflow-y:auto;overflow-x:hidden;overscroll-behavior:contain}
 #product-classifications>*,#shopify-classification-panel,#historical-classification-panel{flex:0 0 auto}
 #product-classifications .records{overflow:visible;max-height:none}
+
+/* KPI tracking uses direction labels, never automatic good/bad colours. */
+.kpi-dashboard-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:1rem;margin:1rem 0 2rem}.kpi-dashboard-card,.kpi-chart-panel{border:1px solid var(--border,#777);border-radius:10px;padding:1rem;min-width:0}.kpi-dashboard-card strong{display:block;font-size:1.65rem;margin:.6rem 0}.kpi-dashboard-card p{font-size:.85rem;margin:.35rem 0}.kpi-dashboard-card small{display:block;line-height:1.5}.kpi-trend{display:block;width:100%;height:auto;min-height:140px}.kpi-chart-panel{margin:1rem 0}.kpi-status{min-height:1.5em}#kpi-root details{margin:1rem 0}#kpi-root td{white-space:normal;overflow-wrap:anywhere}#kpi-root .table-wrap{max-width:100%;overflow-x:auto}#kpi-root summary{cursor:pointer}#kpi-root :focus-visible{outline:3px solid #b53945;outline-offset:3px}@media(max-width:600px){.kpi-dashboard-grid{grid-template-columns:1fr}#kpi-controls{display:grid;grid-template-columns:1fr 1fr}#kpi-root{min-width:0}}

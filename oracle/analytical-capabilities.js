@@ -9,6 +9,7 @@ import { resolveAnalyticalPlan } from './analytical-plan.js';
 // Contracts audited from the governed implementations, not inferred from names.
 // Unlisted bindings remain reachable through the existing governed dispatcher.
 export const ANALYTICAL_CAPABILITIES=Object.freeze({
+  get_kpi_dashboard:{preferred_transport:'job',metrics:[],dimensions:['month','channel','currency'],delivery:['table','chart','xlsx'],identity:'Native Shopify orders and customer IDs',provenance:'Retained, source-reconciled commerce intervals; unsupported GA4 numerator withheld'},
   get_loyalty_report:{metrics:['loyalty'],dimensions:['day','month','current_tier','resource','channel','currency'],delivery:['table','xlsx'],identity:'Reviewed same-shop merchant IDs; no new identity merging',provenance:'Retained LoyaltyLion evidence only; current tiers and claims are distinct from historical tiers and actual reward usage'},
   get_eyewear_sales_stock:{preferred_transport:'job',metrics:[],dimensions:['source','channel','style','colour','month'],grain:'order_line',delivery:['xlsx'],identity:'Source-qualified orders and approved product families',provenance:'Retained Shopify, Square and Woo order lines; paginated current Shopify inventory'},
   get_tw_supplier_stock_report:{preferred_transport:'job',metrics:[],dimensions:['variant','month','location'],grain:'variant_month',delivery:['xlsx'],identity:'Exact Shopify variant ID in current tw catalogue',provenance:'Retained Shopify order lines and live available stock; reviewed coverage required for forecasts'},

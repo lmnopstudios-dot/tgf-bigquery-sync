@@ -7,6 +7,8 @@ import {assertLegacyInventoryAllowed} from './oracle/inventory-export-intent.js'
 let stopOracleAnalysisWorker=()=>Promise.resolve();
 import { messageIntent } from './oracle/message-intent.js';
 import { orderValueRuntimeBinding } from './oracle/runtime-capability-bindings.js';
+import {createKpiDashboard} from './oracle/kpi-dashboard.js';
+import {createKpiReader,reviewedKpiCoverage} from './oracle/kpi-reader.js';
 import { createOracleBaselineDispatcher } from './oracle/baseline-dispatcher.js';
 import { deliverOracleResult, agentResultForUi } from './oracle/result-delivery.js';
 import { createShopifySalesKpiService } from './oracle/daily-sales-provider.js';
@@ -4224,7 +4226,8 @@ const twSupplierReport=createTwSupplierReportService({
 });
 const eyewearReport=createEyewearReportService({...createEyewearSalesReader({bigquery,project:GOOGLE_PROJECT_ID}),
   readStock:createEyewearStockReader({graphql:shopifyGraphQL,getToken:getShopifyAccessToken}),artifactStore:priorityExportStore});
-baselineOverview=createOracleBaselineDispatcher({eyewearReport,twSupplierReport,currentStock,productPriorityExport,generalAnalytics,historicalEventComparison,ecommerceBaselineOverview,productEvidenceReport});
+const kpiDashboard=createKpiDashboard({read:createKpiReader({bigquery,project:GOOGLE_PROJECT_ID}),artifactStore:priorityExportStore,coverage:reviewedKpiCoverage(process.env),baselineStart:process.env.ORACLE_KPI_BASELINE_START||null});
+baselineOverview=createOracleBaselineDispatcher({kpiDashboard,eyewearReport,twSupplierReport,currentStock,productPriorityExport,generalAnalytics,historicalEventComparison,ecommerceBaselineOverview,productEvidenceReport});
 
 async function getSalesByLocation({
   start_date,

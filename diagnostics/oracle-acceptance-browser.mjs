@@ -1,3 +1,4 @@
+import {verifyKpiBrowser} from '../test/helpers/kpi-browser.js';
 import {verifyLoyaltyPerformanceBrowser} from '../test/helpers/loyalty-performance-browser.js';
 import {verifyLoyaltyBrowser} from '../test/helpers/loyalty-browser.js';
 import {verifyMultiPeriodDailyBrowser} from '../test/helpers/multi-period-daily-browser.js';
@@ -26,6 +27,7 @@ const f=acceptanceFixture(),h=await acceptanceServer(f,{durable:true});
 const browser=await chromium.launch({executablePath:process.env.ORACLE_CHROMIUM||(existsSync('/usr/bin/chromium')?'/usr/bin/chromium':chromium.executablePath()),headless:true,args:['--no-sandbox']});
 const output=process.env.ORACLE_BROWSER_OUTPUT||'/tmp/oracle-acceptance-browser';await mkdir(output,{recursive:true});
 try{
+  await verifyKpiBrowser(browser);
   await verifyBlackFridayBrowser(browser);
   await verifyBlackFridaySessionsBrowser(browser);
   await verifyBlackFridayRoutingBrowser(browser);

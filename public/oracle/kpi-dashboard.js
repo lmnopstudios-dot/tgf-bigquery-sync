@@ -1,0 +1,48 @@
+import {pollOracleJob} from './job-polling.js';
+import {kpiRequest} from './kpi-intent.js';
+const el=(tag,text,cls)=>{const e=document.createElement(tag);if(text!=null)e.textContent=String(text);if(cls)e.className=cls;return e;};
+const fmt=(value,currency,metric)=>value==null?'Unavailable':metric.includes('rate')||metric==='conversion'?(value*100).toFixed(1)+'%':currency&&['aov','turnover'].includes(metric)?new Intl.NumberFormat('en-GB',{style:'currency',currency}).format(value):new Intl.NumberFormat('en-GB',{maximumFractionDigits:2}).format(value);
+const change=c=>c?.absolute==null?'Comparison unavailable':`${c.direction==='up'?'↑':c.direction==='down'?'↓':'→'} ${c.absolute.toFixed(2)}${c.percentage==null?' (percentage unavailable)':` / ${(c.percentage*100).toFixed(1)}%`}`;
+function table(rows,keys){const wrap=el('div',null,'table-wrap'),t=el('table'),head=el('thead'),hr=el('tr');for(const k of keys){const th=el('th',k.replaceAll('_',' '));th.scope='col';hr.append(th);}head.append(hr);t.append(head);const body=el('tbody');for(const r of rows){const tr=el('tr');for(const k of keys)tr.append(el('td',r[k]??'Unavailable'));body.append(tr);}t.append(body);wrap.append(t);return wrap;}
+function chart(rows,label,baseline){
+ const ns='http://www.w3.org/2000/svg',s=document.createElementNS(ns,'svg');s.setAttribute('viewBox','0 0 650 190');s.setAttribute('role','img');s.setAttribute('aria-label',label+'; missing values are gaps. Exact values are in the monthly table.');s.classList.add('kpi-trend');
+ const make=(tag,attrs)=>{const e=document.createElementNS(ns,tag);for(const [k,v] of Object.entries(attrs))e.setAttribute(k,v);s.append(e);return e;};
+ const vals=rows.map(r=>r.value).filter(v=>v!=null);if(!vals.length)return el('p','Trend unavailable: '+(rows[0]?.reason||'No compatible source'),'kpi-muted');
+ const max=Math.max(...vals,baseline??0,1)*1.1,min=Math.min(0,...vals),x=i=>30+i*590/Math.max(1,rows.length-1),y=v=>145-(v-min)/(max-min)*120;
+ make('line',{x1:30,x2:620,y1:145,y2:145,stroke:'currentColor'});
+ if(baseline!=null){make('line',{x1:30,x2:620,y1:y(baseline),y2:y(baseline),stroke:'#888','stroke-dasharray':'5 4'});}
+ rows.forEach((r,i)=>{const t=make('text',{x:x(i),y:171,'text-anchor':'middle','font-size':10,fill:'currentColor'});t.textContent=r.start_date.slice(5,7);if(r.value==null)return;if(i&&rows[i-1].value!=null)make('line',{x1:x(i-1),x2:x(i),y1:y(rows[i-1].value),y2:y(r.value),stroke:'#b53945','stroke-width':2});const dot=make('circle',{cx:x(i),cy:y(r.value),r:4,fill:'#b53945',tabindex:0}),title=document.createElementNS(ns,'title');title.textContent=`${r.start_date.slice(0,7)}: ${fmt(r.value,r.currency,r.metric)}`;dot.append(title);dot.setAttribute('aria-label',title.textContent);});return s;
+}
+export function renderKpiDashboard(root,result,currency){
+ const e=result.evidence;root.replaceChildren();if(e?.kind!=='kpi_dashboard')throw Error('KPI evidence unavailable');
+ const current=e.summary.filter(r=>(r.currency==null||r.currency===currency)&&r.period==='selected'),mtd=e.summary.filter(r=>(r.currency==null||r.currency===currency)&&r.period==='mtd');
+ root.append(el('p',`${e.start_date} to ${e.end_date} inclusive · Europe/London · ${e.scope.channel} · ${currency} · Generated ${e.generated_at}`));
+ if(result.artifact?.download_url&&/^\/api\/oracle\/exports\/[a-f0-9]{64}$/.test(result.artifact.download_url)){const a=el('a','Download authenticated Excel workbook');a.href=result.artifact.download_url;a.download=result.artifact.filename;root.append(a);}
+ const drawCards=rows=>{const grid=el('div',null,'kpi-dashboard-grid');for(const r of rows){const card=el('article',null,'kpi-dashboard-card');card.append(el('h3',r.label),el('strong',fmt(r.value,r.currency,r.metric)),el('p','Previous: '+change(r.previous_change)),el('p','Prior year: '+change(r.year_change)),el('p','Fixed baseline: '+fmt(r.baseline_value,r.currency,r.metric)),el('small',r.reason||`Supported · ${r.orders??'—'} orders · ${r.purchasing_customers??'—'} identifiable customers`));if(r.intervals!=null&&r.metric.includes('gap'))card.append(el('small',`${r.intervals} intervals / ${r.interval_customers} returning customers`));grid.append(card);}return grid;};
+ root.append(el('h3','Selected period'),drawCards(current));
+ root.append(el('p','Baseline: '+(e.baseline.start_date?`${e.baseline.start_date} to ${e.baseline.end_date} (${e.baseline.fixed?'fixed':'proposed; not applied to cards'})`:e.baseline.reason)));
+ root.append(el('h3','Customer classification evidence'),table(e.rows.filter(r=>r.metric==='aov'&&r.period==='selected'&&r.currency===currency),['observed_returning_customers','first_observed_customers','customerless_orders','source_reconciled']));
+ root.append(el('h3','12 completed months · gaps remain gaps'));
+ for(const metric of ['aov','order_frequency','median_gap']){const rows=e.monthly.filter(r=>r.currency===currency&&r.metric===metric),r=current.find(r=>r.metric===metric);const section=el('section',null,'kpi-chart-panel');section.append(el('h4',r?.label||metric),chart(rows,r?.label||metric,r?.baseline_value));root.append(section);}
+ if(mtd.length){root.append(el('h3','Current month-to-date · through yesterday'),drawCards(mtd));}
+ const details=el('details'),summary=el('summary','Monthly figures and source freshness');details.append(summary,table(e.monthly.filter(r=>r.currency===currency&&r.metric!=='conversion'),['start_date','end_date','label','value','status','reason','finance_observed_at','customer_observed_at','channel_observed_at']));root.append(details);
+ const retention=el('details');retention.append(el('summary','30 / 60 / 90-day repeat purchase'),table(e.retention.filter(r=>r.currency===currency&&['selected','mtd'].includes(r.period)),['period','horizon_days','cohort_customers','mature_customers','immature_customers','returned_customers','repeat_rate','reason']));root.append(retention);
+ const notes=el('details');notes.append(el('summary','Definitions, comparison dates and coverage'));for(const [k,v] of e.definitions)notes.append(el('h4',k),el('p',v));notes.append(table(e.periods,['label','start_date','end_date']));root.append(notes);
+}
+export function createKpiPanel({root,api}){
+ let mounted=false,active=false,last=null;
+ function init(){if(mounted)return;mounted=true;const form=el('form',null,'report-controls');form.id='kpi-controls';
+ const input=(label,type,name)=>{const l=el('label',label),i=el('input');i.type=type;i.name=name;l.append(i);form.append(l);return i;};
+ const start=input('Start','date','start'),end=input('End','date','end');const d=kpiRequest('KPI dashboard');start.value=d.start_date;end.value=d.end_date;
+ const select=(label,name,items)=>{const l=el('label',label),s=el('select');s.name=name;for(const [v,t] of items){const o=el('option',t);o.value=v;s.append(o);}l.append(s);form.append(l);return s;};
+ const channel=select('Channel','channel',[['combined','Combined Shopify'],['online','Online Store'],['instore','Shopify POS'],['unknown','Unknown channel']]);
+ const currency=select('Currency','currency',[['GBP','GBP'],['USD','USD'],['EUR','EUR'],['JPY','JPY']]);
+ const geo=select('Commerce geography','geography',[['all','All destinations'],['uk','UK · unavailable'],['international','International · unavailable'],['unknown','Unknown destination · unavailable']]);
+ const button=el('button','Run KPI dashboard');form.append(button);const status=el('p','Choose a period and run the report.','kpi-status');status.setAttribute('role','status');status.setAttribute('aria-live','polite');const body=el('div');body.id='kpi-results';root.append(form,status,body);
+ const show=async id=>{const r=await pollOracleJob({get:()=>api('/jobs/'+encodeURIComponent(id)),onProgress:r=>{status.textContent=r.progress||r.status;}});if(r.status!=='completed'&&!r.recovered_persisted_result)throw Error(r.error||'KPI job failed');last=r;if(r.evidence?.scope.currency)currency.value=r.evidence.scope.currency;renderKpiDashboard(body,r,currency.value);status.textContent='Report ready. Unavailable figures remain explicit.';};
+ currency.onchange=()=>{if(last&&last.evidence.scope.currency===null)renderKpiDashboard(body,last,currency.value);};
+ form.onsubmit=async event=>{event.preventDefault();if(active)return;active=true;button.disabled=true;try{const message=`KPI dashboard from ${start.value} through ${end.value}, channel ${channel.value}, ${currency.value}${geo.value==='all'?'':', '+(geo.value==='uk'?'UK':geo.value==='international'?'International':'unknown geography')}`;const r=await api('/jobs',{method:'POST',headers:{'x-request-id':crypto.randomUUID()},body:JSON.stringify({message,new_question:true})});localStorage.setItem('oracle-kpi-job',r.job_id);await show(r.job_id);}catch(error){status.textContent=error.message+' No automatic provider replay. Run explicitly or refresh to reconnect.';}finally{active=false;button.disabled=false;}};
+ const id=localStorage.getItem('oracle-kpi-job');if(id){active=true;button.disabled=true;show(id).catch(error=>{status.textContent=error.message;}).finally(()=>{active=false;button.disabled=false;});}
+ }
+ return {show:init};
+}

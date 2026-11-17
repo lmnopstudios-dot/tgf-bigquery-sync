@@ -29,7 +29,9 @@ def convert(sql):
    return exp.convert(v)
   if isinstance(n,exp.CountIf):return exp.Coalesce(this=n.copy(),expressions=[exp.Literal.number(0)])
   return n
- return tree.transform(rewrite).sql(dialect='duckdb')
+ # CountIf replacement copies descendants; bind parameters in copied nodes too.
+ bound=tree.transform(rewrite)
+ return bound.transform(lambda n: exp.convert(p['params'][n.name]) if isinstance(n,exp.Parameter) else n).sql(dialect='duckdb')
 result={}
 for name,sql in p['queries'].items():
  q=convert(sql)

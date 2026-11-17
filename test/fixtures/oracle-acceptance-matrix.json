@@ -1450,6 +1450,10 @@
     {
       "file": "test/loyalty-commerce-repair.test.js",
       "purpose": "Targeted commerce repair: fresh aggregate/private preview, exact decimal/schema/unknown-field preservation, gated atomic staged snapshot append with unchanged watermarks, source/warehouse and plan tamper freshness, retention/active writer/source completeness safeguards, idempotent refusal, stage failures and uncertain commit reconciliation. No production writes in fixtures."
+    },
+    {
+      "file": "test/oracle-kpi-dashboard.test.js",
+      "purpose": "Dedicated KPI routing across direct, interactive and durable delivery; weighted fixed baselines, London comparison periods, source coverage, exact aggregate SQL, customer history distinctions, partial results and authenticated workbook access."
     }
   ]
 }
