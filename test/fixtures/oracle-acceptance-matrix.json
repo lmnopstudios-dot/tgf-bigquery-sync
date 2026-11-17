@@ -1458,6 +1458,10 @@
     {
       "file": "test/oracle-kpi-recovery.test.js",
       "purpose": "Production KPI ANALYSIS_FAILED regression: unordered BigQuery JSON versus workbook column order and legacy baseline JSON, exact cells/hash/scope checks, safe phase diagnostics and authenticated failed-job persisted-export recovery without provider replay."
+    },
+    {
+      "file": "test/oracle-kpi-usability.test.js",
+      "purpose": "KPI supported-versus-pending presentation, explicitly proposed baseline reference, observed customer-classification bounds, current MTD reconciliation cutoff/gap, London DST and legacy saved-report metadata. Browser KPI scenarios require real keyboard and bottom-of-view scrolling on desktop/mobile."
     }
   ]
 }

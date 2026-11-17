@@ -10,7 +10,16 @@ export async function verifyKpiBrowser(browser){
    await page.locator('[data-view="kpi-dashboard"]').click();
    await page.locator('#kpi-controls [name="start"]').fill('2026-10-01');await page.locator('#kpi-controls [name="end"]').fill('2026-10-31');await page.locator('#kpi-controls button').click();
    await page.waitForFunction(()=>document.querySelector('#kpi-results .kpi-dashboard-card'));
-   assert.match(await page.locator('#kpi-results').innerText(),/Observed gross AOV/);assert.match(await page.locator('#kpi-results').innerText(),/Unavailable/);assert.match(await page.locator('#kpi-results').innerText(),/Current month-to-date/);
+   assert.match(await page.locator('#kpi-results').innerText(),/Observed gross AOV/);assert.match(await page.locator('#kpi-results').innerText(),/unavailable/i);assert.match(await page.locator('#kpi-results').innerText(),/Current month-to-date/);
+   const scroll=page.locator('#kpi-dashboard');
+   assert.equal(await scroll.evaluate(node=>getComputedStyle(node).overflowY),'auto');
+   assert(await scroll.evaluate(node=>node.scrollHeight>node.clientHeight+100),'KPI results must remain inside a scrollable view');
+   await scroll.focus();await page.keyboard.press('PageDown');await page.waitForTimeout(100);
+   assert(await scroll.evaluate(node=>node.scrollTop>0),'Keyboard must scroll KPI content');
+   const last=page.locator('#kpi-results > details').last();await last.scrollIntoViewIfNeeded();
+   const bottom=await last.boundingBox();assert(bottom&&bottom.y>=0&&bottom.y+bottom.height<=900,'Last coverage section is reachable');
+   await last.locator('summary').click();assert.match(await last.innerText(),/Reviewed source intervals/);
+   await scroll.evaluate(node=>node.scrollTop=0);
    assert.equal(await page.locator('#kpi-results svg').count(),3);
    assert(await page.locator('#kpi-results svg circle').first().getAttribute('aria-label'));
    const link=page.locator('#kpi-results a');const response=await page.request.get(h.origin+await link.getAttribute('href'));assert.equal(response.status(),200);
