@@ -29,6 +29,10 @@ export function renderKpiDashboard(root,result,currency){
  const retention=el('details');retention.append(el('summary','30 / 60 / 90-day repeat purchase'),table(e.retention.filter(r=>r.currency===currency&&['selected','mtd'].includes(r.period)),['period','horizon_days','cohort_customers','mature_customers','immature_customers','returned_customers','repeat_rate','reason']));root.append(retention);
  const notes=el('details');notes.append(el('summary','Definitions, comparison dates and coverage'));for(const [k,v] of e.definitions)notes.append(el('h4',k),el('p',v));notes.append(table(e.periods,['label','start_date','end_date']));root.append(notes);
 }
+export function kpiJobError(result){
+ const detail=[result.error||'KPI job failed',result.code&&`Code: ${result.code}`,result.failed_stage&&`Stage: ${result.failed_stage}`,`Request: ${result.request_id||'unavailable'}`,`Job: ${result.job_id||'unavailable'}`].filter(Boolean).join(' · ');
+ return Object.assign(Error(detail),{requestId:result.request_id,jobId:result.job_id});
+}
 export function createKpiPanel({root,api}){
  let mounted=false,active=false,last=null;
  function init(){if(mounted)return;mounted=true;const form=el('form',null,'report-controls');form.id='kpi-controls';
@@ -39,7 +43,7 @@ export function createKpiPanel({root,api}){
  const currency=select('Currency','currency',[['GBP','GBP'],['USD','USD'],['EUR','EUR'],['JPY','JPY']]);
  const geo=select('Commerce geography','geography',[['all','All destinations'],['uk','UK · unavailable'],['international','International · unavailable'],['unknown','Unknown destination · unavailable']]);
  const button=el('button','Run KPI dashboard');form.append(button);const status=el('p','Choose a period and run the report.','kpi-status');status.setAttribute('role','status');status.setAttribute('aria-live','polite');const body=el('div');body.id='kpi-results';root.append(form,status,body);
- const show=async id=>{const r=await pollOracleJob({get:()=>api('/jobs/'+encodeURIComponent(id)),onProgress:r=>{status.textContent=r.progress||r.status;}});if(r.status!=='completed'&&!r.recovered_persisted_result)throw Error(r.error||'KPI job failed');last=r;if(r.evidence?.scope.currency)currency.value=r.evidence.scope.currency;renderKpiDashboard(body,r,currency.value);status.textContent='Report ready. Unavailable figures remain explicit.';};
+ const show=async id=>{const r=await pollOracleJob({get:()=>api('/jobs/'+encodeURIComponent(id)),onProgress:r=>{status.textContent=r.progress||r.status;}});if(r.status!=='completed'&&!r.recovered_persisted_result)throw kpiJobError(r);last=r;if(r.evidence?.scope.currency)currency.value=r.evidence.scope.currency;renderKpiDashboard(body,r,currency.value);status.textContent=r.recovered_persisted_export?'Recovered saved report. No analysis rerun. Unavailable figures remain explicit.':'Report ready. Unavailable figures remain explicit.';};
  currency.onchange=()=>{if(last&&last.evidence.scope.currency===null)renderKpiDashboard(body,last,currency.value);};
  form.onsubmit=async event=>{event.preventDefault();if(active)return;active=true;button.disabled=true;try{const message=`KPI dashboard from ${start.value} through ${end.value}, channel ${channel.value}, ${currency.value}${geo.value==='all'?'':', '+(geo.value==='uk'?'UK':geo.value==='international'?'International':'unknown geography')}`;const r=await api('/jobs',{method:'POST',headers:{'x-request-id':crypto.randomUUID()},body:JSON.stringify({message,new_question:true})});localStorage.setItem('oracle-kpi-job',r.job_id);await show(r.job_id);}catch(error){status.textContent=error.message+' No automatic provider replay. Run explicitly or refresh to reconnect.';}finally{active=false;button.disabled=false;}};
  const id=localStorage.getItem('oracle-kpi-job');if(id){active=true;button.disabled=true;show(id).catch(error=>{status.textContent=error.message;}).finally(()=>{active=false;button.disabled=false;});}

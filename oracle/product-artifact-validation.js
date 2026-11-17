@@ -1,3 +1,4 @@
+import {assertWorksheetEvidence} from './workbook-evidence.js';
 import ExcelJS from 'exceljs';
 import { createHash } from 'node:crypto';
 import { assertCatalogueSelection, scopeMismatch } from './product-catalogue-filter.js';
@@ -19,9 +20,8 @@ export async function assertProductArtifact(artifact){
     const bytes=Buffer.from(artifact.xlsx_base64||'','base64');
     if(createHash('sha256').update(bytes).digest('hex')!==artifact.sha256)throw scopeMismatch('artifact.sha256');
     const wb=new ExcelJS.Workbook();try{await wb.xlsx.load(bytes);}catch{throw scopeMismatch('artifact.workbook');}
-    const rows=campaignWorkbookRows(e),keys=Object.keys(rows[0]),sheet=wb.getWorksheet('Campaigns');
-    if(!sheet||sheet.rowCount!==rows.length+1)throw scopeMismatch('artifact.rows');
-    for(const [i,row] of rows.entries())for(const [j,key] of keys.entries())if((sheet.getRow(i+2).getCell(j+1).value??null)!==(row[key]??null))throw scopeMismatch('artifact.metrics');
+    const rows=campaignWorkbookRows(e);
+    assertWorksheetEvidence(wb.getWorksheet('Campaigns'),rows,()=>scopeMismatch('artifact.metrics'));
     return true;
   }
   if(e?.kind==='governed_basket_composition'){
@@ -36,9 +36,7 @@ export async function assertProductArtifact(artifact){
     if(wb.worksheets.length!==expectedNames.length||wb.worksheets.some((sheet,i)=>sheet.name!==expectedNames[i]))throw scopeMismatch('artifact.sheets');
     for(const [name,rows] of expectedTables){
       if(!rows.length)continue;
-      const sheet=wb.getWorksheet(name),keys=[...new Set(rows.flatMap(Object.keys))];
-      if(!sheet||sheet.rowCount!==rows.length+1||sheet.columnCount!==keys.length||keys.some((key,i)=>sheet.getRow(1).getCell(i+1).value!==key))throw scopeMismatch('artifact.rows');
-      for(const [i,row] of rows.entries())for(const [j,key] of keys.entries())if((sheet.getRow(i+2).getCell(j+1).value??null)!==(row[key]??null))throw scopeMismatch('artifact.metrics');
+      assertWorksheetEvidence(wb.getWorksheet(name),rows,()=>scopeMismatch('artifact.metrics'));
     }
     return true;
   }
@@ -52,9 +50,7 @@ export async function assertProductArtifact(artifact){
     const expected=[['Summary',e.rows],['Sales',e.sections.flatMap(s=>s.bands.map(b=>({comparison:s.label,...b})))],['Products',e.candidates],['Context',orderValueGapRows(e.sections)],...orderValueWorkbookTables(e)];
     for(const [name,rows] of expected){
       if(!rows.length)continue;
-      const sheet=wb.getWorksheet(name),keys=[...new Set(rows.flatMap(Object.keys))];
-      if(!sheet||sheet.rowCount!==rows.length+1)throw scopeMismatch('artifact.rows');
-      for(const [index,row] of rows.entries())for(const [column,key] of keys.entries())if((sheet.getRow(index+2).getCell(column+1).value??null)!==(row[key]??null))throw scopeMismatch('artifact.metrics');
+      assertWorksheetEvidence(wb.getWorksheet(name),rows,()=>scopeMismatch('artifact.metrics'));
     }
     return true;
   }
